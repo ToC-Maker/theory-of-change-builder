@@ -290,16 +290,16 @@ export const ClimateResearchExample: Story = {
                   connectionIds: ["gov-policy"],
                 },
                 {
-                  id: "prototype",
-                  title: "Prototype Built",
-                  text: "Working prototype demonstrating technical feasibility",
-                  connectionIds: ["tech-viability", "carbon-targets"],
-                },
-                {
                   id: "workshop",
                   title: "Stakeholder Workshop",
                   text: "Multi-stakeholder workshop to build understanding",
                   connectionIds: ["shared-understanding"],
+                },
+                {
+                  id: "prototype",
+                  title: "Prototype Built",
+                  text: "Working prototype demonstrating technical feasibility",
+                  connectionIds: ["tech-viability", "carbon-targets"],
                 },
               ],
             },
