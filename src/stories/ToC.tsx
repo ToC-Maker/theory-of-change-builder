@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/16/solid"
+import { InformationCircleIcon } from "@heroicons/react/16/solid"
 import clsx from "clsx"
 import React, { useEffect, useMemo, useRef, useState } from "react"
 
@@ -104,9 +104,9 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       const newData = { ...prevData }
       
       // Remove node from source location
-      newData.sections = prevData.sections.map((section, sIdx) => ({
+      newData.sections = prevData.sections.map((section) => ({
         ...section,
-        columns: section.columns.map((column, cIdx) => ({
+        columns: section.columns.map((column) => ({
           ...column,
           nodes: column.nodes.filter((node) => node.id !== draggedNode.id),
         })),
@@ -441,7 +441,6 @@ function Connections({
     const updateSize = () => {
       // Calculate based on the number of sections and estimate width
       const numSections = data.sections.length
-      const maxColumnsInSection = Math.max(...data.sections.map(s => s.columns.length))
       
       // Estimate dimensions based on content structure
       const estimatedWidth = numSections * 400 + (numSections - 1) * 128 // 400px per section + 128px gap
@@ -585,7 +584,7 @@ function Node({
   onDragStart: (node: Node) => void
   onDragEnd: () => void
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [showPopup, setShowPopup] = useState(false)
   const nodeRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -598,49 +597,59 @@ function Node({
 
   const handleExpandClick = (e: React.MouseEvent) => {
     e.stopPropagation()
-    setExpanded(!expanded)
+    setShowPopup(!showPopup)
   }
 
   return (
-    <div
-      ref={nodeRef}
-      draggable
-      onDragStart={(e) => {
-        onDragStart(node)
-        e.dataTransfer.effectAllowed = "move"
-      }}
-      onDragEnd={onDragEnd}
-      className={clsx(
-        "flex border rounded-lg cursor-pointer transition-all",
-        isHighlighted
-          ? "bg-indigo-200"
-          : isHovered
-            ? "bg-indigo-100"
-            : "hover:bg-gray-100",
-        hasHighlightedNodes && !isConnected && "opacity-30",
-        isDragging && "opacity-50 scale-95 shadow-lg"
-      )}
-      onClick={handleClick}
-      onMouseEnter={() => setHoveredNode(node.id)}
-      onMouseLeave={() => setHoveredNode(null)}
-    >
-      <div className={clsx("flex-grow px-4 py-2", !node.text && "w-full")}>
-        <div className="text-sm font-medium">{node.title}</div>
-        {expanded && node.text && (
-          <div className="text-sm mt-2">{node.text}</div>
+    <div className="relative">
+      <div
+        ref={nodeRef}
+        draggable
+        onDragStart={(e) => {
+          onDragStart(node)
+          e.dataTransfer.effectAllowed = "move"
+        }}
+        onDragEnd={onDragEnd}
+        className={clsx(
+          "flex border rounded-lg cursor-pointer transition-all w-48 h-32",
+          isHighlighted
+            ? "bg-indigo-200"
+            : isHovered
+              ? "bg-indigo-100"
+              : "hover:bg-gray-100",
+          hasHighlightedNodes && !isConnected && "opacity-30",
+          isDragging && "opacity-50 scale-95 shadow-lg"
+        )}
+        onClick={handleClick}
+        onMouseEnter={() => setHoveredNode(node.id)}
+        onMouseLeave={() => setHoveredNode(null)}
+      >
+        <div className={clsx("flex-grow px-4 py-2 flex items-center justify-center", !node.text && "w-full")}>
+          <div className="text-sm font-medium text-center">{node.title}</div>
+        </div>
+        {node.text && (
+          <button
+            className="flex shrink-0 items-center justify-center w-5 hover:bg-white rounded-r-lg"
+            onClick={handleExpandClick}
+          >
+            <InformationCircleIcon className="h-4 w-4" />
+          </button>
         )}
       </div>
-      {node.text && (
-        <button
-          className="flex shrink-0 items-center justify-center w-5 hover:bg-white rounded-r-lg"
-          onClick={handleExpandClick}
-        >
-          {expanded ? (
-            <ChevronUpIcon className="h-4 w-4" />
-          ) : (
-            <ChevronDownIcon className="h-4 w-4" />
-          )}
-        </button>
+      
+      {showPopup && node.text && (
+        <div className="absolute bottom-full left-0 mb-2 p-3 bg-white border border-gray-300 rounded-lg shadow-lg z-50 min-w-64 max-w-80">
+          <div className="text-sm">{node.text}</div>
+          <button
+            className="absolute top-1 right-2 text-gray-500 hover:text-gray-700 text-lg leading-none"
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowPopup(false)
+            }}
+          >
+            ×
+          </button>
+        </div>
       )}
     </div>
   )
