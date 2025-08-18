@@ -2,11 +2,19 @@ import { InformationCircleIcon } from "@heroicons/react/16/solid"
 import clsx from "clsx"
 import React, { useEffect, useMemo, useRef, useState } from "react"
 
+interface Connection {
+  targetId: string
+  confidence: number // 0-100 scale
+  evidence?: string // Evidence supporting this connection
+  assumptions?: string // Key assumptions underlying this connection
+}
+
 interface Node {
   id: string
   title: string
   text: string
   connectionIds: string[]
+  connections?: Connection[]
 }
 
 interface ToCData {
@@ -16,6 +24,38 @@ interface ToCData {
       nodes: Node[]
     }[]
   }[]
+}
+
+
+function interpolateColor(value: number, min: number, max: number, colorStart: [number, number, number], colorEnd: [number, number, number]): [number, number, number] {
+  const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)))
+  return [
+    Math.round(colorStart[0] + ratio * (colorEnd[0] - colorStart[0])),
+    Math.round(colorStart[1] + ratio * (colorEnd[1] - colorStart[1])),
+    Math.round(colorStart[2] + ratio * (colorEnd[2] - colorStart[2]))
+  ]
+}
+
+function getConfidenceColorRGB(confidence: number, opacity: number = 1): string {
+  // Clamp confidence to 0-100 range
+  const clampedConfidence = Math.max(0, Math.min(100, confidence))
+  
+  // Define color points: Red (0) -> Yellow (50) -> Green (100)
+  const red: [number, number, number] = [239, 68, 68]    // red-500
+  const yellow: [number, number, number] = [234, 179, 8] // yellow-500  
+  const green: [number, number, number] = [34, 197, 94]  // green-500
+  
+  let color: [number, number, number]
+  
+  if (clampedConfidence <= 50) {
+    // Interpolate from red to yellow (0-50)
+    color = interpolateColor(clampedConfidence, 0, 50, red, yellow)
+  } else {
+    // Interpolate from yellow to green (50-100)
+    color = interpolateColor(clampedConfidence, 50, 100, yellow, green)
+  }
+  
+  return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${opacity})`
 }
 
 export function ToC({ data: initialData }: { data: ToCData }) {
@@ -163,11 +203,20 @@ export function ToC({ data: initialData }: { data: ToCData }) {
           
           const nodeLocation = findNodeLocation(nodeId)
           if (nodeLocation) {
-            nodeLocation.node.connectionIds.forEach(connectedId => {
-              if (!visited.has(connectedId)) {
-                queue.push({nodeId: connectedId, path: [...path, connectedId]})
-              }
-            })
+            // Handle both old connectionIds and new connections format
+            if (nodeLocation.node.connections) {
+              nodeLocation.node.connections.forEach(conn => {
+                if (!visited.has(conn.targetId)) {
+                  queue.push({nodeId: conn.targetId, path: [...path, conn.targetId]})
+                }
+              })
+            } else {
+              nodeLocation.node.connectionIds.forEach(connectedId => {
+                if (!visited.has(connectedId)) {
+                  queue.push({nodeId: connectedId, path: [...path, connectedId]})
+                }
+              })
+            }
           }
         }
         
@@ -237,9 +286,18 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       section.columns.forEach((column) => {
         column.nodes.forEach((node) => {
           if (node.id === hoveredNode) {
-            node.connectionIds.forEach((id) => connections.add(id))
+            // Handle both old connectionIds and new connections format
+            if (node.connections) {
+              node.connections.forEach((conn) => connections.add(conn.targetId))
+            } else {
+              node.connectionIds.forEach((id) => connections.add(id))
+            }
           }
-          if (node.connectionIds.includes(hoveredNode)) {
+          // Check if any connection points to the hovered node
+          const hasConnectionTo = node.connections 
+            ? node.connections.some(conn => conn.targetId === hoveredNode)
+            : node.connectionIds.includes(hoveredNode)
+          if (hasConnectionTo) {
             connections.add(node.id)
           }
         })
@@ -435,6 +493,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       ))}
       <Connections
         data={data}
+        setData={setData}
         nodeRefs={nodeRefs}
         highlightedNodes={highlightedNodes}
         connectedNodes={connectedNodes}
@@ -446,12 +505,14 @@ export function ToC({ data: initialData }: { data: ToCData }) {
 
 function Connections({
   data,
+  setData,
   nodeRefs,
   highlightedNodes,
   connectedNodes,
   hoveredConnections,
 }: {
   data: ToCData
+  setData: React.Dispatch<React.SetStateAction<ToCData>>
   nodeRefs: { [key: string]: HTMLDivElement | null }
   highlightedNodes: Set<string>
   connectedNodes: Set<string>
@@ -463,6 +524,9 @@ function Connections({
     targetId: string
     x: number
     y: number
+    confidence: number
+    evidence?: string
+    assumptions?: string
   } | null>(null)
 
   useEffect(() => {
@@ -503,24 +567,83 @@ function Connections({
   const connections = data.sections
     .flatMap((section, sectionIndex) =>
       section.columns.flatMap((column, columnIndex) =>
-        column.nodes.flatMap((node) =>
-          node.connectionIds.map((connectionId) => {
-            const targetLocation = findNodeLocation(connectionId)
-            return {
-              start: nodeRefs[node.id],
-              end: nodeRefs[connectionId],
-              sourceSectionIndex: sectionIndex,
-              sourceColumnIndex: columnIndex,
-              targetSectionIndex: targetLocation?.sectionIndex ?? -1,
-              targetColumnIndex: targetLocation?.columnIndex ?? -1,
-              sourceId: node.id,
-              targetId: connectionId,
-            }
-          }),
-        ),
+        column.nodes.flatMap((node) => {
+          // Handle both old connectionIds and new connections format
+          if (node.connections) {
+            return node.connections.map((conn) => {
+              const targetLocation = findNodeLocation(conn.targetId)
+              return {
+                start: nodeRefs[node.id],
+                end: nodeRefs[conn.targetId],
+                sourceSectionIndex: sectionIndex,
+                sourceColumnIndex: columnIndex,
+                targetSectionIndex: targetLocation?.sectionIndex ?? -1,
+                targetColumnIndex: targetLocation?.columnIndex ?? -1,
+                sourceId: node.id,
+                targetId: conn.targetId,
+                confidence: conn.confidence,
+                evidence: conn.evidence,
+                assumptions: conn.assumptions,
+              }
+            })
+          } else {
+            return node.connectionIds.map((connectionId) => {
+              const targetLocation = findNodeLocation(connectionId)
+              return {
+                start: nodeRefs[node.id],
+                end: nodeRefs[connectionId],
+                sourceSectionIndex: sectionIndex,
+                sourceColumnIndex: columnIndex,
+                targetSectionIndex: targetLocation?.sectionIndex ?? -1,
+                targetColumnIndex: targetLocation?.columnIndex ?? -1,
+                sourceId: node.id,
+                targetId: connectionId,
+                confidence: 50, // default confidence (medium)
+                evidence: undefined,
+                assumptions: undefined,
+              }
+            })
+          }
+        }),
       ),
     )
     .filter((connection) => connection.start && connection.end)
+
+  const updateConfidence = (sourceId: string, targetId: string, newConfidence: number) => {
+    setData((prevData: ToCData): ToCData => ({
+      ...prevData,
+      sections: prevData.sections.map((section) => ({
+        ...section,
+        columns: section.columns.map((column) => ({
+          ...column,
+          nodes: column.nodes.map((node) => {
+            if (node.id === sourceId) {
+              if (node.connections) {
+                return {
+                  ...node,
+                  connections: node.connections.map((conn) => 
+                    conn.targetId === targetId 
+                      ? { ...conn, confidence: newConfidence }
+                      : conn
+                  )
+                }
+              } else {
+                // Convert from old format to new format
+                return {
+                  ...node,
+                  connections: node.connectionIds.map((connId) => ({
+                    targetId: connId,
+                    confidence: connId === targetId ? newConfidence : 50 // default medium confidence
+                  }))
+                }
+              }
+            }
+            return node
+          })
+        }))
+      }))
+    }))
+  }
 
   const strokeWidth = 12
   return (
@@ -563,21 +686,25 @@ function Connections({
           (!connectedNodes.has(connection.sourceId) ||
             !connectedNodes.has(connection.targetId))
 
+        const getStrokeColor = () => {
+          if (isHovered) {
+            return getConfidenceColorRGB(connection.confidence, 0.8)
+          } else if (isHighlighted) {
+            return getConfidenceColorRGB(connection.confidence, 1)
+          } else if (isConnected) {
+            return getConfidenceColorRGB(connection.confidence, 0.6)
+          } else {
+            return getConfidenceColorRGB(connection.confidence, 0.3)
+          }
+        }
+        
         return (
           <path
             key={index}
             d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
-            className={clsx(
-              "fill-none cursor-pointer",
-              isHovered
-                ? "stroke-indigo-200"
-                : isHighlighted
-                  ? "stroke-indigo-300"
-                  : isConnected
-                    ? "stroke-indigo-300/60"
-                    : "stroke-indigo-300/20",
-            )}
+            className="fill-none cursor-pointer"
             style={{
+              stroke: getStrokeColor(),
               strokeWidth: `${strokeWidth}px`,
               opacity: isLowOpacity ? 0.01 : 1,
               pointerEvents: "stroke",
@@ -591,6 +718,9 @@ function Connections({
                 targetId: connection.targetId,
                 x: midX,
                 y: midY,
+                confidence: connection.confidence,
+                evidence: connection.evidence,
+                assumptions: connection.assumptions,
               })
             }}
           />
@@ -641,6 +771,62 @@ function Connections({
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                Confidence Level
+              </h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">Current confidence:</span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-2xl font-bold" style={{ color: getConfidenceColorRGB(edgePopup.confidence) }}>
+                      {Math.round(edgePopup.confidence)}%
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      ({edgePopup.confidence <= 33 ? 'Low' : edgePopup.confidence <= 66 ? 'Medium' : 'High'})
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Adjust confidence level:
+                  </label>
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-4">
+                      <span className="text-xs text-red-600 font-medium">0%</span>
+                      <div className="flex-1 relative">
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={edgePopup.confidence}
+                          onChange={(e) => {
+                            const newConfidence = parseInt(e.target.value)
+                            updateConfidence(edgePopup.sourceId, edgePopup.targetId, newConfidence)
+                            setEdgePopup({ ...edgePopup, confidence: newConfidence })
+                          }}
+                          className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                          style={{
+                            background: 'linear-gradient(to right, #ef4444 0%, #eab308 50%, #22c55e 100%)',
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-green-600 font-medium">100%</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-gray-500">
+                      <span>No confidence</span>
+                      <span className="text-red-500">Low</span>
+                      <span className="text-yellow-500">Medium</span>
+                      <span className="text-green-500">High</span>
+                      <span>Total confidence</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">
                 Why this connection exists
               </h3>
               <p className="text-gray-600 leading-relaxed">
@@ -653,17 +839,54 @@ function Connections({
               <h3 className="text-lg font-semibold text-gray-800 mb-3">
                 Evidence & Assumptions
               </h3>
-              <p className="text-gray-600 leading-relaxed">
-                [This is where detailed evidence and assumptions about this specific connection would go. 
-                You can customize this content based on the specific source and target nodes.]
-              </p>
+              {edgePopup.evidence || edgePopup.assumptions ? (
+                <div className="space-y-4">
+                  {edgePopup.evidence && (
+                    <div>
+                      <h4 className="font-medium text-gray-800 mb-2">Evidence:</h4>
+                      <p className="text-gray-600 leading-relaxed">{edgePopup.evidence}</p>
+                    </div>
+                  )}
+                  {edgePopup.assumptions && (
+                    <div>
+                      <h4 className="font-medium text-gray-800 mb-2">Key Assumptions:</h4>
+                      <p className="text-gray-600 leading-relaxed">{edgePopup.assumptions}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-gray-500 italic">
+                  No evidence or assumptions have been documented for this connection yet.
+                </p>
+              )}
             </div>
             
-            <div className="bg-indigo-50 p-4 rounded-lg">
-              <h4 className="font-medium text-indigo-900 mb-2">Key Insight</h4>
-              <p className="text-indigo-700 text-sm">
-                This connection is critical to the overall theory of change because it represents 
-                a key causal link in achieving the desired outcomes.
+            <div className={`p-4 rounded-lg ${
+              edgePopup.confidence >= 67 ? 'bg-green-50' :
+              edgePopup.confidence >= 34 ? 'bg-yellow-50' :
+              'bg-red-50'
+            }`}>
+              <h4 className={`font-medium mb-2 ${
+                edgePopup.confidence >= 67 ? 'text-green-900' :
+                edgePopup.confidence >= 34 ? 'text-yellow-900' :
+                'text-red-900'
+              }`}>
+                Confidence Insight
+              </h4>
+              <p className={`text-sm ${
+                edgePopup.confidence >= 67 ? 'text-green-700' :
+                edgePopup.confidence >= 34 ? 'text-yellow-700' :
+                'text-red-700'
+              }`}>
+                {edgePopup.confidence >= 80
+                  ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
+                  : edgePopup.confidence >= 60
+                  ? `Good confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
+                  : edgePopup.confidence >= 40
+                  ? `Moderate confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
+                  : edgePopup.confidence >= 20
+                  ? `Low confidence (${Math.round(edgePopup.confidence)}%). This connection has limited evidence and significant uncertainty.`
+                  : `Very low confidence (${Math.round(edgePopup.confidence)}%). This connection is speculative with minimal supporting evidence.`}
               </p>
             </div>
           </div>
