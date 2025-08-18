@@ -137,69 +137,91 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       return new Set<string>()
     }
 
-    const getConnectedNodes = (
-      nodeId: string,
-      startSectionIndex: number,
-      visited: Set<string> = new Set(),
-      direction: "outgoing" | "incoming" = "outgoing",
-    ): Set<string> => {
-      if (visited.has(nodeId)) return visited
-      visited.add(nodeId)
-
-      const nodeLocation = findNodeLocation(nodeId)
-      if (
-        !nodeLocation ||
-        (direction === "outgoing" && nodeLocation.sectionIndex < startSectionIndex) ||
-        (direction === "incoming" && nodeLocation.sectionIndex > startSectionIndex)
-      ) {
-        return visited
-      }
-
-      if (direction === "outgoing") {
-        // Check outgoing connections only in subsequent sections
-        nodeLocation.node.connectionIds.forEach((connectedId) => {
-          getConnectedNodes(
-            connectedId,
-            nodeLocation.sectionIndex + 1,
-            visited,
-            "outgoing",
-          )
-        })
-      } else {
-        // Check incoming connections only in previous sections
-        for (let sectionIndex = 0; sectionIndex < nodeLocation.sectionIndex; sectionIndex++) {
-          data.sections[sectionIndex].columns.forEach((col) => {
-            col.nodes.forEach((n) => {
-              if (n.connectionIds.includes(nodeId)) {
-                getConnectedNodes(n.id, startSectionIndex, visited, "incoming")
+    const getShortestPaths = (clickedNodeId: string): Set<string> => {
+      const pathNodes = new Set<string>()
+      
+      // Find all input nodes (first section)
+      const inputNodes = data.sections[0]?.columns.flatMap(col => col.nodes.map(n => n.id)) || []
+      
+      // Find all goal nodes (last section)
+      const goalNodes = data.sections[data.sections.length - 1]?.columns.flatMap(col => col.nodes.map(n => n.id)) || []
+      
+      // Function to find shortest path from start to target using BFS
+      const findShortestPath = (startId: string, targetId: string): string[] | null => {
+        const queue: {nodeId: string, path: string[]}[] = [{nodeId: startId, path: [startId]}]
+        const visited = new Set<string>()
+        
+        while (queue.length > 0) {
+          const {nodeId, path} = queue.shift()!
+          
+          if (nodeId === targetId) {
+            return path
+          }
+          
+          if (visited.has(nodeId)) continue
+          visited.add(nodeId)
+          
+          const nodeLocation = findNodeLocation(nodeId)
+          if (nodeLocation) {
+            nodeLocation.node.connectionIds.forEach(connectedId => {
+              if (!visited.has(connectedId)) {
+                queue.push({nodeId: connectedId, path: [...path, connectedId]})
               }
             })
-          })
+          }
         }
+        
+        return null
       }
-
-      return visited
+      
+      // Find paths from input nodes to clicked node
+      const pathsToClicked: string[][] = []
+      inputNodes.forEach(inputId => {
+        const path = findShortestPath(inputId, clickedNodeId)
+        if (path) {
+          pathsToClicked.push(path)
+        }
+      })
+      
+      // Find paths from clicked node to goal nodes
+      const pathsFromClicked: string[][] = []
+      goalNodes.forEach(goalId => {
+        const path = findShortestPath(clickedNodeId, goalId)
+        if (path) {
+          pathsFromClicked.push(path)
+        }
+      })
+      
+      // If clicked node is an input node, just find paths to goals
+      if (inputNodes.includes(clickedNodeId)) {
+        pathsFromClicked.forEach(path => {
+          path.forEach(nodeId => pathNodes.add(nodeId))
+        })
+      }
+      // If clicked node is a goal node, just find paths from inputs
+      else if (goalNodes.includes(clickedNodeId)) {
+        pathsToClicked.forEach(path => {
+          path.forEach(nodeId => pathNodes.add(nodeId))
+        })
+      }
+      // For middle nodes, combine shortest paths through the clicked node
+      else {
+        pathsToClicked.forEach(pathToClicked => {
+          pathsFromClicked.forEach(pathFromClicked => {
+            // Combine paths, removing duplicate clicked node
+            const fullPath = [...pathToClicked, ...pathFromClicked.slice(1)]
+            fullPath.forEach(nodeId => pathNodes.add(nodeId))
+          })
+        })
+      }
+      
+      return pathNodes
     }
 
     const allConnectedNodes = new Set<string>()
     highlightedNodes.forEach((nodeId) => {
-      const nodeLocation = findNodeLocation(nodeId)
-      if (nodeLocation) {
-        const outgoingSet = getConnectedNodes(
-          nodeId,
-          nodeLocation.sectionIndex,
-          new Set(),
-          "outgoing",
-        )
-        const incomingSet = getConnectedNodes(
-          nodeId,
-          nodeLocation.sectionIndex,
-          new Set(),
-          "incoming",
-        )
-        outgoingSet.forEach((id) => allConnectedNodes.add(id))
-        incomingSet.forEach((id) => allConnectedNodes.add(id))
-      }
+      const pathNodes = getShortestPaths(nodeId)
+      pathNodes.forEach(id => allConnectedNodes.add(id))
     })
 
     return allConnectedNodes
