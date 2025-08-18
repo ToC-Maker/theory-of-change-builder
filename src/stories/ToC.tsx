@@ -458,6 +458,12 @@ function Connections({
   hoveredConnections: Set<string>
 }) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
+  const [edgePopup, setEdgePopup] = useState<{
+    sourceId: string
+    targetId: string
+    x: number
+    y: number
+  } | null>(null)
 
   useEffect(() => {
     const updateSize = () => {
@@ -518,6 +524,7 @@ function Connections({
 
   const strokeWidth = 12
   return (
+    <>
     <svg
       className="absolute top-0 left-0 pointer-events-none"
       width={svgSize.width}
@@ -561,7 +568,7 @@ function Connections({
             key={index}
             d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
             className={clsx(
-              "fill-none",
+              "fill-none cursor-pointer",
               isHovered
                 ? "stroke-indigo-200"
                 : isHighlighted
@@ -573,11 +580,107 @@ function Connections({
             style={{
               strokeWidth: `${strokeWidth}px`,
               opacity: isLowOpacity ? 0.01 : 1,
+              pointerEvents: "stroke",
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              const midX = (startX + endX) / 2
+              const midY = (startY + endY) / 2
+              setEdgePopup({
+                sourceId: connection.sourceId,
+                targetId: connection.targetId,
+                x: midX,
+                y: midY,
+              })
             }}
           />
         )
       })}
     </svg>
+    
+    {/* Large center modal for edge information */}
+    {edgePopup && (
+      <div 
+        className="fixed inset-0 z-50 flex items-center justify-center transition-all duration-150 ease-out"
+        style={{
+          animation: 'fadeIn 0.15s ease-out'
+        }}
+      >
+        {/* Backdrop with blur */}
+        <div 
+          className="absolute inset-0 bg-black bg-opacity-50 backdrop-blur-sm"
+          onClick={() => setEdgePopup(null)}
+        />
+        
+        {/* Modal content */}
+        <div 
+          className="relative bg-white rounded-xl shadow-2xl p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto transform transition-all duration-150 ease-out"
+          style={{
+            animation: 'scaleIn 0.15s ease-out'
+          }}
+        >
+          {/* Close button */}
+          <button
+            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl leading-none"
+            onClick={() => setEdgePopup(null)}
+          >
+            ×
+          </button>
+          
+          {/* Header */}
+          <div className="mb-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              Connection Details
+            </h2>
+            <div className="text-lg text-indigo-600 font-medium">
+              {edgePopup.sourceId} → {edgePopup.targetId}
+            </div>
+          </div>
+          
+          {/* Content */}
+          <div className="space-y-6">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                Why this connection exists
+              </h3>
+              <p className="text-gray-600 leading-relaxed">
+                This connection represents the causal relationship between these two elements in the theory of change. 
+                The source element directly contributes to or enables the target element.
+              </p>
+            </div>
+            
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                Evidence & Assumptions
+              </h3>
+              <p className="text-gray-600 leading-relaxed">
+                [This is where detailed evidence and assumptions about this specific connection would go. 
+                You can customize this content based on the specific source and target nodes.]
+              </p>
+            </div>
+            
+            <div className="bg-indigo-50 p-4 rounded-lg">
+              <h4 className="font-medium text-indigo-900 mb-2">Key Insight</h4>
+              <p className="text-indigo-700 text-sm">
+                This connection is critical to the overall theory of change because it represents 
+                a key causal link in achieving the desired outcomes.
+              </p>
+            </div>
+          </div>
+          
+          {/* Footer */}
+          <div className="mt-8 pt-6 border-t border-gray-200 flex justify-end">
+            <button
+              onClick={() => setEdgePopup(null)}
+              className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   )
 }
 
