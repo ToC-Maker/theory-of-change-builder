@@ -581,6 +581,18 @@ function Connections({
     return null
   }
 
+  const findNodeTitle = (nodeId: string) => {
+    for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
+      for (let columnIndex = 0; columnIndex < data.sections[sectionIndex].columns.length; columnIndex++) {
+        const node = data.sections[sectionIndex].columns[columnIndex].nodes.find((n) => n.id === nodeId)
+        if (node) {
+          return node.title
+        }
+      }
+    }
+    return nodeId // fallback to ID if not found
+  }
+
   const connections = data.sections
     .flatMap((section, sectionIndex) =>
       section.columns.flatMap((column, columnIndex) =>
@@ -789,8 +801,28 @@ function Connections({
             <h2 className="text-4xl font-bold text-gray-900 mb-2">
               Connection Details
             </h2>
-            <div className="text-2xl text-indigo-600 font-medium">
-              {edgePopup.sourceId} → {edgePopup.targetId}
+            <div className="bg-gray-50 rounded-lg p-4 border-l-4 border-indigo-500">
+              <div className="text-sm text-gray-600 uppercase tracking-wide font-semibold mb-2">
+                Connection
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex-1 bg-white rounded p-3 border border-gray-200 shadow-sm">
+                  <div className="text-sm text-gray-500 mb-1">From</div>
+                  <div className="text-lg font-medium text-gray-900">{findNodeTitle(edgePopup.sourceId)}</div>
+                </div>
+                <div className="flex flex-col items-center">
+                  <div className="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center">
+                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5-5 5M6 12h12" />
+                    </svg>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">leads to</div>
+                </div>
+                <div className="flex-1 bg-white rounded p-3 border border-gray-200 shadow-sm">
+                  <div className="text-sm text-gray-500 mb-1">To</div>
+                  <div className="text-lg font-medium text-gray-900">{findNodeTitle(edgePopup.targetId)}</div>
+                </div>
+              </div>
             </div>
           </div>
           
