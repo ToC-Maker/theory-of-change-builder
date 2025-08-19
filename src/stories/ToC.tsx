@@ -961,16 +961,47 @@ function Node({
 }) {
   const [showPopup, setShowPopup] = useState(false)
   const nodeRef = useRef<HTMLDivElement>(null)
+  const [showHint, setShowHint] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
+  const hoverTimer = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     updateNodeRef(node.id, nodeRef.current)
   }, [node.id, updateNodeRef])
 
   const handleClick = () => {
-    if (node.text) {
-      setShowPopup(!showPopup)
+    if (canExpand && node.text && !showPopup) {
+      setShowPopup(true)
+      setCanExpand(false)
+      setShowHint(false)
+    } else if (showPopup) {
+      // Allow closing if already expanded
+      setShowPopup(false)
     } else {
       toggleHighlight(node.id)
+    }
+  }
+
+  const handleMouseEnter = () => {
+    setHoveredNode(node.id)
+    
+    if (node.text && !showPopup) {
+      // Start timer for hint
+      hoverTimer.current = setTimeout(() => {
+        setShowHint(true)
+        setCanExpand(true)
+      }, 1000) // 1 second delay
+    }
+  }
+
+  const handleMouseLeave = () => {
+    setHoveredNode(null)
+    setShowHint(false)
+    setCanExpand(false)
+    
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
     }
   }
 
@@ -989,7 +1020,8 @@ function Node({
         }}
         onDragEnd={onDragEnd}
         className={clsx(
-          "flex border-0 rounded-xl cursor-pointer transition-all duration-300 w-96 h-64 bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl hover:scale-105 transform",
+          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
+          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-96 h-64 hover:scale-105",
           isHighlighted
             ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
@@ -1000,28 +1032,49 @@ function Node({
         )}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
-        onMouseEnter={() => setHoveredNode(node.id)}
-        onMouseLeave={() => setHoveredNode(null)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
-        <div className="flex-grow px-4 py-2 flex items-center justify-center w-full">
-          <div className="text-xl font-medium text-center">{node.title}</div>
-        </div>
+        {showPopup ? (
+          <div className="flex flex-col h-full relative">
+            <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-200">
+              <div className="text-xl font-bold text-indigo-700 flex-1 text-center">
+                {node.title}
+              </div>
+              <button
+                className="ml-2 p-1 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowPopup(false)
+                }}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="text-lg leading-relaxed text-gray-700 overflow-y-auto flex-1">
+              {node.text}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-grow px-4 py-2 flex items-center justify-center relative">
+            <div className="text-xl font-medium text-center">{node.title}</div>
+            
+            {/* Discrete hint text positioned absolutely at bottom */}
+            {node.text && showHint && canExpand && (
+              <div className="absolute bottom-3 left-1/2 text-lg text-gray-500 animate-fade-in-up">
+                click to view details
+              </div>
+            )}
+            
+            {/* Subtle visual cue for nodes with details */}
+            {node.text && !showPopup && !showHint && (
+              <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-30"></div>
+            )}
+          </div>
+        )}
       </div>
-      
-      {showPopup && node.text && (
-        <div className="absolute bottom-full left-0 mb-2 p-3 bg-white border border-gray-300 rounded-lg shadow-lg z-50 min-w-64 max-w-80">
-          <div className="text-lg">{node.text}</div>
-          <button
-            className="absolute top-1 right-2 text-gray-500 hover:text-gray-700 text-lg leading-none"
-            onClick={(e) => {
-              e.stopPropagation()
-              setShowPopup(false)
-            }}
-          >
-            ×
-          </button>
-        </div>
-      )}
     </div>
   )
 }
