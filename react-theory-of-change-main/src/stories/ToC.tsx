@@ -358,7 +358,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                 {/* Existing column */}
                 <div 
                   className={clsx(
-                    "flex-1 min-h-96 p-2 rounded-lg border-2 border-dashed transition-colors",
+                    "min-h-96 p-2 rounded-lg border-2 border-dashed transition-colors flex justify-center",
                     dragOverLocation?.sectionIndex === sectionIndex && 
                     dragOverLocation?.columnIndex === colIndex && 
                     !dragOverLocation?.isNewColumn
@@ -374,7 +374,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                     handleDrop(sectionIndex, colIndex, false)
                   }}
                 >
-                  <div className="flex flex-col gap-2 justify-evenly min-h-96">
+                  <div className="flex flex-col gap-2 justify-evenly min-h-96 items-center">
                     {/* Drop zone at top of column */}
                     <div 
                       className={clsx(
@@ -1071,9 +1071,9 @@ function Node({
         )}
       </div>
       
-      {/* Hint text positioned outside node container but overlaying it */}
+      {/* Independent hint positioned relative to this specific node */}
       {node.text && showHint && canExpand && !showPopup && (
-        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-gray-500 text-center animate-fade-in-up whitespace-nowrap pointer-events-none">
+        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-gray-500 text-center animate-fade-in-up whitespace-nowrap pointer-events-none z-10">
           click to view details
         </div>
       )}
