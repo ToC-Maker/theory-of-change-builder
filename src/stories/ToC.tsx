@@ -531,26 +531,67 @@ function Connections({
 
   useEffect(() => {
     const updateSize = () => {
-      // Calculate based on the number of sections and estimate width
-      const numSections = data.sections.length
+      // Calculate dimensions based on actual node positions
+      const nodeElements = Object.values(nodeRefs).filter(Boolean) as HTMLDivElement[]
       
-      // Estimate dimensions based on content structure
-      const estimatedWidth = numSections * 400 + (numSections - 1) * 128 // 400px per section + 128px gap
-      const estimatedHeight = Math.max(window.innerHeight, 800) // At least 800px height
+      if (nodeElements.length === 0) {
+        // Fallback to estimates if no nodes are rendered yet
+        const numSections = data.sections.length
+        const estimatedWidth = numSections * 400 + (numSections - 1) * 128
+        const estimatedHeight = Math.max(window.innerHeight, 800)
+        setSvgSize({
+          width: estimatedWidth + 400,
+          height: estimatedHeight + 400,
+        })
+        return
+      }
+
+      // Calculate the bounding box of all nodes
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
       
-      setSvgSize({
-        width: estimatedWidth + 200, // Add padding
-        height: estimatedHeight + 200,
+      nodeElements.forEach(node => {
+        const rect = node.getBoundingClientRect()
+        minX = Math.min(minX, rect.left)
+        minY = Math.min(minY, rect.top)
+        maxX = Math.max(maxX, rect.right)
+        maxY = Math.max(maxY, rect.bottom)
+      })
+      
+      // Calculate required SVG dimensions based on actual content bounds
+      const contentWidth = maxX - minX
+      const contentHeight = maxY - minY
+      
+      // Add generous padding for connections and ensure minimum size
+      const svgWidth = Math.max(contentWidth + 800, 1200, window.innerWidth)
+      const svgHeight = Math.max(contentHeight + 800, 800, window.innerHeight)
+      
+      // Only update if the size changed significantly to prevent loops
+      setSvgSize(prevSize => {
+        const widthDiff = Math.abs(prevSize.width - svgWidth)
+        const heightDiff = Math.abs(prevSize.height - svgHeight)
+        
+        // Only update if change is significant (more than 50px)
+        if (widthDiff > 50 || heightDiff > 50) {
+          return { width: svgWidth, height: svgHeight }
+        }
+        return prevSize
       })
     }
     
-    updateSize()
-    window.addEventListener("resize", updateSize)
+    // Initial size calculation with delay to ensure nodes are rendered
+    const timeoutId = setTimeout(updateSize, 200)
+    
+    // Update on window resize
+    const handleResize = () => {
+      setTimeout(updateSize, 100) // Debounce resize events
+    }
+    window.addEventListener("resize", handleResize)
     
     return () => {
-      window.removeEventListener("resize", updateSize)
+      window.removeEventListener("resize", handleResize)
+      clearTimeout(timeoutId)
     }
-  }, [data])
+  }, [data, nodeRefs])
 
   const findNodeLocation = (nodeId: string) => {
     for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
