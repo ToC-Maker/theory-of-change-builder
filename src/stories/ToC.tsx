@@ -314,16 +314,9 @@ export function ToC({ data: initialData }: { data: ToCData }) {
           <div className="flex gap-6">
             {/* Section title positioned to center over actual columns */}
             <div className="flex-1 flex flex-col">
-              <div className="bg-gray-100 rounded-lg px-4 py-2 mb-4 mx-2">
+              <div className="bg-gray-700 rounded px-3 py-3 mb-2 mx-2">
                 <h2
-                  className={clsx(
-                    "text-3xl font-bold text-center",
-                    sectionIndex === 0 && "text-red-700",
-                    sectionIndex === data.sections.length - 1 && "text-green-700",
-                    sectionIndex !== 0 &&
-                      sectionIndex !== data.sections.length - 1 &&
-                      "text-indigo-700",
-                  )}
+                  className="text-3xl font-bold text-center text-white uppercase"
                 >
                   {section.title}
                 </h2>
