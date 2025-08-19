@@ -313,8 +313,8 @@ export function ToC({ data: initialData }: { data: ToCData }) {
         <div key={sectionIndex} className="flex-1">
           <div className="flex gap-6">
             {/* Section title positioned to center over actual columns */}
-            <div className="flex-1 flex flex-col">
-              <div className="bg-gray-700 rounded px-3 py-3 mb-2 mx-2">
+            <div className="flex flex-col">
+              <div className="bg-gray-700 rounded py-3 mb-2 px-3">
                 <h2
                   className="text-3xl font-bold text-center text-white uppercase"
                 >
