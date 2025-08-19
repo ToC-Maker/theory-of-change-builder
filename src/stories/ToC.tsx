@@ -308,16 +308,16 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   }, [hoveredNode, data])
 
   return (
-    <div className="flex relative gap-32">
+    <div className="flex relative gap-16 min-w-fit">
       {data.sections.map((section, sectionIndex) => (
         <div key={sectionIndex} className="flex-1">
-          <div className="flex gap-8">
+          <div className="flex gap-6">
             {/* Section title positioned to center over actual columns */}
             <div className="flex-1 flex flex-col">
               <div className="bg-gray-100 rounded-lg px-4 py-2 mb-4 mx-2">
                 <h2
                   className={clsx(
-                    "text-lg font-bold text-center",
+                    "text-3xl font-bold text-center",
                     sectionIndex === 0 && "text-red-700",
                     sectionIndex === data.sections.length - 1 && "text-green-700",
                     sectionIndex !== 0 &&
@@ -328,7 +328,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   {section.title}
                 </h2>
               </div>
-              <div className="flex gap-8">
+              <div className="flex gap-6">
             {section.columns.filter(column => column.nodes.length > 0).map((column, colIndex) => (
               <React.Fragment key={colIndex}>
                 {/* Drop zone before first column */}
@@ -531,59 +531,42 @@ function Connections({
 
   useEffect(() => {
     const updateSize = () => {
-      // Calculate dimensions based on actual node positions
-      const nodeElements = Object.values(nodeRefs).filter(Boolean) as HTMLDivElement[]
+      // Calculate dimensions based on estimated layout
+      const numSections = data.sections.length
+      const maxNodesPerSection = Math.max(...data.sections.map(section => 
+        Math.max(...section.columns.map(col => col.nodes.length), 1)
+      ))
       
-      if (nodeElements.length === 0) {
-        // Fallback to estimates if no nodes are rendered yet
-        const numSections = data.sections.length
-        const estimatedWidth = numSections * 400 + (numSections - 1) * 128
-        const estimatedHeight = Math.max(window.innerHeight, 800)
-        setSvgSize({
-          width: estimatedWidth + 400,
-          height: estimatedHeight + 400,
-        })
-        return
-      }
-
-      // Calculate the bounding box of all nodes
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      // Calculate maximum columns per section
+      const maxColumnsPerSection = Math.max(...data.sections.map(section => section.columns.length))
       
-      nodeElements.forEach(node => {
-        const rect = node.getBoundingClientRect()
-        minX = Math.min(minX, rect.left)
-        minY = Math.min(minY, rect.top)
-        maxX = Math.max(maxX, rect.right)
-        maxY = Math.max(maxY, rect.bottom)
-      })
+      // Estimate dimensions more reliably with generous padding
+      const nodeWidth = 384 // w-96 = 24rem = 384px
+      const nodeHeight = 256 // h-64 = 16rem = 256px
+      const sectionGap = 64 // gap-16 = 4rem = 64px
+      const columnGap = 24 // gap-6 = 1.5rem = 24px
+      const nodeGap = 16 // gap-4 = 1rem = 16px
       
-      // Calculate required SVG dimensions based on actual content bounds
-      const contentWidth = maxX - minX
-      const contentHeight = maxY - minY
+      // Much more generous width calculation
+      const estimatedWidth = numSections * (nodeWidth * maxColumnsPerSection + columnGap * (maxColumnsPerSection + 1)) + (numSections - 1) * sectionGap
+      const estimatedHeight = maxNodesPerSection * (nodeHeight + nodeGap) + 200 // extra for headers
       
-      // Add generous padding for connections and ensure minimum size
-      const svgWidth = Math.max(contentWidth + 800, 1200, window.innerWidth)
-      const svgHeight = Math.max(contentHeight + 800, 800, window.innerHeight)
+      // Set very generous dimensions to ensure edges never get cut off
+      const svgWidth = Math.max(estimatedWidth + 800, window.innerWidth * 2)
+      const svgHeight = Math.max(estimatedHeight + 600, window.innerHeight * 1.5)
       
-      // Only update if the size changed significantly to prevent loops
-      setSvgSize(prevSize => {
-        const widthDiff = Math.abs(prevSize.width - svgWidth)
-        const heightDiff = Math.abs(prevSize.height - svgHeight)
-        
-        // Only update if change is significant (more than 50px)
-        if (widthDiff > 50 || heightDiff > 50) {
-          return { width: svgWidth, height: svgHeight }
-        }
-        return prevSize
-      })
+      setSvgSize({ width: svgWidth, height: svgHeight })
     }
     
-    // Initial size calculation with delay to ensure nodes are rendered
-    const timeoutId = setTimeout(updateSize, 200)
+    // Immediate size calculation
+    updateSize()
+    
+    // Also update after a short delay to ensure everything is settled
+    const timeoutId = setTimeout(updateSize, 100)
     
     // Update on window resize
     const handleResize = () => {
-      setTimeout(updateSize, 100) // Debounce resize events
+      updateSize()
     }
     window.addEventListener("resize", handleResize)
     
@@ -591,7 +574,7 @@ function Connections({
       window.removeEventListener("resize", handleResize)
       clearTimeout(timeoutId)
     }
-  }, [data, nodeRefs])
+  }, [data])
 
   const findNodeLocation = (nodeId: string) => {
     for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
@@ -772,14 +755,24 @@ function Connections({
     {/* Large center modal for edge information */}
     {edgePopup && (
       <div 
-        className="fixed inset-0 z-50 flex items-center justify-center transition-all duration-150 ease-out"
+        className="fixed z-50 flex items-center justify-center transition-all duration-150 ease-out"
         style={{
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
           animation: 'fadeIn 0.15s ease-out'
         }}
       >
         {/* Backdrop with blur */}
         <div 
-          className="absolute inset-0 bg-black bg-opacity-50 backdrop-blur-sm"
+          className="absolute bg-black bg-opacity-50 backdrop-blur-sm"
+          style={{
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh'
+          }}
           onClick={() => setEdgePopup(null)}
         />
         
@@ -800,10 +793,10 @@ function Connections({
           
           {/* Header */}
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            <h2 className="text-4xl font-bold text-gray-900 mb-2">
               Connection Details
             </h2>
-            <div className="text-lg text-indigo-600 font-medium">
+            <div className="text-2xl text-indigo-600 font-medium">
               {edgePopup.sourceId} → {edgePopup.targetId}
             </div>
           </div>
@@ -811,7 +804,7 @@ function Connections({
           {/* Content */}
           <div className="space-y-6">
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+              <h3 className="text-2xl font-semibold text-gray-800 mb-3">
                 Confidence Level
               </h3>
               <div className="space-y-4">
@@ -867,7 +860,7 @@ function Connections({
             </div>
             
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+              <h3 className="text-2xl font-semibold text-gray-800 mb-3">
                 Why this connection exists
               </h3>
               <p className="text-gray-600 leading-relaxed">
@@ -877,7 +870,7 @@ function Connections({
             </div>
             
             <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+              <h3 className="text-2xl font-semibold text-gray-800 mb-3">
                 Evidence & Assumptions
               </h3>
               {edgePopup.evidence || edgePopup.assumptions ? (
@@ -1000,7 +993,7 @@ function Node({
         }}
         onDragEnd={onDragEnd}
         className={clsx(
-          "flex border rounded-lg cursor-pointer transition-all w-48 h-32",
+          "flex border rounded-lg cursor-pointer transition-all w-96 h-64",
           isHighlighted
             ? "bg-indigo-200"
             : isHovered
@@ -1014,7 +1007,7 @@ function Node({
         onMouseLeave={() => setHoveredNode(null)}
       >
         <div className={clsx("flex-grow px-4 py-2 flex items-center justify-center", !node.text && "w-full")}>
-          <div className="text-sm font-medium text-center">{node.title}</div>
+          <div className="text-xl font-medium text-center">{node.title}</div>
         </div>
         {node.text && (
           <button
@@ -1028,7 +1021,7 @@ function Node({
       
       {showPopup && node.text && (
         <div className="absolute bottom-full left-0 mb-2 p-3 bg-white border border-gray-300 rounded-lg shadow-lg z-50 min-w-64 max-w-80">
-          <div className="text-sm">{node.text}</div>
+          <div className="text-lg">{node.text}</div>
           <button
             className="absolute top-1 right-2 text-gray-500 hover:text-gray-700 text-lg leading-none"
             onClick={(e) => {
