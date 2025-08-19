@@ -967,12 +967,15 @@ function Node({
   }, [node.id, updateNodeRef])
 
   const handleClick = () => {
-    toggleHighlight(node.id)
+    if (node.text) {
+      setShowPopup(!showPopup)
+    } else {
+      toggleHighlight(node.id)
+    }
   }
 
-  const handleExpandClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    setShowPopup(!showPopup)
+  const handleDoubleClick = () => {
+    toggleHighlight(node.id)
   }
 
   return (
@@ -986,30 +989,23 @@ function Node({
         }}
         onDragEnd={onDragEnd}
         className={clsx(
-          "flex border rounded-lg cursor-pointer transition-all w-96 h-64",
+          "flex border-0 rounded-xl cursor-pointer transition-all duration-300 w-96 h-64 bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl hover:scale-105 transform",
           isHighlighted
-            ? "bg-indigo-200"
+            ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
-              ? "bg-indigo-100"
-              : "hover:bg-gray-100",
+              ? "ring-2 ring-indigo-300 bg-gradient-to-br from-indigo-25 to-indigo-50"
+              : "hover:shadow-2xl",
           hasHighlightedNodes && !isConnected && "opacity-30",
           isDragging && "opacity-50 scale-95 shadow-lg"
         )}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onMouseEnter={() => setHoveredNode(node.id)}
         onMouseLeave={() => setHoveredNode(null)}
       >
-        <div className={clsx("flex-grow px-4 py-2 flex items-center justify-center", !node.text && "w-full")}>
+        <div className="flex-grow px-4 py-2 flex items-center justify-center w-full">
           <div className="text-xl font-medium text-center">{node.title}</div>
         </div>
-        {node.text && (
-          <button
-            className="flex shrink-0 items-center justify-center w-5 hover:bg-white rounded-r-lg"
-            onClick={handleExpandClick}
-          >
-            <InformationCircleIcon className="h-4 w-4" />
-          </button>
-        )}
       </div>
       
       {showPopup && node.text && (
