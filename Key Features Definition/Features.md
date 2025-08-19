@@ -110,6 +110,74 @@ An interactive web application that maintains the rigorous backwards-chaining me
 
 ## 3. MVP Feature Specification
 
+### 3.0 Phase 0: AI-Assisted Visualization Proof of Concept (Simpler MVP)
+
+**Goal**: Validate that an AI-assisted chatbot can successfully transform text-based Theory of Change descriptions into the interactive flowchart format, providing a foundation for the full backwards-chaining methodology.
+
+**Layout**: 
+- 2/3 of screen: Interactive ToC visualization (using existing React component)
+- 1/3 of screen: AI chatbot interface (left panel)
+
+#### Core Features (Phase 0)
+1. **Existing ToC Display Integration**
+   - Utilize current React ToC visualization component
+   - Display interactive flowchart with confidence bars, hover details, and connection popups
+   - Maintain existing drag-and-drop and highlighting functionality
+
+2. **AI Chatbot Interface**
+   - Clean, minimal chat interface in left panel (1/3 screen width)
+   - Two primary conversation paths:
+     - **Path A**: "Build ToC from scratch" - Guided structured process
+     - **Path B**: "Input existing ToC context" - Text-to-visualization conversion
+
+3. **Text-to-ToC Conversion Engine**
+   - Accept unstructured Theory of Change text input
+   - AI parsing to identify:
+     - Goal/outcome statements
+     - Causal relationships and assumptions
+     - Evidence statements
+     - Confidence levels (inferred or explicitly stated)
+   - Transform parsed content into JSON format compatible with existing React component
+
+4. **Initial Conversation Flow**
+   ```
+   Chatbot: "I can help you create or visualize your Theory of Change. Would you like to:
+   1. 🏗️ Build a new ToC from scratch with guided questions
+   2. 📋 Transform existing ToC text into an interactive visualization"
+   ```
+
+5. **Real-time Visualization Updates**
+   - Live update of flowchart as AI processes user input
+   - Progressive building of nodes, connections, and confidence levels
+   - Visual feedback showing AI's interpretation accuracy
+
+6. **Basic Validation Features**
+   - AI asks clarifying questions about ambiguous relationships
+   - User can confirm/modify AI interpretations before finalizing
+   - Simple feedback mechanism: "Does this look right?"
+
+#### Technical Implementation (Phase 0)
+- **Frontend**: Extend existing React setup with chat component
+- **AI Integration**: OpenAI API or similar for text processing and conversation management
+- **Data Flow**: Text input → AI parsing → JSON generation → React component update
+- **Layout**: CSS Grid/Flexbox for 1/3 chat, 2/3 visualization split
+
+#### Success Criteria (Phase 0)
+- 80% of users can successfully input text ToC and see reasonable visualization
+- AI correctly identifies basic causal chains in 70% of test cases
+- Users report the visualization matches their intended meaning in 60% of cases
+- Proof that AI-assisted approach is viable before investing in full backwards-chaining methodology
+
+#### Key Learning Objectives
+1. **Technical Feasibility**: Can AI reliably parse Theory of Change text into structured format?
+2. **User Experience**: Do users find the AI-assisted approach intuitive and helpful?
+3. **Visualization Value**: Does seeing their ToC as an interactive flowchart provide immediate value?
+4. **Conversation Design**: What conversation patterns work best for ToC elicitation?
+
+This Phase 0 serves as a critical validation step before proceeding to the full backwards-chaining methodology in Release 1, ensuring the core AI-visualization pipeline works effectively.
+
+---
+
 ### 3.1 Essential Features (Release 1)
 
 1. **End Goal Definition Interface**
@@ -193,7 +261,32 @@ An interactive web application that maintains the rigorous backwards-chaining me
 
 ## 4. User Journey & Workflow
 
-### 4.1 Primary User Flow (MVP)
+### 4.0 Phase 0 User Flow (Simpler MVP)
+
+**Path A: Build from Scratch**
+1. **Welcome** - Choose "Build new ToC from scratch"
+2. **Goal Elicitation** - AI asks: "What specific change do you want to see in the world?"
+3. **Context Gathering** - AI gathers background, stakeholders, timeframe
+4. **Iterative Building** - AI suggests potential causal chains, user confirms/modifies
+5. **Visualization Refinement** - User adjusts connections, confidence levels via chat
+6. **Validation** - "Does this visualization capture your theory accurately?"
+
+**Path B: Text-to-Visualization**
+1. **Welcome** - Choose "Transform existing ToC text"  
+2. **Text Input** - User pastes or types their existing Theory of Change
+3. **AI Processing** - "I'm analyzing your text and identifying key relationships..."
+4. **Initial Visualization** - First-pass flowchart appears, AI explains interpretation
+5. **Clarification Round** - AI asks about ambiguous connections: "Did you mean X leads to Y?"
+6. **Refinement** - User provides feedback, AI updates visualization
+7. **Finalization** - User confirms final version matches their intent
+
+**Common Elements:**
+- Real-time visualization updates in 2/3 of screen
+- Conversational AI guidance in 1/3 left panel
+- Click-to-modify elements: "Change this connection" → AI helps refine
+- Export options: "Save as JSON", "Generate summary"
+
+### 4.1 Primary User Flow (Release 1 - Full MVP)
 1. **Orientation** - Brief process explanation
 2. **Goal Definition** - Single, specific end goal entry
 3. **Mission Context** - Broader mission connection
