@@ -1021,7 +1021,7 @@ function Node({
         onDragEnd={onDragEnd}
         className={clsx(
           "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
-          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-64 min-h-[12rem] hover:scale-105 p-4",
+          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-64 hover:scale-105 pt-4 px-4 pb-8",
           isHighlighted
             ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
@@ -1058,17 +1058,10 @@ function Node({
             </div>
           </div>
         ) : (
-          <div className="flex-grow flex flex-col justify-center relative">
-            <div className="text-xl font-medium text-center leading-tight px-2 py-2 break-words">
+          <div className="flex flex-col justify-center relative py-2">
+            <div className="text-xl font-medium text-center leading-tight px-2 break-words">
               {node.title}
             </div>
-            
-            {/* Discrete hint text positioned absolutely at bottom */}
-            {node.text && showHint && canExpand && (
-              <div className="absolute bottom-1 left-1/2 transform -translate-x-1/2 text-xs text-gray-500 text-center animate-fade-in-up whitespace-nowrap">
-                click to view details
-              </div>
-            )}
             
             {/* Subtle visual cue for nodes with details */}
             {node.text && !showPopup && !showHint && (
@@ -1077,6 +1070,13 @@ function Node({
           </div>
         )}
       </div>
+      
+      {/* Hint text positioned outside node container but overlaying it */}
+      {node.text && showHint && canExpand && !showPopup && (
+        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-gray-500 text-center animate-fade-in-up whitespace-nowrap pointer-events-none">
+          click to view details
+        </div>
+      )}
     </div>
   )
 }
