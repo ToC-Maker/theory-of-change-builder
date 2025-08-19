@@ -374,7 +374,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                     handleDrop(sectionIndex, colIndex, false)
                   }}
                 >
-                  <div className="flex flex-col gap-4 justify-evenly min-h-96">
+                  <div className="flex flex-col gap-2 justify-evenly min-h-96">
                     {/* Drop zone at top of column */}
                     <div 
                       className={clsx(
@@ -534,11 +534,11 @@ function Connections({
       const maxColumnsPerSection = Math.max(...data.sections.map(section => section.columns.length))
       
       // Estimate dimensions more reliably with generous padding
-      const nodeWidth = 384 // w-96 = 24rem = 384px
+      const nodeWidth = 256 // w-64 = 16rem = 256px
       const nodeHeight = 256 // h-64 = 16rem = 256px
       const sectionGap = 64 // gap-16 = 4rem = 64px
       const columnGap = 24 // gap-6 = 1.5rem = 24px
-      const nodeGap = 16 // gap-4 = 1rem = 16px
+      const nodeGap = 8 // gap-2 = 0.5rem = 8px
       
       // Much more generous width calculation
       const estimatedWidth = numSections * (nodeWidth * maxColumnsPerSection + columnGap * (maxColumnsPerSection + 1)) + (numSections - 1) * sectionGap
@@ -1021,7 +1021,7 @@ function Node({
         onDragEnd={onDragEnd}
         className={clsx(
           "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
-          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-96 h-64 hover:scale-105",
+          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-64 min-h-[12rem] hover:scale-105 p-4",
           isHighlighted
             ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
@@ -1058,19 +1058,21 @@ function Node({
             </div>
           </div>
         ) : (
-          <div className="flex-grow px-4 py-2 flex items-center justify-center relative">
-            <div className="text-xl font-medium text-center">{node.title}</div>
+          <div className="flex-grow flex flex-col justify-center relative">
+            <div className="text-xl font-medium text-center leading-tight px-2 py-2 break-words">
+              {node.title}
+            </div>
             
             {/* Discrete hint text positioned absolutely at bottom */}
             {node.text && showHint && canExpand && (
-              <div className="absolute bottom-3 left-1/2 text-lg text-gray-500 animate-fade-in-up">
+              <div className="absolute bottom-1 left-1/2 transform -translate-x-1/2 text-xs text-gray-500 text-center animate-fade-in-up whitespace-nowrap">
                 click to view details
               </div>
             )}
             
             {/* Subtle visual cue for nodes with details */}
             {node.text && !showPopup && !showHint && (
-              <div className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-30"></div>
+              <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-30"></div>
             )}
           </div>
         )}
