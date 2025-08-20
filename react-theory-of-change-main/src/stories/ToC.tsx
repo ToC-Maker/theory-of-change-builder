@@ -1,5 +1,5 @@
 import clsx from "clsx"
-import React, { useEffect, useMemo, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 interface Connection {
   targetId: string
@@ -14,6 +14,7 @@ interface Node {
   text: string
   connectionIds: string[]
   connections?: Connection[]
+  yPosition?: number
 }
 
 interface ToCData {
@@ -67,10 +68,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   )
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
   const [draggedNode, setDraggedNode] = useState<Node | null>(null)
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null)
   const [dragOverLocation, setDragOverLocation] = useState<{
     sectionIndex: number
     columnIndex: number
-    nodeIndex?: number
+    yPosition?: number
     isNewColumn?: boolean
   } | null>(null)
 
@@ -90,20 +92,74 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     })
   }
 
-  const handleDragStart = (node: Node) => {
+
+  const moveNodeVertically = useCallback((nodeId: string, direction: 'up' | 'down') => {
+    const moveAmount = direction === 'up' ? -20 : 20
+    
+    setData((prevData) => ({
+      ...prevData,
+      sections: prevData.sections.map((section) => ({
+        ...section,
+        columns: section.columns.map((column) => ({
+          ...column,
+          nodes: column.nodes.map((node, nodeIndex) => {
+            if (node.id === nodeId) {
+              // If node doesn't have a custom position, use its current visual position
+              const currentY = node.yPosition ?? (nodeIndex * 180 + 30)
+              return { ...node, yPosition: currentY + moveAmount }
+            }
+            return node
+          })
+        }))
+      }))
+    }))
+  }, [setData])
+
+  // Keyboard event handler for moving nodes
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only handle arrow keys when nodes are highlighted
+      if (highlightedNodes.size === 0) return
+      
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        const direction = event.key === 'ArrowUp' ? 'up' : 'down'
+        
+        // Move all highlighted nodes
+        highlightedNodes.forEach((nodeId) => {
+          moveNodeVertically(nodeId, direction)
+        })
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [highlightedNodes, moveNodeVertically])
+
+  const handleDragStart = (node: Node, event: React.DragEvent) => {
     setDraggedNode(node)
+    
+    // Calculate the offset from where the user clicked to the top of the node
+    const nodeElement = nodeRefs[node.id]
+    if (nodeElement) {
+      const rect = nodeElement.getBoundingClientRect()
+      const offsetX = event.clientX - rect.left
+      const offsetY = event.clientY - rect.top
+      setDragOffset({ x: offsetX, y: offsetY })
+    }
   }
 
   const handleDragEnd = () => {
     setDraggedNode(null)
+    setDragOffset(null)
     setDragOverLocation(null)
   }
 
-  const handleDragOver = (sectionIndex: number, columnIndex: number, isNewColumn: boolean = false, nodeIndex?: number) => {
-    setDragOverLocation({ sectionIndex, columnIndex, isNewColumn, nodeIndex })
+  const handleDragOver = (sectionIndex: number, columnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
+    setDragOverLocation({ sectionIndex, columnIndex, isNewColumn, yPosition })
   }
 
-  const findNodeLocation = (nodeId: string) => {
+  const findNodeLocation = useCallback((nodeId: string) => {
     for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
       for (let columnIndex = 0; columnIndex < data.sections[sectionIndex].columns.length; columnIndex++) {
         const node = data.sections[sectionIndex].columns[columnIndex].nodes.find((n) => n.id === nodeId)
@@ -113,11 +169,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       }
     }
     return null
-  }
+  }, [data.sections])
 
-  const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, nodeIndex?: number) => {
-    if (!draggedNode) {
-      console.log("No dragged node")
+  const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
+    if (!draggedNode || !dragOffset) {
+      console.log("No dragged node or drag offset")
       return
     }
 
@@ -127,19 +183,39 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       return
     }
 
-    if (
-      !isNewColumn &&
-      nodeIndex === undefined &&
-      sourceLocation.sectionIndex === targetSectionIndex &&
-      sourceLocation.columnIndex === targetColumnIndex
-    ) {
-      console.log("Same location, not moving")
-      return
-    }
+    // Adjust yPosition by the drag offset so the node appears where the user grabbed it
+    const adjustedYPosition = yPosition !== undefined ? yPosition - dragOffset.y : 20
 
-    console.log("Moving node", draggedNode.id, "from", sourceLocation, "to", {targetSectionIndex, targetColumnIndex, isNewColumn, nodeIndex})
+    console.log("Moving node", draggedNode.id, "from", sourceLocation, "to", {targetSectionIndex, targetColumnIndex, isNewColumn, yPosition: adjustedYPosition})
 
     setData((prevData) => {
+      // If we're just updating position in the same column, do it more precisely
+      if (!isNewColumn && 
+          sourceLocation.sectionIndex === targetSectionIndex && 
+          sourceLocation.columnIndex === targetColumnIndex) {
+        
+        // Just update the yPosition of the specific node in place
+        return {
+          ...prevData,
+          sections: prevData.sections.map((section, sIndex) => 
+            sIndex === targetSectionIndex ? {
+              ...section,
+              columns: section.columns.map((column, cIndex) =>
+                cIndex === targetColumnIndex ? {
+                  ...column,
+                  nodes: column.nodes.map((node) =>
+                    node.id === draggedNode.id 
+                      ? { ...node, yPosition: adjustedYPosition }
+                      : node
+                  )
+                } : column
+              )
+            } : section
+          )
+        }
+      }
+      
+      // For moves between different columns/sections, do the full remove and add
       const newData = { ...prevData }
       
       // Remove node from source location
@@ -154,20 +230,19 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       if (isNewColumn) {
         // Insert new column at the target position
         const targetSection = newData.sections[targetSectionIndex]
-        const newColumn = { nodes: [draggedNode] }
+        const newColumn = { nodes: [{ ...draggedNode, yPosition: adjustedYPosition }] }
         targetSection.columns.splice(targetColumnIndex, 0, newColumn)
-      } else if (nodeIndex !== undefined) {
-        // Insert at specific position within column
-        newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.splice(nodeIndex, 0, draggedNode)
       } else {
-        // Add to end of existing column
-        newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(draggedNode)
+        // Add node with custom yPosition to existing column
+        const nodeWithPosition = { ...draggedNode, yPosition: adjustedYPosition }
+        newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(nodeWithPosition)
       }
 
       return newData
     })
 
     setDraggedNode(null)
+    setDragOffset(null)
     setDragOverLocation(null)
   }
 
@@ -273,7 +348,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     })
 
     return allConnectedNodes
-  }, [highlightedNodes, data])
+  }, [highlightedNodes, data, findNodeLocation])
 
   const hoveredConnections = useMemo(() => {
     if (!hoveredNode) return new Set<string>()
@@ -307,7 +382,10 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   }, [hoveredNode, data])
 
   return (
-    <div className="flex relative gap-8 min-w-fit">
+    <div 
+      className="flex relative gap-8 min-w-fit overflow-visible" 
+      style={{ minHeight: '100vh' }}
+    >
       {data.sections.map((section, sectionIndex) => (
         <div key={sectionIndex}>
           <div className="flex gap-6">
@@ -354,55 +432,34 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   </div>
                 )}
                 
-                {/* Existing column */}
+                {/* Column with drag and keyboard positioning */}
                 <div 
-                  className={clsx(
-                    "min-h-96 p-2 rounded-lg border-2 border-dashed transition-colors flex justify-center",
-                    dragOverLocation?.sectionIndex === sectionIndex && 
-                    dragOverLocation?.columnIndex === colIndex && 
-                    !dragOverLocation?.isNewColumn
-                      ? "border-blue-400 bg-blue-50"
-                      : "border-transparent"
-                  )}
+                  className="relative w-48 min-h-screen"
                   onDragOver={(e) => {
                     e.preventDefault()
-                    handleDragOver(sectionIndex, colIndex, false)
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    const yPosition = e.clientY - rect.top
+                    handleDragOver(sectionIndex, colIndex, false, yPosition)
                   }}
                   onDrop={(e) => {
                     e.preventDefault()
-                    handleDrop(sectionIndex, colIndex, false)
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    const yPosition = e.clientY - rect.top
+                    handleDrop(sectionIndex, colIndex, false, yPosition)
                   }}
                 >
-                  <div className="flex flex-col gap-2 justify-evenly min-h-96 items-center">
-                    {/* Drop zone at top of column */}
-                    <div 
-                      className={clsx(
-                        "h-8 rounded-lg transition-colors border-2 border-dashed flex items-center justify-center",
-                        dragOverLocation?.sectionIndex === sectionIndex && 
-                        dragOverLocation?.columnIndex === colIndex && 
-                        dragOverLocation?.nodeIndex === 0
-                          ? "bg-blue-200 border-blue-400"
-                          : draggedNode 
-                            ? "border-blue-200 bg-blue-50 hover:border-blue-300 hover:bg-blue-100" 
-                            : "border-transparent"
-                      )}
-                      onDragOver={(e) => {
-                        e.preventDefault()
-                        handleDragOver(sectionIndex, colIndex, false, 0)
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault()
-                        handleDrop(sectionIndex, colIndex, false, 0)
-                      }}
-                    >
-                      {draggedNode && (
-                        <div className="text-blue-400 text-xs font-medium">
-                          Drop here
-                        </div>
-                      )}
-                    </div>
-                    {column.nodes.map((node, nodeIndex) => (
-                      <React.Fragment key={node.id}>
+                  {column.nodes
+                    .map((node, nodeIndex) => (
+                      <div
+                        key={node.id}
+                        className="absolute w-full"
+                        style={{
+                          top: node.yPosition !== undefined 
+                            ? `${node.yPosition}px` 
+                            : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
+                          left: 0
+                        }}
+                      >
                         <Node
                           node={node}
                           updateNodeRef={updateNodeRef}
@@ -416,42 +473,14 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                           onDragStart={handleDragStart}
                           onDragEnd={handleDragEnd}
                         />
-                        {/* Drop zone after each node */}
-                        <div 
-                          className={clsx(
-                            "h-8 rounded-lg transition-colors border-2 border-dashed flex items-center justify-center",
-                            dragOverLocation?.sectionIndex === sectionIndex && 
-                            dragOverLocation?.columnIndex === colIndex && 
-                            dragOverLocation?.nodeIndex === nodeIndex + 1
-                              ? "bg-blue-200 border-blue-400"
-                              : draggedNode 
-                                ? "border-blue-200 bg-blue-50 hover:border-blue-300 hover:bg-blue-100" 
-                                : "border-transparent"
-                          )}
-                          onDragOver={(e) => {
-                            e.preventDefault()
-                            handleDragOver(sectionIndex, colIndex, false, nodeIndex + 1)
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault()
-                            handleDrop(sectionIndex, colIndex, false, nodeIndex + 1)
-                          }}
-                        >
-                          {draggedNode && (
-                            <div className="text-blue-400 text-xs font-medium">
-                              Drop here
-                            </div>
-                          )}
-                        </div>
-                      </React.Fragment>
+                      </div>
                     ))}
-                  </div>
                 </div>
 
                 {/* Drop zone after column */}
                 <div 
                   className={clsx(
-                    "w-4 min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
+                    "w-4 min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
                     dragOverLocation?.sectionIndex === sectionIndex && 
                     dragOverLocation?.columnIndex === colIndex + 1 && 
                     dragOverLocation?.isNewColumn
@@ -987,7 +1016,7 @@ function Node({
   toggleHighlight: (id: string) => void
   setHoveredNode: (id: string | null) => void
   hasHighlightedNodes: boolean
-  onDragStart: (node: Node) => void
+  onDragStart: (node: Node, event: React.DragEvent) => void
   onDragEnd: () => void
 }) {
   const [showPopup, setShowPopup] = useState(false)
@@ -1046,7 +1075,7 @@ function Node({
         ref={nodeRef}
         draggable
         onDragStart={(e) => {
-          onDragStart(node)
+          onDragStart(node, e)
           e.dataTransfer.effectAllowed = "move"
         }}
         onDragEnd={onDragEnd}
