@@ -1,4 +1,3 @@
-import { InformationCircleIcon } from "@heroicons/react/16/solid"
 import clsx from "clsx"
 import React, { useEffect, useMemo, useRef, useState } from "react"
 
@@ -308,9 +307,9 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   }, [hoveredNode, data])
 
   return (
-    <div className="flex relative gap-16 min-w-fit">
+    <div className="flex relative gap-8 min-w-fit">
       {data.sections.map((section, sectionIndex) => (
-        <div key={sectionIndex} className="flex-1">
+        <div key={sectionIndex}>
           <div className="flex gap-6">
             {/* Section title positioned to center over actual columns */}
             <div className="flex flex-col">
@@ -533,20 +532,20 @@ function Connections({
       // Calculate maximum columns per section
       const maxColumnsPerSection = Math.max(...data.sections.map(section => section.columns.length))
       
-      // Estimate dimensions more reliably with generous padding
-      const nodeWidth = 256 // w-64 = 16rem = 256px
+      // Estimate dimensions more reliably with moderate padding
+      const nodeWidth = 192 // w-48 = 12rem = 192px
       const nodeHeight = 256 // h-64 = 16rem = 256px
-      const sectionGap = 64 // gap-16 = 4rem = 64px
+      const sectionGap = 32 // gap-8 = 2rem = 32px
       const columnGap = 24 // gap-6 = 1.5rem = 24px
       const nodeGap = 8 // gap-2 = 0.5rem = 8px
       
-      // Much more generous width calculation
+      // More conservative width calculation
       const estimatedWidth = numSections * (nodeWidth * maxColumnsPerSection + columnGap * (maxColumnsPerSection + 1)) + (numSections - 1) * sectionGap
       const estimatedHeight = maxNodesPerSection * (nodeHeight + nodeGap) + 200 // extra for headers
       
-      // Set very generous dimensions to ensure edges never get cut off
-      const svgWidth = Math.max(estimatedWidth + 800, window.innerWidth * 2)
-      const svgHeight = Math.max(estimatedHeight + 600, window.innerHeight * 1.5)
+      // Safe dimensions to ensure edges never get cut off
+      const svgWidth = Math.max(estimatedWidth + 400, window.innerWidth * 1.2)
+      const svgHeight = Math.max(estimatedHeight + 300, window.innerHeight * 1.2)
       
       setSvgSize({ width: svgWidth, height: svgHeight })
     }
@@ -1053,7 +1052,7 @@ function Node({
         onDragEnd={onDragEnd}
         className={clsx(
           "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
-          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-64 hover:scale-105 pt-4 px-4 pb-8",
+          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-48 hover:scale-105 pt-3 px-3 pb-6",
           isHighlighted
             ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
@@ -1091,7 +1090,7 @@ function Node({
           </div>
         ) : (
           <div className="flex flex-col justify-center relative py-2">
-            <div className="text-xl font-medium text-center leading-tight px-2 break-words">
+            <div className="text-lg font-medium text-center leading-tight px-2 break-words">
               {node.title}
             </div>
             
