@@ -75,6 +75,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     yPosition?: number
     isNewColumn?: boolean
   } | null>(null)
+  const [editMode, setEditMode] = useState(false)
 
   const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
@@ -114,6 +115,72 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       }))
     }))
   }, [setData])
+
+  const straightenEdges = useCallback(() => {
+    setData((prevData) => {
+      // Collect all nodes with their actual center positions
+      const allNodes: { node: Node; sectionIndex: number; columnIndex: number; nodeIndex: number; centerY: number; topY: number; height: number }[] = []
+      
+      prevData.sections.forEach((section, sectionIndex) => {
+        section.columns.forEach((column, columnIndex) => {
+          column.nodes.forEach((node, nodeIndex) => {
+            const topY = node.yPosition ?? (nodeIndex * 180 + 30)
+            
+            // Get actual node height from DOM
+            const nodeElement = nodeRefs[node.id]
+            let actualHeight = 120 // Default fallback
+            if (nodeElement) {
+              const rect = nodeElement.getBoundingClientRect()
+              actualHeight = rect.height
+            }
+            
+            const centerY = topY + actualHeight / 2
+            allNodes.push({ node, sectionIndex, columnIndex, nodeIndex, centerY, topY, height: actualHeight })
+          })
+        })
+      })
+
+      // Group nodes by similar center Y positions (within 60px tolerance - increased for better grouping)
+      const groups: typeof allNodes[] = []
+      const tolerance = 60
+
+      allNodes.forEach((nodeData) => {
+        let addedToGroup = false
+        for (const group of groups) {
+          const avgCenterY = group.reduce((sum, n) => sum + n.centerY, 0) / group.length
+          if (Math.abs(nodeData.centerY - avgCenterY) <= tolerance) {
+            group.push(nodeData)
+            addedToGroup = true
+            break
+          }
+        }
+        if (!addedToGroup) {
+          groups.push([nodeData])
+        }
+      })
+
+      // Calculate the average center Y position for each group and update nodes
+      const newData = { ...prevData }
+      groups.forEach((group) => {
+        if (group.length > 1) { // Only straighten groups with multiple nodes
+          const avgCenterY = Math.round(group.reduce((sum, n) => sum + n.centerY, 0) / group.length)
+          
+          group.forEach(({ sectionIndex, columnIndex, nodeIndex, height }) => {
+            const node = newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex]
+            // Calculate top position that will center this specific node at avgCenterY
+            const alignedTopY = avgCenterY - height / 2
+            
+            newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex] = {
+              ...node,
+              yPosition: alignedTopY
+            }
+          })
+        }
+      })
+
+      return newData
+    })
+  }, [setData, nodeRefs])
 
   // Keyboard event handler for moving nodes
   useEffect(() => {
@@ -170,6 +237,55 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     }
     return null
   }, [data.sections])
+
+  const connectSelectedNodes = useCallback(() => {
+    if (highlightedNodes.size !== 2) {
+      alert('Please select exactly two nodes to connect')
+      return
+    }
+
+    const [sourceId, targetId] = Array.from(highlightedNodes)
+    
+    setData((prevData) => ({
+      ...prevData,
+      sections: prevData.sections.map((section) => ({
+        ...section,
+        columns: section.columns.map((column) => ({
+          ...column,
+          nodes: column.nodes.map((node) => {
+            if (node.id === sourceId) {
+              // Check if connection already exists
+              const existingConnection = node.connections?.some(conn => conn.targetId === targetId) ||
+                                       node.connectionIds.includes(targetId)
+              
+              if (existingConnection) {
+                alert('Connection already exists between these nodes')
+                return node
+              }
+
+              // Add new connection
+              if (node.connections) {
+                return {
+                  ...node,
+                  connections: [...node.connections, { targetId, confidence: 75 }]
+                }
+              } else {
+                return {
+                  ...node,
+                  connectionIds: [...node.connectionIds, targetId],
+                  connections: [...(node.connectionIds.map(id => ({ targetId: id, confidence: 50 }))), { targetId, confidence: 75 }]
+                }
+              }
+            }
+            return node
+          })
+        }))
+      }))
+    }))
+
+    // Clear selection after connecting
+    setHighlightedNodes(new Set())
+  }, [highlightedNodes, setData])
 
   const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
     if (!draggedNode || !dragOffset) {
@@ -382,10 +498,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   }, [hoveredNode, data])
 
   return (
-    <div 
-      className="flex relative gap-8 min-w-fit overflow-visible" 
-      style={{ minHeight: '100vh' }}
-    >
+      
+      <div 
+        className="flex relative gap-8 min-w-fit overflow-visible" 
+        style={{ minHeight: '100vh' }}
+      >
       {data.sections.map((section, sectionIndex) => (
         <div key={sectionIndex}>
           <div className="flex gap-6">
@@ -512,6 +629,94 @@ export function ToC({ data: initialData }: { data: ToCData }) {
           </div>
         </div>
       ))}
+      
+      {/* Edit button positioned after the final section */}
+      <div className="flex flex-col justify-start relative">
+        <div className="bg-transparent rounded py-3 mb-2 px-3 flex items-center justify-center">
+          <button
+            onClick={() => setEditMode(!editMode)}
+            className={`w-12 h-12 rounded-full shadow-lg transition-all duration-200 flex items-center justify-center ${
+              editMode 
+                ? 'bg-indigo-600 text-white' 
+                : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+            }`}
+            title="Edit Mode"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+        </div>
+        
+        {/* Edit Tools Panel - positioned relative to the button */}
+        {editMode && (
+          <div className="absolute top-16 left-0 z-50 bg-white rounded-xl shadow-2xl border border-gray-200 p-4 min-w-64">
+            <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-100">
+              <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              <h3 className="font-semibold text-gray-900">Edit Tools</h3>
+            </div>
+            
+            <div className="space-y-3">
+              {/* Straighten Edges Tool */}
+              <button
+                onClick={straightenEdges}
+                className="w-full flex items-center gap-3 px-3 py-2 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg transition-colors"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+                <div>
+                  <div className="font-medium text-sm">Straighten Edges</div>
+                  <div className="text-xs text-gray-500">Align nodes horizontally</div>
+                </div>
+              </button>
+
+              {/* Connect Nodes Tool */}
+              <button
+                onClick={connectSelectedNodes}
+                disabled={highlightedNodes.size !== 2}
+                className={`w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg transition-colors ${
+                  highlightedNodes.size === 2
+                    ? 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                    : 'text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+                <div>
+                  <div className="font-medium text-sm">Connect Nodes</div>
+                  <div className="text-xs text-gray-500">
+                    {highlightedNodes.size === 0 && 'Select 2 nodes to connect'}
+                    {highlightedNodes.size === 1 && 'Select 1 more node'}
+                    {highlightedNodes.size === 2 && 'Click to connect selected nodes'}
+                    {highlightedNodes.size > 2 && 'Select exactly 2 nodes'}
+                  </div>
+                </div>
+              </button>
+
+              {/* Drag Info */}
+              <div className="px-3 py-2 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                  </svg>
+                  <span>Drag nodes to reposition</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                  </svg>
+                  <span>Use ↑↓ arrows to fine-tune</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      
       <Connections
         data={data}
         setData={setData}
