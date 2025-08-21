@@ -78,6 +78,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   const [editMode, setEditMode] = useState(false)
   const [columnDragMode, setColumnDragMode] = useState(false)
   const [curvature, setCurvature] = useState(0.5)
+  const [textSize, setTextSize] = useState(1) // 0.5 to 2.0 scale
 
   const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
@@ -568,6 +569,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                           onDragStart={handleDragStart}
                           onDragEnd={handleDragEnd}
                           editMode={editMode}
+                          textSize={textSize}
                         />
                       </div>
                     ))}
@@ -730,6 +732,34 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   </div>
                   <div className="text-xs text-gray-500 text-center">
                     Adjust bezier curve intensity
+                  </div>
+                </div>
+              </div>
+
+              {/* Text Size Control */}
+              <div className="px-3 py-2 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-3 mb-2">
+                  <svg className="w-4 h-4 flex-shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700">Text Size</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-3">
+                    <span className="text-xs text-gray-500 w-8">Small</span>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2"
+                      step="0.1"
+                      value={textSize}
+                      onChange={(e) => setTextSize(parseFloat(e.target.value))}
+                      className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-gray-300 to-gray-600"
+                    />
+                    <span className="text-xs text-gray-500 w-8">Large</span>
+                  </div>
+                  <div className="text-xs text-gray-500 text-center">
+                    Adjust node text size (Current: {Math.round(textSize * 100)}%)
                   </div>
                 </div>
               </div>
@@ -1253,6 +1283,7 @@ function Node({
   onDragStart,
   onDragEnd,
   editMode,
+  textSize,
 }: {
   node: Node
   updateNodeRef: (id: string, ref: HTMLDivElement | null) => void
@@ -1266,6 +1297,7 @@ function Node({
   onDragStart: (node: Node, event: React.DragEvent) => void
   onDragEnd: () => void
   editMode: boolean
+  textSize: number
 }) {
   const [showPopup, setShowPopup] = useState(false)
   const nodeRef = useRef<HTMLDivElement>(null)
@@ -1346,7 +1378,10 @@ function Node({
         {showPopup ? (
           <div className="flex flex-col h-full relative">
             <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-200">
-              <div className="text-xl font-bold text-indigo-700 flex-1 text-center">
+              <div 
+                className="font-bold text-indigo-700 flex-1 text-center"
+                style={{ fontSize: `${textSize * 1.25}rem` }} // 1.25rem is text-xl base size
+              >
                 {node.title}
               </div>
               <button
@@ -1367,7 +1402,10 @@ function Node({
           </div>
         ) : (
           <div className="flex flex-col justify-center relative py-2">
-            <div className="text-lg font-medium text-center leading-tight px-2 break-words">
+            <div 
+              className="font-medium text-center leading-tight px-2 break-words"
+              style={{ fontSize: `${textSize * 1.125}rem` }} // 1.125rem is text-lg base size
+            >
               {node.title}
             </div>
             
