@@ -76,6 +76,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     isNewColumn?: boolean
   } | null>(null)
   const [editMode, setEditMode] = useState(false)
+  const [columnDragMode, setColumnDragMode] = useState(false)
   const [curvature, setCurvature] = useState(0.5)
 
   const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
@@ -118,6 +119,8 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   }, [setData])
 
   const straightenEdges = useCallback(() => {
+    if (!editMode) return
+    
     setData((prevData) => {
       // Collect all nodes with their actual center positions
       const allNodes: { node: Node; sectionIndex: number; columnIndex: number; nodeIndex: number; centerY: number; topY: number; height: number }[] = []
@@ -186,8 +189,8 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   // Keyboard event handler for moving nodes
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Only handle arrow keys when nodes are highlighted
-      if (highlightedNodes.size === 0) return
+      // Only handle arrow keys when in edit mode and nodes are highlighted
+      if (!editMode || highlightedNodes.size === 0) return
       
       if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
         event.preventDefault()
@@ -202,9 +205,14 @@ export function ToC({ data: initialData }: { data: ToCData }) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [highlightedNodes, moveNodeVertically])
+  }, [editMode, highlightedNodes, moveNodeVertically])
 
   const handleDragStart = (node: Node, event: React.DragEvent) => {
+    if (!editMode) {
+      event.preventDefault()
+      return
+    }
+    
     setDraggedNode(node)
     
     // Calculate the offset from where the user clicked to the top of the node
@@ -240,6 +248,8 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   }, [data.sections])
 
   const connectSelectedNodes = useCallback(() => {
+    if (!editMode) return
+    
     if (highlightedNodes.size !== 2) {
       alert('Please select exactly two nodes to connect')
       return
@@ -297,6 +307,14 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     const sourceLocation = findNodeLocation(draggedNode.id)
     if (!sourceLocation) {
       console.log("Source location not found for node:", draggedNode.id)
+      return
+    }
+
+    // If column dragging is disabled, only allow drops within the same column
+    if (!columnDragMode && 
+        (sourceLocation.sectionIndex !== targetSectionIndex || 
+         sourceLocation.columnIndex !== targetColumnIndex || 
+         isNewColumn)) {
       return
     }
 
@@ -444,10 +462,22 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       <div 
         className="flex relative gap-8 min-w-fit overflow-visible" 
         style={{ minHeight: '100vh' }}
+        onClick={(e) => {
+          // Only clear selections in view mode when clicking empty space
+          if (!editMode && e.target === e.currentTarget) {
+            setHighlightedNodes(new Set())
+          }
+        }}
       >
       {data.sections.map((section, sectionIndex) => (
-        <div key={sectionIndex}>
-          <div className="flex gap-6">
+        <div key={sectionIndex}
+             onClick={(e) => {
+               // Allow deselection by clicking section area in view mode
+               if (!editMode && e.target === e.currentTarget) {
+                 setHighlightedNodes(new Set())
+               }
+             }}>
+          <div className={`flex ${editMode ? 'gap-6' : 'gap-4'}`}>
             {/* Section title positioned to center over actual columns */}
             <div className="flex flex-col">
               <div className="bg-gray-700 rounded py-3 mb-2 px-3">
@@ -457,11 +487,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   {section.title}
                 </h2>
               </div>
-              <div className="flex gap-6">
+              <div className={`flex ${editMode && columnDragMode ? 'gap-8' : 'gap-6'}`}>
             {section.columns.filter(column => column.nodes.length > 0).map((column, colIndex) => (
               <React.Fragment key={colIndex}>
-                {/* Drop zone before first column */}
-                {colIndex === 0 && (
+                {/* Drop zone before first column - only show when column dragging is enabled */}
+                {editMode && columnDragMode && colIndex === 0 && (
                   <div 
                     className={clsx(
                       "w-4 min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
@@ -494,17 +524,23 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                 {/* Column with drag and keyboard positioning */}
                 <div 
                   className="relative w-48 min-h-screen"
-                  onDragOver={(e) => {
+                  onDragOver={editMode ? (e) => {
                     e.preventDefault()
                     const rect = e.currentTarget.getBoundingClientRect()
                     const yPosition = e.clientY - rect.top
                     handleDragOver(sectionIndex, colIndex, false, yPosition)
-                  }}
-                  onDrop={(e) => {
+                  } : undefined}
+                  onDrop={editMode ? (e) => {
                     e.preventDefault()
                     const rect = e.currentTarget.getBoundingClientRect()
                     const yPosition = e.clientY - rect.top
                     handleDrop(sectionIndex, colIndex, false, yPosition)
+                  } : undefined}
+                  onClick={(e) => {
+                    // Allow deselection by clicking column area in view mode
+                    if (!editMode && e.target === e.currentTarget) {
+                      setHighlightedNodes(new Set())
+                    }
                   }}
                 >
                   {column.nodes
@@ -531,39 +567,42 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                           hasHighlightedNodes={highlightedNodes.size > 0}
                           onDragStart={handleDragStart}
                           onDragEnd={handleDragEnd}
+                          editMode={editMode}
                         />
                       </div>
                     ))}
                 </div>
 
-                {/* Drop zone after column */}
-                <div 
-                  className={clsx(
-                    "w-4 min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
-                    dragOverLocation?.sectionIndex === sectionIndex && 
-                    dragOverLocation?.columnIndex === colIndex + 1 && 
-                    dragOverLocation?.isNewColumn
-                      ? "border-green-400 bg-green-50"
-                      : "border-transparent",
-                    draggedNode ? "hover:border-green-300" : ""
-                  )}
-                  onDragOver={(e) => {
-                    e.preventDefault()
-                    handleDragOver(sectionIndex, colIndex + 1, true)
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    handleDrop(sectionIndex, colIndex + 1, true)
-                  }}
-                >
-                  {dragOverLocation?.sectionIndex === sectionIndex && 
-                   dragOverLocation?.columnIndex === colIndex + 1 && 
-                   dragOverLocation?.isNewColumn && (
-                    <div className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap">
-                      New Column
-                    </div>
-                  )}
-                </div>
+                {/* Drop zone after column - only show when column dragging is enabled */}
+                {editMode && columnDragMode && (
+                  <div 
+                    className={clsx(
+                      "w-4 min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
+                      dragOverLocation?.sectionIndex === sectionIndex && 
+                      dragOverLocation?.columnIndex === colIndex + 1 && 
+                      dragOverLocation?.isNewColumn
+                        ? "border-green-400 bg-green-50"
+                        : "border-transparent",
+                      draggedNode ? "hover:border-green-300" : ""
+                    )}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      handleDragOver(sectionIndex, colIndex + 1, true)
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      handleDrop(sectionIndex, colIndex + 1, true)
+                    }}
+                  >
+                    {dragOverLocation?.sectionIndex === sectionIndex && 
+                     dragOverLocation?.columnIndex === colIndex + 1 && 
+                     dragOverLocation?.isNewColumn && (
+                      <div className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap">
+                        New Column
+                      </div>
+                    )}
+                  </div>
+                )}
               </React.Fragment>
             ))}
               </div>
@@ -576,7 +615,15 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       <div className="flex flex-col justify-start relative">
         <div className="bg-transparent rounded py-3 mb-2 px-3 flex items-center justify-center">
           <button
-            onClick={() => setEditMode(!editMode)}
+            onClick={() => {
+              const newEditMode = !editMode
+              setEditMode(newEditMode)
+              if (!newEditMode) {
+                // Clear selections and column drag mode when exiting edit mode
+                setHighlightedNodes(new Set())
+                setColumnDragMode(false)
+              }
+            }}
             className={`w-12 h-12 rounded-full shadow-lg transition-all duration-200 flex items-center justify-center ${
               editMode 
                 ? 'bg-indigo-600 text-white' 
@@ -635,6 +682,26 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                     {highlightedNodes.size === 1 && 'Select 1 more node'}
                     {highlightedNodes.size === 2 && 'Click to connect selected nodes'}
                     {highlightedNodes.size > 2 && 'Select exactly 2 nodes'}
+                  </div>
+                </div>
+              </button>
+
+              {/* Column Drag Mode Toggle */}
+              <button
+                onClick={() => setColumnDragMode(!columnDragMode)}
+                className={`w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg transition-colors ${
+                  columnDragMode
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                    : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                }`}
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <div>
+                  <div className="font-medium text-sm">Column Dragging</div>
+                  <div className="text-xs text-gray-500">
+                    {columnDragMode ? 'Enabled - drag nodes between columns' : 'Click to enable column dragging'}
                   </div>
                 </div>
               </button>
@@ -1185,6 +1252,7 @@ function Node({
   hasHighlightedNodes,
   onDragStart,
   onDragEnd,
+  editMode,
 }: {
   node: Node
   updateNodeRef: (id: string, ref: HTMLDivElement | null) => void
@@ -1197,6 +1265,7 @@ function Node({
   hasHighlightedNodes: boolean
   onDragStart: (node: Node, event: React.DragEvent) => void
   onDragEnd: () => void
+  editMode: boolean
 }) {
   const [showPopup, setShowPopup] = useState(false)
   const nodeRef = useRef<HTMLDivElement>(null)
@@ -1252,12 +1321,12 @@ function Node({
     <div className="relative">
       <div
         ref={nodeRef}
-        draggable
-        onDragStart={(e) => {
+        draggable={editMode}
+        onDragStart={editMode ? (e) => {
           onDragStart(node, e)
           e.dataTransfer.effectAllowed = "move"
-        }}
-        onDragEnd={onDragEnd}
+        } : undefined}
+        onDragEnd={editMode ? onDragEnd : undefined}
         className={clsx(
           "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
           showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-48 hover:scale-105 pt-3 px-3 pb-6",
