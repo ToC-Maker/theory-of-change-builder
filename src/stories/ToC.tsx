@@ -15,6 +15,7 @@ interface Node {
   connectionIds: string[]
   connections?: Connection[]
   yPosition?: number
+  width?: number // Width in pixels (default 192px = w-48)
 }
 
 interface ToCData {
@@ -79,6 +80,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   const [columnDragMode, setColumnDragMode] = useState(false)
   const [curvature, setCurvature] = useState(0.5)
   const [textSize, setTextSize] = useState(1) // 0.5 to 2.0 scale
+  const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
 
   const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
@@ -247,6 +249,42 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     }
     return null
   }, [data.sections])
+
+  // Calculate maximum node width for each section
+  const sectionWidths = useMemo(() => {
+    return data.sections.map(section => {
+      const nodeWidths: number[] = []
+      section.columns.forEach(column => {
+        column.nodes.forEach(node => {
+          nodeWidths.push(node.width || 192)
+        })
+      })
+      // If no nodes, use default width
+      if (nodeWidths.length === 0) return 192
+      // Return the actual maximum width from all nodes in the section
+      return Math.max(...nodeWidths)
+    })
+  }, [data])
+
+  const applyWidthToSelectedNodes = useCallback(() => {
+    if (highlightedNodes.size === 0) return
+
+    setData((prevData) => ({
+      ...prevData,
+      sections: prevData.sections.map((section) => ({
+        ...section,
+        columns: section.columns.map((column) => ({
+          ...column,
+          nodes: column.nodes.map((node) => {
+            if (highlightedNodes.has(node.id)) {
+              return { ...node, width: nodeWidth }
+            }
+            return node
+          })
+        }))
+      }))
+    }))
+  }, [highlightedNodes, nodeWidth, setData])
 
   const connectSelectedNodes = useCallback(() => {
     if (!editMode) return
@@ -481,7 +519,12 @@ export function ToC({ data: initialData }: { data: ToCData }) {
           <div className={`flex ${editMode ? 'gap-6' : 'gap-4'}`}>
             {/* Section title positioned to center over actual columns */}
             <div className="flex flex-col">
-              <div className="bg-gray-700 rounded py-3 mb-2 px-3">
+              <div 
+                className="bg-gray-700 rounded py-3 mb-2 px-3"
+                style={{ 
+                  minWidth: `${sectionWidths[sectionIndex] + (editMode && columnDragMode ? 32 : 0)}px` // Account for drop zones
+                }}
+              >
                 <h2
                   className="text-3xl font-bold text-center text-white uppercase"
                 >
@@ -524,7 +567,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                 
                 {/* Column with drag and keyboard positioning */}
                 <div 
-                  className="relative w-48 min-h-screen"
+                  className="relative min-h-screen"
+                  style={{ 
+                    minWidth: `${sectionWidths[sectionIndex]}px`, 
+                    width: `${sectionWidths[sectionIndex]}px` 
+                  }}
                   onDragOver={editMode ? (e) => {
                     e.preventDefault()
                     const rect = e.currentTarget.getBoundingClientRect()
@@ -761,6 +808,48 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   <div className="text-xs text-gray-500 text-center">
                     Adjust node text size (Current: {Math.round(textSize * 100)}%)
                   </div>
+                </div>
+              </div>
+
+              {/* Node Width Control */}
+              <div className="px-3 py-2 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-3 mb-2">
+                  <svg className="w-4 h-4 flex-shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700">Node Width</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-3">
+                    <span className="text-xs text-gray-500 w-10">Narrow</span>
+                    <input
+                      type="range"
+                      min="128"
+                      max="320"
+                      step="16"
+                      value={nodeWidth}
+                      onChange={(e) => setNodeWidth(parseInt(e.target.value))}
+                      className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-orange-300 to-orange-600"
+                    />
+                    <span className="text-xs text-gray-500 w-8">Wide</span>
+                  </div>
+                  <div className="text-xs text-gray-500 text-center">
+                    Width: {nodeWidth}px - Apply to selected nodes
+                  </div>
+                  <button
+                    onClick={applyWidthToSelectedNodes}
+                    disabled={highlightedNodes.size === 0}
+                    className={`w-full px-3 py-1 text-xs rounded transition-colors ${
+                      highlightedNodes.size > 0
+                        ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    }`}
+                  >
+                    {highlightedNodes.size === 0 
+                      ? 'Select nodes to resize' 
+                      : `Apply to ${highlightedNodes.size} selected node${highlightedNodes.size === 1 ? '' : 's'}`
+                    }
+                  </button>
                 </div>
               </div>
 
@@ -1361,7 +1450,7 @@ function Node({
         onDragEnd={editMode ? onDragEnd : undefined}
         className={clsx(
           "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
-          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "w-48 hover:scale-105 pt-3 px-3 pb-6",
+          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "hover:scale-105 pt-3 px-3 pb-6",
           isHighlighted
             ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
@@ -1370,6 +1459,9 @@ function Node({
           hasHighlightedNodes && !isConnected && "opacity-30",
           isDragging && "opacity-50 scale-95 shadow-lg"
         )}
+        style={{
+          width: !showPopup ? `${node.width || 192}px` : undefined
+        }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onMouseEnter={handleMouseEnter}
