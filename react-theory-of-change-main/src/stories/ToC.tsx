@@ -76,6 +76,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     isNewColumn?: boolean
   } | null>(null)
   const [editMode, setEditMode] = useState(false)
+  const [curvature, setCurvature] = useState(0.5)
 
   const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
@@ -367,100 +368,41 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       return new Set<string>()
     }
 
-    const getShortestPaths = (clickedNodeId: string): Set<string> => {
-      const pathNodes = new Set<string>()
+    const allConnectedNodes = new Set<string>()
+    
+    highlightedNodes.forEach((nodeId) => {
+      // Add the selected node itself
+      allConnectedNodes.add(nodeId)
       
-      // Find all input nodes (first section)
-      const inputNodes = data.sections[0]?.columns.flatMap(col => col.nodes.map(n => n.id)) || []
-      
-      // Find all goal nodes (last section)
-      const goalNodes = data.sections[data.sections.length - 1]?.columns.flatMap(col => col.nodes.map(n => n.id)) || []
-      
-      // Function to find shortest path from start to target using BFS
-      const findShortestPath = (startId: string, targetId: string): string[] | null => {
-        const queue: {nodeId: string, path: string[]}[] = [{nodeId: startId, path: [startId]}]
-        const visited = new Set<string>()
+      // Find the node's location and connections
+      const nodeLocation = findNodeLocation(nodeId)
+      if (nodeLocation) {
+        const node = nodeLocation.node
         
-        while (queue.length > 0) {
-          const {nodeId, path} = queue.shift()!
-          
-          if (nodeId === targetId) {
-            return path
-          }
-          
-          if (visited.has(nodeId)) continue
-          visited.add(nodeId)
-          
-          const nodeLocation = findNodeLocation(nodeId)
-          if (nodeLocation) {
-            // Handle both old connectionIds and new connections format
-            if (nodeLocation.node.connections) {
-              nodeLocation.node.connections.forEach(conn => {
-                if (!visited.has(conn.targetId)) {
-                  queue.push({nodeId: conn.targetId, path: [...path, conn.targetId]})
-                }
-              })
-            } else {
-              nodeLocation.node.connectionIds.forEach(connectedId => {
-                if (!visited.has(connectedId)) {
-                  queue.push({nodeId: connectedId, path: [...path, connectedId]})
-                }
-              })
+        // Add nodes that this node connects TO (outgoing connections)
+        if (node.connections) {
+          node.connections.forEach(conn => allConnectedNodes.add(conn.targetId))
+        } else if (node.connectionIds) {
+          node.connectionIds.forEach(connId => allConnectedNodes.add(connId))
+        }
+      }
+      
+      // Find nodes that connect TO this node (incoming connections)
+      data.sections.forEach(section => {
+        section.columns.forEach(column => {
+          column.nodes.forEach(otherNode => {
+            if (otherNode.connections) {
+              if (otherNode.connections.some(conn => conn.targetId === nodeId)) {
+                allConnectedNodes.add(otherNode.id)
+              }
+            } else if (otherNode.connectionIds) {
+              if (otherNode.connectionIds.includes(nodeId)) {
+                allConnectedNodes.add(otherNode.id)
+              }
             }
-          }
-        }
-        
-        return null
-      }
-      
-      // Find paths from input nodes to clicked node
-      const pathsToClicked: string[][] = []
-      inputNodes.forEach(inputId => {
-        const path = findShortestPath(inputId, clickedNodeId)
-        if (path) {
-          pathsToClicked.push(path)
-        }
-      })
-      
-      // Find paths from clicked node to goal nodes
-      const pathsFromClicked: string[][] = []
-      goalNodes.forEach(goalId => {
-        const path = findShortestPath(clickedNodeId, goalId)
-        if (path) {
-          pathsFromClicked.push(path)
-        }
-      })
-      
-      // If clicked node is an input node, just find paths to goals
-      if (inputNodes.includes(clickedNodeId)) {
-        pathsFromClicked.forEach(path => {
-          path.forEach(nodeId => pathNodes.add(nodeId))
-        })
-      }
-      // If clicked node is a goal node, just find paths from inputs
-      else if (goalNodes.includes(clickedNodeId)) {
-        pathsToClicked.forEach(path => {
-          path.forEach(nodeId => pathNodes.add(nodeId))
-        })
-      }
-      // For middle nodes, combine shortest paths through the clicked node
-      else {
-        pathsToClicked.forEach(pathToClicked => {
-          pathsFromClicked.forEach(pathFromClicked => {
-            // Combine paths, removing duplicate clicked node
-            const fullPath = [...pathToClicked, ...pathFromClicked.slice(1)]
-            fullPath.forEach(nodeId => pathNodes.add(nodeId))
           })
         })
-      }
-      
-      return pathNodes
-    }
-
-    const allConnectedNodes = new Set<string>()
-    highlightedNodes.forEach((nodeId) => {
-      const pathNodes = getShortestPaths(nodeId)
-      pathNodes.forEach(id => allConnectedNodes.add(id))
+      })
     })
 
     return allConnectedNodes
@@ -697,6 +639,34 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                 </div>
               </button>
 
+              {/* Curve Curvature Control */}
+              <div className="px-3 py-2 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-3 mb-2">
+                  <svg className="w-4 h-4 flex-shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700">Curve Shape</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-3">
+                    <span className="text-xs text-gray-500 w-8">Flat</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={curvature}
+                      onChange={(e) => setCurvature(parseFloat(e.target.value))}
+                      className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-blue-200 to-indigo-400"
+                    />
+                    <span className="text-xs text-gray-500 w-10">Curved</span>
+                  </div>
+                  <div className="text-xs text-gray-500 text-center">
+                    Adjust bezier curve intensity
+                  </div>
+                </div>
+              </div>
+
               {/* Drag Info */}
               <div className="px-3 py-2 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -724,6 +694,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
         highlightedNodes={highlightedNodes}
         connectedNodes={connectedNodes}
         hoveredConnections={hoveredConnections}
+        curvature={curvature}
       />
     </div>
   )
@@ -736,6 +707,7 @@ function Connections({
   highlightedNodes,
   connectedNodes,
   hoveredConnections,
+  curvature,
 }: {
   data: ToCData
   setData: React.Dispatch<React.SetStateAction<ToCData>>
@@ -743,6 +715,7 @@ function Connections({
   highlightedNodes: Set<string>
   connectedNodes: Set<string>
   hoveredConnections: Set<string>
+  curvature: number
 }) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [edgePopup, setEdgePopup] = useState<{
@@ -931,7 +904,8 @@ function Connections({
         const endX = endRect.left - containerRect.left
         const endY = endRect.top + endRect.height / 2 - containerRect.top
 
-        const controlPointOffset = Math.abs(endX - startX) / 2
+        const baseOffset = Math.abs(endX - startX) / 2
+        const controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9)
 
         const isHighlighted =
           highlightedNodes.has(connection.sourceId) ||
