@@ -1289,26 +1289,26 @@ function Connections({
             
             <div>
               <h3 className="text-2xl font-semibold text-gray-800 mb-3">
-                Evidence & Assumptions
+                Assumptions & Evidence
               </h3>
               {edgePopup.evidence || edgePopup.assumptions ? (
                 <div className="space-y-4">
-                  {edgePopup.evidence && (
-                    <div>
-                      <h4 className="font-medium text-gray-800 mb-2">Evidence:</h4>
-                      <p className="text-gray-600 leading-relaxed">{edgePopup.evidence}</p>
-                    </div>
-                  )}
                   {edgePopup.assumptions && (
                     <div>
                       <h4 className="font-medium text-gray-800 mb-2">Key Assumptions:</h4>
                       <p className="text-gray-600 leading-relaxed">{edgePopup.assumptions}</p>
                     </div>
                   )}
+                  {edgePopup.evidence && (
+                    <div>
+                      <h4 className="font-medium text-gray-800 mb-2">Evidence:</h4>
+                      <p className="text-gray-600 leading-relaxed">{edgePopup.evidence}</p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="text-gray-500 italic">
-                  No evidence or assumptions have been documented for this connection yet.
+                  No assumptions or evidence have been documented for this connection yet.
                 </p>
               )}
             </div>
