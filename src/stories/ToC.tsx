@@ -81,6 +81,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
   const [curvature, setCurvature] = useState(0.5)
   const [textSize, setTextSize] = useState(1) // 0.5 to 2.0 scale
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
+  const [nodePopup, setNodePopup] = useState<{
+    id: string
+    title: string
+    text: string
+  } | null>(null)
 
   const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
@@ -617,6 +622,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                           onDragEnd={handleDragEnd}
                           editMode={editMode}
                           textSize={textSize}
+                          setNodePopup={setNodePopup}
                         />
                       </div>
                     ))}
@@ -882,6 +888,77 @@ export function ToC({ data: initialData }: { data: ToCData }) {
         hoveredConnections={hoveredConnections}
         curvature={curvature}
       />
+      
+      {/* Node Details Modal */}
+      {nodePopup && (
+        <div 
+          className="fixed z-50 flex items-center justify-center transition-all duration-150 ease-out"
+          style={{
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            animation: 'fadeIn 0.15s ease-out'
+          }}
+        >
+          {/* Backdrop with blur */}
+          <div 
+            className="absolute bg-black bg-opacity-50 backdrop-blur-sm"
+            style={{
+              top: 0,
+              left: 0,
+              width: '100vw',
+              height: '100vh'
+            }}
+            onClick={() => setNodePopup(null)}
+          />
+          
+          {/* Modal content */}
+          <div 
+            className="relative bg-white rounded-xl shadow-2xl p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto transform transition-all duration-150 ease-out"
+            style={{
+              animation: 'scaleIn 0.15s ease-out'
+            }}
+          >
+            {/* Close button */}
+            <button
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl leading-none"
+              onClick={() => setNodePopup(null)}
+            >
+              ×
+            </button>
+            
+            {/* Header */}
+            <div className="mb-6">
+              <h2 className="text-4xl font-bold text-gray-900 mb-2">
+                {nodePopup.title}
+              </h2>
+            </div>
+            
+            {/* Content */}
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-2xl font-semibold text-gray-800 mb-3">
+                  Details
+                </h3>
+                <p className="text-gray-600 leading-relaxed text-lg">
+                  {nodePopup.text}
+                </p>
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div className="mt-8 pt-6 border-t border-gray-200 flex justify-end">
+              <button
+                onClick={() => setNodePopup(null)}
+                className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1373,6 +1450,7 @@ function Node({
   onDragEnd,
   editMode,
   textSize,
+  setNodePopup,
 }: {
   node: Node
   updateNodeRef: (id: string, ref: HTMLDivElement | null) => void
@@ -1387,11 +1465,11 @@ function Node({
   onDragEnd: () => void
   editMode: boolean
   textSize: number
+  setNodePopup: React.Dispatch<React.SetStateAction<{ id: string; title: string; text: string } | null>>
 }) {
-  const [showPopup, setShowPopup] = useState(false)
   const nodeRef = useRef<HTMLDivElement>(null)
   const [showHint, setShowHint] = useState(false)
-  const [canExpand, setCanExpand] = useState(false)
+  const [canViewDetails, setCanViewDetails] = useState(false)
   const hoverTimer = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
@@ -1399,13 +1477,12 @@ function Node({
   }, [node.id, updateNodeRef])
 
   const handleClick = () => {
-    if (canExpand && node.text && !showPopup) {
-      setShowPopup(true)
-      setCanExpand(false)
-      setShowHint(false)
-    } else if (showPopup) {
-      // Allow closing if already expanded
-      setShowPopup(false)
+    if (node.text && canViewDetails && showHint) {
+      setNodePopup({
+        id: node.id,
+        title: node.title,
+        text: node.text
+      })
     } else {
       toggleHighlight(node.id)
     }
@@ -1414,11 +1491,11 @@ function Node({
   const handleMouseEnter = () => {
     setHoveredNode(node.id)
     
-    if (node.text && !showPopup) {
+    if (node.text) {
       // Start timer for hint
       hoverTimer.current = setTimeout(() => {
         setShowHint(true)
-        setCanExpand(true)
+        setCanViewDetails(true)
       }, 1000) // 1 second delay
     }
   }
@@ -1426,7 +1503,7 @@ function Node({
   const handleMouseLeave = () => {
     setHoveredNode(null)
     setShowHint(false)
-    setCanExpand(false)
+    setCanViewDetails(false)
     
     if (hoverTimer.current) {
       clearTimeout(hoverTimer.current)
@@ -1449,8 +1526,7 @@ function Node({
         } : undefined}
         onDragEnd={editMode ? onDragEnd : undefined}
         className={clsx(
-          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform",
-          showPopup ? "w-[32rem] h-auto min-h-80 p-6" : "hover:scale-105 pt-3 px-3 pb-6",
+          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform hover:scale-105 pt-3 px-3 pb-6",
           isHighlighted
             ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
@@ -1460,57 +1536,30 @@ function Node({
           isDragging && "opacity-50 scale-95 shadow-lg"
         )}
         style={{
-          width: !showPopup ? `${node.width || 192}px` : undefined
+          width: `${node.width || 192}px`
         }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        {showPopup ? (
-          <div className="flex flex-col h-full relative">
-            <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-200">
-              <div 
-                className="font-bold text-indigo-700 flex-1 text-center"
-                style={{ fontSize: `${textSize * 1.25}rem` }} // 1.25rem is text-xl base size
-              >
-                {node.title}
-              </div>
-              <button
-                className="ml-2 p-1 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setShowPopup(false)
-                }}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="text-lg leading-relaxed text-gray-700 overflow-y-auto flex-1">
-              {node.text}
-            </div>
+        <div className="flex flex-col justify-center relative py-2">
+          <div 
+            className="font-medium text-center leading-tight px-2 break-words"
+            style={{ fontSize: `${textSize * 1.125}rem` }} // 1.125rem is text-lg base size
+          >
+            {node.title}
           </div>
-        ) : (
-          <div className="flex flex-col justify-center relative py-2">
-            <div 
-              className="font-medium text-center leading-tight px-2 break-words"
-              style={{ fontSize: `${textSize * 1.125}rem` }} // 1.125rem is text-lg base size
-            >
-              {node.title}
-            </div>
-            
-            {/* Subtle visual cue for nodes with details */}
-            {node.text && !showPopup && !showHint && (
-              <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-30"></div>
-            )}
-          </div>
-        )}
+          
+          {/* Subtle visual cue for nodes with details */}
+          {node.text && !showHint && (
+            <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-30"></div>
+          )}
+        </div>
       </div>
       
-      {/* Independent hint positioned relative to this specific node */}
-      {node.text && showHint && canExpand && !showPopup && (
+      {/* Hover hint for nodes with details */}
+      {node.text && showHint && (
         <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-gray-500 text-center animate-fade-in-up whitespace-nowrap pointer-events-none z-10">
           click to view details
         </div>
