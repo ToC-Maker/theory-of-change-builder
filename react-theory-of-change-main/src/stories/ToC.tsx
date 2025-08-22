@@ -308,11 +308,26 @@ export function ToC({
     }))
   }, [highlightedNodes, nodeWidth, setData])
 
-  const connectSelectedNodes = useCallback(() => {
+  const areNodesConnected = useCallback((sourceId: string, targetId: string) => {
+    const sourceLocation = findNodeLocation(sourceId)
+    if (!sourceLocation) return false
+    
+    const sourceNode = sourceLocation.node
+    
+    // Check if connection exists in either direction
+    if (sourceNode.connections) {
+      return sourceNode.connections.some(conn => conn.targetId === targetId)
+    } else if (sourceNode.connectionIds) {
+      return sourceNode.connectionIds.includes(targetId)
+    }
+    
+    return false
+  }, [findNodeLocation])
+
+  const disconnectSelectedNodes = useCallback(() => {
     if (!editMode) return
     
     if (highlightedNodes.size !== 2) {
-      alert('Please select exactly two nodes to connect')
       return
     }
 
@@ -326,15 +341,54 @@ export function ToC({
           ...column,
           nodes: column.nodes.map((node) => {
             if (node.id === sourceId) {
-              // Check if connection already exists
-              const existingConnection = node.connections?.some(conn => conn.targetId === targetId) ||
-                                       node.connectionIds.includes(targetId)
-              
-              if (existingConnection) {
-                alert('Connection already exists between these nodes')
-                return node
+              // Remove connection
+              if (node.connections) {
+                return {
+                  ...node,
+                  connections: node.connections.filter(conn => conn.targetId !== targetId)
+                }
+              } else if (node.connectionIds) {
+                return {
+                  ...node,
+                  connectionIds: node.connectionIds.filter(id => id !== targetId)
+                }
               }
+            }
+            return node
+          })
+        }))
+      }))
+    }))
 
+    // Clear selection after disconnecting
+    setHighlightedNodes(new Set())
+  }, [editMode, highlightedNodes, setData])
+
+  const connectSelectedNodes = useCallback(() => {
+    if (!editMode) return
+    
+    if (highlightedNodes.size !== 2) {
+      alert('Please select exactly two nodes to connect')
+      return
+    }
+
+    const [sourceId, targetId] = Array.from(highlightedNodes)
+    
+    // Check if nodes are already connected
+    if (areNodesConnected(sourceId, targetId)) {
+      // Disconnect them
+      disconnectSelectedNodes()
+      return
+    }
+    
+    setData((prevData) => ({
+      ...prevData,
+      sections: prevData.sections.map((section) => ({
+        ...section,
+        columns: section.columns.map((column) => ({
+          ...column,
+          nodes: column.nodes.map((node) => {
+            if (node.id === sourceId) {
               // Add new connection
               if (node.connections) {
                 return {
@@ -357,7 +411,7 @@ export function ToC({
 
     // Clear selection after connecting
     setHighlightedNodes(new Set())
-  }, [editMode, highlightedNodes, setData])
+  }, [editMode, highlightedNodes, setData, areNodesConnected, disconnectSelectedNodes])
 
   const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
     if (!draggedNode || !dragOffset) {
@@ -764,11 +818,20 @@ export function ToC({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                   </svg>
                   <div>
-                    <div className="font-medium text-xs">Connect</div>
+                    <div className="font-medium text-xs">
+                      {highlightedNodes.size === 2 && 
+                       areNodesConnected(...Array.from(highlightedNodes)) 
+                        ? 'Disconnect' 
+                        : 'Connect'}
+                    </div>
                     <div className="text-xs text-gray-500">
                       {highlightedNodes.size === 0 && 'Select 2'}
                       {highlightedNodes.size === 1 && 'Select 1 more'}
-                      {highlightedNodes.size === 2 && 'Ready'}
+                      {highlightedNodes.size === 2 && (
+                        areNodesConnected(...Array.from(highlightedNodes)) 
+                          ? 'Remove link' 
+                          : 'Create link'
+                      )}
                       {highlightedNodes.size > 2 && 'Too many'}
                     </div>
                   </div>
