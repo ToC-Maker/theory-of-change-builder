@@ -597,35 +597,42 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   }}
                 >
                   {column.nodes
-                    .map((node, nodeIndex) => (
-                      <div
-                        key={node.id}
-                        className="absolute w-full"
-                        style={{
-                          top: node.yPosition !== undefined 
-                            ? `${node.yPosition}px` 
-                            : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
-                          left: 0
-                        }}
-                      >
-                        <Node
-                          node={node}
-                          updateNodeRef={updateNodeRef}
-                          isHighlighted={highlightedNodes.has(node.id)}
-                          isConnected={connectedNodes.has(node.id)}
-                          isHovered={hoveredNode === node.id}
-                          isDragging={draggedNode?.id === node.id}
-                          toggleHighlight={toggleHighlight}
-                          setHoveredNode={setHoveredNode}
-                          hasHighlightedNodes={highlightedNodes.size > 0}
-                          onDragStart={handleDragStart}
-                          onDragEnd={handleDragEnd}
-                          editMode={editMode}
-                          textSize={textSize}
-                          setNodePopup={setNodePopup}
-                        />
-                      </div>
-                    ))}
+                    .map((node, nodeIndex) => {
+                      const nodeWidth = node.width || 192
+                      const columnWidth = sectionWidths[sectionIndex]
+                      const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2)
+                      
+                      return (
+                        <div
+                          key={node.id}
+                          className="absolute"
+                          style={{
+                            top: node.yPosition !== undefined 
+                              ? `${node.yPosition}px` 
+                              : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
+                            left: `${leftOffset}px`,
+                            width: `${nodeWidth}px`
+                          }}
+                        >
+                          <Node
+                            node={node}
+                            updateNodeRef={updateNodeRef}
+                            isHighlighted={highlightedNodes.has(node.id)}
+                            isConnected={connectedNodes.has(node.id)}
+                            isHovered={hoveredNode === node.id}
+                            isDragging={draggedNode?.id === node.id}
+                            toggleHighlight={toggleHighlight}
+                            setHoveredNode={setHoveredNode}
+                            hasHighlightedNodes={highlightedNodes.size > 0}
+                            onDragStart={handleDragStart}
+                            onDragEnd={handleDragEnd}
+                            editMode={editMode}
+                            textSize={textSize}
+                            setNodePopup={setNodePopup}
+                          />
+                        </div>
+                      )
+                    })}
                 </div>
 
                 {/* Drop zone after column - only show when column dragging is enabled */}
@@ -887,6 +894,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
         connectedNodes={connectedNodes}
         hoveredConnections={hoveredConnections}
         curvature={curvature}
+        editMode={editMode}
       />
       
       {/* Node Details Modal */}
@@ -971,6 +979,7 @@ function Connections({
   connectedNodes,
   hoveredConnections,
   curvature,
+  editMode,
 }: {
   data: ToCData
   setData: React.Dispatch<React.SetStateAction<ToCData>>
@@ -979,6 +988,7 @@ function Connections({
   connectedNodes: Set<string>
   hoveredConnections: Set<string>
   curvature: number
+  editMode: boolean
 }) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [edgePopup, setEdgePopup] = useState<{
@@ -990,6 +1000,10 @@ function Connections({
     evidence?: string
     assumptions?: string
   } | null>(null)
+  const [smoothUpdates, setSmoothUpdates] = useState(false)
+  const [refreshCounter, setRefreshCounter] = useState(0)
+  const animationFrameRef = useRef<number | null>(null)
+  const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const updateSize = useCallback(() => {
     // Calculate dimensions based on estimated layout
@@ -1038,6 +1052,59 @@ function Connections({
     }
   }, [updateSize])
 
+  // Smooth edge updates during interactions using RAF
+  useEffect(() => {
+    const updateConnections = () => {
+      if (smoothUpdates) {
+        // Trigger re-render of connections by incrementing counter
+        setRefreshCounter(prev => prev + 1)
+        animationFrameRef.current = requestAnimationFrame(updateConnections)
+      }
+    }
+
+    if (smoothUpdates) {
+      animationFrameRef.current = requestAnimationFrame(updateConnections)
+    } else if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = null
+    }
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
+    }
+  }, [smoothUpdates])
+
+  // Enable smooth updates when there are active interactions or in edit mode
+  useEffect(() => {
+    const hasActiveInteractions = highlightedNodes.size > 0 || hoveredConnections.size > 0
+    const shouldUpdate = editMode || hasActiveInteractions
+    
+    // Clear any existing timeout
+    if (smoothUpdateTimeoutRef.current) {
+      clearTimeout(smoothUpdateTimeoutRef.current)
+      smoothUpdateTimeoutRef.current = null
+    }
+    
+    if (shouldUpdate) {
+      // Enable immediately for active interactions or edit mode
+      setSmoothUpdates(true)
+    } else {
+      // Add delay before disabling to allow smooth retraction
+      smoothUpdateTimeoutRef.current = setTimeout(() => {
+        setSmoothUpdates(false)
+      }, 300) // 300ms delay for smooth retraction
+    }
+    
+    return () => {
+      if (smoothUpdateTimeoutRef.current) {
+        clearTimeout(smoothUpdateTimeoutRef.current)
+        smoothUpdateTimeoutRef.current = null
+      }
+    }
+  }, [editMode, highlightedNodes.size, hoveredConnections.size])
+
   const findNodeLocation = (nodeId: string) => {
     for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
       for (let columnIndex = 0; columnIndex < data.sections[sectionIndex].columns.length; columnIndex++) {
@@ -1062,7 +1129,8 @@ function Connections({
     return nodeId // fallback to ID if not found
   }
 
-  const connections = data.sections
+  const connections = useMemo(() => {    
+    return data.sections
     .flatMap((section, sectionIndex) =>
       section.columns.flatMap((column, columnIndex) =>
         column.nodes.flatMap((node) => {
@@ -1106,6 +1174,7 @@ function Connections({
       ),
     )
     .filter((connection) => connection.start && connection.end)
+  }, [data.sections, nodeRefs, refreshCounter, findNodeLocation]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateConfidence = (sourceId: string, targetId: string, newConfidence: number) => {
     setData((prevData: ToCData): ToCData => ({
@@ -1207,6 +1276,7 @@ function Connections({
               strokeWidth: `${strokeWidth}px`,
               opacity: isLowOpacity ? 0.01 : 1,
               pointerEvents: "stroke",
+              transition: smoothUpdates ? 'none' : 'd 0.15s ease-out, stroke 0.2s ease-out, opacity 0.2s ease-out',
             }}
             onClick={(e) => {
               e.stopPropagation()
