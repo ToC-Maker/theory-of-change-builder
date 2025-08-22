@@ -927,6 +927,7 @@ export function ToC({
         hoveredConnections={hoveredConnections}
         curvature={curvature}
         editMode={editMode}
+        columnDragMode={columnDragMode}
         sectionWidths={sectionWidths}
         onSizeChange={(size) => {
           setSvgSize(size)
@@ -1017,6 +1018,7 @@ function Connections({
   hoveredConnections,
   curvature,
   editMode,
+  columnDragMode,
   sectionWidths,
   onSizeChange,
 }: {
@@ -1028,6 +1030,7 @@ function Connections({
   hoveredConnections: Set<string>
   curvature: number
   editMode: boolean
+  columnDragMode: boolean
   sectionWidths: number[]
   onSizeChange: (size: { width: number; height: number }) => void
 }) {
@@ -1053,6 +1056,25 @@ function Connections({
     // Use the actual calculated section widths
     sectionWidths.forEach((sectionWidth, sectionIndex) => {
       totalWidth += sectionWidth
+      
+      // Add extra width for column drag mode drop zones
+      if (editMode && columnDragMode) {
+        // Count columns in this section
+        const columnCount = data.sections[sectionIndex].columns.filter(column => column.nodes.length > 0).length
+        
+        // Drop zones: N+1 zones × 16px each
+        const dropZonesWidth = (columnCount + 1) * 16
+        
+        // Gap calculation:
+        // Normal mode: (N-1) gaps × 24px
+        // Drag mode: 2N gaps × 32px (between dropzones and columns)
+        // Extra gap width = 2N × 32 - (N-1) × 24 = 64N - 24N + 24 = 40N + 24
+        const normalGapWidth = Math.max(0, columnCount - 1) * 24
+        const dragGapWidth = 2 * columnCount * 32
+        const extraGapWidth = dragGapWidth - normalGapWidth
+        
+        totalWidth += dropZonesWidth + extraGapWidth
+      }
       
       // Add gap between sections (gap-8 = 32px) - only between sections, not on edges
       if (sectionIndex < sectionWidths.length - 1) {
@@ -1087,7 +1109,7 @@ function Connections({
     const newSize = { width: totalWidth, height: dynamicHeight }
     setSvgSize(newSize)
     onSizeChange(newSize)
-  }, [sectionWidths, data.sections])
+  }, [sectionWidths, data.sections, editMode, columnDragMode])
 
   useEffect(() => {
     // Immediate size calculation
