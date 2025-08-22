@@ -15,9 +15,9 @@ function App() {
         className="bg-white rounded-xl shadow-lg p-4"
         style={{
           width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-          height: containerSize.height > 0 ? `${containerSize.height}px` : 'auto',
+          height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
           minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-          minHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'auto',
+          minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
           maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
           maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
         }}
