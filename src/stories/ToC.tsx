@@ -59,7 +59,13 @@ function getConfidenceColorRGB(confidence: number, opacity: number = 1): string 
   return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${opacity})`
 }
 
-export function ToC({ data: initialData }: { data: ToCData }) {
+export function ToC({ 
+  data: initialData, 
+  onSizeChange 
+}: { 
+  data: ToCData
+  onSizeChange?: (size: { width: number; height: number }) => void 
+}) {
   const [data, setData] = useState<ToCData>(initialData)
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null
@@ -86,6 +92,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     title: string
     text: string
   } | null>(null)
+  const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
@@ -255,25 +262,34 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     return null
   }, [data.sections])
 
-  // Calculate maximum node width for each section
+  // Calculate total width needed for each section (all columns + gaps)
   const sectionWidths = useMemo(() => {
-    return data.sections.map(section => {
-      const nodeWidths: number[] = []
-      section.columns.forEach(column => {
-        column.nodes.forEach(node => {
-          nodeWidths.push(node.width || 192)
-        })
+    const widths = data.sections.map(section => {
+      // Filter out empty columns
+      const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0)
+      
+      if (nonEmptyColumns.length === 0) return 192 // Default width if no columns
+      
+      // Calculate width needed for each column (max node width in that column)
+      const columnWidths = nonEmptyColumns.map(column => {
+        const nodeWidths = column.nodes.map(node => node.width || 192)
+        return Math.max(...nodeWidths, 192) // At least 192px per column
       })
-      // If no nodes, use default width
-      if (nodeWidths.length === 0) return 192
-      // Return the actual maximum width from all nodes in the section
-      return Math.max(...nodeWidths)
+      
+      // Total width = sum of all column widths + gaps between columns
+      const totalColumnWidth = columnWidths.reduce((sum, width) => sum + width, 0)
+      const gaps = Math.max(0, columnWidths.length - 1) * 24 // gap-6 = 24px between columns
+      
+      return totalColumnWidth + gaps
     })
-  }, [data])
+    console.log('sectionWidths updated:', widths, 'sections structure:', data.sections.map(s => s.columns.length))
+    return widths
+  }, [data.sections])
 
   const applyWidthToSelectedNodes = useCallback(() => {
     if (highlightedNodes.size === 0) return
 
+    console.log('Applying width', nodeWidth, 'to nodes:', Array.from(highlightedNodes))
     setData((prevData) => ({
       ...prevData,
       sections: prevData.sections.map((section) => ({
@@ -282,6 +298,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
           ...column,
           nodes: column.nodes.map((node) => {
             if (highlightedNodes.has(node.id)) {
+              console.log('Updating node', node.id, 'width from', node.width || 192, 'to', nodeWidth)
               return { ...node, width: nodeWidth }
             }
             return node
@@ -505,7 +522,10 @@ export function ToC({ data: initialData }: { data: ToCData }) {
       
       <div 
         className="flex relative gap-8 min-w-fit overflow-visible" 
-        style={{ minHeight: '100vh' }}
+        style={{ 
+          width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
+          height: svgSize.height > 0 ? `${svgSize.height}px` : '100vh'
+        }}
         onClick={(e) => {
           // Only clear selections in view mode when clicking empty space
           if (!editMode && e.target === e.currentTarget) {
@@ -574,8 +594,8 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                 <div 
                   className="relative min-h-screen"
                   style={{ 
-                    minWidth: `${sectionWidths[sectionIndex]}px`, 
-                    width: `${sectionWidths[sectionIndex]}px` 
+                    minWidth: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`, 
+                    width: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px` 
                   }}
                   onDragOver={editMode ? (e) => {
                     e.preventDefault()
@@ -599,7 +619,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
                   {column.nodes
                     .map((node, nodeIndex) => {
                       const nodeWidth = node.width || 192
-                      const columnWidth = sectionWidths[sectionIndex]
+                      const columnWidth = Math.max(...column.nodes.map(node => node.width || 192), 192)
                       const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2)
                       
                       return (
@@ -673,10 +693,15 @@ export function ToC({ data: initialData }: { data: ToCData }) {
         </div>
       ))}
       
-      {/* Edit button positioned after the final section */}
-      <div className="flex flex-col justify-start relative">
-        <div className="bg-transparent rounded py-3 mb-2 px-3 flex items-center justify-center">
-          <button
+      {/* Edit button positioned at bottom right corner of SVG area */}
+      <div 
+        className="absolute z-50"
+        style={{
+          right: '20px',
+          bottom: '20px'
+        }}
+      >
+        <button
             onClick={() => {
               const newEditMode = !editMode
               setEditMode(newEditMode)
@@ -697,77 +722,84 @@ export function ToC({ data: initialData }: { data: ToCData }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
           </button>
-        </div>
         
         {/* Edit Tools Panel - positioned relative to the button */}
         {editMode && (
-          <div className="absolute top-16 left-0 z-50 bg-white rounded-xl shadow-2xl border border-gray-200 p-4 min-w-64">
-            <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-100">
-              <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="absolute bottom-16 right-0 z-50 bg-white rounded-xl shadow-2xl border border-gray-200 p-2 min-w-32">
+            <div className="flex items-center gap-1 mb-2 pb-2 border-b border-gray-100">
+              <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
-              <h3 className="font-semibold text-gray-900">Edit Tools</h3>
+              <h3 className="font-medium text-sm text-gray-900">Tools</h3>
             </div>
             
-            <div className="space-y-3">
-              {/* Straighten Edges Tool */}
-              <button
-                onClick={straightenEdges}
-                className="w-full flex items-center gap-3 px-3 py-2 text-left text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg transition-colors"
-              >
-                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-                <div>
-                  <div className="font-medium text-sm">Straighten Edges</div>
-                  <div className="text-xs text-gray-500">Align nodes horizontally</div>
-                </div>
-              </button>
-
-              {/* Connect Nodes Tool */}
-              <button
-                onClick={connectSelectedNodes}
-                disabled={highlightedNodes.size !== 2}
-                className={`w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg transition-colors ${
-                  highlightedNodes.size === 2
-                    ? 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
-                    : 'text-gray-400 cursor-not-allowed'
-                }`}
-              >
-                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                <div>
-                  <div className="font-medium text-sm">Connect Nodes</div>
-                  <div className="text-xs text-gray-500">
-                    {highlightedNodes.size === 0 && 'Select 2 nodes to connect'}
-                    {highlightedNodes.size === 1 && 'Select 1 more node'}
-                    {highlightedNodes.size === 2 && 'Click to connect selected nodes'}
-                    {highlightedNodes.size > 2 && 'Select exactly 2 nodes'}
+            <div className="grid grid-cols-2 gap-1">
+              {/* Left Column */}
+              <div className="space-y-1">
+                {/* Straighten Edges Tool */}
+                <button
+                  onClick={straightenEdges}
+                  className="w-full flex flex-col items-center gap-1 px-1 py-2 text-center text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 rounded transition-colors"
+                >
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                  <div>
+                    <div className="font-medium text-xs">Straighten</div>
+                    <div className="text-xs text-gray-500">Align nodes</div>
                   </div>
-                </div>
-              </button>
+                </button>
 
-              {/* Column Drag Mode Toggle */}
-              <button
-                onClick={() => setColumnDragMode(!columnDragMode)}
-                className={`w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg transition-colors ${
-                  columnDragMode
-                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                    : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
-                }`}
-              >
-                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-                <div>
-                  <div className="font-medium text-sm">Column Dragging</div>
-                  <div className="text-xs text-gray-500">
-                    {columnDragMode ? 'Enabled - drag nodes between columns' : 'Click to enable column dragging'}
+                {/* Connect Nodes Tool */}
+                <button
+                  onClick={connectSelectedNodes}
+                  disabled={highlightedNodes.size !== 2}
+                  className={`w-full flex flex-col items-center gap-1 px-1 py-2 text-center rounded transition-colors ${
+                    highlightedNodes.size === 2
+                      ? 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                      : 'text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                  <div>
+                    <div className="font-medium text-xs">Connect</div>
+                    <div className="text-xs text-gray-500">
+                      {highlightedNodes.size === 0 && 'Select 2'}
+                      {highlightedNodes.size === 1 && 'Select 1 more'}
+                      {highlightedNodes.size === 2 && 'Ready'}
+                      {highlightedNodes.size > 2 && 'Too many'}
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
+              </div>
 
+              {/* Right Column */}
+              <div className="space-y-1">
+                {/* Column Drag Mode Toggle */}
+                <button
+                  onClick={() => setColumnDragMode(!columnDragMode)}
+                  className={`w-full flex flex-col items-center gap-1 px-1 py-2 text-center rounded transition-colors ${
+                    columnDragMode
+                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                      : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                  }`}
+                >
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <div>
+                    <div className="font-medium text-xs">Column Drag</div>
+                    <div className="text-xs text-gray-500">
+                      {columnDragMode ? 'Enabled' : 'Disabled'}
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2 mt-2">
               {/* Curve Curvature Control */}
               <div className="px-3 py-2 bg-gray-50 rounded-lg">
                 <div className="flex items-center gap-3 mb-2">
@@ -895,6 +927,11 @@ export function ToC({ data: initialData }: { data: ToCData }) {
         hoveredConnections={hoveredConnections}
         curvature={curvature}
         editMode={editMode}
+        sectionWidths={sectionWidths}
+        onSizeChange={(size) => {
+          setSvgSize(size)
+          onSizeChange?.(size)
+        }}
       />
       
       {/* Node Details Modal */}
@@ -980,6 +1017,8 @@ function Connections({
   hoveredConnections,
   curvature,
   editMode,
+  sectionWidths,
+  onSizeChange,
 }: {
   data: ToCData
   setData: React.Dispatch<React.SetStateAction<ToCData>>
@@ -989,6 +1028,8 @@ function Connections({
   hoveredConnections: Set<string>
   curvature: number
   editMode: boolean
+  sectionWidths: number[]
+  onSizeChange: (size: { width: number; height: number }) => void
 }) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [edgePopup, setEdgePopup] = useState<{
@@ -1006,32 +1047,47 @@ function Connections({
   const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const updateSize = useCallback(() => {
-    // Calculate dimensions based on estimated layout
-    const numSections = data.sections.length
-    const maxNodesPerSection = Math.max(...data.sections.map(section => 
-      Math.max(...section.columns.map(col => col.nodes.length), 1)
-    ))
+    // Calculate width based on actual section widths + gaps only
+    let totalWidth = 0
     
-    // Calculate maximum columns per section
-    const maxColumnsPerSection = Math.max(...data.sections.map(section => section.columns.length))
+    // Use the actual calculated section widths
+    sectionWidths.forEach((sectionWidth, sectionIndex) => {
+      totalWidth += sectionWidth
+      
+      // Add gap between sections (gap-8 = 32px) - only between sections, not on edges
+      if (sectionIndex < sectionWidths.length - 1) {
+        totalWidth += 32
+      }
+    })
     
-    // Estimate dimensions more reliably with moderate padding
-    const nodeWidth = 192 // w-48 = 12rem = 192px
-    const nodeHeight = 256 // h-64 = 16rem = 256px
-    const sectionGap = 32 // gap-8 = 2rem = 32px
-    const columnGap = 24 // gap-6 = 1.5rem = 24px
-    const nodeGap = 8 // gap-2 = 0.5rem = 8px
+    // Calculate height based on content positions (avoid DOM measurements that change with zoom)
+    let maxHeight = 0
     
-    // More conservative width calculation
-    const estimatedWidth = numSections * (nodeWidth * maxColumnsPerSection + columnGap * (maxColumnsPerSection + 1)) + (numSections - 1) * sectionGap
-    const estimatedHeight = maxNodesPerSection * (nodeHeight + nodeGap) + 200 // extra for headers
+    data.sections.forEach(section => {
+      section.columns.forEach(column => {
+        column.nodes.forEach((node, nodeIndex) => {
+          // Get node position (either custom yPosition or calculated position)
+          const nodeTop = node.yPosition !== undefined ? node.yPosition : (nodeIndex * 180 + 30)
+          
+          // Use fixed node height instead of DOM measurement to avoid zoom effects
+          const nodeHeight = 150 // Fixed height
+          
+          const nodeBottom = nodeTop + nodeHeight
+          maxHeight = Math.max(maxHeight, nodeBottom)
+        })
+      })
+    })
     
-    // Safe dimensions to ensure edges never get cut off
-    const svgWidth = Math.max(estimatedWidth + 400, window.innerWidth * 1.2)
-    const svgHeight = Math.max(estimatedHeight + 300, window.innerHeight * 1.2)
+    // Add header height and padding
+    const headerHeight = 80 // Approximate header height
+    const padding = 100 // Extra padding for safety
+    const dynamicHeight = Math.max(maxHeight + headerHeight + padding, 800) // Minimum 800px
     
-    setSvgSize({ width: svgWidth, height: svgHeight })
-  }, [data.sections])
+    console.log('SVG updateSize called with sectionWidths:', sectionWidths, 'totalWidth:', totalWidth, 'dynamicHeight:', dynamicHeight)
+    const newSize = { width: totalWidth, height: dynamicHeight }
+    setSvgSize(newSize)
+    onSizeChange(newSize)
+  }, [sectionWidths, data.sections])
 
   useEffect(() => {
     // Immediate size calculation
@@ -1051,6 +1107,11 @@ function Connections({
       clearTimeout(timeoutId)
     }
   }, [updateSize])
+  
+  // Update SVG size when section widths change
+  useEffect(() => {
+    updateSize()
+  }, [sectionWidths, updateSize])
 
   // Smooth edge updates during interactions using RAF
   useEffect(() => {
