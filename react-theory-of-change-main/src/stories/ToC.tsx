@@ -87,9 +87,9 @@ export function ToC({ data: initialData }: { data: ToCData }) {
     text: string
   } | null>(null)
 
-  const updateNodeRef = (id: string, ref: HTMLDivElement | null) => {
+  const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
-  }
+  }, [])
 
   const toggleHighlight = (id: string) => {
     setHighlightedNodes((prev) => {
@@ -192,7 +192,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
 
       return newData
     })
-  }, [setData, nodeRefs])
+  }, [editMode, setData, nodeRefs])
 
   // Keyboard event handler for moving nodes
   useEffect(() => {
@@ -340,7 +340,7 @@ export function ToC({ data: initialData }: { data: ToCData }) {
 
     // Clear selection after connecting
     setHighlightedNodes(new Set())
-  }, [highlightedNodes, setData])
+  }, [editMode, highlightedNodes, setData])
 
   const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
     if (!draggedNode || !dragOffset) {
@@ -991,35 +991,35 @@ function Connections({
     assumptions?: string
   } | null>(null)
 
-  useEffect(() => {
-    const updateSize = () => {
-      // Calculate dimensions based on estimated layout
-      const numSections = data.sections.length
-      const maxNodesPerSection = Math.max(...data.sections.map(section => 
-        Math.max(...section.columns.map(col => col.nodes.length), 1)
-      ))
-      
-      // Calculate maximum columns per section
-      const maxColumnsPerSection = Math.max(...data.sections.map(section => section.columns.length))
-      
-      // Estimate dimensions more reliably with moderate padding
-      const nodeWidth = 192 // w-48 = 12rem = 192px
-      const nodeHeight = 256 // h-64 = 16rem = 256px
-      const sectionGap = 32 // gap-8 = 2rem = 32px
-      const columnGap = 24 // gap-6 = 1.5rem = 24px
-      const nodeGap = 8 // gap-2 = 0.5rem = 8px
-      
-      // More conservative width calculation
-      const estimatedWidth = numSections * (nodeWidth * maxColumnsPerSection + columnGap * (maxColumnsPerSection + 1)) + (numSections - 1) * sectionGap
-      const estimatedHeight = maxNodesPerSection * (nodeHeight + nodeGap) + 200 // extra for headers
-      
-      // Safe dimensions to ensure edges never get cut off
-      const svgWidth = Math.max(estimatedWidth + 400, window.innerWidth * 1.2)
-      const svgHeight = Math.max(estimatedHeight + 300, window.innerHeight * 1.2)
-      
-      setSvgSize({ width: svgWidth, height: svgHeight })
-    }
+  const updateSize = useCallback(() => {
+    // Calculate dimensions based on estimated layout
+    const numSections = data.sections.length
+    const maxNodesPerSection = Math.max(...data.sections.map(section => 
+      Math.max(...section.columns.map(col => col.nodes.length), 1)
+    ))
     
+    // Calculate maximum columns per section
+    const maxColumnsPerSection = Math.max(...data.sections.map(section => section.columns.length))
+    
+    // Estimate dimensions more reliably with moderate padding
+    const nodeWidth = 192 // w-48 = 12rem = 192px
+    const nodeHeight = 256 // h-64 = 16rem = 256px
+    const sectionGap = 32 // gap-8 = 2rem = 32px
+    const columnGap = 24 // gap-6 = 1.5rem = 24px
+    const nodeGap = 8 // gap-2 = 0.5rem = 8px
+    
+    // More conservative width calculation
+    const estimatedWidth = numSections * (nodeWidth * maxColumnsPerSection + columnGap * (maxColumnsPerSection + 1)) + (numSections - 1) * sectionGap
+    const estimatedHeight = maxNodesPerSection * (nodeHeight + nodeGap) + 200 // extra for headers
+    
+    // Safe dimensions to ensure edges never get cut off
+    const svgWidth = Math.max(estimatedWidth + 400, window.innerWidth * 1.2)
+    const svgHeight = Math.max(estimatedHeight + 300, window.innerHeight * 1.2)
+    
+    setSvgSize({ width: svgWidth, height: svgHeight })
+  }, [data.sections])
+
+  useEffect(() => {
     // Immediate size calculation
     updateSize()
     
@@ -1036,7 +1036,7 @@ function Connections({
       window.removeEventListener("resize", handleResize)
       clearTimeout(timeoutId)
     }
-  }, [data])
+  }, [updateSize])
 
   const findNodeLocation = (nodeId: string) => {
     for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
