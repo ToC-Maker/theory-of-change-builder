@@ -249,211 +249,288 @@ export const ClimateResearchExample: Story = {
 export const CharityEntrepreneurship: Story = {
   args: {
     data: {
-      "sections": [{
-        "title": "Inputs",
-
-        "columns": [{
-          "nodes": [{
-            "id": "research",
-            "title": "Extensive research into promising ideas for new charities",
-            "text": "Find out more about our extensive research into promising charity ideas at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["reports"],
-
-            "connections": [{
-              "targetId": "reports",
-              "confidence": 85,
-              "evidence": "Corroboration of several recommendations by GiveWell and OpenPhilanthropy. Strong track record of CE's incubated charities with no diminishing performance over time.",
-              "assumptions": "Researcher skills, time and available information are sufficient to make recommendations worth following. The pool of shovel-ready ideas is not exhausted."
-            }],
-
-            "yPosition": 36
-          }, {
-            "id": "outreach",
-            "title": "Outreach to encourage talented individuals to apply to the program",
-            "text": "Find out more about our outreach and application process at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["cohorts"],
-
-            "connections": [{
-              "targetId": "cohorts",
-              "confidence": 75,
-              "evidence": "Historical data showing consistent ~20 suitable candidates from ~3000 applications annually.",
-              "assumptions": "Talent pool is not exhausted and outreach continues to attract quality applicants. Selection criteria accurately identify entrepreneurship potential."
-            }],
-
-            "yPosition": 201.5
-          }, {
-            "id": "vetting",
-            "title": "Rigorous vetting to identify the most promising applicants",
-            "text": "Find out more about our rigorous vetting process at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["cohorts"],
-
-            "connections": [{
-              "targetId": "cohorts",
-              "confidence": 88,
-              "evidence": "Vetting scores show 0.7 correlation with internal estimates of charity impact, demonstrating predictive validity of the selection process.",
-              "assumptions": "Vetting process accurately identifies suitable applicants. Selected co-founders wouldn't have had greater impact elsewhere."
-            }],
-
-            "yPosition": 408
-          }, {
-            "id": "training",
-            "title": "Improve and facilitate training program to launch an effective charity",
-            "text": "Find out more about our training programs for charity founders at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["programs"],
-
-            "connections": [{
-              "targetId": "programs",
-              "confidence": 82,
-              "evidence": "Successful scaling to two programs per year while maintaining quality standards. Consistent program delivery track record.",
-              "assumptions": "Running two Incubation Programs per year is sustainable at equal or higher quality. New program types can be integrated without compromising existing quality."
-            }],
-
-            "yPosition": 574.75
-          }, {
-            "id": "funder-outreach",
-            "title": "Outreach to intelligent, value aligned funders to join seed network",
-            "text": "Find out more about our funder outreach and seed network at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["seed-network"],
-
-            "connections": [{
-              "targetId": "seed-network",
-              "confidence": 90,
-              "evidence": "83% of applications funded in last 3 programs (94% for CE recommended charity ideas). Average funding of $120k demonstrates strong funder commitment.",
-              "assumptions": "Funding landscape can support ~10 new charities per year across cause areas, even in economic downturns. CE's reputation attracts sufficient high-quality funders."
-            }],
-
-            "yPosition": 743
-          }]
-        }]
-      }, {
-        "title": "Outputs",
-
-        "columns": [{
-          "nodes": [{
-            "id": "reports",
-            "title": "Reports recommending excellent ideas for new charities to launch",
-            "text": "Find out more about our charity recommendation reports at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["plans"],
-
-            "connections": [{
-              "targetId": "plans",
-              "confidence": 72,
-              "evidence": "Historical correlation between quality research reports and successful business plan submissions. Report recommendations have been validated by external organizations.",
-              "assumptions": "Recommended ideas are diverse enough for founders with different preferences. Quality research translates to actionable charity ideas."
-            }],
-
-            "yPosition": 24.75
-          }, {
-            "id": "cohorts",
-            "title": "Cohorts of talented participants are a good fit for entrepreneurship",
-            "text": "Find out more about our entrepreneurship cohorts at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["plans"],
-
-            "connections": [{
-              "targetId": "plans",
-              "confidence": 68,
-              "evidence": "62% of participants founded after the last 3 programs, indicating strong conversion from cohort participation to plan development.",
-              "assumptions": "Facilitation leads to strong co-founder & idea combinations. Teaching equips participants with necessary knowledge and support for success."
-            }],
-
-            "yPosition": 212.75
-          }, {
-            "id": "programs",
-            "title": "Programs occur multiple times a year",
-            "text": "Find out more about our year-round programs at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["plans"],
-
-            "connections": [{
-              "targetId": "plans",
-              "confidence": 65,
-              "evidence": "62% of participants founded after the last 3 programs. Consistent program delivery demonstrates scalability.",
-              "assumptions": "Teaching effectively equips participants with knowledge and support needed for smart launch plans and field success."
-            }],
-
-            "yPosition": 597.25,
-            "width": 192
-          }, {
-            "id": "seed-network",
-            "title": "Seed network with the resources and good judgement to fund deserving proposals",
-            "text": "Find out more about our seed funding network at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["new-charities"],
-
-            "connections": [{
-              "targetId": "new-charities",
-              "confidence": 92,
-              "evidence": "83% of applications funded in last 3 programs (94% for CE recommended charity ideas). Average funding of $120k demonstrates robust funding capacity.",
-              "assumptions": "Seed network has sufficient resources and maintains good judgment in funding decisions. Funded proposals translate to operational charities."
-            }],
-
-            "yPosition": 731.75
-          }]
-        }]
-      }, {
-        "title": "Outcomes",
-
-        "columns": [{
-          "nodes": [{
-            "id": "plans",
-            "title": "Incubatees form co-founder teams & submit high quality plans to the seed network for funding",
-            "text": "Find out more about our co-founder matching and funding process at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["new-charities"],
-
-            "connections": [{
-              "targetId": "new-charities",
-              "confidence": 85,
-              "evidence": "High follow-through rate from plan submission to charity launch. Seed network's selective funding approach ensures quality.",
-              "assumptions": "Seed network only funds teams with high expected counterfactual impact. Funded co-founder teams follow through on launching charities."
-            }],
-
-            "yPosition": 201.5
-          }]
-        }, {
-          "nodes": [{
-            "id": "new-charities",
-            "title": "New effective charities exist, some of which wouldn't have otherwise",
-            "text": "Find out more about the new effective charities we've launched at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["impactful-programs"],
-
-            "connections": [{
-              "targetId": "impactful-programs",
-              "confidence": 78,
-              "evidence": "Track record of launched charities demonstrates successful transition from funding to operational programs. Portfolio performance shows sustainability.",
-              "assumptions": "Charities can secure funding through the 'valley of death' phase. Organizations and co-founders maintain their values and don't succumb to mission drift."
-            }],
-
-            "yPosition": 396.75
-          }]
-        }, {
-          "nodes": [{
-            "id": "impactful-programs",
-            "title": "Charities execute counterfactually impactful programs",
-            "text": "Find out more about our charities' impactful programs at https://www.charityentrepreneurship.com/",
-            "connectionIds": ["wellbeing"],
-
-            "connections": [{
-              "targetId": "wellbeing",
-              "confidence": 88,
-              "evidence": "~40% of charities are field leading based on internal assessments, public M&E results, endorsements from GiveWell and OpenPhilanthropy, and 11 positive external evaluations (11/11 positive rate).",
-              "assumptions": "Impactful programs translate directly to improved wellbeing outcomes. Cost-effectiveness assessments accurately predict real-world impact."
-            }],
-
-            "yPosition": 408
-          }]
-        }]
-      }, {
-        "title": "Goal",
-
-        "columns": [{
-          "nodes": [{
-            "id": "wellbeing",
-            "title": "Improved well being for humans and animals",
-            "text": "Find out more about improving wellbeing for humans and animals at https://www.charityentrepreneurship.com/",
-            "connectionIds": [],
-            "connections": [],
-            "yPosition": 419.25
-          }]
-        }]
-      }]
-    },
+      "sections": [
+        {
+          "title": "Inputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "research",
+                  "title": "Extensive research into promising ideas for new charities",
+                  "text": "Find out more about our extensive research into promising charity ideas at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "reports"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "reports",
+                      "confidence": 85,
+                      "evidence": "Corroboration of several recommendations by GiveWell and OpenPhilanthropy. Strong track record of CE's incubated charities with no diminishing performance over time.",
+                      "assumptions": "Researcher skills, time and available information are sufficient to make recommendations worth following. The pool of shovel-ready ideas is not exhausted."
+                    }
+                  ],
+                  "yPosition": 30.28409194946289,
+                  "width": 256,
+                  "color": "#ffb8ca"
+                },
+                {
+                  "id": "outreach",
+                  "title": "Outreach to encourage talented individuals to apply to the program",
+                  "text": "Find out more about our outreach and application process at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "cohorts"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "cohorts",
+                      "confidence": 75,
+                      "evidence": "Historical data showing consistent ~20 suitable candidates from ~3000 applications annually.",
+                      "assumptions": "Talent pool is not exhausted and outreach continues to attract quality applicants. Selection criteria accurately identify entrepreneurship potential."
+                    }
+                  ],
+                  "yPosition": 169.30682373046875,
+                  "width": 256,
+                  "color": "#b96374"
+                },
+                {
+                  "id": "vetting",
+                  "title": "Rigorous vetting to identify the most promising applicants",
+                  "text": "Find out more about our rigorous vetting process at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "cohorts"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "cohorts",
+                      "confidence": 88,
+                      "evidence": "Vetting scores show 0.7 correlation with internal estimates of charity impact, demonstrating predictive validity of the selection process.",
+                      "assumptions": "Vetting process accurately identifies suitable applicants. Selected co-founders wouldn't have had greater impact elsewhere."
+                    }
+                  ],
+                  "yPosition": 308.2926025390625,
+                  "width": 256,
+                  "color": "#b96374"
+                },
+                {
+                  "id": "training",
+                  "title": "Improve and facilitate training program to launch an effective charity",
+                  "text": "Find out more about our training programs for charity founders at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "programs"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "programs",
+                      "confidence": 82,
+                      "evidence": "Successful scaling to two programs per year while maintaining quality standards. Consistent program delivery track record.",
+                      "assumptions": "Running two Incubation Programs per year is sustainable at equal or higher quality. New program types can be integrated without compromising existing quality."
+                    }
+                  ],
+                  "yPosition": 460.2840919494629,
+                  "width": 256,
+                  "color": "#a63247"
+                },
+                {
+                  "id": "funder-outreach",
+                  "title": "Outreach to intelligent, value aligned funders to join seed network",
+                  "text": "Find out more about our funder outreach and seed network at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "seed-network"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "seed-network",
+                      "confidence": 50,
+                      "evidence": "83% of applications funded in last 3 programs (94% for CE recommended charity ideas). Average funding of $120k demonstrates strong funder commitment.",
+                      "assumptions": "Funding landscape can support ~10 new charities per year across cause areas, even in economic downturns. CE's reputation attracts sufficient high-quality funders."
+                    }
+                  ],
+                  "yPosition": 603.2840919494629,
+                  "width": 256,
+                  "color": "#944050"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "reports",
+                  "title": "Reports recommending excellent ideas for new charities to launch",
+                  "text": "Find out more about our charity recommendation reports at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "plans"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "plans",
+                      "confidence": 20,
+                      "evidence": "Historical correlation between quality research reports and successful business plan submissions. Report recommendations have been validated by external organizations.",
+                      "assumptions": "Recommended ideas are diverse enough for founders with different preferences. Quality research translates to actionable charity ideas."
+                    }
+                  ],
+                  "yPosition": 30.28409194946289,
+                  "width": 256,
+                  "color": "#ffb8ca"
+                },
+                {
+                  "id": "cohorts",
+                  "title": "Cohorts of talented participants are a good fit for entrepreneurship",
+                  "text": "Find out more about our entrepreneurship cohorts at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "plans"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "plans",
+                      "confidence": 70,
+                      "evidence": "62% of participants founded after the last 3 programs, indicating strong conversion from cohort participation to plan development.",
+                      "assumptions": "Facilitation leads to strong co-founder & idea combinations. Teaching equips participants with necessary knowledge and support for success."
+                    }
+                  ],
+                  "yPosition": 236.2840919494629,
+                  "width": 256,
+                  "color": "#b96374"
+                },
+                {
+                  "id": "programs",
+                  "title": "Programs occur multiple times a year",
+                  "text": "Find out more about our year-round programs at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "plans"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "plans",
+                      "confidence": 65,
+                      "evidence": "62% of participants founded after the last 3 programs. Consistent program delivery demonstrates scalability.",
+                      "assumptions": "Teaching effectively equips participants with knowledge and support needed for smart launch plans and field success."
+                    }
+                  ],
+                  "yPosition": 471.5269889831543,
+                  "width": 256,
+                  "color": "#a63247"
+                },
+                {
+                  "id": "seed-network",
+                  "title": "Seed network with the resources and good judgement to fund deserving proposals",
+                  "text": "Find out more about our seed funding network at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "new-charities"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "new-charities",
+                      "confidence": 92,
+                      "evidence": "83% of applications funded in last 3 programs (94% for CE recommended charity ideas). Average funding of $120k demonstrates robust funding capacity.",
+                      "assumptions": "Seed network has sufficient resources and maintains good judgment in funding decisions. Funded proposals translate to operational charities."
+                    }
+                  ],
+                  "yPosition": 592.0411987304688,
+                  "width": 256,
+                  "color": "#944050"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outcomes",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "plans",
+                  "title": "Incubatees form co-founder teams & submit high quality plans to the seed network for funding",
+                  "text": "Find out more about our co-founder matching and funding process at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "new-charities"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "new-charities",
+                      "confidence": 85,
+                      "evidence": "High follow-through rate from plan submission to charity launch. Seed network's selective funding approach ensures quality.",
+                      "assumptions": "Seed network only funds teams with high expected counterfactual impact. Funded co-founder teams follow through on launching charities."
+                    }
+                  ],
+                  "yPosition": 202.55540466308594,
+                  "color": "#7f1c31"
+                }
+              ]
+            },
+            {
+              "nodes": [
+                {
+                  "id": "new-charities",
+                  "title": "New effective charities exist, some of which wouldn't have otherwise",
+                  "text": "Find out more about the new effective charities we've launched at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "impactful-programs"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "impactful-programs",
+                      "confidence": 60,
+                      "evidence": "Track record of launched charities demonstrates successful transition from funding to operational programs. Portfolio performance shows sustainability.",
+                      "assumptions": "Charities can secure funding through the 'valley of death' phase. Organizations and co-founders maintain their values and don't succumb to mission drift."
+                    }
+                  ],
+                  "yPosition": 333.79830169677734,
+                  "color": "#7f1c31"
+                }
+              ]
+            },
+            {
+              "nodes": [
+                {
+                  "id": "impactful-programs",
+                  "title": "Charities execute counterfactually impactful programs",
+                  "text": "Find out more about our charities' impactful programs at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [
+                    "wellbeing"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "wellbeing",
+                      "confidence": 88,
+                      "evidence": "~40% of charities are field leading based on internal assessments, public M&E results, endorsements from GiveWell and OpenPhilanthropy, and 11 positive external evaluations (11/11 positive rate).",
+                      "assumptions": "Impactful programs translate directly to improved wellbeing outcomes. Cost-effectiveness assessments accurately predict real-world impact."
+                    }
+                  ],
+                  "yPosition": 345.04119873046875,
+                  "color": "#7f1c31"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Goal",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "wellbeing",
+                  "title": "Improved well being for humans and animals",
+                  "text": "Find out more about improving wellbeing for humans and animals at https://www.charityentrepreneurship.com/",
+                  "connectionIds": [],
+                  "connections": [],
+                  "yPosition": 356.2840919494629,
+                  "color": "#7f1c31"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "textSize": 1,
+      "curvature": 1,
+    }
   },
 }
