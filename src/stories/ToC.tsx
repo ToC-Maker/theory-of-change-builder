@@ -204,16 +204,19 @@ export function ToC({
     }
   }, [data, curvature, textSize, legendPosition])
 
-  const toggleHighlight = (id: string) => {
+  const toggleHighlight = (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
     setHighlightedNodes((prev) => {
-      const newSet = new Set(prev)
-      if (newSet.has(id)) {
-        newSet.delete(id)
-      } else {
-        newSet.add(id)
+      if (selectionMode === 'multi') {
+        // Multi-select mode (Ctrl held): toggle individual nodes
+        const newSet = new Set(prev)
+        if (newSet.has(id)) {
+          newSet.delete(id)
+        } else {
+          newSet.add(id)
+        }
         
         // When adding a node to selection, snap width slider and color to that node's properties
-        if (newSet.size === 1) { // Only snap if this is the first/only selected node
+        if (newSet.size === 1 && newSet.has(id)) { // Only snap if this is the first/only selected node
           const nodeLocation = findNodeLocation(id)
           if (nodeLocation) {
             const node = nodeLocation.node
@@ -223,8 +226,60 @@ export function ToC({
             setNodeColor(currentColor)
           }
         }
+        return newSet
+      } else if (selectionMode === 'column') {
+        // Column select mode (Shift held): select all nodes in the same column
+        const nodeLocation = findNodeLocation(id)
+        if (nodeLocation) {
+          const { sectionIndex, columnIndex } = nodeLocation
+          const columnNodes = data.sections[sectionIndex].columns[columnIndex].nodes
+          const columnNodeIds = columnNodes.map(node => node.id)
+          
+          // Check if all column nodes are already selected
+          const allColumnNodesSelected = columnNodeIds.every(nodeId => prev.has(nodeId))
+          
+          if (allColumnNodesSelected) {
+            // If all column nodes are selected, deselect them
+            const newSet = new Set(prev)
+            columnNodeIds.forEach(nodeId => newSet.delete(nodeId))
+            return newSet
+          } else {
+            // Select all nodes in the column (add to existing selection)
+            const newSet = new Set(prev)
+            columnNodeIds.forEach(nodeId => newSet.add(nodeId))
+            
+            // Snap to the clicked node's properties
+            const node = nodeLocation.node
+            const currentWidth = node.width || 192
+            const currentColor = node.color || '#ffffff'
+            setNodeWidth(currentWidth)
+            setNodeColor(currentColor)
+            
+            return newSet
+          }
+        }
+        return prev
+      } else {
+        // Single select mode (default): clear existing selection and select only this node
+        const newSet = new Set<string>()
+        if (!prev.has(id) || prev.size > 1) {
+          // Either this node wasn't selected, or multiple nodes were selected
+          // In both cases, select only this node
+          newSet.add(id)
+          
+          // Snap width slider and color to the selected node's properties
+          const nodeLocation = findNodeLocation(id)
+          if (nodeLocation) {
+            const node = nodeLocation.node
+            const currentWidth = node.width || 192
+            const currentColor = node.color || '#ffffff'
+            setNodeWidth(currentWidth)
+            setNodeColor(currentColor)
+          }
+        }
+        // If this node was the only selected node, deselect it (newSet remains empty)
+        return newSet
       }
-      return newSet
     })
   }
 
@@ -279,7 +334,7 @@ export function ToC({
 
       // Group nodes by similar center Y positions (within 60px tolerance - increased for better grouping)
       const groups: typeof allNodes[] = []
-      const tolerance = 60
+      const tolerance = 40
 
       allNodes.forEach((nodeData) => {
         let addedToGroup = false
@@ -1844,7 +1899,7 @@ function Node({
   isConnected: boolean
   isHovered: boolean
   isDragging: boolean
-  toggleHighlight: (id: string) => void
+  toggleHighlight: (id: string, selectionMode?: 'single' | 'multi' | 'column') => void
   setHoveredNode: (id: string | null) => void
   hasHighlightedNodes: boolean
   onDragStart: (node: Node, event: React.DragEvent) => void
@@ -1862,7 +1917,7 @@ function Node({
     updateNodeRef(node.id, nodeRef.current)
   }, [node.id, updateNodeRef])
 
-  const handleClick = () => {
+  const handleClick = (event: React.MouseEvent) => {
     if (node.text && canViewDetails && showHint) {
       setNodePopup({
         id: node.id,
@@ -1870,7 +1925,15 @@ function Node({
         text: node.text
       })
     } else {
-      toggleHighlight(node.id)
+      let selectionMode: 'single' | 'multi' | 'column' = 'single'
+      
+      if (event.ctrlKey) {
+        selectionMode = 'multi'
+      } else if (event.shiftKey && editMode) {
+        selectionMode = 'column'
+      }
+      
+      toggleHighlight(node.id, selectionMode)
     }
   }
 
@@ -1897,8 +1960,16 @@ function Node({
     }
   }
 
-  const handleDoubleClick = () => {
-    toggleHighlight(node.id)
+  const handleDoubleClick = (event: React.MouseEvent) => {
+    let selectionMode: 'single' | 'multi' | 'column' = 'single'
+    
+    if (event.ctrlKey) {
+      selectionMode = 'multi'
+    } else if (event.shiftKey && editMode) {
+      selectionMode = 'column'
+    }
+    
+    toggleHighlight(node.id, selectionMode)
   }
 
   return (
