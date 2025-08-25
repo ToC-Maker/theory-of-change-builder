@@ -819,19 +819,18 @@ export function ToC({
                   </svg>
                   <div>
                     <div className="font-medium text-xs">
-                      {highlightedNodes.size === 2 && 
-                       areNodesConnected(...Array.from(highlightedNodes)) 
-                        ? 'Disconnect' 
-                        : 'Connect'}
+                      {highlightedNodes.size === 2 && (() => {
+                        const [sourceId, targetId] = Array.from(highlightedNodes)
+                        return areNodesConnected(sourceId, targetId) ? 'Disconnect' : 'Connect'
+                      })()}
                     </div>
                     <div className="text-xs text-gray-500">
                       {highlightedNodes.size === 0 && 'Select 2'}
                       {highlightedNodes.size === 1 && 'Select 1 more'}
-                      {highlightedNodes.size === 2 && (
-                        areNodesConnected(...Array.from(highlightedNodes)) 
-                          ? 'Remove link' 
-                          : 'Create link'
-                      )}
+                      {highlightedNodes.size === 2 && (() => {
+                        const [sourceId, targetId] = Array.from(highlightedNodes)
+                        return areNodesConnected(sourceId, targetId) ? 'Remove link' : 'Create link'
+                      })()}
                       {highlightedNodes.size > 2 && 'Too many'}
                     </div>
                   </div>
