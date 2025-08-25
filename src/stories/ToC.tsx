@@ -26,6 +26,8 @@ interface ToCData {
       nodes: Node[]
     }[]
   }[]
+  textSize?: number // Optional text size scaling factor (0.5 to 2.0)
+  curvature?: number // Optional curve shape setting (0.0 to 1.0)
 }
 
 
@@ -122,8 +124,8 @@ export function ToC({
   } | null>(null)
   const [editMode, setEditMode] = useState(false)
   const [columnDragMode, setColumnDragMode] = useState(false)
-  const [curvature, setCurvature] = useState(0.5)
-  const [textSize, setTextSize] = useState(1) // 0.5 to 2.0 scale
+  const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5)
+  const [textSize, setTextSize] = useState(initialData.textSize ?? 1) // 0.5 to 2.0 scale
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff') // Default white background
   const [nodePopup, setNodePopup] = useState<{
@@ -171,6 +173,36 @@ export function ToC({
       }
     }
   }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp])
+
+  // Update textSize and curvature when data changes
+  useEffect(() => {
+    if (initialData.textSize !== undefined) {
+      setTextSize(initialData.textSize)
+    }
+    if (initialData.curvature !== undefined) {
+      setCurvature(initialData.curvature)
+    }
+  }, [initialData.textSize, initialData.curvature])
+
+  const copyGraphJSON = useCallback(async () => {
+    try {
+      const graphData = {
+        ...data,
+        // Include text size and curve shape as part of main data
+        textSize,
+        curvature,
+        // Include additional UI state in metadata
+        _metadata: {
+          exportedAt: new Date().toISOString(),
+          legendPosition,
+        }
+      }
+      await navigator.clipboard.writeText(JSON.stringify(graphData, null, 2))
+      // Could add a toast notification here if desired
+    } catch (err) {
+      console.error('Failed to copy JSON:', err)
+    }
+  }, [data, curvature, textSize, legendPosition])
 
   const toggleHighlight = (id: string) => {
     setHighlightedNodes((prev) => {
@@ -826,7 +858,7 @@ export function ToC({
       {/* Edit Tools Banner - positioned at bottom of graph */}
       {editMode && (
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200 shadow-lg">
-          <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="max-w-none mx-auto px-4 py-4" style={{ maxWidth: '120rem' }}>
             <div className="flex items-center justify-between">
               {/* Left side - Main tools */}
               <div className="flex items-center gap-6">
@@ -887,6 +919,17 @@ export function ToC({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
                     <span>Column Drag: {columnDragMode ? 'On' : 'Off'}</span>
+                  </button>
+
+                  {/* Copy JSON Button */}
+                  <button
+                    onClick={copyGraphJSON}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-green-50 hover:text-green-600 rounded-lg transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <span>Copy JSON</span>
                   </button>
                 </div>
               </div>
