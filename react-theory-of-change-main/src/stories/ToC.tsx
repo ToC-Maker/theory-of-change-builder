@@ -105,6 +105,16 @@ export function ToC({
         newSet.delete(id)
       } else {
         newSet.add(id)
+        
+        // When adding a node to selection, snap width slider to that node's width
+        if (newSet.size === 1) { // Only snap if this is the first/only selected node
+          const nodeLocation = findNodeLocation(id)
+          if (nodeLocation) {
+            const node = nodeLocation.node
+            const currentWidth = node.width || 192
+            setNodeWidth(currentWidth)
+          }
+        }
       }
       return newSet
     })
@@ -362,6 +372,7 @@ export function ToC({
 
     // Clear selection after disconnecting
     setHighlightedNodes(new Set())
+    setNodeWidth(192)
   }, [editMode, highlightedNodes, setData])
 
   const connectSelectedNodes = useCallback(() => {
@@ -411,6 +422,7 @@ export function ToC({
 
     // Clear selection after connecting
     setHighlightedNodes(new Set())
+    setNodeWidth(192)
   }, [editMode, highlightedNodes, setData, areNodesConnected, disconnectSelectedNodes])
 
   const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
@@ -581,18 +593,21 @@ export function ToC({
           height: svgSize.height > 0 ? `${svgSize.height}px` : '100vh'
         }}
         onClick={(e) => {
-          // Only clear selections in view mode when clicking empty space
-          if (!editMode && e.target === e.currentTarget) {
+          // Clear selections when clicking empty space in both view and edit mode
+          if (e.target === e.currentTarget) {
             setHighlightedNodes(new Set())
+            // Reset width slider to default when clearing selection
+            setNodeWidth(192)
           }
         }}
       >
       {data.sections.map((section, sectionIndex) => (
         <div key={sectionIndex}
              onClick={(e) => {
-               // Allow deselection by clicking section area in view mode
-               if (!editMode && e.target === e.currentTarget) {
+               // Allow deselection by clicking section area in both view and edit mode
+               if (e.target === e.currentTarget) {
                  setHighlightedNodes(new Set())
+                 setNodeWidth(192)
                }
              }}>
           <div className={`flex ${editMode ? 'gap-6' : 'gap-4'}`}>
@@ -617,7 +632,7 @@ export function ToC({
                 {editMode && columnDragMode && colIndex === 0 && (
                   <div 
                     className={clsx(
-                      "w-4 min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
+                      "w-8 min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
                       dragOverLocation?.sectionIndex === sectionIndex && 
                       dragOverLocation?.columnIndex === 0 && 
                       dragOverLocation?.isNewColumn
@@ -664,9 +679,10 @@ export function ToC({
                     handleDrop(sectionIndex, colIndex, false, yPosition)
                   } : undefined}
                   onClick={(e) => {
-                    // Allow deselection by clicking column area in view mode
-                    if (!editMode && e.target === e.currentTarget) {
+                    // Allow deselection by clicking column area in both view and edit mode
+                    if (e.target === e.currentTarget) {
                       setHighlightedNodes(new Set())
+                      setNodeWidth(192)
                     }
                   }}
                 >
@@ -713,7 +729,7 @@ export function ToC({
                 {editMode && columnDragMode && (
                   <div 
                     className={clsx(
-                      "w-4 min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
+                      "w-8 min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
                       dragOverLocation?.sectionIndex === sectionIndex && 
                       dragOverLocation?.columnIndex === colIndex + 1 && 
                       dragOverLocation?.isNewColumn
@@ -747,12 +763,166 @@ export function ToC({
         </div>
       ))}
       
-      {/* Edit button positioned at bottom right corner of SVG area */}
+      {/* Edit Tools Banner - positioned at bottom of graph */}
+      {editMode && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200 shadow-lg">
+          <div className="max-w-7xl mx-auto px-4 py-4">
+            <div className="flex items-center justify-between">
+              {/* Left side - Main tools */}
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  <h3 className="font-medium text-gray-900">Edit Tools</h3>
+                </div>
+                
+                {/* Action Buttons */}
+                <div className="flex items-center gap-4">
+                  {/* Straighten Edges Tool */}
+                  <button
+                    onClick={straightenEdges}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    <span>Straighten</span>
+                  </button>
+
+                  {/* Connect Nodes Tool */}
+                  <button
+                    onClick={connectSelectedNodes}
+                    disabled={highlightedNodes.size !== 2}
+                    className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
+                      highlightedNodes.size === 2
+                        ? 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                        : 'text-gray-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                    </svg>
+                    <span>
+                      {highlightedNodes.size === 0 && 'Connect (Select 2)'}
+                      {highlightedNodes.size === 1 && 'Connect (Select 1 more)'}
+                      {highlightedNodes.size === 2 && (() => {
+                        const [sourceId, targetId] = Array.from(highlightedNodes)
+                        return areNodesConnected(sourceId, targetId) ? 'Disconnect' : 'Connect'
+                      })()}
+                      {highlightedNodes.size > 2 && 'Connect (Too many selected)'}
+                    </span>
+                  </button>
+
+                  {/* Column Drag Mode Toggle */}
+                  <button
+                    onClick={() => setColumnDragMode(!columnDragMode)}
+                    className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
+                      columnDragMode
+                        ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                        : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    <span>Column Drag: {columnDragMode ? 'On' : 'Off'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Right side - Controls and Close */}
+              <div className="flex items-center gap-6">
+                {/* Curve Control */}
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-gray-700">Curve:</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">Flat</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={curvature}
+                      onChange={(e) => setCurvature(parseFloat(e.target.value))}
+                      className="w-20 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-blue-200 to-indigo-400"
+                    />
+                    <span className="text-xs text-gray-500">Curved</span>
+                  </div>
+                </div>
+
+                {/* Text Size Control */}
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-gray-700">Text Size:</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">S</span>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2"
+                      step="0.1"
+                      value={textSize}
+                      onChange={(e) => setTextSize(parseFloat(e.target.value))}
+                      className="w-20 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-gray-300 to-gray-600"
+                    />
+                    <span className="text-xs text-gray-500">L</span>
+                  </div>
+                </div>
+
+                {/* Node Width Control */}
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-gray-700">Width:</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min="128"
+                      max="320"
+                      step="16"
+                      value={nodeWidth}
+                      onChange={(e) => {
+                        const newWidth = parseInt(e.target.value)
+                        setNodeWidth(newWidth)
+                        // Auto-apply to selected nodes
+                        if (highlightedNodes.size > 0) {
+                          setData((prevData) => ({
+                            ...prevData,
+                            sections: prevData.sections.map((section) => ({
+                              ...section,
+                              columns: section.columns.map((column) => ({
+                                ...column,
+                                nodes: column.nodes.map((node) => {
+                                  if (highlightedNodes.has(node.id)) {
+                                    return { ...node, width: newWidth }
+                                  }
+                                  return node
+                                })
+                              }))
+                            }))
+                          }))
+                        }
+                      }}
+                      className="w-20 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-orange-300 to-orange-600"
+                    />
+                    <span className="text-xs text-gray-500 w-10">{nodeWidth}px</span>
+                  </div>
+                  {highlightedNodes.size > 0 && (
+                    <span className="text-xs text-gray-500">
+                      ({highlightedNodes.size} selected)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Mode Toggle Button - positioned at bottom right corner */}
       <div 
         className="absolute z-50"
         style={{
           right: '20px',
-          bottom: '20px'
+          bottom: editMode ? '80px' : '20px' // Move up when banner is visible
         }}
       >
         <button
@@ -763,6 +933,7 @@ export function ToC({
                 // Clear selections and column drag mode when exiting edit mode
                 setHighlightedNodes(new Set())
                 setColumnDragMode(false)
+                setNodeWidth(192)
               }
             }}
             className={`w-12 h-12 rounded-full shadow-lg transition-all duration-200 flex items-center justify-center ${
@@ -773,211 +944,9 @@ export function ToC({
             title="Edit Mode"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
           </button>
-        
-        {/* Edit Tools Panel - positioned relative to the button */}
-        {editMode && (
-          <div className="absolute bottom-16 right-0 z-50 bg-white rounded-xl shadow-2xl border border-gray-200 p-2 min-w-32">
-            <div className="flex items-center gap-1 mb-2 pb-2 border-b border-gray-100">
-              <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-              <h3 className="font-medium text-sm text-gray-900">Tools</h3>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-1">
-              {/* Left Column */}
-              <div className="space-y-1">
-                {/* Straighten Edges Tool */}
-                <button
-                  onClick={straightenEdges}
-                  className="w-full flex flex-col items-center gap-1 px-1 py-2 text-center text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 rounded transition-colors"
-                >
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                  <div>
-                    <div className="font-medium text-xs">Straighten</div>
-                    <div className="text-xs text-gray-500">Align nodes</div>
-                  </div>
-                </button>
-
-                {/* Connect Nodes Tool */}
-                <button
-                  onClick={connectSelectedNodes}
-                  disabled={highlightedNodes.size !== 2}
-                  className={`w-full flex flex-col items-center gap-1 px-1 py-2 text-center rounded transition-colors ${
-                    highlightedNodes.size === 2
-                      ? 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
-                      : 'text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                  </svg>
-                  <div>
-                    <div className="font-medium text-xs">
-                      {highlightedNodes.size === 2 && (() => {
-                        const [sourceId, targetId] = Array.from(highlightedNodes)
-                        return areNodesConnected(sourceId, targetId) ? 'Disconnect' : 'Connect'
-                      })()}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {highlightedNodes.size === 0 && 'Select 2'}
-                      {highlightedNodes.size === 1 && 'Select 1 more'}
-                      {highlightedNodes.size === 2 && (() => {
-                        const [sourceId, targetId] = Array.from(highlightedNodes)
-                        return areNodesConnected(sourceId, targetId) ? 'Remove link' : 'Create link'
-                      })()}
-                      {highlightedNodes.size > 2 && 'Too many'}
-                    </div>
-                  </div>
-                </button>
-              </div>
-
-              {/* Right Column */}
-              <div className="space-y-1">
-                {/* Column Drag Mode Toggle */}
-                <button
-                  onClick={() => setColumnDragMode(!columnDragMode)}
-                  className={`w-full flex flex-col items-center gap-1 px-1 py-2 text-center rounded transition-colors ${
-                    columnDragMode
-                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                      : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
-                  }`}
-                >
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  <div>
-                    <div className="font-medium text-xs">Column Drag</div>
-                    <div className="text-xs text-gray-500">
-                      {columnDragMode ? 'Enabled' : 'Disabled'}
-                    </div>
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-2 mt-2">
-              {/* Curve Curvature Control */}
-              <div className="px-3 py-2 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-3 mb-2">
-                  <svg className="w-4 h-4 flex-shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <span className="text-sm font-medium text-gray-700">Curve Shape</span>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-xs text-gray-500 w-8">Flat</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.1"
-                      value={curvature}
-                      onChange={(e) => setCurvature(parseFloat(e.target.value))}
-                      className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-blue-200 to-indigo-400"
-                    />
-                    <span className="text-xs text-gray-500 w-10">Curved</span>
-                  </div>
-                  <div className="text-xs text-gray-500 text-center">
-                    Adjust bezier curve intensity
-                  </div>
-                </div>
-              </div>
-
-              {/* Text Size Control */}
-              <div className="px-3 py-2 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-3 mb-2">
-                  <svg className="w-4 h-4 flex-shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  <span className="text-sm font-medium text-gray-700">Text Size</span>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-xs text-gray-500 w-8">Small</span>
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="2"
-                      step="0.1"
-                      value={textSize}
-                      onChange={(e) => setTextSize(parseFloat(e.target.value))}
-                      className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-gray-300 to-gray-600"
-                    />
-                    <span className="text-xs text-gray-500 w-8">Large</span>
-                  </div>
-                  <div className="text-xs text-gray-500 text-center">
-                    Adjust node text size (Current: {Math.round(textSize * 100)}%)
-                  </div>
-                </div>
-              </div>
-
-              {/* Node Width Control */}
-              <div className="px-3 py-2 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-3 mb-2">
-                  <svg className="w-4 h-4 flex-shrink-0 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
-                  <span className="text-sm font-medium text-gray-700">Node Width</span>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-3">
-                    <span className="text-xs text-gray-500 w-10">Narrow</span>
-                    <input
-                      type="range"
-                      min="128"
-                      max="320"
-                      step="16"
-                      value={nodeWidth}
-                      onChange={(e) => setNodeWidth(parseInt(e.target.value))}
-                      className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-orange-300 to-orange-600"
-                    />
-                    <span className="text-xs text-gray-500 w-8">Wide</span>
-                  </div>
-                  <div className="text-xs text-gray-500 text-center">
-                    Width: {nodeWidth}px - Apply to selected nodes
-                  </div>
-                  <button
-                    onClick={applyWidthToSelectedNodes}
-                    disabled={highlightedNodes.size === 0}
-                    className={`w-full px-3 py-1 text-xs rounded transition-colors ${
-                      highlightedNodes.size > 0
-                        ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    }`}
-                  >
-                    {highlightedNodes.size === 0 
-                      ? 'Select nodes to resize' 
-                      : `Apply to ${highlightedNodes.size} selected node${highlightedNodes.size === 1 ? '' : 's'}`
-                    }
-                  </button>
-                </div>
-              </div>
-
-              {/* Drag Info */}
-              <div className="px-3 py-2 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
-                  </svg>
-                  <span>Drag nodes to reposition</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-gray-600 mt-1">
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                  </svg>
-                  <span>Use ↑↓ arrows to fine-tune</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
       
       <Connections
@@ -1124,8 +1093,8 @@ function Connections({
         // Count columns in this section
         const columnCount = data.sections[sectionIndex].columns.filter(column => column.nodes.length > 0).length
         
-        // Drop zones: N+1 zones × 16px each
-        const dropZonesWidth = (columnCount + 1) * 16
+        // Drop zones: N+1 zones × 32px each
+        const dropZonesWidth = (columnCount + 1) * 32
         
         // Gap calculation:
         // Normal mode: (N-1) gaps × 24px
