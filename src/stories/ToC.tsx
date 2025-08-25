@@ -16,6 +16,7 @@ interface Node {
   connections?: Connection[]
   yPosition?: number
   width?: number // Width in pixels (default 192px = w-48)
+  color?: string // Background color (default white)
 }
 
 interface ToCData {
@@ -28,35 +29,72 @@ interface ToCData {
 }
 
 
-function interpolateColor(value: number, min: number, max: number, colorStart: [number, number, number], colorEnd: [number, number, number]): [number, number, number] {
-  const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)))
-  return [
-    Math.round(colorStart[0] + ratio * (colorEnd[0] - colorStart[0])),
-    Math.round(colorStart[1] + ratio * (colorEnd[1] - colorStart[1])),
-    Math.round(colorStart[2] + ratio * (colorEnd[2] - colorStart[2]))
-  ]
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  // Remove # if present
+  hex = hex.replace('#', '')
+  
+  if (hex.length === 3) {
+    // Convert 3-digit hex to 6-digit
+    hex = hex.split('').map(char => char + char).join('')
+  }
+  
+  const result = /^([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : null
 }
 
-function getConfidenceColorRGB(confidence: number, opacity: number = 1): string {
+function isColorDark(hexColor: string): boolean {
+  const rgb = hexToRgb(hexColor)
+  if (!rgb) return false
+  
+  // Calculate relative luminance using WCAG formula
+  const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255
+  
+  // Return true if color is dark (luminance < 0.5)
+  return luminance < 0.5
+}
+
+function getContrastTextColor(backgroundColor: string): string {
+  return isColorDark(backgroundColor) ? '#ffffff' : '#000000'
+}
+
+function getConfidenceStrokeStyle(confidence: number): { 
+  strokeDasharray: string;
+  stroke: string;
+  opacity: number;
+} {
   // Clamp confidence to 0-100 range
   const clampedConfidence = Math.max(0, Math.min(100, confidence))
   
-  // Define color points: Red (0) -> Yellow (50) -> Green (100)
-  const red: [number, number, number] = [239, 68, 68]    // red-500
-  const yellow: [number, number, number] = [234, 179, 8] // yellow-500  
-  const green: [number, number, number] = [34, 197, 94]  // green-500
+  // Use black color for all connections
+  const stroke = '#000000' // black
   
-  let color: [number, number, number]
-  
-  if (clampedConfidence <= 50) {
-    // Interpolate from red to yellow (0-50)
-    color = interpolateColor(clampedConfidence, 0, 50, red, yellow)
+  if (clampedConfidence >= 67) {
+    // High confidence: solid line
+    return {
+      strokeDasharray: 'none',
+      stroke,
+      opacity: 1.0
+    }
+  } else if (clampedConfidence >= 34) {
+    // Medium confidence: dashed line
+    return {
+      strokeDasharray: '8 4', // 8px dash, 4px gap (adjusted for thinner lines)
+      stroke,
+      opacity: 0.9
+    }
   } else {
-    // Interpolate from yellow to green (50-100)
-    color = interpolateColor(clampedConfidence, 50, 100, yellow, green)
+    // Low confidence: dotted line
+    return {
+      strokeDasharray: '2 4', // 2px dot, 4px gap (adjusted for thinner lines)
+      stroke,
+      opacity: 0.8
+    }
   }
-  
-  return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${opacity})`
 }
 
 export function ToC({ 
@@ -87,16 +125,52 @@ export function ToC({
   const [curvature, setCurvature] = useState(0.5)
   const [textSize, setTextSize] = useState(1) // 0.5 to 2.0 scale
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
+  const [nodeColor, setNodeColor] = useState('#ffffff') // Default white background
   const [nodePopup, setNodePopup] = useState<{
     id: string
     title: string
     text: string
   } | null>(null)
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
+  const [legendPosition, setLegendPosition] = useState({ x: 20, y: 70 }) // Start 50px lower
+  const [isDraggingLegend, setIsDraggingLegend] = useState(false)
+  const [legendDragOffset, setLegendDragOffset] = useState({ x: 0, y: 0 })
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
   }, [])
+
+  const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsDraggingLegend(true)
+    setLegendDragOffset({
+      x: e.clientX - legendPosition.x,
+      y: e.clientY - legendPosition.y
+    })
+  }, [legendPosition])
+
+  const handleLegendMouseMove = useCallback((e: MouseEvent) => {
+    if (isDraggingLegend) {
+      setLegendPosition({
+        x: e.clientX - legendDragOffset.x,
+        y: e.clientY - legendDragOffset.y
+      })
+    }
+  }, [isDraggingLegend, legendDragOffset])
+
+  const handleLegendMouseUp = useCallback(() => {
+    setIsDraggingLegend(false)
+  }, [])
+
+  useEffect(() => {
+    if (isDraggingLegend) {
+      document.addEventListener('mousemove', handleLegendMouseMove)
+      document.addEventListener('mouseup', handleLegendMouseUp)
+      return () => {
+        document.removeEventListener('mousemove', handleLegendMouseMove)
+        document.removeEventListener('mouseup', handleLegendMouseUp)
+      }
+    }
+  }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp])
 
   const toggleHighlight = (id: string) => {
     setHighlightedNodes((prev) => {
@@ -106,13 +180,15 @@ export function ToC({
       } else {
         newSet.add(id)
         
-        // When adding a node to selection, snap width slider to that node's width
+        // When adding a node to selection, snap width slider and color to that node's properties
         if (newSet.size === 1) { // Only snap if this is the first/only selected node
           const nodeLocation = findNodeLocation(id)
           if (nodeLocation) {
             const node = nodeLocation.node
             const currentWidth = node.width || 192
+            const currentColor = node.color || '#ffffff'
             setNodeWidth(currentWidth)
+            setNodeColor(currentColor)
           }
         }
       }
@@ -296,27 +372,6 @@ export function ToC({
     return widths
   }, [data.sections])
 
-  const applyWidthToSelectedNodes = useCallback(() => {
-    if (highlightedNodes.size === 0) return
-
-    console.log('Applying width', nodeWidth, 'to nodes:', Array.from(highlightedNodes))
-    setData((prevData) => ({
-      ...prevData,
-      sections: prevData.sections.map((section) => ({
-        ...section,
-        columns: section.columns.map((column) => ({
-          ...column,
-          nodes: column.nodes.map((node) => {
-            if (highlightedNodes.has(node.id)) {
-              console.log('Updating node', node.id, 'width from', node.width || 192, 'to', nodeWidth)
-              return { ...node, width: nodeWidth }
-            }
-            return node
-          })
-        }))
-      }))
-    }))
-  }, [highlightedNodes, nodeWidth, setData])
 
   const areNodesConnected = useCallback((sourceId: string, targetId: string) => {
     const sourceLocation = findNodeLocation(sourceId)
@@ -373,6 +428,7 @@ export function ToC({
     // Clear selection after disconnecting
     setHighlightedNodes(new Set())
     setNodeWidth(192)
+    setNodeColor('#ffffff')
   }, [editMode, highlightedNodes, setData])
 
   const connectSelectedNodes = useCallback(() => {
@@ -423,6 +479,7 @@ export function ToC({
     // Clear selection after connecting
     setHighlightedNodes(new Set())
     setNodeWidth(192)
+    setNodeColor('#ffffff')
   }, [editMode, highlightedNodes, setData, areNodesConnected, disconnectSelectedNodes])
 
   const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
@@ -596,8 +653,9 @@ export function ToC({
           // Clear selections when clicking empty space in both view and edit mode
           if (e.target === e.currentTarget) {
             setHighlightedNodes(new Set())
-            // Reset width slider to default when clearing selection
+            // Reset controls to default when clearing selection
             setNodeWidth(192)
+            setNodeColor('#ffffff')
           }
         }}
       >
@@ -608,6 +666,7 @@ export function ToC({
                if (e.target === e.currentTarget) {
                  setHighlightedNodes(new Set())
                  setNodeWidth(192)
+                 setNodeColor('#ffffff')
                }
              }}>
           <div className={`flex ${editMode ? 'gap-6' : 'gap-4'}`}>
@@ -683,6 +742,7 @@ export function ToC({
                     if (e.target === e.currentTarget) {
                       setHighlightedNodes(new Set())
                       setNodeWidth(192)
+                      setNodeColor('#ffffff')
                     }
                   }}
                 >
@@ -905,6 +965,68 @@ export function ToC({
                     />
                     <span className="text-xs text-gray-500 w-10">{nodeWidth}px</span>
                   </div>
+                </div>
+
+                {/* Node Color Control */}
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-gray-700">Color:</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={nodeColor}
+                      onChange={(e) => {
+                        const newColor = e.target.value
+                        setNodeColor(newColor)
+                        // Auto-apply to selected nodes
+                        if (highlightedNodes.size > 0) {
+                          setData((prevData) => ({
+                            ...prevData,
+                            sections: prevData.sections.map((section) => ({
+                              ...section,
+                              columns: section.columns.map((column) => ({
+                                ...column,
+                                nodes: column.nodes.map((node) => {
+                                  if (highlightedNodes.has(node.id)) {
+                                    return { ...node, color: newColor }
+                                  }
+                                  return node
+                                })
+                              }))
+                            }))
+                          }))
+                        }
+                      }}
+                      className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                      title="Node background color"
+                    />
+                    <button
+                      onClick={() => {
+                        setNodeColor('#ffffff')
+                        // Auto-apply to selected nodes
+                        if (highlightedNodes.size > 0) {
+                          setData((prevData) => ({
+                            ...prevData,
+                            sections: prevData.sections.map((section) => ({
+                              ...section,
+                              columns: section.columns.map((column) => ({
+                                ...column,
+                                nodes: column.nodes.map((node) => {
+                                  if (highlightedNodes.has(node.id)) {
+                                    return { ...node, color: '#ffffff' }
+                                  }
+                                  return node
+                                })
+                              }))
+                            }))
+                          }))
+                        }
+                      }}
+                      className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition-colors"
+                      title="Reset to white"
+                    >
+                      Reset
+                    </button>
+                  </div>
                   {highlightedNodes.size > 0 && (
                     <span className="text-xs text-gray-500">
                       ({highlightedNodes.size} selected)
@@ -916,6 +1038,40 @@ export function ToC({
           </div>
         </div>
       )}
+
+      {/* Connection Confidence Legend - draggable */}
+      <div 
+        className={`absolute z-40 bg-white rounded-lg shadow-lg border border-gray-200 p-3 select-none ${
+          isDraggingLegend ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+        style={{
+          left: `${legendPosition.x}px`,
+          top: `${legendPosition.y}px`
+        }}
+        onMouseDown={handleLegendMouseDown}
+      >
+        <div className="text-xs font-medium text-gray-700 mb-2">Connection Confidence</div>
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <svg width="24" height="2" className="flex-shrink-0">
+              <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" />
+            </svg>
+            <span className="text-xs text-gray-600">High</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <svg width="24" height="2" className="flex-shrink-0">
+              <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" strokeDasharray="8 4" />
+            </svg>
+            <span className="text-xs text-gray-600">Medium</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <svg width="24" height="2" className="flex-shrink-0">
+              <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" strokeDasharray="2 4" />
+            </svg>
+            <span className="text-xs text-gray-600">Low</span>
+          </div>
+        </div>
+      </div>
 
       {/* Edit Mode Toggle Button - positioned at bottom right corner */}
       <div 
@@ -934,12 +1090,13 @@ export function ToC({
                 setHighlightedNodes(new Set())
                 setColumnDragMode(false)
                 setNodeWidth(192)
+                setNodeColor('#ffffff')
               }
             }}
             className={`w-12 h-12 rounded-full shadow-lg transition-all duration-200 flex items-center justify-center ${
               editMode 
-                ? 'bg-indigo-600 text-white' 
-                : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+                ? 'bg-gray-800 text-white border border-gray-600' 
+                : 'bg-gray-700 text-white hover:bg-gray-800 border border-gray-600'
             }`}
             title="Edit Mode"
           >
@@ -1326,7 +1483,7 @@ function Connections({
     }))
   }
 
-  const strokeWidth = 12
+  const strokeWidth = 3
   return (
     <>
     <svg
@@ -1368,45 +1525,62 @@ function Connections({
           (!connectedNodes.has(connection.sourceId) ||
             !connectedNodes.has(connection.targetId))
 
-        const getStrokeColor = () => {
+        const getStrokeStyle = () => {
+          const baseStyle = getConfidenceStrokeStyle(connection.confidence)
+          
           if (isHovered) {
-            return getConfidenceColorRGB(connection.confidence, 0.8)
+            return { ...baseStyle, opacity: Math.min(1, baseStyle.opacity + 0.3) }
           } else if (isHighlighted) {
-            return getConfidenceColorRGB(connection.confidence, 1)
+            return { ...baseStyle, opacity: Math.min(1, baseStyle.opacity + 0.4) }
           } else if (isConnected) {
-            return getConfidenceColorRGB(connection.confidence, 0.6)
+            return { ...baseStyle, opacity: Math.min(1, baseStyle.opacity + 0.2) }
           } else {
-            return getConfidenceColorRGB(connection.confidence, 0.3)
+            return { ...baseStyle, opacity: baseStyle.opacity * 0.7 }
           }
         }
         
+        const strokeStyle = getStrokeStyle()
+        
         return (
-          <path
-            key={index}
-            d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
-            className="fill-none cursor-pointer"
-            style={{
-              stroke: getStrokeColor(),
-              strokeWidth: `${strokeWidth}px`,
-              opacity: isLowOpacity ? 0.01 : 1,
-              pointerEvents: "stroke",
-              transition: smoothUpdates ? 'none' : 'd 0.15s ease-out, stroke 0.2s ease-out, opacity 0.2s ease-out',
-            }}
-            onClick={(e) => {
-              e.stopPropagation()
-              const midX = (startX + endX) / 2
-              const midY = (startY + endY) / 2
-              setEdgePopup({
-                sourceId: connection.sourceId,
-                targetId: connection.targetId,
-                x: midX,
-                y: midY,
-                confidence: connection.confidence,
-                evidence: connection.evidence,
-                assumptions: connection.assumptions,
-              })
-            }}
-          />
+          <g key={index}>
+            {/* Invisible thicker path for easier clicking */}
+            <path
+              d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
+              className="fill-none cursor-pointer"
+              style={{
+                stroke: "transparent",
+                strokeWidth: "15px", // Much thicker for easier clicking
+                pointerEvents: "stroke",
+              }}
+              onClick={(e) => {
+                e.stopPropagation()
+                const midX = (startX + endX) / 2
+                const midY = (startY + endY) / 2
+                setEdgePopup({
+                  sourceId: connection.sourceId,
+                  targetId: connection.targetId,
+                  x: midX,
+                  y: midY,
+                  confidence: connection.confidence,
+                  evidence: connection.evidence,
+                  assumptions: connection.assumptions,
+                })
+              }}
+            />
+            {/* Visible styled path */}
+            <path
+              d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
+              className="fill-none"
+              style={{
+                stroke: strokeStyle.stroke,
+                strokeWidth: `${strokeWidth}px`,
+                strokeDasharray: strokeStyle.strokeDasharray === 'none' ? undefined : strokeStyle.strokeDasharray,
+                opacity: isLowOpacity ? 0.01 : strokeStyle.opacity,
+                pointerEvents: "none", // This path doesn't handle clicks
+                transition: smoothUpdates ? 'none' : 'd 0.15s ease-out, stroke 0.2s ease-out, opacity 0.2s ease-out, stroke-dasharray 0.2s ease-out',
+              }}
+            />
+          </g>
         )
       })}
     </svg>
@@ -1490,7 +1664,7 @@ function Connections({
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-gray-700">Current confidence:</span>
                   <div className="flex items-center space-x-2">
-                    <span className="text-2xl font-bold" style={{ color: getConfidenceColorRGB(edgePopup.confidence) }}>
+                    <span className="text-2xl font-bold text-gray-800">
                       {Math.round(edgePopup.confidence)}%
                     </span>
                     <span className="text-sm text-gray-500">
@@ -1505,33 +1679,47 @@ function Connections({
                   </label>
                   <div className="space-y-3">
                     <div className="flex items-center space-x-4">
-                      <span className="text-xs text-red-600 font-medium">0%</span>
+                      <span className="text-xs text-gray-600 font-medium">0%</span>
                       <div className="flex-1 relative">
                         <input
                           type="range"
                           min="0"
-                          max="100"
+                          max="10"
                           step="1"
-                          value={edgePopup.confidence}
+                          value={Math.round(edgePopup.confidence / 10)}
                           onChange={(e) => {
-                            const newConfidence = parseInt(e.target.value)
+                            const newConfidence = parseInt(e.target.value) * 10
                             updateConfidence(edgePopup.sourceId, edgePopup.targetId, newConfidence)
                             setEdgePopup({ ...edgePopup, confidence: newConfidence })
                           }}
-                          className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                          style={{
-                            background: 'linear-gradient(to right, #ef4444 0%, #eab308 50%, #22c55e 100%)',
-                          }}
+                          className="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-200"
                         />
                       </div>
-                      <span className="text-xs text-green-600 font-medium">100%</span>
+                      <span className="text-xs text-gray-600 font-medium">100%</span>
                     </div>
-                    <div className="flex justify-between text-xs text-gray-500">
-                      <span>No confidence</span>
-                      <span className="text-red-500">Low</span>
-                      <span className="text-yellow-500">Medium</span>
-                      <span className="text-green-500">High</span>
-                      <span>Total confidence</span>
+                    <div className="flex justify-between text-xs text-gray-500 px-2">
+                      <span>0%</span>
+                      <span>10%</span>
+                      <span>20%</span>
+                      <span>30%</span>
+                      <span>40%</span>
+                      <span>50%</span>
+                      <span>60%</span>
+                      <span>70%</span>
+                      <span>80%</span>
+                      <span>90%</span>
+                      <span>100%</span>
+                    </div>
+                    <div className="text-xs text-gray-700 text-center">
+                      {edgePopup.confidence >= 80
+                        ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
+                        : edgePopup.confidence >= 60
+                        ? `Good confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
+                        : edgePopup.confidence >= 40
+                        ? `Moderate confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
+                        : edgePopup.confidence >= 20
+                        ? `Low confidence (${Math.round(edgePopup.confidence)}%). This connection has limited evidence and significant uncertainty.`
+                        : `Very low confidence (${Math.round(edgePopup.confidence)}%). This connection is speculative with minimal supporting evidence.`}
                     </div>
                   </div>
                 </div>
@@ -1572,35 +1760,6 @@ function Connections({
                   No assumptions or evidence have been documented for this connection yet.
                 </p>
               )}
-            </div>
-            
-            <div className={`p-4 rounded-lg ${
-              edgePopup.confidence >= 67 ? 'bg-green-50' :
-              edgePopup.confidence >= 34 ? 'bg-yellow-50' :
-              'bg-red-50'
-            }`}>
-              <h4 className={`font-medium mb-2 ${
-                edgePopup.confidence >= 67 ? 'text-green-900' :
-                edgePopup.confidence >= 34 ? 'text-yellow-900' :
-                'text-red-900'
-              }`}>
-                Confidence Insight
-              </h4>
-              <p className={`text-sm ${
-                edgePopup.confidence >= 67 ? 'text-green-700' :
-                edgePopup.confidence >= 34 ? 'text-yellow-700' :
-                'text-red-700'
-              }`}>
-                {edgePopup.confidence >= 80
-                  ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
-                  : edgePopup.confidence >= 60
-                  ? `Good confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
-                  : edgePopup.confidence >= 40
-                  ? `Moderate confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
-                  : edgePopup.confidence >= 20
-                  ? `Low confidence (${Math.round(edgePopup.confidence)}%). This connection has limited evidence and significant uncertainty.`
-                  : `Very low confidence (${Math.round(edgePopup.confidence)}%). This connection is speculative with minimal supporting evidence.`}
-              </p>
             </div>
           </div>
           
@@ -1710,17 +1869,24 @@ function Node({
         } : undefined}
         onDragEnd={editMode ? onDragEnd : undefined}
         className={clsx(
-          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out bg-gradient-to-br from-white to-gray-50 shadow-lg hover:shadow-xl transform hover:scale-105 pt-3 px-3 pb-6",
+          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-lg hover:shadow-xl transform hover:scale-105 pt-3 px-3 pb-6",
+          // Only apply default gradients if no custom color is set
+          !node.color && "bg-gradient-to-br from-white to-gray-50",
           isHighlighted
-            ? "ring-4 ring-indigo-400 bg-gradient-to-br from-indigo-50 to-indigo-100"
+            ? node.color 
+              ? "ring-2 ring-black" 
+              : "ring-2 ring-black bg-gradient-to-br from-indigo-50 to-indigo-100"
             : isHovered
-              ? "ring-2 ring-indigo-300 bg-gradient-to-br from-indigo-25 to-indigo-50"
+              ? node.color
+                ? "" // No ring for custom colored nodes when hovered
+                : "bg-gradient-to-br from-indigo-25 to-indigo-50" // Only background for default nodes when hovered
               : "hover:shadow-2xl",
           hasHighlightedNodes && !isConnected && "opacity-30",
           isDragging && "opacity-50 scale-95 shadow-lg"
         )}
         style={{
-          width: `${node.width || 192}px`
+          width: `${node.width || 192}px`,
+          backgroundColor: node.color || '#ffffff'
         }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
@@ -1730,21 +1896,29 @@ function Node({
         <div className="flex flex-col justify-center relative py-2">
           <div 
             className="font-medium text-center leading-tight px-2 break-words"
-            style={{ fontSize: `${textSize * 1.125}rem` }} // 1.125rem is text-lg base size
+            style={{ 
+              fontSize: `${textSize * 1.125}rem`, // 1.125rem is text-lg base size
+              color: node.color ? getContrastTextColor(node.color) : '#000000' // Default black text for no custom color
+            }}
           >
             {node.title}
           </div>
           
-          {/* Subtle visual cue for nodes with details */}
+          {/* Subtle visual cue for nodes with details - hidden */}
           {node.text && !showHint && (
-            <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-30"></div>
+            <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-0"></div>
           )}
         </div>
       </div>
       
       {/* Hover hint for nodes with details */}
       {node.text && showHint && (
-        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-gray-500 text-center animate-fade-in-up whitespace-nowrap pointer-events-none z-10">
+        <div 
+          className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-center animate-fade-in-up whitespace-nowrap pointer-events-none z-10"
+          style={{
+            color: node.color ? getContrastTextColor(node.color) : '#6b7280' // Dynamic color or default gray
+          }}
+        >
           click to view details
         </div>
       )}
