@@ -1945,7 +1945,7 @@ function Node({
         } : undefined}
         onDragEnd={editMode ? onDragEnd : undefined}
         className={clsx(
-          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-lg hover:shadow-xl transform hover:scale-105 pt-3 px-3 pb-6",
+          "flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6",
           // Only apply default gradients if no custom color is set
           !node.color && "bg-gradient-to-br from-white to-gray-50",
           isHighlighted
@@ -1969,7 +1969,7 @@ function Node({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        <div className="flex flex-col justify-center relative">
+        <div className="flex flex-col justify-center relative py-2">
           <div 
             className="font-medium text-center leading-tight break-words"
             style={{ 
