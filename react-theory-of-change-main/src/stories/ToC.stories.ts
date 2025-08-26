@@ -340,7 +340,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Talent pool is not exhausted and outreach continues to attract quality applicants. Selection criteria accurately identify entrepreneurship potential."
                     }
                   ],
-                  "yPosition": 126.64999389648438,
+                  "yPosition": 146.64999389648438,
                   "width": 224,
                   "color": "#b96374"
                 },
@@ -359,7 +359,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Vetting process accurately identifies suitable applicants. Selected co-founders wouldn't have had greater impact elsewhere."
                     }
                   ],
-                  "yPosition": 238.12091064453125,
+                  "yPosition": 278.12091064453125,
                   "width": 224,
                   "color": "#b96374"
                 },
@@ -378,7 +378,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Running two Incubation Programs per year is sustainable at equal or higher quality. New program types can be integrated without compromising existing quality."
                     }
                   ],
-                  "yPosition": 350,
+                  "yPosition": 410,
                   "width": 224,
                   "color": "#a63247"
                 },
@@ -397,7 +397,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Funding landscape can support ~10 new charities per year across cause areas, even in economic downturns. CE's reputation attracts sufficient high-quality funders."
                     }
                   ],
-                  "yPosition": 486.25,
+                  "yPosition": 566.25,
                   "width": 224,
                   "color": "#944050"
                 }
@@ -444,7 +444,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Facilitation leads to strong co-founder & idea combinations. Teaching equips participants with necessary knowledge and support for success."
                     }
                   ],
-                  "yPosition": 170,
+                  "yPosition": 198,
                   "width": 224,
                   "color": "#b96374"
                 },
@@ -463,7 +463,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Teaching effectively equips participants with knowledge and support needed for smart launch plans and field success."
                     }
                   ],
-                  "yPosition": 372.5,
+                  "yPosition": 432.5,
                   "width": 224,
                   "color": "#a63247"
                 },
@@ -477,12 +477,12 @@ export const CharityEntrepreneurship: Story = {
                   "connections": [
                     {
                       "targetId": "new-charities",
-                      "confidence": 92,
+                      "confidence": 94,
                       "evidence": "83% of applications funded in last 3 programs (94% for CE recommended charity ideas). Average funding of $120k demonstrates robust funding capacity.",
                       "assumptions": "Seed network has sufficient resources and maintains good judgment in funding decisions. Funded proposals translate to operational charities."
                     }
                   ],
-                  "yPosition": 475,
+                  "yPosition": 555,
                   "width": 224,
                   "color": "#944050"
                 }
@@ -510,7 +510,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Seed network only funds teams with high expected counterfactual impact. Funded co-founder teams follow through on launching charities."
                     }
                   ],
-                  "yPosition": 125,
+                  "yPosition": 153,
                   "color": "#7f1c31",
                   "width": 160
                 }
@@ -533,7 +533,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Charities can secure funding through the 'valley of death' phase. Organizations and co-founders maintain their values and don't succumb to mission drift."
                     }
                   ],
-                  "yPosition": 280.75,
+                  "yPosition": 320.75,
                   "color": "#7f1c31",
                   "width": 160
                 }
@@ -556,7 +556,7 @@ export const CharityEntrepreneurship: Story = {
                       "assumptions": "Impactful programs translate directly to improved wellbeing outcomes. Cost-effectiveness assessments accurately predict real-world impact."
                     }
                   ],
-                  "yPosition": 280.75,
+                  "yPosition": 320.75,
                   "color": "#7f1c31",
                   "width": 160
                 }
@@ -575,7 +575,7 @@ export const CharityEntrepreneurship: Story = {
                   "text": "Find out more about improving wellbeing for humans and animals at https://www.charityentrepreneurship.com/",
                   "connectionIds": [],
                   "connections": [],
-                  "yPosition": 292,
+                  "yPosition": 332,
                   "color": "#7f1c31",
                   "width": 160
                 }
