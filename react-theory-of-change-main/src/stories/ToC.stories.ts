@@ -42,7 +42,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Key stakeholders will attend and engage constructively. Workshop format can overcome existing adversarial relationships. Participants have authority to commit to outcomes."
                     }
                   ],
-                  "yPosition": 92.7437515258789,
+                  "yPosition": 105.55625915527344,
                   "width": 192,
                   "color": "#fce5cd"
                 },
@@ -61,7 +61,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Qualified staff can be hired and retained. Technical challenges are solvable within timeline. Team maintains focus despite industry pressures and competing opportunities."
                     }
                   ],
-                  "yPosition": 309.375,
+                  "yPosition": 349.375,
                   "color": "#cfe2f3"
                 }
               ]
@@ -106,7 +106,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "All key stakeholder groups will participate meaningfully. Workshop facilitators can navigate complex political dynamics. Single events can shift deeply held positions."
                     }
                   ],
-                  "yPosition": 133.75,
+                  "yPosition": 153.75,
                   "color": "#fce5cd"
                 },
                 {
@@ -131,7 +131,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Single technology demonstration can drive national policy targets. Technology can scale from prototype to national deployment without major technical or economic obstacles."
                     }
                   ],
-                  "yPosition": 309.375,
+                  "yPosition": 349.375,
                   "color": "#cfe2f3"
                 }
               ]
@@ -158,7 +158,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Understanding leads to consensus on solutions. Economic incentives can be aligned with climate action. Stakeholders will act against immediate self-interest for long-term benefit."
                     }
                   ],
-                  "yPosition": 119.125,
+                  "yPosition": 139.125,
                   "color": "#fdf2cc"
                 }
               ]
@@ -180,7 +180,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Stakeholder alignment translates to political pressure. Aligned stakeholders have sufficient political influence. Government responds to stakeholder pressure over industry lobbying."
                     }
                   ],
-                  "yPosition": 119.125,
+                  "yPosition": 139.125,
                   "color": "#fdf2cc"
                 },
                 {
@@ -198,7 +198,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Firms will adopt new technology without regulatory mandates. Early adopters won't be disadvantaged competitively. Market signals sufficient to drive widespread adoption."
                     }
                   ],
-                  "yPosition": 334.75,
+                  "yPosition": 374.75,
                   "color": "#fdf2cc"
                 }
               ]
@@ -238,7 +238,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Corporate commitments translate to actual emissions reductions. Market incentives align with climate targets. Firms will accept reduced profitability for climate goals."
                     }
                   ],
-                  "yPosition": 320.125,
+                  "yPosition": 360.125,
                   "color": "#d9d2e9"
                 }
               ]
@@ -265,7 +265,7 @@ export const ClimateResearchExample: Story = {
                       "assumptions": "Measured emission reductions represent real atmospheric impact. Global coordination prevents carbon leakage. Climate targets reflect actual atmospheric requirements rather than political feasibility."
                     }
                   ],
-                  "yPosition": 162.125,
+                  "yPosition": 182.125,
                   "color": "#e3e3e3"
                 }
               ]
@@ -283,7 +283,7 @@ export const ClimateResearchExample: Story = {
                   "text": "A sustainable, climate-resilient future is achieved",
                   "connectionIds": [],
                   "connections": [],
-                  "yPosition": 176.75,
+                  "yPosition": 196.75,
                   "color": "#e3e3e3"
                 }
               ]
