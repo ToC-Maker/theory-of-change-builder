@@ -1759,66 +1759,45 @@ function Connections({
                 Confidence Level
               </h3>
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-700">Current confidence:</span>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-2xl font-bold text-gray-800">
-                      {Math.round(edgePopup.confidence)}%
-                    </span>
-                    <span className="text-sm text-gray-500">
-                      ({edgePopup.confidence <= 33 ? 'Low' : edgePopup.confidence <= 66 ? 'Medium' : 'High'})
-                    </span>
-                  </div>
+                <div className="text-center">
+                  <span className="text-2xl font-bold text-gray-800">
+                    {Math.round(edgePopup.confidence)}%
+                  </span>
+                  <span className="text-sm text-gray-500 ml-2">
+                    ({edgePopup.confidence <= 33 ? 'Low' : edgePopup.confidence <= 66 ? 'Medium' : 'High'})
+                  </span>
                 </div>
                 
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700">
-                    Adjust confidence level:
-                  </label>
-                  <div className="space-y-3">
-                    <div className="flex items-center space-x-4">
-                      <span className="text-xs text-gray-600 font-medium">0%</span>
-                      <div className="flex-1 relative">
-                        <input
-                          type="range"
-                          min="0"
-                          max="10"
-                          step="1"
-                          value={Math.round(edgePopup.confidence / 10)}
-                          onChange={(e) => {
-                            const newConfidence = parseInt(e.target.value) * 10
-                            updateConfidence(edgePopup.sourceId, edgePopup.targetId, newConfidence)
-                            setEdgePopup({ ...edgePopup, confidence: newConfidence })
-                          }}
-                          className="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-200"
-                        />
-                      </div>
-                      <span className="text-xs text-gray-600 font-medium">100%</span>
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-4">
+                    <span className="text-xs text-gray-600 font-medium">0%</span>
+                    <div className="flex-1 relative">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={edgePopup.confidence}
+                        onChange={(e) => {
+                          const newConfidence = parseInt(e.target.value)
+                          updateConfidence(edgePopup.sourceId, edgePopup.targetId, newConfidence)
+                          setEdgePopup({ ...edgePopup, confidence: newConfidence })
+                        }}
+                        className="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-200"
+                      />
                     </div>
-                    <div className="flex justify-between text-xs text-gray-500 px-2">
-                      <span>0%</span>
-                      <span>10%</span>
-                      <span>20%</span>
-                      <span>30%</span>
-                      <span>40%</span>
-                      <span>50%</span>
-                      <span>60%</span>
-                      <span>70%</span>
-                      <span>80%</span>
-                      <span>90%</span>
-                      <span>100%</span>
-                    </div>
-                    <div className="text-xs text-gray-700 text-center">
-                      {edgePopup.confidence >= 80
-                        ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
-                        : edgePopup.confidence >= 60
-                        ? `Good confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
-                        : edgePopup.confidence >= 40
-                        ? `Moderate confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
-                        : edgePopup.confidence >= 20
-                        ? `Low confidence (${Math.round(edgePopup.confidence)}%). This connection has limited evidence and significant uncertainty.`
-                        : `Very low confidence (${Math.round(edgePopup.confidence)}%). This connection is speculative with minimal supporting evidence.`}
-                    </div>
+                    <span className="text-xs text-gray-600 font-medium">100%</span>
+                  </div>
+                  <div className="text-xs text-gray-700 text-center">
+                    {edgePopup.confidence >= 80
+                      ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
+                      : edgePopup.confidence >= 60
+                      ? `Good confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
+                      : edgePopup.confidence >= 40
+                      ? `Moderate confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
+                      : edgePopup.confidence >= 20
+                      ? `Low confidence (${Math.round(edgePopup.confidence)}%). This connection has limited evidence and significant uncertainty.`
+                      : `Very low confidence (${Math.round(edgePopup.confidence)}%). This connection is speculative with minimal supporting evidence.`}
                   </div>
                 </div>
               </div>
