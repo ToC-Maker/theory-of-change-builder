@@ -1909,55 +1909,38 @@ function Node({
   setNodePopup: React.Dispatch<React.SetStateAction<{ id: string; title: string; text: string } | null>>
 }) {
   const nodeRef = useRef<HTMLDivElement>(null)
-  const [showHint, setShowHint] = useState(false)
-  const [canViewDetails, setCanViewDetails] = useState(false)
-  const hoverTimer = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     updateNodeRef(node.id, nodeRef.current)
   }, [node.id, updateNodeRef])
 
   const handleClick = (event: React.MouseEvent) => {
-    if (node.text && canViewDetails && showHint) {
-      setNodePopup({
-        id: node.id,
-        title: node.title,
-        text: node.text
-      })
-    } else {
-      let selectionMode: 'single' | 'multi' | 'column' = 'single'
-      
-      if (event.ctrlKey) {
-        selectionMode = 'multi'
-      } else if (event.shiftKey && editMode) {
-        selectionMode = 'column'
-      }
-      
-      toggleHighlight(node.id, selectionMode)
+    let selectionMode: 'single' | 'multi' | 'column' = 'single'
+    
+    if (event.ctrlKey) {
+      selectionMode = 'multi'
+    } else if (event.shiftKey && editMode) {
+      selectionMode = 'column'
     }
+    
+    toggleHighlight(node.id, selectionMode)
+  }
+
+  const handleInfoClick = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    setNodePopup({
+      id: node.id,
+      title: node.title,
+      text: node.text
+    })
   }
 
   const handleMouseEnter = () => {
     setHoveredNode(node.id)
-    
-    if (node.text) {
-      // Start timer for hint
-      hoverTimer.current = setTimeout(() => {
-        setShowHint(true)
-        setCanViewDetails(true)
-      }, 1000) // 1 second delay
-    }
   }
 
   const handleMouseLeave = () => {
     setHoveredNode(null)
-    setShowHint(false)
-    setCanViewDetails(false)
-    
-    if (hoverTimer.current) {
-      clearTimeout(hoverTimer.current)
-      hoverTimer.current = null
-    }
   }
 
   const handleDoubleClick = (event: React.MouseEvent) => {
@@ -2007,9 +1990,9 @@ function Node({
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
-        <div className="flex flex-col justify-center relative py-2">
+        <div className="flex flex-col justify-center relative">
           <div 
-            className="font-medium text-center leading-tight px-2 break-words"
+            className="font-medium text-center leading-tight break-words"
             style={{ 
               fontSize: `${textSize * 1.125}rem`, // 1.125rem is text-lg base size
               color: node.color ? getContrastTextColor(node.color) : '#000000' // Default black text for no custom color
@@ -2017,25 +2000,24 @@ function Node({
           >
             {node.title}
           </div>
-          
-          {/* Subtle visual cue for nodes with details - hidden */}
-          {node.text && !showHint && (
-            <div className="absolute bottom-2 right-2 w-1.5 h-1.5 rounded-full bg-indigo-400 opacity-0"></div>
-          )}
         </div>
+        
+        {/* Information icon for selected nodes with details - positioned relative to outer node */}
+        {node.text && isHighlighted && (
+          <button
+            onClick={handleInfoClick}
+            className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center hover:bg-gray-100 hover:bg-opacity-20 transition-colors z-10"
+            style={{
+              color: node.color ? getContrastTextColor(node.color) : '#6b7280'
+            }}
+            title="View details"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+          </button>
+        )}
       </div>
-      
-      {/* Hover hint for nodes with details */}
-      {node.text && showHint && (
-        <div 
-          className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-sm text-center animate-fade-in-up whitespace-nowrap pointer-events-none z-10"
-          style={{
-            color: node.color ? getContrastTextColor(node.color) : '#6b7280' // Dynamic color or default gray
-          }}
-        >
-          click to view details
-        </div>
-      )}
     </div>
   )
 }
