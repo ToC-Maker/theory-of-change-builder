@@ -1014,3 +1014,309 @@ export const OpenPhilEffectiveGiving: Story = {
     }
   },
 }
+
+export const AdversarialOpenPhilEffectiveGiving: Story = {
+  args: {
+    data: {
+      "sections": [
+        {
+          "title": "Inputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "systematic-research",
+                  "title": "Rigorous comparative research on intervention effectiveness",
+                  "text": "Systematic evaluation of charitable interventions using RCTs, quasi-experimental methods, and meta-analysis where available",
+                  "connectionIds": [
+                    "evidence-base"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "evidence-base",
+                      "confidence": 75,
+                      "evidence": "GiveWell's methodology has been validated by external evaluators and correlates with independent effectiveness assessments. Research quality has improved over 10+ years of iteration.",
+                      "assumptions": "Comparative research can identify effectiveness differences between interventions. External validation provides meaningful quality control. Past performance predicts future research quality."
+                    }
+                  ],
+                  "yPosition": 28.25,
+                  "width": 224,
+                  "color": "#f1f2f6"
+                },
+                {
+                  "id": "targeted-outreach",
+                  "title": "Evidence-based outreach to high-capacity donors",
+                  "text": "Focused engagement with individuals who have both capacity and stated interest in maximizing their social impact",
+                  "connectionIds": [
+                    "influenced-donors"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "influenced-donors",
+                      "confidence": 60,
+                      "evidence": "RCT showing 15% increase in effective giving rates sustained at 12 months. Natural experiments show 2-3x higher effective giving rates in areas with EA presence.",
+                      "assumptions": "Randomized trial results generalize to broader population. Effects persist beyond measured timeframes. Natural experiment controls for confounding factors."
+                    }
+                  ],
+                  "yPosition": 194.25,
+                  "width": 224,
+                  "color": "#263046"
+                },
+                {
+                  "id": "measurement-systems",
+                  "title": "Robust monitoring and evaluation infrastructure",
+                  "text": "Systems for tracking donation flows, career transitions, and intermediate impact indicators with external validation where possible",
+                  "connectionIds": [
+                    "accountability"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "accountability",
+                      "confidence": 70,
+                      "evidence": "Independent evaluation by third parties confirms methodology validity. Public reporting of success rates including failures provides transparency.",
+                      "assumptions": "External evaluators remain independent despite ecosystem connections. Measurement systems capture meaningful indicators of progress. Transparency enables course correction."
+                    }
+                  ],
+                  "yPosition": 382.25,
+                  "width": 224,
+                  "color": "#445277"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "evidence-base",
+                  "title": "Publicly available comparative effectiveness research",
+                  "text": "Research publications comparing intervention cost-effectiveness with explicit methodology and uncertainty quantification",
+                  "connectionIds": [
+                    "informed-decisions"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "informed-decisions",
+                      "confidence": 50,
+                      "evidence": "Donor surveys indicate 73% credit GiveWell research with donation decisions. However, attribution is self-reported and may reflect post-hoc rationalization.",
+                      "assumptions": "Research quality translates to decision quality. Self-reported attribution reflects genuine causal influence. Information availability improves resource allocation."
+                    }
+                  ],
+                  "yPosition": 28.25,
+                  "width": 224,
+                  "color": "#f1f2f6"
+                },
+                {
+                  "id": "influenced-donors",
+                  "title": "Donors with increased effective giving behavior",
+                  "text": "Individuals who have demonstrably increased their donations to cost-effective interventions following exposure to effectiveness information",
+                  "connectionIds": [
+                    "redirected-resources"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "redirected-resources",
+                      "confidence": 65,
+                      "evidence": "Tracked donation flows show $600M+ directed to GiveWell-recommended organizations. Verification through public records where available.",
+                      "assumptions": "Donation tracking accurately captures influenced giving. Recommended organizations maintain effectiveness at scale. Resources are genuinely additional rather than substituted."
+                    }
+                  ],
+                  "yPosition": 194.25,
+                  "width": 224,
+                  "color": "#263046"
+                },
+                {
+                  "id": "accountability",
+                  "title": "Transparent reporting of outcomes including failures",
+                  "text": "Public documentation of intervention success rates, cost-effectiveness changes over time, and discontinued programs",
+                  "connectionIds": [
+                    "course-correction"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "course-correction",
+                      "confidence": 80,
+                      "evidence": "Observable strategy changes in response to evidence: reduced deworming support, increased AI safety investment, added criminal justice reform.",
+                      "assumptions": "Transparency enables effective learning and adaptation. Public reporting creates accountability pressure for improvement. Course corrections improve future performance."
+                    }
+                  ],
+                  "yPosition": 382.25,
+                  "width": 224,
+                  "color": "#445277"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outcomes",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "informed-decisions",
+                  "title": "Charitable resource allocation based on comparative effectiveness",
+                  "text": "Donors making giving decisions with access to rigorous comparative information about intervention effectiveness",
+                  "connectionIds": [
+                    "improved-interventions"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "improved-interventions",
+                      "confidence": 40,
+                      "evidence": "Limited and contested. Some evidence that GiveWell-recommended organizations outperform alternatives, but comparative studies are few and subject to selection bias.",
+                      "assumptions": "Comparative effectiveness information improves allocation decisions. Donors act on available information. Better information leads to better outcomes."
+                    }
+                  ],
+                  "yPosition": 17,
+                  "color": "#6e7ca0",
+                  "width": 224
+                },
+                {
+                  "id": "redirected-resources",
+                  "title": "Philanthropic resources flowing to higher-impact interventions",
+                  "text": "Measurable increase in funding for interventions with stronger evidence bases and cost-effectiveness ratios",
+                  "connectionIds": [
+                    "scaled-solutions"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "scaled-solutions",
+                      "confidence": 55,
+                      "evidence": "AMF malaria net distribution scaled 500% following GiveWell recommendation. Consistent health outcome improvements in areas with high coverage.",
+                      "assumptions": "Resource redirection is genuinely additional. Scaled interventions maintain effectiveness. Health improvements persist over time."
+                    }
+                  ],
+                  "yPosition": 194.25,
+                  "color": "#6e7ca0",
+                  "width": 224
+                },
+                {
+                  "id": "course-correction",
+                  "title": "Adaptive strategy based on performance measurement",
+                  "text": "Systematic adjustment of approaches based on evidence of success and failure rates",
+                  "connectionIds": [
+                    "improved-methodology"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "improved-methodology",
+                      "confidence": 70,
+                      "evidence": "Observable methodology improvements over time. External validation of evaluation approaches. Documented strategy changes in response to evidence.",
+                      "assumptions": "Learning from failures improves future performance. Measurement systems capture meaningful performance indicators. Adaptation occurs faster than environmental change."
+                    }
+                  ],
+                  "yPosition": 382.25,
+                  "color": "#6e7ca0",
+                  "width": 224
+                }
+              ]
+            },
+            {
+              "nodes": []
+            },
+            {
+              "nodes": []
+            }
+          ]
+        },
+        {
+          "title": "Goals",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "improved-interventions",
+                  "title": "Demonstrably more effective charitable interventions at scale",
+                  "text": "Interventions that deliver measurably better outcomes per dollar invested, verified through independent evaluation",
+                  "connectionIds": [
+                    "welfare-improvements"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "welfare-improvements",
+                      "confidence": 60,
+                      "evidence": "Global health interventions show measurable impact: malaria mortality reduction, increased immunization coverage, improved nutritional outcomes in target populations.",
+                      "assumptions": "Measured health improvements translate to broader welfare gains. Intervention effects persist without continued support. Benefits outweigh any negative unintended consequences."
+                    }
+                  ],
+                  "yPosition": 28.25,
+                  "color": "#6e7ca0",
+                  "width": 224
+                },
+                {
+                  "id": "scaled-solutions",
+                  "title": "Cost-effective interventions implemented at sufficient scale to address problems",
+                  "text": "Proven interventions reaching the population scale necessary to make meaningful progress on targeted problems",
+                  "connectionIds": [
+                    "welfare-improvements"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "welfare-improvements",
+                      "confidence": 65,
+                      "evidence": "200+ million malaria nets distributed through AMF and similar organizations. Estimated 120,000+ lives saved based on conservative modeling.",
+                      "assumptions": "Scale estimates are accurate. Life-saving estimates account for displacement effects and diminishing returns. Scale achieved is sufficient for meaningful problem reduction."
+                    }
+                  ],
+                  "yPosition": 171.75,
+                  "color": "#6e7ca0",
+                  "width": 224
+                },
+                {
+                  "id": "improved-methodology",
+                  "title": "More rigorous approaches to charitable evaluation and allocation",
+                  "text": "Systematic methods for comparing interventions that improve over time through learning and external critique",
+                  "connectionIds": [
+                    "welfare-improvements"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "welfare-improvements",
+                      "confidence": 45,
+                      "evidence": "Mixed and limited evidence. Some improvements in evaluation rigor, but fundamental methodological challenges remain. Unclear whether methodological improvements translate to better outcomes.",
+                      "assumptions": "Better evaluation methods lead to better intervention selection. Methodological improvements compound over time. Evaluation advances transfer to other domains."
+                    }
+                  ],
+                  "yPosition": 371,
+                  "color": "#6e7ca0",
+                  "width": 224
+                }
+              ]
+            },
+            {
+              "nodes": []
+            },
+            {
+              "nodes": []
+            }
+          ]
+        },
+        {
+          "title": "Ultimate Impact",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "welfare-improvements",
+                  "title": "Measurable improvements in human welfare and reduced suffering",
+                  "text": "Demonstrable reductions in preventable deaths, disease burden, and other forms of measurable suffering",
+                  "connectionIds": [],
+                  "connections": [],
+                  "yPosition": 194.25,
+                  "color": "#6e7ca0",
+                  "width": 288
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "textSize": 1,
+      "curvature": 1,
+    }
+  },
+}
