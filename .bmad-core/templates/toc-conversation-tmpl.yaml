@@ -1,0 +1,97 @@
+document_type: "Theory of Change Adversarial Analysis"
+metadata:
+  organization: "[ORG_NAME]"
+  analyst: "Dr. Sarah Chen"
+  date: "[DATE]"
+  session_length: "[HOURS]"
+  word_count: "[WORD_COUNT]"
+  assumptions_challenged: "[NUMBER]"
+  revisions_forced: "[NUMBER]"
+
+sections:
+  executive_summary:
+    prompt: "Provide a 500-word executive summary of the adversarial analysis process, highlighting the most significant challenges raised and how they improved the final theory."
+    
+  methodology:
+    prompt: "Explain the adversarial approach used, including the modified Strategy Co-Pilot framework and skeptical interrogation techniques."
+
+    
+  conversation_transcript:
+    prompt: "Present the complete conversation transcript, structured as authentic dialogue between the skeptical analyst and organization representative. Must exceed 15,000 words."
+    format: |
+      **Dr. Sarah Chen (ToC Analyst):** [Challenge/Question]
+      
+      **[Organization] Representative:** [Response]
+      
+      **Dr. Sarah Chen:** [Follow-up challenge]
+      
+      **[Organization] Representative:** [Refined response]
+    
+  key_challenges_addressed:
+    prompt: "List the 10 most significant challenges raised during the analysis and how they were addressed."
+    
+  assumptions_survival_analysis:
+    prompt: "Analyze which assumptions survived the adversarial process and which were modified or abandoned."
+    
+  final_theory_of_change:
+    prompt: "Present the final Theory of Change in the exact JSON format specified in the Strategy Co-Pilot prompt."
+    format: "JSON"
+    
+  improvement_analysis:
+    prompt: "Compare the final theory to what the organization likely would have produced without adversarial analysis."
+    
+  remaining_vulnerabilities:
+    prompt: "Identify any remaining weak points or assumptions that still need further validation."
+
+conversation_flow:
+  step_0_orientation:
+    analyst_approach: "Set aggressive, skeptical tone"
+    expected_exchanges: "2-3"
+    
+  step_1_end_goal:
+    analyst_approach: "Attack goal specificity, measurability, and importance"
+    expected_exchanges: "8-12"
+    
+  step_2_end_mission:
+    analyst_approach: "Challenge mission-goal connection and mission validity"
+    expected_exchanges: "6-10"
+    
+  step_3_outcomes_layer1:
+    analyst_approach: "Demand evidence for outcome-to-goal connections"
+    expected_exchanges: "12-18"
+    
+  step_4_additional_layers:
+    analyst_approach: "Keep probing for missing causal layers with extreme skepticism"
+    expected_exchanges: "8-15 per layer"
+    
+  step_5_outputs:
+    analyst_approach: "Attack every output's necessity and effectiveness"
+    expected_exchanges: "15-25"
+    
+  step_6_prioritization:
+    analyst_approach: "Force brutal prioritization with evidence demands"
+    expected_exchanges: "10-15"
+    
+  step_7_chain_draft:
+    analyst_approach: "Question every connection in the chain"
+    expected_exchanges: "20-30"
+    
+  step_8_evidence_probabilities:
+    analyst_approach: "Interrogate every probability assignment with evidence demands"
+    expected_exchanges: "25-35"
+    
+  step_9_health_check:
+    analyst_approach: "Exploit every weakness found in the chain"
+    expected_exchanges: "12-20"
+    
+  step_10_critical_assumptions:
+    analyst_approach: "Assume all assumptions are wrong until proven otherwise"
+    expected_exchanges: "15-25"
+
+quality_standards:
+  minimum_word_count: 15000
+  minimum_challenges_per_step: 5
+  evidence_demands_per_major_claim: 3
+  alternative_approaches_considered: 10
+  failure_modes_explored: 8
+  real_world_precedents_required: 5
