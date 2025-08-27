@@ -991,7 +991,7 @@ export const OpenPhilEffectiveGiving: Story = {
           ]
         },
         {
-          "title": "End Mission",
+          "title": "Mission",
           "columns": [
             {
               "nodes": [

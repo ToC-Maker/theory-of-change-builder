@@ -1224,31 +1224,33 @@ export function ToC({
       {/* Node Details Modal */}
       {nodePopup && (
         <div 
-          className="fixed z-50 flex items-center justify-center transition-all duration-150 ease-out"
+          className="absolute z-50 flex items-center justify-center transition-all duration-150 ease-out"
           style={{
             top: 0,
             left: 0,
-            width: '100vw',
-            height: '100vh',
+            width: `${svgSize.width}px`,
+            height: `${svgSize.height}px`,
+            pointerEvents: 'auto',
             animation: 'fadeIn 0.15s ease-out'
           }}
         >
           {/* Backdrop with blur */}
           <div 
-            className="absolute bg-black bg-opacity-50 backdrop-blur-sm"
+            className="absolute bg-black bg-opacity-40 backdrop-blur-[2px]"
             style={{
               top: 0,
               left: 0,
-              width: '100vw',
-              height: '100vh'
+              width: '100%',
+              height: '100%'
             }}
             onClick={() => setNodePopup(null)}
           />
           
           {/* Modal content */}
           <div 
-            className="relative bg-white rounded-xl shadow-2xl p-8 max-w-xl w-full mx-4 max-h-[80vh] overflow-y-auto transform transition-all duration-150 ease-out"
+            className="relative bg-white rounded-xl shadow-2xl p-8 overflow-y-auto max-h-[500px] transform transition-all duration-150 ease-out"
             style={{
+              width: '600px',
               animation: 'scaleIn 0.15s ease-out'
             }}
           >
@@ -1690,31 +1692,34 @@ function Connections({
     {/* Large center modal for edge information */}
     {edgePopup && (
       <div 
-        className="fixed z-50 flex items-center justify-center transition-all duration-150 ease-out"
+        className="absolute z-50 flex items-center justify-center transition-all duration-150 ease-out"
         style={{
           top: 0,
           left: 0,
-          width: '100vw',
-          height: '100vh',
+          width: `${svgSize.width}px`,
+          height: `${svgSize.height}px`,
+          pointerEvents: 'auto',
           animation: 'fadeIn 0.15s ease-out'
         }}
       >
         {/* Backdrop with blur */}
         <div 
-          className="absolute bg-black bg-opacity-50 backdrop-blur-sm"
+          className="absolute bg-black bg-opacity-40 backdrop-blur-[2px]"
           style={{
             top: 0,
             left: 0,
-            width: '100vw',
-            height: '100vh'
+            width: '100%',
+            height: '100%'
           }}
           onClick={() => setEdgePopup(null)}
         />
         
         {/* Modal content */}
         <div 
-          className="relative bg-white rounded-xl shadow-2xl p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto transform transition-all duration-150 ease-out"
+          className="relative bg-white rounded-xl shadow-2xl p-8 overflow-y-auto transform transition-all duration-150 ease-out"
           style={{
+            width: '800px',
+            height: '600px',
             animation: 'scaleIn 0.15s ease-out'
           }}
         >
