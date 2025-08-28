@@ -2,6 +2,9 @@ import { useState, useEffect } from "react"
 import { Routes, Route, useParams, Link } from "react-router-dom"
 import { ToC } from "./stories/ToC"
 import { CharityEntrepreneurship } from "./stories/ToC.stories"
+import { ChatInterface } from "./components/ChatInterface"
+import { InfoPanel } from "./components/InfoPanel"
+import { StaticLegend } from "./components/StaticLegend"
 import "./App.css"
 
 interface ToCData {
@@ -16,6 +19,15 @@ function ToCViewer() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+  const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
+
+  const handleGraphUpdate = (newGraphData: ToCData) => {
+    console.log('App handleGraphUpdate called with:', newGraphData);
+    console.log('Current data before update:', data);
+    setData(newGraphData);
+    console.log('setData called with new graph data');
+  };
 
   useEffect(() => {
     const loadData = async () => {
@@ -81,18 +93,43 @@ function ToCViewer() {
       <h1 className="text-3xl font-bold mb-4 text-center text-gray-800 flex-shrink-0">
         Theory of Change: {title}
       </h1>
-      <div 
-        className="bg-white rounded-xl shadow-lg p-4"
-        style={{
-          width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-          height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-          minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-          minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-          maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
-          maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
-        }}
-      >
-        <ToC data={data} onSizeChange={setContainerSize} />
+      
+      <div className="flex flex-1 gap-6 justify-center items-start">
+        {/* Left Side Panel - AI Assistant */}
+        <div className="flex-shrink-0">
+          <ChatInterface 
+            height={containerSize.height > 0 ? containerSize.height + 32 : undefined}
+            isCollapsed={isLeftPanelCollapsed}
+            onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
+            graphData={data}
+            onGraphUpdate={handleGraphUpdate}
+          />
+        </div>
+        
+        {/* Main Graph Container */}
+        <div 
+          className="bg-white rounded-xl shadow-lg p-4 flex-shrink-0"
+          style={{
+            width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+            height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+            minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+            minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+            maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
+            maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
+          }}
+        >
+          <ToC data={data} onSizeChange={setContainerSize} />
+        </div>
+        
+        {/* Right Side Panel - Info and Legend */}
+        <div className="flex-shrink-0">
+          <InfoPanel 
+            legendComponent={<StaticLegend />} 
+            height={containerSize.height > 0 ? containerSize.height + 32 : undefined}
+            isCollapsed={isRightPanelCollapsed}
+            onToggle={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
+          />
+        </div>
       </div>
     </div>
   )

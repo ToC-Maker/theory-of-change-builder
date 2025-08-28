@@ -85,6 +85,12 @@ export function ToC({
     }
   }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp])
 
+  // Update internal data state when prop changes
+  useEffect(() => {
+    console.log('ToC component received new initialData:', initialData);
+    setData(initialData);
+  }, [initialData]);
+
   // Update textSize and curvature when data changes
   useEffect(() => {
     if (initialData.textSize !== undefined) {
@@ -841,14 +847,17 @@ export function ToC({
         setData={setData}
       />
 
-      <Legend
-        legendPosition={legendPosition}
-        setLegendPosition={setLegendPosition}
-        isDraggingLegend={isDraggingLegend}
-        setIsDraggingLegend={setIsDraggingLegend}
-        legendDragOffset={legendDragOffset}
-        setLegendDragOffset={setLegendDragOffset}
-      />
+      {/* Hide the draggable legend since we now have it in the info panel */}
+      {false && (
+        <Legend
+          legendPosition={legendPosition}
+          setLegendPosition={setLegendPosition}
+          isDraggingLegend={isDraggingLegend}
+          setIsDraggingLegend={setIsDraggingLegend}
+          legendDragOffset={legendDragOffset}
+          setLegendDragOffset={setLegendDragOffset}
+        />
+      )}
 
       {/* Edit Mode Toggle Button - positioned at bottom right corner */}
       <div 
