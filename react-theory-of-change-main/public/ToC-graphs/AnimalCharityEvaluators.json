@@ -1,0 +1,234 @@
+{
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "research-capacity",
+              "title": "Limited research capacity with systematic methodology development",
+              "text": "Imperfect but structured research capabilities focused on continuous methodological improvement",
+              "connectionIds": [
+                "evaluation-frameworks"
+              ],
+              "connections": [
+                {
+                  "targetId": "evaluation-frameworks",
+                  "confidence": 65,
+                  "evidence": "Historical development of evaluation methodologies in other fields shows iterative improvement possible, though animal welfare evaluation faces unique challenges",
+                  "assumptions": "Research staff can develop domain expertise faster than biases accumulate. Systematic approaches provide value over intuition despite limitations."
+                }
+              ],
+              "yPosition": 8.205703735351562,
+              "width": 224,
+              "color": "#00a6a1"
+            },
+            {
+              "id": "expert-networks",
+              "title": "Access to animal welfare researchers and practitioners",
+              "text": "Relationships with field experts for validation and feedback, with awareness of potential bias",
+              "connectionIds": [
+                "evaluation-frameworks"
+              ],
+              "connections": [
+                {
+                  "targetId": "evaluation-frameworks",
+                  "confidence": 50,
+                  "evidence": "Expert networks in other evaluation fields provide value through diverse perspectives, though animal welfare field is small and potentially insular",
+                  "assumptions": "Experts provide honest feedback rather than confirmation of existing views. Network diversity sufficient to challenge assumptions."
+                }
+              ],
+              "yPosition": 206.29544830322266,
+              "width": 224,
+              "color": "#00a6a1"
+            },
+            {
+              "id": "uncertainty-tracking",
+              "title": "Systems for tracking prediction accuracy and updating methodology",
+              "text": "Mechanisms to measure recommendation performance and improve evaluation methods",
+              "connectionIds": [
+                "performance-data"
+              ],
+              "connections": [
+                {
+                  "targetId": "performance-data",
+                  "confidence": 40,
+                  "evidence": "Limited precedent for systematic prediction tracking in nonprofit evaluation, but essential for credibility",
+                  "assumptions": "Organization willing to expose and learn from failures. Sufficient resources available for performance tracking infrastructure."
+                }
+              ],
+              "yPosition": 345.2840919494629,
+              "width": 224,
+              "color": "#eef2ef"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "evaluation-frameworks",
+              "title": "Explicitly uncertain evaluation frameworks with clear limitations",
+              "text": "Structured but imperfect methodologies for organizational assessment, with honest uncertainty communication",
+              "connectionIds": [
+                "conditional-recommendations"
+              ],
+              "connections": [
+                {
+                  "targetId": "conditional-recommendations",
+                  "confidence": 55,
+                  "evidence": "Structured evaluation better than no evaluation in limited studies from other fields, though animal welfare evaluation faces unique measurement challenges",
+                  "assumptions": "Frameworks capture relevant organizational characteristics. Structure improves decision-making despite imperfection."
+                }
+              ],
+              "yPosition": 99.04119873046875,
+              "width": 208,
+              "color": "#00a6a1"
+            },
+            {
+              "id": "performance-data",
+              "title": "Systematic tracking of recommendation accuracy and outcomes",
+              "text": "Data on how well ACE recommendations predict organizational performance over time",
+              "connectionIds": [
+                "methodology-improvement"
+              ],
+              "connections": [
+                {
+                  "targetId": "methodology-improvement",
+                  "confidence": 70,
+                  "evidence": "Feedback loops essential for learning in complex systems, though implementation challenging",
+                  "assumptions": "Organization commits to transparency about failures. Sufficient data available for meaningful pattern detection."
+                }
+              ],
+              "yPosition": 334.04119873046875,
+              "width": 208,
+              "color": "#eef2ef"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "conditional-recommendations",
+              "title": "Conditional charity recommendations with explicit uncertainty bounds",
+              "text": "Organization assessments presented as uncertain bets rather than confident predictions",
+              "connectionIds": [
+                "informed-donor-decisions"
+              ],
+              "connections": [
+                {
+                  "targetId": "informed-donor-decisions",
+                  "confidence": 35,
+                  "evidence": "Mixed evidence on whether more information improves donor decisions vs. causing analysis paralysis",
+                  "assumptions": "Donors can process uncertainty information effectively. Explicit limitations increase rather than decrease trust."
+                }
+              ],
+              "yPosition": 99.04119873046875,
+              "width": 208,
+              "color": "#00a6a1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "informed-donor-decisions",
+              "title": "Donors make slightly better funding decisions than alternatives",
+              "text": "Marginal improvement in resource allocation compared to intuition-based or random giving",
+              "connectionIds": [
+                "marginally-better-allocation"
+              ],
+              "connections": [
+                {
+                  "targetId": "marginally-better-allocation",
+                  "confidence": 30,
+                  "evidence": "No evidence that systematic nonprofit evaluation improves outcomes compared to alternatives in animal welfare context",
+                  "assumptions": "Better-evaluated organizations actually perform better. Donor behavior changes persist over time. No negative effects from evaluation burden on organizations."
+                }
+              ],
+              "yPosition": 99.04119873046875,
+              "color": "#00a6a1",
+              "width": 192
+            },
+            {
+              "id": "methodology-improvement",
+              "title": "Evaluation methods improve through systematic learning",
+              "text": "ACE evaluation accuracy increases over time through performance tracking and methodology updates",
+              "connectionIds": [
+                "marginally-better-allocation"
+              ],
+              "connections": [
+                {
+                  "targetId": "marginally-better-allocation",
+                  "confidence": 45,
+                  "evidence": "Other evaluation fields show methodological progress possible, though animal welfare presents unique challenges",
+                  "assumptions": "Sufficient feedback available for learning. Organization culture supports updating beliefs based on evidence."
+                }
+              ],
+              "yPosition": 345.2840919494629,
+              "color": "#eef2ef",
+              "width": 192
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "marginally-better-allocation",
+              "title": "Marginally improved resource allocation within animal advocacy",
+              "text": "Slightly more effective distribution of limited resources, with large uncertainty about impact",
+              "connectionIds": [
+                "uncertain-welfare-impact"
+              ],
+              "connections": [
+                {
+                  "targetId": "uncertain-welfare-impact",
+                  "confidence": 25,
+                  "evidence": "No validated connection between improved resource allocation and animal welfare outcomes in current literature",
+                  "assumptions": "Current animal advocacy approaches capable of meaningful impact with better allocation. Scale of movement sufficient to affect animal welfare outcomes."
+                }
+              ],
+              "yPosition": 212.04119873046875,
+              "color": "#041c30",
+              "width": 192
+            }
+          ]
+        },
+        {
+          "nodes": []
+        }
+      ]
+    },
+    {
+      "title": "Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "uncertain-welfare-impact",
+              "title": "Possible marginal reduction in animal suffering with high uncertainty",
+              "text": "Uncertain and potentially small impact on animal welfare through improved movement effectiveness",
+              "connectionIds": [],
+              "connections": [],
+              "yPosition": 212.04119873046875,
+              "color": "#041c30",
+              "width": 192
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "textSize": 1,
+  "curvature": 1
+}

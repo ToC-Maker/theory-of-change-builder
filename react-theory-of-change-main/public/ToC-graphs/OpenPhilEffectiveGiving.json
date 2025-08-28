@@ -1,0 +1,420 @@
+{
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "program-funding",
+              "title": "Program Funding",
+              "text": "$15-20 million annually for effective giving and careers initiatives",
+              "connectionIds": [
+                "funded-orgs"
+              ],
+              "connections": [
+                {
+                  "targetId": "funded-orgs",
+                  "confidence": 70,
+                  "evidence": "Clear budget allocation and existing grantee relationships. OpenPhil has sustained funding track record.",
+                  "assumptions": "Funding will be sustained long-term through economic cycles. Effective grantee selection continues. Grantees use funds effectively for intended purposes."
+                }
+              ],
+              "yPosition": 20.265625,
+              "color": "#e6f3ff",
+              "width": 160
+            },
+            {
+              "id": "program-staff",
+              "title": "Program Staff",
+              "text": "Dedicated program officers specializing in meta-interventions",
+              "connectionIds": [
+                "individual-outreach",
+                "research-pubs",
+                "educational-content"
+              ],
+              "connections": [
+                {
+                  "targetId": "individual-outreach",
+                  "confidence": 80,
+                  "evidence": "Direct operational control with dedicated specialized staff.",
+                  "assumptions": "Staff expertise sufficient for effective outreach. Target audiences reachable and responsive. Outreach methods remain effective over time."
+                },
+                {
+                  "targetId": "research-pubs",
+                  "confidence": 75,
+                  "evidence": "Program officers have research background and institutional support.",
+                  "assumptions": "Staff capacity adequate for research alongside operational duties. Research findings will be actionable and influential."
+                },
+                {
+                  "targetId": "educational-content",
+                  "confidence": 72,
+                  "evidence": "Program staff have expertise to create educational materials and direct operational control over content development.",
+                  "assumptions": "Staff have time and skills for content creation alongside other duties. Educational content remains current and high-quality over time."
+                }
+              ],
+              "yPosition": 383.6328125,
+              "color": "#e6f3ff",
+              "width": 160
+            },
+            {
+              "id": "grantee-orgs",
+              "title": "Grantee Organizations",
+              "text": "Partnerships with effective giving organizations like GiveWell, Giving What We Can",
+              "connectionIds": [
+                "community-building",
+                "educational-content"
+              ],
+              "connections": [
+                {
+                  "targetId": "community-building",
+                  "confidence": 85,
+                  "evidence": "Established partnerships with proven effective giving organizations. Track record of successful collaboration.",
+                  "assumptions": "Grantee organizations maintain effectiveness and alignment. Community-building activities translate to sustained engagement."
+                },
+                {
+                  "targetId": "educational-content",
+                  "confidence": 75,
+                  "evidence": "Grantee organizations like GiveWell and GWWC already produce substantial educational content as core activities.",
+                  "assumptions": "Grantee organizations will create content aligned with OpenPhil's goals. Content quality and messaging remain consistent across organizations."
+                }
+              ],
+              "yPosition": 605.265625,
+              "color": "#e6f3ff",
+              "width": 160
+            },
+            {
+              "id": "network-access",
+              "title": "Network Access",
+              "text": "Connections to high-net-worth individuals, professionals, and career changers",
+              "connectionIds": [
+                "individual-outreach",
+                "donor-cultivation"
+              ],
+              "connections": [
+                {
+                  "targetId": "individual-outreach",
+                  "confidence": 65,
+                  "evidence": "OpenPhil's reputation and existing networks provide access to target demographics.",
+                  "assumptions": "Network access translates to engagement. High-net-worth individuals open to evidence-based giving approaches."
+                },
+                {
+                  "targetId": "donor-cultivation",
+                  "confidence": 60,
+                  "evidence": "Network connections provide potential donor pipeline.",
+                  "assumptions": "Personal networks can be systematically cultivated for effective giving. Wealthy individuals responsive to peer influence."
+                }
+              ],
+              "yPosition": 192.265625,
+              "color": "#e6f3ff",
+              "width": 160
+            },
+            {
+              "id": "research-infrastructure",
+              "title": "Research Infrastructure",
+              "text": "Analysis systems for giving patterns, career impact, and movement research",
+              "connectionIds": [
+                "research-pubs"
+              ],
+              "connections": [
+                {
+                  "targetId": "research-pubs",
+                  "confidence": 78,
+                  "evidence": "Existing infrastructure and methodological expertise for impact assessment.",
+                  "assumptions": "Research infrastructure can scale with program growth. Analysis methods accurately capture real-world impact patterns."
+                }
+              ],
+              "yPosition": 490.265625,
+              "color": "#e6f3ff",
+              "width": 160
+            }
+          ]
+        },
+        {
+          "nodes": []
+        },
+        {
+          "nodes": []
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "funded-orgs",
+              "title": "Funded Organizations",
+              "text": "Sustained support for effective giving organizations and career guidance platforms",
+              "connectionIds": [
+                "increased-donations"
+              ],
+              "connections": [
+                {
+                  "targetId": "increased-donations",
+                  "confidence": 65,
+                  "evidence": "Grantee organizations like GiveWell have demonstrated track record of influencing donations.",
+                  "assumptions": "Funded organizations can effectively convert their resources into additional donations. Marginal funding increases organizational impact rather than displacing existing funding."
+                }
+              ],
+              "yPosition": 20.265625,
+              "color": "#ccf2ff"
+            },
+            {
+              "id": "individual-outreach",
+              "title": "Individual Outreach",
+              "text": "Programs reaching potential effective givers and career changers",
+              "connectionIds": [
+                "career-multiplication",
+                "increased-donations"
+              ],
+              "connections": [
+                {
+                  "targetId": "career-multiplication",
+                  "confidence": 40,
+                  "evidence": "80,000 Hours data shows career guidance can influence career choices, though impact varies widely.",
+                  "assumptions": "Individual outreach translates to actual career changes. Career advice recipients make optimal use of guidance. High-impact careers remain available for career changers."
+                },
+                {
+                  "targetId": "increased-donations",
+                  "confidence": 50,
+                  "evidence": "Some evidence from giving pledges and GiveWell donors, but attribution challenging.",
+                  "assumptions": "Outreach reaches people who wouldn't otherwise donate effectively. Giving behavior changes persist over time."
+                }
+              ],
+              "yPosition": 254.265625,
+              "color": "#ccf2ff"
+            },
+            {
+              "id": "educational-content",
+              "title": "Educational Content",
+              "text": "Resources on effective giving principles and high-impact career paths",
+              "connectionIds": [
+                "movement-growth"
+              ],
+              "connections": [
+                {
+                  "targetId": "movement-growth",
+                  "confidence": 45,
+                  "evidence": "Educational content has reach metrics but behavior change attribution is limited.",
+                  "assumptions": "Content reaches target audiences effectively. Educational material translates to belief and behavior changes. Content quality maintains over scaled production."
+                }
+              ],
+              "yPosition": 490.265625,
+              "color": "#ccf2ff"
+            },
+            {
+              "id": "research-pubs",
+              "title": "Research Publications",
+              "text": "Analysis of giving patterns, career impact, and movement growth",
+              "connectionIds": [
+                "institutional-adoption"
+              ],
+              "connections": [
+                {
+                  "targetId": "institutional-adoption",
+                  "confidence": 35,
+                  "evidence": "Academic and policy research has mixed track record of institutional influence. EA research has limited mainstream penetration.",
+                  "assumptions": "Institutional decision-makers read and are influenced by research. Research findings support effectiveness-focused approaches. Academic credibility translates to policy influence."
+                }
+              ],
+              "yPosition": 371.265625,
+              "color": "#ccf2ff"
+            },
+            {
+              "id": "community-building",
+              "title": "Community Building",
+              "text": "Networks and platforms connecting effective altruists and career changers",
+              "connectionIds": [
+                "movement-growth"
+              ],
+              "connections": [
+                {
+                  "targetId": "movement-growth",
+                  "confidence": 70,
+                  "evidence": "EA community has grown substantially with clear community-building activities driving engagement.",
+                  "assumptions": "Community growth translates to increased impact rather than just social activity. Community maintains quality and effectiveness focus while scaling."
+                }
+              ],
+              "yPosition": 715.04541015625,
+              "color": "#ccf2ff"
+            },
+            {
+              "id": "donor-cultivation",
+              "title": "Donor Cultivation",
+              "text": "Targeted outreach to high-capacity potential effective givers",
+              "connectionIds": [
+                "increased-donations"
+              ],
+              "connections": [
+                {
+                  "targetId": "increased-donations",
+                  "confidence": 55,
+                  "evidence": "Some success stories in major donor cultivation, though systematic evidence limited.",
+                  "assumptions": "High-net-worth individuals responsive to cultivation efforts. Personal relationships translate to sustained giving commitments. Cultivation scales without diminishing returns."
+                }
+              ],
+              "yPosition": 142.6328125,
+              "color": "#ccf2ff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "increased-donations",
+              "title": "Increased Effective Donations",
+              "text": "Significant growth in donations to highly effective charities",
+              "connectionIds": [
+                "leverage-effects"
+              ],
+              "connections": [
+                {
+                  "targetId": "leverage-effects",
+                  "confidence": 65,
+                  "evidence": "GiveWell and other EA organizations have tracked substantial money moved. Some documented cases of high leverage ratios.",
+                  "assumptions": "Additional donations represent truly marginal impact rather than displacing other giving. Donated money is used effectively by recipient organizations."
+                }
+              ],
+              "yPosition": 130.265625,
+              "color": "#b3e0ff",
+              "width": 192
+            },
+            {
+              "id": "career-multiplication",
+              "title": "Career Impact Multiplication",
+              "text": "More professionals working in or supporting high-impact sectors",
+              "connectionIds": [
+                "leverage-effects"
+              ],
+              "connections": [
+                {
+                  "targetId": "leverage-effects",
+                  "confidence": 45,
+                  "evidence": "Some career transitions documented but systematic impact measurement challenging. Long-term outcomes uncertain.",
+                  "assumptions": "Career changes generate higher impact than previous career paths. High-impact sectors can absorb additional talent effectively. Career advice recipients optimize their impact within chosen paths."
+                }
+              ],
+              "yPosition": 254.265625,
+              "color": "#b3e0ff",
+              "width": 176
+            },
+            {
+              "id": "movement-growth",
+              "title": "Movement Growth",
+              "text": "Expansion of the effective altruism and effective giving movements",
+              "connectionIds": [
+                "cultural-shift"
+              ],
+              "connections": [
+                {
+                  "targetId": "cultural-shift",
+                  "confidence": 55,
+                  "evidence": "EA movement has grown but mainstream cultural influence remains limited. Some indication of broader awareness.",
+                  "assumptions": "Movement growth translates to broader cultural influence. Growing movement maintains effectiveness focus rather than diluting principles."
+                }
+              ],
+              "yPosition": 605.265625,
+              "color": "#b3e0ff",
+              "width": 176
+            },
+            {
+              "id": "institutional-adoption",
+              "title": "Institutional Adoption",
+              "text": "Organizations and foundations adopting effectiveness-focused giving approaches",
+              "connectionIds": [
+                "cultural-shift"
+              ],
+              "connections": [
+                {
+                  "targetId": "cultural-shift",
+                  "confidence": 30,
+                  "evidence": "Limited examples of major institutional adoption. Most philanthropic institutions remain traditional in approach.",
+                  "assumptions": "Institutional changes spread through sector influence. Organizations implement effectiveness approaches authentically rather than superficially. Institutional adoption survives leadership changes."
+                }
+              ],
+              "yPosition": 371.265625,
+              "color": "#b3e0ff",
+              "width": 176
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "cultural-shift",
+              "title": "Cultural Shift",
+              "text": "Broader acceptance of impact-focused giving and career choices",
+              "connectionIds": [
+                "leverage-effects"
+              ],
+              "connections": [
+                {
+                  "targetId": "leverage-effects",
+                  "confidence": 25,
+                  "evidence": "Cultural change in philanthropy historically slow. Limited mainstream adoption of EA principles to date.",
+                  "assumptions": "Cultural shifts can be accelerated through targeted interventions. Broader culture will adopt effectiveness focus without losing other important values. Cultural change translates to resource allocation changes."
+                }
+              ],
+              "yPosition": 502.6328125,
+              "color": "#99d6ff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "End Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "leverage-effects",
+              "title": "Leverage Effects",
+              "text": "Each dollar spent generating 5-50x in additional effective giving and career impact",
+              "connectionIds": [
+                "self-sustaining-ecosystem"
+              ],
+              "connections": [
+                {
+                  "targetId": "self-sustaining-ecosystem",
+                  "confidence": 40,
+                  "evidence": "Some documented cases of high leverage ratios, though systematic measurement challenging. Historical precedent for meta-interventions scaling.",
+                  "assumptions": "Leverage effects compound rather than diminish over time. High leverage ratios can be maintained at scale. Meta-interventions don't hit saturation points."
+                }
+              ],
+              "yPosition": 266.6328125,
+              "color": "#80ccff"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Mission",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "self-sustaining-ecosystem",
+              "title": "Self-sustaining Ecosystem",
+              "text": "Effective giving and high-impact careers become mainstream, directing billions toward pressing problems",
+              "connectionIds": [],
+              "connections": [],
+              "yPosition": 254.265625,
+              "color": "#66c2ff"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "textSize": 1.1,
+  "curvature": 0.5
+}

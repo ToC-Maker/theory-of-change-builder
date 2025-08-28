@@ -88,6 +88,12 @@ Assess organizational capabilities:
 
 ## Output Format
 
+**CRITICAL: ALWAYS SAVE TO FILE** - This analysis must be automatically saved to a timestamped file in the current directory.
+
+**File Naming Convention**: `Org_Analysis_YYYY-MM-DD_HHMM.md`
+
+**MANDATORY FILE SAVE**: After generating the complete analysis, automatically save it to a file using the Write tool with the naming convention above. Do not ask the user - this is required for all organizational analyses.
+
 Generate a structured analysis document with:
 
 ```markdown

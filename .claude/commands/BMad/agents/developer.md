@@ -1,7 +1,6 @@
 ---
 name: developer
 description: Use for code implementation, debugging, refactoring, and development best practices
-model: opus
 color: red
 ---
 

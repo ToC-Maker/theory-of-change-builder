@@ -92,11 +92,13 @@ After completing the full 10-step adversarial process, generate the final Theory
 - Document length: 15,000+ words minimum
 
 ## Output Format
-Generate a single comprehensive document containing:
+**CRITICAL: ALWAYS SAVE TO FILE** - This analysis must be automatically saved to a single comprehensive document containing:
 1. Executive summary of the adversarial process
 2. Complete conversation transcript (15,000+ words)
 3. Final refined Theory of Change in JSON format
 4. Summary of key assumptions that survived the adversarial process
+
+**MANDATORY FILE SAVE**: After generating the complete analysis, automatically save it to a file using the Write tool. Do not ask the user - this is required for all ToC analyses.
 
 ## Quality Checks
 - Are challenges genuinely difficult and pointed?

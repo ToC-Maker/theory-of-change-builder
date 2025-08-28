@@ -1,0 +1,281 @@
+{
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "funding",
+              "title": "Funding",
+              "text": "Financial resources for research and development",
+              "connectionIds": [
+                "whitepaper",
+                "workshop"
+              ],
+              "connections": [
+                {
+                  "targetId": "whitepaper",
+                  "confidence": 15,
+                  "evidence": "Academic publications often ignored by policymakers. Climate reports regularly published but rarely drive immediate policy change.",
+                  "assumptions": "Funding will be sustained long enough to complete publication. Research findings will be communicated effectively to target audiences. Academic credibility translates to policy influence."
+                },
+                {
+                  "targetId": "workshop",
+                  "confidence": 25,
+                  "evidence": "Stakeholder workshops frequently cancelled or poorly attended. Competing interests often prevent meaningful dialogue.",
+                  "assumptions": "Key stakeholders will attend and engage constructively. Workshop format can overcome existing adversarial relationships. Participants have authority to commit to outcomes."
+                }
+              ],
+              "yPosition": 105.55625915527344,
+              "width": 192,
+              "color": "#fce5cd"
+            },
+            {
+              "id": "research-staff",
+              "title": "Research Staff",
+              "text": "Qualified researchers and technical experts",
+              "connectionIds": [
+                "prototype"
+              ],
+              "connections": [
+                {
+                  "targetId": "prototype",
+                  "confidence": 18,
+                  "evidence": "Technical talent shortage in climate tech. High researcher turnover due to better industry opportunities. Many climate prototypes fail to reach commercial viability.",
+                  "assumptions": "Qualified staff can be hired and retained. Technical challenges are solvable within timeline. Team maintains focus despite industry pressures and competing opportunities."
+                }
+              ],
+              "yPosition": 349.375,
+              "color": "#cfe2f3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "whitepaper",
+              "title": "Whitepaper Published",
+              "text": "Research findings and recommendations published",
+              "connectionIds": [
+                "gov-policy"
+              ],
+              "connections": [
+                {
+                  "targetId": "gov-policy",
+                  "confidence": 8,
+                  "evidence": "Thousands of climate reports published annually with minimal policy uptake. Policy cycles don't align with research timelines. Lobbying by vested interests regularly blocks evidence-based policies.",
+                  "assumptions": "Policymakers will read and understand technical research. Political will exists to act on recommendations. Industry opposition can be overcome through evidence alone."
+                }
+              ],
+              "yPosition": 25.75,
+              "color": "#fce5cd"
+            },
+            {
+              "id": "workshop",
+              "title": "Stakeholder Workshop",
+              "text": "Multi-stakeholder workshop to build understanding",
+              "connectionIds": [
+                "shared-understanding"
+              ],
+              "connections": [
+                {
+                  "targetId": "shared-understanding",
+                  "confidence": 12,
+                  "evidence": "Climate workshops often devolve into position-taking rather than genuine dialogue. Fundamental value differences between stakeholders rarely resolved through single events.",
+                  "assumptions": "All key stakeholder groups will participate meaningfully. Workshop facilitators can navigate complex political dynamics. Single events can shift deeply held positions."
+                }
+              ],
+              "yPosition": 153.75,
+              "color": "#fce5cd"
+            },
+            {
+              "id": "prototype",
+              "title": "Prototype Built",
+              "text": "Working prototype demonstrating technical feasibility",
+              "connectionIds": [
+                "tech-viability",
+                "carbon-targets"
+              ],
+              "connections": [
+                {
+                  "targetId": "tech-viability",
+                  "confidence": 22,
+                  "evidence": "Lab conditions rarely translate to real-world performance. Scaling challenges consistently underestimated in climate tech. Cost projections frequently overly optimistic.",
+                  "assumptions": "Prototype performance accurately predicts scaled deployment. Manufacturing and deployment costs can be reduced to competitive levels. No unforeseen technical barriers emerge."
+                },
+                {
+                  "targetId": "carbon-targets",
+                  "confidence": 5,
+                  "evidence": "Massive gap between prototype demonstration and national-scale deployment. Infrastructure, regulatory, and market barriers routinely delay climate tech adoption by decades.",
+                  "assumptions": "Single technology demonstration can drive national policy targets. Technology can scale from prototype to national deployment without major technical or economic obstacles."
+                }
+              ],
+              "yPosition": 349.375,
+              "color": "#cfe2f3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "shared-understanding",
+              "title": "Shared understanding of issue",
+              "text": "Stakeholders have common understanding of the problem",
+              "connectionIds": [
+                "stakeholder-alignment"
+              ],
+              "connections": [
+                {
+                  "targetId": "stakeholder-alignment",
+                  "confidence": 10,
+                  "evidence": "Understanding problems doesn't translate to agreeing on solutions. Economic interests often override shared understanding. Climate action requires sacrificing short-term gains.",
+                  "assumptions": "Understanding leads to consensus on solutions. Economic incentives can be aligned with climate action. Stakeholders will act against immediate self-interest for long-term benefit."
+                }
+              ],
+              "yPosition": 139.125,
+              "color": "#fdf2cc"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "stakeholder-alignment",
+              "title": "Widespread stakeholder alignment",
+              "text": "Key stakeholders aligned on approach and solutions",
+              "connectionIds": [
+                "gov-policy"
+              ],
+              "connections": [
+                {
+                  "targetId": "gov-policy",
+                  "confidence": 6,
+                  "evidence": "Climate stakeholder coalitions frequently fragment when specific policies are proposed. Industry groups often capture or co-opt stakeholder processes.",
+                  "assumptions": "Stakeholder alignment translates to political pressure. Aligned stakeholders have sufficient political influence. Government responds to stakeholder pressure over industry lobbying."
+                }
+              ],
+              "yPosition": 139.125,
+              "color": "#fdf2cc"
+            },
+            {
+              "id": "tech-viability",
+              "title": "Proven tech viability",
+              "text": "Technology proven to be viable and scalable",
+              "connectionIds": [
+                "firm-standards"
+              ],
+              "connections": [
+                {
+                  "targetId": "firm-standards",
+                  "confidence": 14,
+                  "evidence": "Corporate adoption of unproven climate tech extremely conservative. Regulatory uncertainty deters private investment. First-mover disadvantage strong in climate tech.",
+                  "assumptions": "Firms will adopt new technology without regulatory mandates. Early adopters won't be disadvantaged competitively. Market signals sufficient to drive widespread adoption."
+                }
+              ],
+              "yPosition": 374.75,
+              "color": "#fdf2cc"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "gov-policy",
+              "title": "Gov't adopts new policy",
+              "text": "Government implements supportive policy framework",
+              "connectionIds": [
+                "carbon-targets"
+              ],
+              "connections": [
+                {
+                  "targetId": "carbon-targets",
+                  "confidence": 11,
+                  "evidence": "Climate policies routinely weakened during implementation. International coordination on climate targets consistently fails. Political cycles interrupt long-term climate commitments.",
+                  "assumptions": "Policy frameworks will be implemented as designed. International coordination achievable despite conflicting national interests. Political commitment survives electoral cycles."
+                }
+              ],
+              "yPosition": 25.75,
+              "color": "#d9d2e9"
+            },
+            {
+              "id": "firm-standards",
+              "title": "Large firms change standards",
+              "text": "Major corporations adopt new standards and practices",
+              "connectionIds": [
+                "carbon-targets"
+              ],
+              "connections": [
+                {
+                  "targetId": "carbon-targets",
+                  "confidence": 9,
+                  "evidence": "Corporate climate commitments often lack binding enforcement. Greenwashing widespread with minimal actual emission reductions. Market pressures consistently override environmental commitments.",
+                  "assumptions": "Corporate commitments translate to actual emissions reductions. Market incentives align with climate targets. Firms will accept reduced profitability for climate goals."
+                }
+              ],
+              "yPosition": 360.125,
+              "color": "#d9d2e9"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "End Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "carbon-targets",
+              "title": "National carbon targets achieved",
+              "text": "Country achieves its carbon reduction targets",
+              "connectionIds": [
+                "climate-future"
+              ],
+              "connections": [
+                {
+                  "targetId": "climate-future",
+                  "confidence": 7,
+                  "evidence": "No major economy currently on track to meet climate commitments. Carbon accounting often manipulated through offsets and creative accounting. Rebound effects regularly negate efficiency gains.",
+                  "assumptions": "Measured emission reductions represent real atmospheric impact. Global coordination prevents carbon leakage. Climate targets reflect actual atmospheric requirements rather than political feasibility."
+                }
+              ],
+              "yPosition": 182.125,
+              "color": "#e3e3e3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "End Mission",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "climate-future",
+              "title": "Climate-resilient future",
+              "text": "A sustainable, climate-resilient future is achieved",
+              "connectionIds": [],
+              "connections": [],
+              "yPosition": 196.75,
+              "color": "#e3e3e3"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "textSize": 1.3,
+  "curvature": 0.5
+}

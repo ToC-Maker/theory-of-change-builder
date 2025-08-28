@@ -1320,3 +1320,886 @@ export const AdversarialOpenPhilEffectiveGiving: Story = {
     }
   },
 }
+
+export const AnimalCharityEvaluators: Story = {
+  args: {
+    data: {
+      "sections": [
+        {
+          "title": "Inputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "research-capacity",
+                  "title": "Limited research capacity with systematic methodology development",
+                  "text": "Imperfect but structured research capabilities focused on continuous methodological improvement",
+                  "connectionIds": [
+                    "evaluation-frameworks"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "evaluation-frameworks",
+                      "confidence": 65,
+                      "evidence": "Historical development of evaluation methodologies in other fields shows iterative improvement possible, though animal welfare evaluation faces unique challenges",
+                      "assumptions": "Research staff can develop domain expertise faster than biases accumulate. Systematic approaches provide value over intuition despite limitations."
+                    }
+                  ],
+                  "yPosition": 8.205703735351562,
+                  "width": 224,
+                  "color": "#00a6a1"
+                },
+                {
+                  "id": "expert-networks",
+                  "title": "Access to animal welfare researchers and practitioners",
+                  "text": "Relationships with field experts for validation and feedback, with awareness of potential bias",
+                  "connectionIds": [
+                    "evaluation-frameworks"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "evaluation-frameworks",
+                      "confidence": 50,
+                      "evidence": "Expert networks in other evaluation fields provide value through diverse perspectives, though animal welfare field is small and potentially insular",
+                      "assumptions": "Experts provide honest feedback rather than confirmation of existing views. Network diversity sufficient to challenge assumptions."
+                    }
+                  ],
+                  "yPosition": 206.29544830322266,
+                  "width": 224,
+                  "color": "#00a6a1"
+                },
+                {
+                  "id": "uncertainty-tracking",
+                  "title": "Systems for tracking prediction accuracy and updating methodology",
+                  "text": "Mechanisms to measure recommendation performance and improve evaluation methods",
+                  "connectionIds": [
+                    "performance-data"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "performance-data",
+                      "confidence": 40,
+                      "evidence": "Limited precedent for systematic prediction tracking in nonprofit evaluation, but essential for credibility",
+                      "assumptions": "Organization willing to expose and learn from failures. Sufficient resources available for performance tracking infrastructure."
+                    }
+                  ],
+                  "yPosition": 345.2840919494629,
+                  "width": 224,
+                  "color": "#eef2ef"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "evaluation-frameworks",
+                  "title": "Explicitly uncertain evaluation frameworks with clear limitations",
+                  "text": "Structured but imperfect methodologies for organizational assessment, with honest uncertainty communication",
+                  "connectionIds": [
+                    "conditional-recommendations"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "conditional-recommendations",
+                      "confidence": 55,
+                      "evidence": "Structured evaluation better than no evaluation in limited studies from other fields, though animal welfare evaluation faces unique measurement challenges",
+                      "assumptions": "Frameworks capture relevant organizational characteristics. Structure improves decision-making despite imperfection."
+                    }
+                  ],
+                  "yPosition": 99.04119873046875,
+                  "width": 208,
+                  "color": "#00a6a1"
+                },
+                {
+                  "id": "performance-data",
+                  "title": "Systematic tracking of recommendation accuracy and outcomes",
+                  "text": "Data on how well ACE recommendations predict organizational performance over time",
+                  "connectionIds": [
+                    "methodology-improvement"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "methodology-improvement",
+                      "confidence": 70,
+                      "evidence": "Feedback loops essential for learning in complex systems, though implementation challenging",
+                      "assumptions": "Organization commits to transparency about failures. Sufficient data available for meaningful pattern detection."
+                    }
+                  ],
+                  "yPosition": 334.04119873046875,
+                  "width": 208,
+                  "color": "#eef2ef"
+                }
+              ]
+            },
+            {
+              "nodes": [
+                {
+                  "id": "conditional-recommendations",
+                  "title": "Conditional charity recommendations with explicit uncertainty bounds",
+                  "text": "Organization assessments presented as uncertain bets rather than confident predictions",
+                  "connectionIds": [
+                    "informed-donor-decisions"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "informed-donor-decisions",
+                      "confidence": 35,
+                      "evidence": "Mixed evidence on whether more information improves donor decisions vs. causing analysis paralysis",
+                      "assumptions": "Donors can process uncertainty information effectively. Explicit limitations increase rather than decrease trust."
+                    }
+                  ],
+                  "yPosition": 99.04119873046875,
+                  "width": 208,
+                  "color": "#00a6a1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outcomes",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "informed-donor-decisions",
+                  "title": "Donors make slightly better funding decisions than alternatives",
+                  "text": "Marginal improvement in resource allocation compared to intuition-based or random giving",
+                  "connectionIds": [
+                    "marginally-better-allocation"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "marginally-better-allocation",
+                      "confidence": 30,
+                      "evidence": "No evidence that systematic nonprofit evaluation improves outcomes compared to alternatives in animal welfare context",
+                      "assumptions": "Better-evaluated organizations actually perform better. Donor behavior changes persist over time. No negative effects from evaluation burden on organizations."
+                    }
+                  ],
+                  "yPosition": 99.04119873046875,
+                  "color": "#00a6a1",
+                  "width": 192
+                },
+                {
+                  "id": "methodology-improvement",
+                  "title": "Evaluation methods improve through systematic learning",
+                  "text": "ACE evaluation accuracy increases over time through performance tracking and methodology updates",
+                  "connectionIds": [
+                    "marginally-better-allocation"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "marginally-better-allocation",
+                      "confidence": 45,
+                      "evidence": "Other evaluation fields show methodological progress possible, though animal welfare presents unique challenges",
+                      "assumptions": "Sufficient feedback available for learning. Organization culture supports updating beliefs based on evidence."
+                    }
+                  ],
+                  "yPosition": 345.2840919494629,
+                  "color": "#eef2ef",
+                  "width": 192
+                }
+              ]
+            },
+            {
+              "nodes": [
+                {
+                  "id": "marginally-better-allocation",
+                  "title": "Marginally improved resource allocation within animal advocacy",
+                  "text": "Slightly more effective distribution of limited resources, with large uncertainty about impact",
+                  "connectionIds": [
+                    "uncertain-welfare-impact"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "uncertain-welfare-impact",
+                      "confidence": 25,
+                      "evidence": "No validated connection between improved resource allocation and animal welfare outcomes in current literature",
+                      "assumptions": "Current animal advocacy approaches capable of meaningful impact with better allocation. Scale of movement sufficient to affect animal welfare outcomes."
+                    }
+                  ],
+                  "yPosition": 212.04119873046875,
+                  "color": "#041c30",
+                  "width": 192
+                }
+              ]
+            },
+            {
+              "nodes": []
+            }
+          ]
+        },
+        {
+          "title": "Goal",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "uncertain-welfare-impact",
+                  "title": "Possible marginal reduction in animal suffering with high uncertainty",
+                  "text": "Uncertain and potentially small impact on animal welfare through improved movement effectiveness",
+                  "connectionIds": [],
+                  "connections": [],
+                  "yPosition": 212.04119873046875,
+                  "color": "#041c30",
+                  "width": 192
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "textSize": 1,
+      "curvature": 1,
+    }
+  }
+}
+
+export const FishWelfareInitiative: Story = {
+  args: {
+    data: {
+      "sections": [
+        {
+          "title": "Inputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "research-team",
+                  "title": "Research and program staff with aquaculture and animal welfare expertise",
+                  "text": "Interdisciplinary team combining marine biology, animal welfare science, development economics, and field implementation experience",
+                  "connectionIds": [
+                    "field-studies",
+                    "scientific-publications",
+                    "ara-partnerships"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "field-studies",
+                      "confidence": 85,
+                      "evidence": "FWI has conducted multiple field studies in India, China, and Philippines. Team has published peer-reviewed research and established academic partnerships.",
+                      "assumptions": "Research staff can be retained and expertise developed. Field research access maintained in key countries."
+                    },
+                    {
+                      "targetId": "scientific-publications",
+                      "confidence": 80,
+                      "evidence": "Track record of publishing in peer-reviewed journals. Academic collaborations established with universities.",
+                      "assumptions": "Research quality meets publication standards. Academic journals receptive to fish welfare research."
+                    },
+                    {
+                      "targetId": "ara-partnerships",
+                      "confidence": 75,
+                      "evidence": "Currently managing partnerships with 155+ farms through ARA program. Demonstrated farmer engagement and retention.",
+                      "assumptions": "Staff capacity sufficient for program management. Farmer relationships maintained over time."
+                    }
+                  ],
+                  "yPosition": 207.158203125,
+                  "width": 224,
+                  "color": "#e8f4f8"
+                },
+                {
+                  "id": "funding-resources",
+                  "title": "$830K annual budget for research, programs, and operations",
+                  "text": "Funding for field research, farmer outreach, technology development, policy engagement, and organizational operations across multiple countries",
+                  "connectionIds": [
+                    "field-studies",
+                    "ara-partnerships",
+                    "innovation-challenges"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "field-studies",
+                      "confidence": 70,
+                      "evidence": "2024 budget of $590K supported research activities in India and China. 2025 budget increased to $830K indicating donor confidence.",
+                      "assumptions": "Funding sustained over multi-year projects. Donors continue supporting fish welfare as cause area."
+                    },
+                    {
+                      "targetId": "ara-partnerships",
+                      "confidence": 75,
+                      "evidence": "ARA program operational costs supported by current funding. Cost per fish helped (~$0.14) suggests financial sustainability.",
+                      "assumptions": "Program costs don't increase faster than funding. Farmer partnership model remains cost-effective."
+                    },
+                    {
+                      "targetId": "innovation-challenges",
+                      "confidence": 60,
+                      "evidence": "FWI launched Stunning RFP and Satellite Imagery Challenge in 2024, demonstrating capacity to fund innovation initiatives.",
+                      "assumptions": "Innovation challenges produce usable results. Additional funding available for technology development."
+                    }
+                  ],
+                  "yPosition": 420.53125,
+                  "width": 224,
+                  "color": "#f0f8f0"
+                },
+                {
+                  "id": "farmer-networks",
+                  "title": "Relationships with aquaculture farmers and producer associations",
+                  "text": "Direct partnerships with fish farmers in India, emerging relationships in China and Philippines, connections to industry associations and cooperatives",
+                  "connectionIds": [
+                    "ara-partnerships",
+                    "stakeholder-engagement"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "ara-partnerships",
+                      "confidence": 80,
+                      "evidence": "155+ active farmers in ARA program. High retention rates and farmer satisfaction scores. Word-of-mouth recruitment working.",
+                      "assumptions": "Farmer trust maintained through beneficial outcomes. Network effects continue driving recruitment."
+                    },
+                    {
+                      "targetId": "stakeholder-engagement",
+                      "confidence": 65,
+                      "evidence": "Established relationships with key stakeholders in Indian aquaculture. Growing network in China through program expansion.",
+                      "assumptions": "Stakeholder relationships translate to broader influence. Industry associations receptive to welfare messaging."
+                    }
+                  ],
+                  "yPosition": 712.53125,
+                  "width": 224,
+                  "color": "#f8f0e8"
+                },
+                {
+                  "id": "technology-partnerships",
+                  "title": "Collaborations with technology developers and research institutions",
+                  "text": "Partnerships for developing welfare monitoring technologies, satellite imagery analysis, water quality sensors, and innovation competitions",
+                  "connectionIds": [
+                    "innovation-challenges",
+                    "welfare-protocols"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "innovation-challenges",
+                      "confidence": 55,
+                      "evidence": "Launched innovation challenges but results still emerging. Some technology partnerships established but early stage.",
+                      "assumptions": "Technology partnerships produce viable solutions. External innovators interested in fish welfare applications."
+                    },
+                    {
+                      "targetId": "welfare-protocols",
+                      "confidence": 70,
+                      "evidence": "Developing welfare assessment methods through research partnerships. Water quality and stocking density protocols established.",
+                      "assumptions": "Technology partnerships enhance protocol development. Assessment methods can be standardized across contexts."
+                    }
+                  ],
+                  "yPosition": 967.53125,
+                  "width": 224,
+                  "color": "#f4e8f8"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outputs",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "field-studies",
+                  "title": "Field research documenting welfare problems and testing intervention effectiveness",
+                  "text": "Controlled studies measuring welfare impacts of water quality improvements, stocking density changes, and handling practices across different farming contexts",
+                  "connectionIds": [
+                    "evidence-base",
+                    "practical-solutions"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "evidence-base",
+                      "confidence": 85,
+                      "evidence": "Field studies in India have documented welfare problems and intervention effectiveness. Research methodology established and validated.",
+                      "assumptions": "Field research access maintained. Study designs capture meaningful welfare indicators."
+                    },
+                    {
+                      "targetId": "practical-solutions",
+                      "confidence": 80,
+                      "evidence": "ARA program based on field-tested interventions. Water quality and stocking density improvements proven effective in practice.",
+                      "assumptions": "Research findings translate to practical applications. Solutions remain effective across different contexts."
+                    }
+                  ],
+                  "yPosition": 207.158203125,
+                  "width": 224,
+                  "color": "#e8f4f8"
+                },
+                {
+                  "id": "scientific-publications",
+                  "title": "Peer-reviewed research establishing fish sentience and welfare science",
+                  "text": "Publications documenting fish consciousness, suffering capacity, welfare assessment methods, and intervention effectiveness in academic journals",
+                  "connectionIds": [
+                    "scientific-legitimacy"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "scientific-legitimacy",
+                      "confidence": 75,
+                      "evidence": "FWI researchers have publication track record. Fish sentience research gaining academic acceptance. Journals publishing fish welfare studies.",
+                      "assumptions": "Publication pipeline continues. Academic community receptive to fish welfare research."
+                    }
+                  ],
+                  "yPosition": 30.53125,
+                  "width": 224,
+                  "color": "#e8f4f8"
+                },
+                {
+                  "id": "ara-partnerships",
+                  "title": "Alliance for Responsible Aquaculture partnerships with farmers implementing welfare standards",
+                  "text": "Direct program helping 155+ farms improve water quality and reduce stocking density, with regular monitoring and technical assistance",
+                  "connectionIds": [
+                    "direct-welfare-impact",
+                    "early-adopters"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "direct-welfare-impact",
+                      "confidence": 85,
+                      "evidence": "ARA program currently helping ~1.2 million fish with verified welfare improvements. Cost-effective at ~7 fish per dollar.",
+                      "assumptions": "Welfare improvements are genuine and sustained. Monitoring accurately captures impact."
+                    },
+                    {
+                      "targetId": "early-adopters",
+                      "confidence": 70,
+                      "evidence": "ARA farmers reporting economic benefits including better survival rates, reduced disease, improved feed conversion ratios.",
+                      "assumptions": "Economic benefits persist over time. Early adopters influence peer farmers."
+                    }
+                  ],
+                  "yPosition": 395.78515625,
+                  "width": 224,
+                  "color": "#f0f8f0"
+                },
+                {
+                  "id": "welfare-protocols",
+                  "title": "Standardized welfare assessment protocols and implementation guidelines",
+                  "text": "Evidence-based methods for measuring fish welfare, practical guidelines for improvement interventions, training materials for farmers and industry",
+                  "connectionIds": [
+                    "assessment-methods",
+                    "stakeholder-education"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "assessment-methods",
+                      "confidence": 75,
+                      "evidence": "Water quality and stocking density protocols developed through field research. Methods tested across multiple farm contexts.",
+                      "assumptions": "Protocols capture meaningful welfare differences. Methods can be standardized across regions."
+                    },
+                    {
+                      "targetId": "stakeholder-education",
+                      "confidence": 65,
+                      "evidence": "Training materials developed for ARA farmers. Educational content created for broader stakeholder engagement.",
+                      "assumptions": "Educational materials effectively communicate welfare concepts. Stakeholders receptive to training."
+                    }
+                  ],
+                  "yPosition": 618.53125,
+                  "width": 224,
+                  "color": "#f8f0e8"
+                },
+                {
+                  "id": "policy-recommendations",
+                  "title": "Evidence-based policy recommendations for fish welfare regulations",
+                  "text": "Policy briefs, regulatory frameworks, and government engagement promoting minimum welfare standards for aquaculture",
+                  "connectionIds": [
+                    "regulatory-development"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "regulatory-development",
+                      "confidence": 35,
+                      "evidence": "Limited progress on fish welfare regulation globally. EU developing some standards. Most countries lack specific fish welfare laws.",
+                      "assumptions": "Policymakers receptive to welfare arguments. Industry won't successfully oppose regulations."
+                    }
+                  ],
+                  "yPosition": 772.53125,
+                  "width": 224,
+                  "color": "#f4e8f8"
+                },
+                {
+                  "id": "stakeholder-engagement",
+                  "title": "Industry conferences, workshops, and educational campaigns",
+                  "text": "Outreach to farmers, processors, retailers, and consumers about fish welfare issues and solutions",
+                  "connectionIds": [
+                    "stakeholder-education",
+                    "market-awareness"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "stakeholder-education",
+                      "confidence": 60,
+                      "evidence": "Stakeholder engagement activities conducted but impact measurement limited. Industry conferences provide platform for welfare messaging.",
+                      "assumptions": "Stakeholders attend and engage meaningfully. Educational messaging changes attitudes and behavior."
+                    },
+                    {
+                      "targetId": "market-awareness",
+                      "confidence": 30,
+                      "evidence": "Consumer awareness of fish welfare very low compared to other animal welfare issues. Limited retailer engagement to date.",
+                      "assumptions": "Market actors respond to welfare messaging. Consumer demand can be developed for welfare-certified products."
+                    }
+                  ],
+                  "yPosition": 1113.53125,
+                  "width": 224,
+                  "color": "#f8f0e8"
+                },
+                {
+                  "id": "innovation-challenges",
+                  "title": "Technology innovation competitions and solution development",
+                  "text": "Stunning RFP, Satellite Imagery Innovation Challenge, and other initiatives crowdsourcing technological solutions for welfare problems",
+                  "connectionIds": [
+                    "welfare-technologies"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "welfare-technologies",
+                      "confidence": 50,
+                      "evidence": "Innovation challenges launched in 2024 but results still emerging. Some promising technology concepts identified.",
+                      "assumptions": "Innovation competitions produce viable solutions. Technologies can be scaled cost-effectively."
+                    }
+                  ],
+                  "yPosition": 967.53125,
+                  "width": 224,
+                  "color": "#f4e8f8"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outcomes Layer 3",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "scientific-legitimacy",
+                  "title": "Fish welfare recognized as legitimate scientific and ethical concern",
+                  "text": "Academic acceptance of fish sentience research, inclusion in animal welfare curricula, recognition by scientific bodies",
+                  "connectionIds": [
+                    "stakeholder-education"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "stakeholder-education",
+                      "confidence": 70,
+                      "evidence": "Growing academic acceptance of fish sentience. Some universities adding fish welfare to curricula. Scientific conferences including fish welfare sessions.",
+                      "assumptions": "Scientific legitimacy translates to broader stakeholder acceptance. Academic recognition influences policy and industry."
+                    }
+                  ],
+                  "yPosition": 30.53125,
+                  "color": "#d1e7dd",
+                  "width": 200
+                },
+                {
+                  "id": "evidence-base",
+                  "title": "Comprehensive scientific evidence documents welfare problems and solutions",
+                  "text": "Research base establishing specific welfare issues in aquaculture and demonstrating effectiveness of improvement interventions",
+                  "connectionIds": [
+                    "assessment-methods"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "assessment-methods",
+                      "confidence": 80,
+                      "evidence": "FWI and others building evidence base documenting welfare problems. Intervention studies showing measurable improvements.",
+                      "assumptions": "Evidence base reaches sufficient comprehensiveness. Research quality meets scientific standards."
+                    }
+                  ],
+                  "yPosition": 408.158203125,
+                  "color": "#d1e7dd",
+                  "width": 200
+                },
+                {
+                  "id": "practical-solutions",
+                  "title": "Field research demonstrates feasible welfare improvement methods",
+                  "text": "Proven interventions for water quality, stocking density, handling, and other welfare issues validated across farming contexts",
+                  "connectionIds": [
+                    "economic-viability"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "economic-viability",
+                      "confidence": 75,
+                      "evidence": "ARA program demonstrating practical solutions. Farmers reporting economic benefits from welfare improvements.",
+                      "assumptions": "Solutions remain effective when scaled. Economic benefits persist across different market conditions."
+                    }
+                  ],
+                  "yPosition": 207.158203125,
+                  "color": "#d1e7dd",
+                  "width": 200
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outcomes Layer 2",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "economic-viability",
+                  "title": "Welfare improvements proven cost-effective and economically beneficial",
+                  "text": "Demonstrated that welfare improvement practices maintain or improve farmer profitability through better survival, growth, and feed conversion",
+                  "connectionIds": [
+                    "early-adopters"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "early-adopters",
+                      "confidence": 70,
+                      "evidence": "ARA farmers reporting economic benefits including 43% better survival rates with water quality improvements, improved feed conversion ratios.",
+                      "assumptions": "Economic benefits persist over time and scale. Cost-benefit analysis remains positive across different contexts."
+                    }
+                  ],
+                  "yPosition": 239.7548828125,
+                  "color": "#cff4fc",
+                  "width": 200
+                }
+              ]
+            },
+            {
+              "nodes": [
+                {
+                  "id": "stakeholder-education",
+                  "title": "Key stakeholders educated about fish welfare issues and solutions",
+                  "text": "Farmers, industry, policymakers, and consumers understand fish welfare problems and available improvement methods",
+                  "connectionIds": [
+                    "industry-recognition"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "industry-recognition",
+                      "confidence": 55,
+                      "evidence": "Some industry stakeholder engagement but limited behavior change documented. Educational campaigns reaching target audiences.",
+                      "assumptions": "Education translates to attitude and behavior change. Stakeholders have capacity to implement improvements."
+                    }
+                  ],
+                  "yPosition": 30.53125,
+                  "color": "#cff4fc",
+                  "width": 200
+                },
+                {
+                  "id": "assessment-methods",
+                  "title": "Practical welfare assessment methods developed and validated",
+                  "text": "Standardized, cost-effective methods for measuring fish welfare that can be implemented by farmers, auditors, and regulators",
+                  "connectionIds": [
+                    "industry-recognition"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "industry-recognition",
+                      "confidence": 65,
+                      "evidence": "Water quality and stocking density assessment methods proven effective. Some industry adoption of welfare measurement approaches.",
+                      "assumptions": "Assessment methods capture meaningful welfare differences. Industry accepts standardized measurement approaches."
+                    }
+                  ],
+                  "yPosition": 878.129638671875,
+                  "color": "#cff4fc",
+                  "width": 200
+                },
+                {
+                  "id": "early-adopters",
+                  "title": "Industry champions demonstrate welfare improvements are viable",
+                  "text": "Leading farmers and companies successfully implementing welfare practices, serving as models and advocates for broader adoption",
+                  "connectionIds": [
+                    "industry-recognition"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "industry-recognition",
+                      "confidence": 65,
+                      "evidence": "ARA farmers serving as examples of welfare implementation. Some larger producers beginning to adopt welfare practices.",
+                      "assumptions": "Early adopter success influences peer adoption. Champions actively advocate for welfare improvements."
+                    }
+                  ],
+                  "yPosition": 475.78515625,
+                  "color": "#cff4fc",
+                  "width": 200
+                },
+                {
+                  "id": "welfare-technologies",
+                  "title": "Welfare monitoring and improvement technologies are accessible and affordable",
+                  "text": "Cost-effective technological solutions for welfare assessment, water quality monitoring, and other improvement methods available to farmers",
+                  "connectionIds": [
+                    "scalable-solutions"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "scalable-solutions",
+                      "confidence": 50,
+                      "evidence": "Some technology solutions emerging from innovation challenges. Water quality monitoring becoming more affordable.",
+                      "assumptions": "Technologies can be scaled cost-effectively. Farmers adopt technological solutions when accessible."
+                    }
+                  ],
+                  "yPosition": 1101.158203125,
+                  "color": "#cff4fc",
+                  "width": 200
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Outcomes Layer 1",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "industry-recognition",
+                  "title": "Fish welfare becomes recognized priority within aquaculture industry",
+                  "text": "Industry associations, major producers, and supply chain actors acknowledge welfare importance and begin implementing improvements",
+                  "connectionIds": [
+                    "producer-adoption",
+                    "market-demand"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "producer-adoption",
+                      "confidence": 45,
+                      "evidence": "Some industry recognition emerging but limited systematic adoption. ASC and other certification schemes beginning to include welfare elements.",
+                      "assumptions": "Industry recognition translates to concrete adoption. Welfare becomes competitive advantage rather than cost burden."
+                    },
+                    {
+                      "targetId": "market-demand",
+                      "confidence": 35,
+                      "evidence": "Limited consumer awareness of fish welfare compared to other animal welfare issues. Some retailer commitments beginning to emerge.",
+                      "assumptions": "Industry recognition influences market positioning. Consumer demand develops for welfare-certified products."
+                    }
+                  ],
+                  "yPosition": 488.158203125,
+                  "color": "#fff2cc",
+                  "width": 200
+                }
+              ]
+            },
+            {
+              "nodes": [
+                {
+                  "id": "regulatory-development",
+                  "title": "Government regulations mandate minimum welfare standards",
+                  "text": "Policy development and implementation of fish welfare regulations in key aquaculture-producing countries",
+                  "connectionIds": [
+                    "producer-adoption"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "producer-adoption",
+                      "confidence": 60,
+                      "evidence": "EU developing fish welfare regulations. Limited progress in other major producing countries. Industry typically resists new regulations initially.",
+                      "assumptions": "Regulations are implemented and enforced effectively. Industry complies rather than lobbying for exemptions or delays."
+                    }
+                  ],
+                  "yPosition": 772.53125,
+                  "color": "#fff2cc",
+                  "width": 200
+                },
+                {
+                  "id": "market-demand",
+                  "title": "Consumer and corporate demand drives welfare-certified products",
+                  "text": "Market mechanisms create economic incentives for welfare improvements through consumer preferences and corporate commitments",
+                  "connectionIds": [
+                    "producer-adoption"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "producer-adoption",
+                      "confidence": 40,
+                      "evidence": "Consumer awareness of fish welfare very low. Limited retailer commitments. Price sensitivity high for fish products.",
+                      "assumptions": "Consumer education campaigns succeed. Retailers make meaningful welfare commitments. Price premiums for welfare products acceptable."
+                    }
+                  ],
+                  "yPosition": 415.7421875,
+                  "color": "#fff2cc",
+                  "width": 200
+                },
+                {
+                  "id": "scalable-solutions",
+                  "title": "Welfare improvement technologies and practices are widely accessible",
+                  "text": "Cost-effective, practical solutions for welfare improvements available to farmers across different contexts and scales",
+                  "connectionIds": [
+                    "producer-adoption"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "producer-adoption",
+                      "confidence": 55,
+                      "evidence": "ARA program proving welfare improvements possible at farm scale. Technology costs decreasing for water quality monitoring.",
+                      "assumptions": "Solutions maintain effectiveness when scaled. Technology adoption barriers overcome by cost reduction and usability improvements."
+                    }
+                  ],
+                  "yPosition": 1101.158203125,
+                  "color": "#fff2cc",
+                  "width": 200
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "End Goal",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "producer-adoption",
+                  "title": "Major aquaculture producers adopt welfare standards benefiting 100 million fish annually",
+                  "text": "Widespread implementation of water quality, stocking density, and handling improvements across industrial aquaculture systems by 2030",
+                  "connectionIds": [
+                    "end-mission"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "end-mission",
+                      "confidence": 75,
+                      "evidence": "Large-scale aquaculture operations can affect millions of fish per facility. China alone produces 65% of global farmed fish.",
+                      "assumptions": "Producer adoption reaches sufficient scale. Welfare improvements are genuine and sustained. Impact measurement accurately captures benefits."
+                    }
+                  ],
+                  "yPosition": 488.158203125,
+                  "color": "#f8d7da",
+                  "width": 240
+                },
+                {
+                  "id": "direct-welfare-impact",
+                  "title": "Direct intervention programs scale to help millions of fish annually",
+                  "text": "Expansion of Alliance for Responsible Aquaculture and similar direct implementation programs to reach scale contributing to 100 million fish target",
+                  "connectionIds": [
+                    "end-mission"
+                  ],
+                  "connections": [
+                    {
+                      "targetId": "end-mission",
+                      "confidence": 60,
+                      "evidence": "ARA program currently helping ~1.2 million fish with proven welfare improvements. Scalable model demonstrated.",
+                      "assumptions": "Direct programs can scale 100x current level. Staff capacity and funding sufficient for expansion. Farmer recruitment sustainable."
+                    }
+                  ],
+                  "yPosition": 342.77099609375,
+                  "color": "#f8d7da",
+                  "width": 240
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "End Mission",
+          "columns": [
+            {
+              "nodes": [
+                {
+                  "id": "end-mission",
+                  "title": "World where welfare of all sentient beings is recognized and protected",
+                  "text": "Aquatic animals receive same ethical consideration as terrestrial farm animals, with fish welfare integrated into broader animal protection movement",
+                  "connectionIds": [],
+                  "connections": [],
+                  "yPosition": 432.904296875,
+                  "color": "#d4edda",
+                  "width": 280
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "textSize": 1.1,
+      "curvature": 0.5,
+    }
+  }
+}

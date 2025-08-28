@@ -1,7 +1,6 @@
 ---
 name: quality-assurance
 description: Use for senior code review, refactoring, test planning, quality assurance, and mentoring through code improvements
-model: opus
 color: green
 ---
 

@@ -1,7 +1,6 @@
 ---
 name: architect
 description: Use for system design, architecture documents, technology selection, API design, and infrastructure planning
-model: opus
 color: blue
 ---
 

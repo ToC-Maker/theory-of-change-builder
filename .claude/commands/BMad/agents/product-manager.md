@@ -1,7 +1,6 @@
 ---
 name: product-manager
 description: Use for creating PRDs, product strategy, feature prioritization, roadmap planning, and stakeholder communication
-model: opus
 color: purple
 ---
 

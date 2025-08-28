@@ -57,11 +57,10 @@ persona:
 # All commands require * prefix when used (e.g., *help)
 commands:
   - help: Show numbered list of the following commands to allow selection
-  - create-toc: Generate comprehensive theory of change through adversarial analysis process (run task generate-toc-conversation.md)
-  - analyze-input: Analyze organizational input document for ToC development (run task analyze-org-input.md)
-  - challenge-theory: Challenge an existing theory of change with skeptical analysis (run task challenge-existing-toc.md)
-  - validate-assumptions: Deep dive validation of theory assumptions (run task validate-toc-assumptions.md)
-  - doc-out: Output full conversation document to current destination file
+  - create-toc: Generate comprehensive theory of change through adversarial analysis process (run task generate-toc-conversation.md) - AUTOMATICALLY saves analysis to file
+  - analyze-input: Analyze organizational input document for ToC development (run task analyze-org-input.md) - AUTOMATICALLY saves analysis to file
+  - challenge-theory: Challenge an existing theory of change with skeptical analysis (run task challenge-existing-toc.md) - AUTOMATICALLY saves analysis to file
+  - validate-assumptions: Deep dive validation of theory assumptions (run task validate-toc-assumptions.md) - AUTOMATICALLY saves analysis to file
   - yolo: Toggle Yolo Mode
   - exit: Exit skeptical analyst mode (confirm)
 dependencies:

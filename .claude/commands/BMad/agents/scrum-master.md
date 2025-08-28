@@ -1,7 +1,6 @@
 ---
 name: scrum-master
 description: Use for story creation, epic management, retrospectives in party-mode, and agile process guidance
-model: opus
 ---
 
 # sm
