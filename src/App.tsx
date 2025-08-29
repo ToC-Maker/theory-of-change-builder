@@ -5,6 +5,7 @@ import { CharityEntrepreneurship } from "./stories/ToC.stories"
 import { ChatInterface } from "./components/ChatInterface"
 import { InfoPanel } from "./components/InfoPanel"
 import { StaticLegend } from "./components/StaticLegend"
+import { JsonDropdown } from "./components/JsonDropdown"
 import "./App.css"
 
 interface ToCData {
@@ -27,6 +28,11 @@ function ToCViewer() {
     console.log('Current data before update:', data);
     setData(newGraphData);
     console.log('setData called with new graph data');
+  };
+
+  const handleDataChange = (newData: ToCData) => {
+    console.log('App handleDataChange called with:', newData);
+    setData(newData);
   };
 
   useEffect(() => {
@@ -106,19 +112,30 @@ function ToCViewer() {
           />
         </div>
         
-        {/* Main Graph Container */}
-        <div 
-          className="bg-white rounded-xl shadow-lg p-4 flex-shrink-0"
-          style={{
-            width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-            height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-            minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-            minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-            maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
-            maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
-          }}
-        >
-          <ToC data={data} onSizeChange={setContainerSize} />
+        {/* Main Graph Container and JSON Dropdown */}
+        <div className="flex flex-col flex-shrink-0 items-start">
+          <div 
+            className="bg-white rounded-xl shadow-lg p-4"
+            style={{
+              width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+              height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+              minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+              minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+              maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
+              maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
+            }}
+          >
+            <ToC data={data} onSizeChange={setContainerSize} onDataChange={handleDataChange} />
+          </div>
+          
+          {/* JSON Dropdown below graph */}
+          <div 
+            style={{
+              width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto'
+            }}
+          >
+            <JsonDropdown data={data} title="Current Graph JSON" />
+          </div>
         </div>
         
         {/* Right Side Panel - Info and Legend */}

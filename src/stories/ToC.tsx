@@ -12,12 +12,24 @@ import { NodePopup } from "../components/NodePopup"
 
 export function ToC({ 
   data: initialData, 
-  onSizeChange 
+  onSizeChange,
+  onDataChange
 }: { 
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void 
+  onDataChange?: (data: ToCData) => void
 }) {
   const [data, setData] = useState<ToCData>(initialData)
+  
+  // Create a wrapped setData that also notifies parent
+  const setDataAndNotify = useCallback((newData: ToCData | ((prevData: ToCData) => ToCData)) => {
+    setData((prevData) => {
+      const updatedData = typeof newData === 'function' ? newData(prevData) : newData;
+      // Always notify parent of changes using setTimeout to avoid infinite loops
+      setTimeout(() => onDataChange?.(updatedData), 0);
+      return updatedData;
+    });
+  }, [onDataChange]);
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null
   }>({})
@@ -204,7 +216,7 @@ export function ToC({
   const moveNodeVertically = useCallback((nodeId: string, direction: 'up' | 'down') => {
     const moveAmount = direction === 'up' ? -20 : 20
     
-    setData((prevData) => ({
+    setDataAndNotify((prevData) => ({
       ...prevData,
       sections: prevData.sections.map((section) => ({
         ...section,
@@ -221,12 +233,12 @@ export function ToC({
         }))
       }))
     }))
-  }, [setData])
+  }, [setDataAndNotify])
 
   const straightenEdges = useCallback(() => {
     if (!editMode) return
     
-    setData((prevData) => {
+    setDataAndNotify((prevData) => {
       // Collect all nodes with their actual center positions
       const allNodes: { node: Node; sectionIndex: number; columnIndex: number; nodeIndex: number; centerY: number; topY: number; height: number }[] = []
       
@@ -289,7 +301,7 @@ export function ToC({
 
       return newData
     })
-  }, [editMode, setData, nodeRefs])
+  }, [editMode, setDataAndNotify, nodeRefs])
 
   // Keyboard event handler for moving nodes
   useEffect(() => {
@@ -433,7 +445,7 @@ export function ToC({
     setHighlightedNodes(new Set())
     setNodeWidth(192)
     setNodeColor('#ffffff')
-  }, [editMode, highlightedNodes, setData])
+  }, [editMode, highlightedNodes, setDataAndNotify])
 
   const connectSelectedNodes = useCallback(() => {
     if (!editMode) return
@@ -484,7 +496,7 @@ export function ToC({
     setHighlightedNodes(new Set())
     setNodeWidth(192)
     setNodeColor('#ffffff')
-  }, [editMode, highlightedNodes, setData, areNodesConnected, disconnectSelectedNodes])
+  }, [editMode, highlightedNodes, setDataAndNotify, areNodesConnected, disconnectSelectedNodes])
 
   const handleDrop = (targetSectionIndex: number, targetColumnIndex: number, isNewColumn: boolean = false, yPosition?: number) => {
     if (!draggedNode || !dragOffset) {
@@ -511,7 +523,7 @@ export function ToC({
 
     console.log("Moving node", draggedNode.id, "from", sourceLocation, "to", {targetSectionIndex, targetColumnIndex, isNewColumn, yPosition: adjustedYPosition})
 
-    setData((prevData) => {
+    setDataAndNotify((prevData) => {
       // If we're just updating position in the same column, do it more precisely
       if (!isNewColumn && 
           sourceLocation.sectionIndex === targetSectionIndex && 
@@ -844,7 +856,7 @@ export function ToC({
         connectSelectedNodes={connectSelectedNodes}
         areNodesConnected={areNodesConnected}
         copyGraphJSON={copyGraphJSON}
-        setData={setData}
+        setData={setDataAndNotify}
       />
 
       {/* Hide the draggable legend since we now have it in the info panel */}
@@ -894,7 +906,7 @@ export function ToC({
       
       <ConnectionsComponent
         data={data}
-        setData={setData}
+        setData={setDataAndNotify}
         nodeRefs={nodeRefs}
         highlightedNodes={highlightedNodes}
         connectedNodes={connectedNodes}
