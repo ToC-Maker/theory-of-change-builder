@@ -384,7 +384,6 @@ export function ToC({
       
       return totalColumnWidth + gaps
     })
-    console.log('sectionWidths updated:', widths, 'sections structure:', data.sections.map(s => s.columns.length))
     return widths
   }, [data.sections])
 

@@ -103,7 +103,6 @@ export function ConnectionsComponent({
     const padding = 100 // Extra padding for safety
     const dynamicHeight = Math.max(maxHeight + headerHeight + padding, 800) // Minimum 800px
     
-    console.log('SVG updateSize called with sectionWidths:', sectionWidths, 'totalWidth:', totalWidth, 'dynamicHeight:', dynamicHeight)
     const newSize = { width: totalWidth, height: dynamicHeight }
     setSvgSize(newSize)
     onSizeChange(newSize)
