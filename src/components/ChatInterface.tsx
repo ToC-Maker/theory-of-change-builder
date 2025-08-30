@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { chatService, ChatMessage } from '../services/chatService';
+import { applyEdits } from '../utils/graphEdits';
 
 interface ChatInterfaceProps {
   height?: number;
@@ -60,18 +61,21 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: response.message,
-          timestamp: new Date()
+          timestamp: new Date(),
+          usage: response.usage
         };
         setMessages(prev => [...prev, assistantMessage]);
         
-        // Handle graph updates if present
-        if (response.graphUpdate && onGraphUpdate) {
-          console.log('Graph update detected in ChatInterface:', response.graphUpdate);
-          onGraphUpdate(response.graphUpdate);
+        // Handle edit instructions if present
+        if (response.editInstructions && onGraphUpdate && graphData) {
+          console.log('Edit instructions detected in ChatInterface:', response.editInstructions);
+          const updatedGraph = applyEdits(graphData, response.editInstructions);
+          onGraphUpdate(updatedGraph);
         } else {
-          console.log('No graph update or callback:', {
-            hasGraphUpdate: !!response.graphUpdate,
-            hasCallback: !!onGraphUpdate
+          console.log('No edit instructions, callback, or graph data:', {
+            hasEditInstructions: !!response.editInstructions,
+            hasCallback: !!onGraphUpdate,
+            hasGraphData: !!graphData
           });
         }
       }
@@ -174,7 +178,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
                   <div className={`text-xs mt-1 opacity-70 ${
                     message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
                   }`}>
-                    {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                    {message.usage && (
+                      <div className="mt-1">
+                        Tokens: {message.usage.input_tokens} in, {message.usage.output_tokens} out ({message.usage.total_tokens} total)
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
