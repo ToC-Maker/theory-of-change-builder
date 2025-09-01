@@ -33,6 +33,9 @@ export function ToC({
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null
   }>({})
+  const [nodeHeights, setNodeHeights] = useState<{
+    [key: string]: number
+  }>({})
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(
     new Set(),
   )
@@ -63,6 +66,12 @@ export function ToC({
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
+    
+    // Update height when ref changes
+    if (ref) {
+      const height = ref.getBoundingClientRect().height
+      setNodeHeights((prev) => ({ ...prev, [id]: height }))
+    }
   }, [])
 
   const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
@@ -224,16 +233,20 @@ export function ToC({
           ...column,
           nodes: column.nodes.map((node, nodeIndex) => {
             if (node.id === nodeId) {
-              // If node doesn't have a custom position, use its current visual position
-              const currentY = node.yPosition ?? (nodeIndex * 180 + 30)
-              return { ...node, yPosition: currentY + moveAmount }
+              // Use cached height or default
+              const actualHeight = nodeHeights[node.id] || 150
+              
+              // Calculate current center Y position
+              const defaultCenterY = nodeIndex * 180 + 30 + actualHeight / 2
+              const currentCenterY = node.yPosition ?? defaultCenterY
+              return { ...node, yPosition: currentCenterY + moveAmount }
             }
             return node
           })
         }))
       }))
     }))
-  }, [setDataAndNotify])
+  }, [setDataAndNotify, nodeHeights])
 
   const straightenEdges = useCallback(() => {
     if (!editMode) return
@@ -245,17 +258,12 @@ export function ToC({
       prevData.sections.forEach((section, sectionIndex) => {
         section.columns.forEach((column, columnIndex) => {
           column.nodes.forEach((node, nodeIndex) => {
-            const topY = node.yPosition ?? (nodeIndex * 180 + 30)
+            // Use cached height or default
+            const actualHeight = nodeHeights[node.id] || 150
             
-            // Get actual node height from DOM
-            const nodeElement = nodeRefs[node.id]
-            let actualHeight = 120 // Default fallback
-            if (nodeElement) {
-              const rect = nodeElement.getBoundingClientRect()
-              actualHeight = rect.height
-            }
-            
-            const centerY = topY + actualHeight / 2
+            // yPosition now represents the center Y
+            const centerY = node.yPosition ?? (nodeIndex * 180 + 30 + actualHeight / 2)
+            const topY = centerY - actualHeight / 2
             allNodes.push({ node, sectionIndex, columnIndex, nodeIndex, centerY, topY, height: actualHeight })
           })
         })
@@ -286,14 +294,12 @@ export function ToC({
         if (group.length > 1) { // Only straighten groups with multiple nodes
           const avgCenterY = Math.round(group.reduce((sum, n) => sum + n.centerY, 0) / group.length)
           
-          group.forEach(({ sectionIndex, columnIndex, nodeIndex, height }) => {
+          group.forEach(({ sectionIndex, columnIndex, nodeIndex }) => {
             const node = newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex]
-            // Calculate top position that will center this specific node at avgCenterY
-            const alignedTopY = avgCenterY - height / 2
-            
+            // yPosition now represents the center Y, so set it directly
             newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex] = {
               ...node,
-              yPosition: alignedTopY
+              yPosition: avgCenterY
             }
           })
         }
@@ -301,7 +307,7 @@ export function ToC({
 
       return newData
     })
-  }, [editMode, setDataAndNotify, nodeRefs])
+  }, [editMode, setDataAndNotify, nodeHeights])
 
   // Keyboard event handler for moving nodes
   useEffect(() => {
@@ -518,7 +524,14 @@ export function ToC({
     }
 
     // Adjust yPosition by the drag offset so the node appears where the user grabbed it
-    const adjustedYPosition = yPosition !== undefined ? yPosition - dragOffset.y : 20
+    // Since yPosition now represents center, we need to get the actual node height
+    let adjustedYPosition = 20 // Default fallback
+    if (yPosition !== undefined) {
+      // Use cached height or default
+      const actualHeight = nodeHeights[draggedNode.id] || 150
+      // Convert from top position to center position
+      adjustedYPosition = yPosition - dragOffset.y + actualHeight / 2
+    }
 
     console.log("Moving node", draggedNode.id, "from", sourceLocation, "to", {targetSectionIndex, targetColumnIndex, isNewColumn, yPosition: adjustedYPosition})
 
@@ -774,7 +787,7 @@ export function ToC({
                           className="absolute"
                           style={{
                             top: node.yPosition !== undefined 
-                              ? `${node.yPosition}px` 
+                              ? `${node.yPosition - (nodeHeights[node.id] || 150) / 2}px` // Convert from center to top position using cached height
                               : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
                             left: `${leftOffset}px`,
                             width: `${nodeWidth}px`
@@ -1011,6 +1024,7 @@ export function ToC({
         data={data}
         setData={setDataAndNotify}
         nodeRefs={nodeRefs}
+        nodeHeights={nodeHeights}
         highlightedNodes={highlightedNodes}
         connectedNodes={connectedNodes}
         hoveredConnections={hoveredConnections}
