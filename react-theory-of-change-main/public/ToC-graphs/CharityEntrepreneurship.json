@@ -1,4 +1,5 @@
 {
+  "title": "Charity Entrepreneurship Incubation Program",
   "sections": [
     {
       "title": "Inputs",
@@ -20,7 +21,7 @@
                   "assumptions": "Researcher skills, time and available information are sufficient to make recommendations worth following. The pool of shovel-ready ideas is not exhausted."
                 }
               ],
-              "yPosition": 70,
+              "yPosition": 65,
               "width": 224,
               "color": "#ffb8ca"
             },
@@ -124,7 +125,7 @@
                   "assumptions": "Recommended ideas are diverse enough for founders with different preferences. Quality research translates to actionable charity ideas."
                 }
               ],
-              "yPosition": 70,
+              "yPosition": 65,
               "width": 224,
               "color": "#ffb8ca"
             },
@@ -286,6 +287,6 @@
   "textSize": 1,
   "curvature": 1,
   "_metadata": {
-    "exportedAt": "2025-09-01T12:19:12.068Z"
+    "exportedAt": "2025-09-01T13:27:32.141Z"
   }
 }

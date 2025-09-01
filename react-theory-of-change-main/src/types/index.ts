@@ -17,6 +17,7 @@ export interface Node {
 }
 
 export interface ToCData {
+  title?: string // Optional title for the theory of change
   sections: {
     title: string
     columns: {
