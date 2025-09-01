@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { generateGraphSummary, parseEditInstructions, type EditInstruction } from '../utils/graphEdits';
 
 export interface ChatMessage {
@@ -182,32 +181,12 @@ export { SYSTEM_PROMPT };
 
 
 class ChatService {
-  private anthropic: Anthropic | null = null;
-
-  constructor() {
-    try {
-      const apiKey = import.meta.env.VITE_CLAUDE_API_KEY;
-      if (apiKey) {
-        this.anthropic = new Anthropic({
-          apiKey: apiKey,
-          dangerouslyAllowBrowser: true
-        });
-      }
-    } catch (error) {
-      console.error('Failed to initialize Anthropic client:', error);
-    }
-  }
+  private baseURL = '/api'; // Vite will proxy this to backend
 
   async sendMessage(messages: ChatMessage[], currentGraphData?: any): Promise<ChatResponse> {
-    if (!this.anthropic) {
-      return {
-        message: "API is not configured. Please check your API key.",
-        error: "API_NOT_CONFIGURED"
-      };
-    }
-
     try {
-      const anthropicMessages = messages.map((msg, index) => {
+      // Prepare messages with graph summary for the last user message
+      const processedMessages = messages.map((msg, index) => {
         let content = msg.content;
         
         // Append current graph summary to user messages (much smaller than full JSON)
@@ -225,14 +204,29 @@ class ChatService {
         };
       });
 
-      const response = await this.anthropic.messages.create({
-        model: "claude-3-5-haiku-latest",
-        max_tokens: 8000,
-        system: SYSTEM_PROMPT,
-        messages: anthropicMessages
+      console.log(`Sending ${processedMessages.length} messages to backend API`);
+
+      const response = await fetch(`${this.baseURL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: processedMessages,
+          currentGraphData,
+          systemPrompt: SYSTEM_PROMPT
+        })
       });
 
-      const content = response.content[0];
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      // Extract the text content from the response
+      const content = data.content[0];
       if (content.type === 'text') {
         console.log('=== COMPLETE AI RESPONSE ===');
         console.log(content.text);
@@ -257,9 +251,9 @@ class ChatService {
           message: displayMessage,
           editInstructions: editInstructions,
           usage: {
-            input_tokens: response.usage.input_tokens,
-            output_tokens: response.usage.output_tokens,
-            total_tokens: response.usage.input_tokens + response.usage.output_tokens
+            input_tokens: data.usage?.input_tokens ?? 0,
+            output_tokens: data.usage?.output_tokens ?? 0,
+            total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0)
           }
         };
       } else {
@@ -269,7 +263,30 @@ class ChatService {
         };
       }
     } catch (error) {
-      console.error('Error calling Anthropic API:', error);
+      console.error('Error calling backend API:', error);
+      
+      // Handle different error types
+      if (error instanceof Error) {
+        if (error.message.includes('Rate limit')) {
+          return {
+            message: "Rate limit exceeded. Please wait a moment and try again.",
+            error: "RATE_LIMIT"
+          };
+        }
+        if (error.message.includes('Invalid API key')) {
+          return {
+            message: "API key is invalid. Please check your configuration.",
+            error: "INVALID_API_KEY"
+          };
+        }
+        if (error.message.includes('fetch')) {
+          return {
+            message: "Unable to connect to the backend server. Please ensure the server is running.",
+            error: "BACKEND_UNAVAILABLE"
+          };
+        }
+      }
+      
       return {
         message: "Sorry, I encountered an error while processing your request.",
         error: "API_ERROR"
@@ -277,8 +294,18 @@ class ChatService {
     }
   }
 
+  async checkHealth(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseURL}/health`);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   isConfigured(): boolean {
-    return this.anthropic !== null;
+    // Always return true since backend handles the API key
+    return true;
   }
 }
 
