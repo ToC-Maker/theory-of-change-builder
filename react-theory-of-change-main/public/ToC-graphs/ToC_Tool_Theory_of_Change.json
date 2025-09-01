@@ -1,0 +1,486 @@
+{
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "development-time",
+              "title": "Cian and Zoe's dedicated development time to build the MVP",
+              "text": "Cian and Zoe's dedicated time to build the MVP, including user experience design, frontend development, backend integration, and iterative testing. The goal is to have a functional MVP ready for refinement during their collaboration period.",
+              "connectionIds": [
+                "web-application",
+                "user-research"
+              ],
+              "connections": [
+                {
+                  "targetId": "web-application",
+                  "confidence": 75,
+                  "evidence": "Both developers have some demonstrated technical capability, but building a user-friendly tool that captures complex strategic thinking is challenging. MVP deadlines often slip in practice.",
+                  "assumptions": "Development stays focused despite feature creep temptations. Technical challenges are manageable. Collaboration remains productive even when disagreements arise about design decisions."
+                },
+                {
+                  "targetId": "user-research",
+                  "confidence": 70,
+                  "evidence": "User research methods are well-established, but getting busy organizations to participate meaningfully is difficult. Many give superficial feedback to be polite.",
+                  "assumptions": "Target organizations provide honest feedback rather than telling researchers what they think they want to hear. Organizations actually know what they need rather than just what they think they want."
+                }
+              ],
+              "yPosition": 21.25,
+              "width": 224,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "platform-hosting",
+              "title": "Web hosting, domain, and cloud services for tool deployment",
+              "text": "Web hosting, domain registration, SSL certificates, and cloud services necessary to deploy and maintain the ToC creation tool. Includes considerations for scalability as user base grows.",
+              "connectionIds": [
+                "web-application"
+              ],
+              "connections": [
+                {
+                  "targetId": "web-application",
+                  "confidence": 95,
+                  "evidence": "Standard web hosting and cloud services are highly reliable. Technical requirements are well-understood for web applications of this type.",
+                  "assumptions": "Hosting costs remain manageable. Technical infrastructure scales appropriately with user growth."
+                }
+              ],
+              "yPosition": 205.25,
+              "width": 224,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "partnership-outreach",
+              "title": "Direct relationship building with target organizations and funders",
+              "text": "Direct relationship building with potential user organizations and funding community members. Includes leveraging Cian's goal to work with animal welfare organizations in Asia and existing EA network connections.",
+              "connectionIds": [
+                "partnerships",
+                "marketing-materials"
+              ],
+              "connections": [
+                {
+                  "targetId": "partnerships",
+                  "confidence": 55,
+                  "evidence": "Some initial interest expressed, but organizational priorities shift frequently. Many organizations express polite interest but don't follow through on commitments to pilot new tools.",
+                  "assumptions": "Expressed interest translates to actual willingness to invest time. Organizations remember conversations months later. Decision-makers have authority and time to engage with new tools."
+                },
+                {
+                  "targetId": "marketing-materials",
+                  "confidence": 65,
+                  "evidence": "Outreach conversations may generate some useful content, but organizations often give diplomatic responses rather than honest feedback about messaging effectiveness.",
+                  "assumptions": "Outreach conversations reveal true organizational needs rather than politically correct responses. Time exists to systematize learnings into professional materials."
+                }
+              ],
+              "yPosition": 361,
+              "width": 224,
+              "color": "#a8ccec"
+            },
+            {
+              "id": "ea-network-access",
+              "title": "Existing connections within the effective altruism community",
+              "text": "Existing connections and reputation within the effective altruism community, including recognition from organizations like Charity Entrepreneurship whose forum post inspired the concept. Provides credibility and access to potential users and funders.",
+              "connectionIds": [
+                "marketing-materials",
+                "partnerships"
+              ],
+              "connections": [
+                {
+                  "targetId": "marketing-materials",
+                  "confidence": 75,
+                  "evidence": "EA community values transparency and evidence-based approaches, aligning well with ToC tool benefits. Community connections provide access to success stories and use cases.",
+                  "assumptions": "EA community continues to value transparency tools. Network connections remain accessible and supportive."
+                },
+                {
+                  "targetId": "partnerships",
+                  "confidence": 50,
+                  "evidence": "EA organizations express interest in strategic planning improvements, but many are overcommitted and struggle to implement new processes even when beneficial.",
+                  "assumptions": "Relationships provide genuine access rather than polite meetings that go nowhere. Organizations follow through on pilot commitments rather than deprioritizing when other urgent work emerges."
+                }
+              ],
+              "yPosition": 561.25,
+              "width": 224,
+              "color": "#7fb3d3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "web-application",
+              "title": "Web application that guides organizations through creating theories of change",
+              "text": "A user-friendly web application that guides organizations through creating comprehensive theories of change. Features include step-by-step guidance, collaborative editing, visual representation, and export capabilities for website integration (e.g., somecharity.org/theoryofchange).",
+              "connectionIds": [
+                "functional-mvp"
+              ],
+              "connections": [
+                {
+                  "targetId": "functional-mvp",
+                  "confidence": 65,
+                  "evidence": "Creating a web application is technically feasible, but translating strategic planning methodology into software often loses nuance. Many tools that work in theory fail in practice.",
+                  "assumptions": "Complex strategic thinking can be effectively guided by software. Users engage thoughtfully rather than clicking through quickly. Core features remain stable under real-world usage."
+                }
+              ],
+              "yPosition": 194,
+              "width": 224,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "user-research",
+              "title": "Research findings on organization needs and strategic planning challenges",
+              "text": "Systematic research with target organizations to understand their current strategic planning challenges, ToC development pain points, and requirements for an effective tool. Includes interviews, surveys, and usability testing to inform product development.",
+              "connectionIds": [
+                "addresses-needs"
+              ],
+              "connections": [
+                {
+                  "targetId": "addresses-needs",
+                  "confidence": 70,
+                  "evidence": "User research can provide useful insights, but organizations often don't know what they actually need until they try it. People tend to rationalize current processes and resist change.",
+                  "assumptions": "Organizations give honest feedback about pain points rather than presenting themselves in best light. Stated needs align with actual willingness to change behavior when tool is available."
+                }
+              ],
+              "yPosition": 10,
+              "width": 224,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "marketing-materials",
+              "title": "Content explaining the tool's benefits to different audiences",
+              "text": "Content designed to communicate the tool's value proposition to different audiences: organizations seeking strategic clarity, funders wanting transparency, and the broader EA community. Includes case studies, demonstration videos, and targeted messaging for different user types.",
+              "connectionIds": [
+                "clear-value-prop"
+              ],
+              "connections": [
+                {
+                  "targetId": "clear-value-prop",
+                  "confidence": 60,
+                  "evidence": "Well-designed marketing materials can improve understanding, but many organizations are skeptical of new tools and tend to ignore marketing content from unknown sources.",
+                  "assumptions": "Organizations take time to read and consider marketing materials rather than dismissing them. Promised benefits seem credible rather than overhyped."
+                }
+              ],
+              "yPosition": 372.25,
+              "width": 224,
+              "color": "#a8ccec"
+            },
+            {
+              "id": "partnerships",
+              "title": "Working relationships with organizations willing to test the tool",
+              "text": "Direct working relationships with organizations willing to pilot the tool, provide feedback, and serve as early adopters. These partnerships provide validation, refinement opportunities, and initial user base for building momentum.",
+              "connectionIds": [
+                "case-studies",
+                "organization-discovery"
+              ],
+              "connections": [
+                {
+                  "targetId": "case-studies",
+                  "confidence": 60,
+                  "evidence": "Some pilot organizations may achieve positive outcomes, but many pilots fail or produce mixed results. Organizations may be reluctant to share details publicly.",
+                  "assumptions": "Pilot organizations invest sufficient time and effort for meaningful results. Organizations are willing to be associated publicly with an unproven tool. Success stories are compelling rather than obviously cherry-picked."
+                }
+              ],
+              "yPosition": 561.25,
+              "width": 224,
+              "color": "#7fb3d3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "clear-value-prop",
+              "title": "Compelling reasons for EA organizations, nonprofits, and funders to use the tool",
+              "text": "Distinct, compelling reasons for EA organizations, non-EA organizations, and funders to engage with the tool. Value propositions address specific needs: strategic clarity for organizations, transparency for funders, and impact improvement for all.",
+              "connectionIds": [
+                "organization-discovery",
+                "funder-awareness"
+              ],
+              "connections": [
+                {
+                  "targetId": "organization-discovery",
+                  "confidence": 55,
+                  "evidence": "Clear messaging can help, but organizations often remain skeptical until they see concrete proof of value. Many tools promise similar benefits.",
+                  "assumptions": "Organizations believe claimed benefits rather than assuming marketing hype. Tool actually delivers on promised value propositions. Value propositions address genuine pain points rather than imagined needs."
+                },
+                {
+                  "targetId": "funder-awareness",
+                  "confidence": 45,
+                  "evidence": "Funders say they value transparency, but changing funder behavior is notoriously difficult. Many funders have established processes and relationships they prefer to maintain.",
+                  "assumptions": "Funders act on stated preferences for transparency rather than continuing to fund based on personal relationships and familiarity. Tool-generated transparency provides genuinely useful information for funding decisions."
+                }
+              ],
+              "yPosition": 361,
+              "width": 224,
+              "color": "#a8ccec"
+            },
+            {
+              "id": "addresses-needs",
+              "title": "Tool solves actual problems organizations face with strategic planning",
+              "text": "The tool solves actual problems organizations face in strategic planning and theory of change development, rather than creating a solution in search of a problem. Features directly address identified user needs and workflow challenges.",
+              "connectionIds": [
+                "high-quality-output"
+              ],
+              "connections": [
+                {
+                  "targetId": "high-quality-output",
+                  "confidence": 70,
+                  "evidence": "Tools that address genuine needs tend to produce better results, but implementation often differs from user expectations. Many tools address stated needs but not actual workflow realities.",
+                  "assumptions": "Identified needs represent actual problems worth solving rather than nice-to-have features. Organizations change their processes to accommodate tool design rather than expecting tool to match existing workflows."
+                }
+              ],
+              "yPosition": 10,
+              "width": 224,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "functional-mvp",
+              "title": "Working minimum viable product that produces professional theories of change",
+              "text": "A minimum viable product that successfully guides users through theory of change creation with core features working reliably. The tool produces professional-quality outputs and provides genuine strategic planning value to users.",
+              "connectionIds": [
+                "organization-discovery",
+                "high-quality-output"
+              ],
+              "connections": [
+                {
+                  "targetId": "organization-discovery",
+                  "confidence": 60,
+                  "evidence": "A working product enables discovery, but first impressions of MVPs are often disappointing compared to user expectations. Many MVPs feel too basic for serious strategic work.",
+                  "assumptions": "MVP quality exceeds low expectations users have for early-stage tools. Organizations give tool fair trial despite initial limitations. Word-of-mouth is positive rather than warning others about bugs."
+                },
+                {
+                  "targetId": "high-quality-output",
+                  "confidence": 65,
+                  "evidence": "MVP may enable ToC creation, but quality depends heavily on user engagement and understanding. Many users rush through processes or provide superficial inputs.",
+                  "assumptions": "Users invest genuine thought in strategic planning rather than treating tool as compliance exercise. Technical implementation captures nuances of strategic thinking rather than just surface-level structure."
+                }
+              ],
+              "yPosition": 194,
+              "width": 224,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "case-studies",
+              "title": "Real examples of organizations successfully using the tool",
+              "text": "Real-world examples of organizations that have successfully used the tool to create and implement theories of change. Demonstrates practical application and benefits, particularly valuable for showing funding community the quality of outputs.",
+              "connectionIds": [
+                "funder-awareness"
+              ],
+              "connections": [
+                {
+                  "targetId": "funder-awareness",
+                  "confidence": 55,
+                  "evidence": "Case studies can be persuasive, but funders are often skeptical of cherry-picked success stories. Many case studies overstate benefits or ignore implementation challenges.",
+                  "assumptions": "Case studies represent genuine success rather than best-case scenarios. Funders trust case studies from unknown organizations. Success stories address funders' actual decision criteria rather than assumed priorities."
+                },
+                {
+                  "targetId": "organization-discovery",
+                  "confidence": 75,
+                  "evidence": "Success stories and examples help new organizations understand the tool's value and build confidence in trying it. Real examples reduce uncertainty about outcomes.",
+                  "assumptions": "Case studies reach target audiences effectively. Success stories resonate with potential users. Examples demonstrate clear benefits that motivate trial."
+                }
+              ],
+              "yPosition": 550,
+              "width": 224,
+              "color": "#7fb3d3"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "organization-discovery",
+              "title": "Target organizations learn about and decide to try the tool",
+              "text": "Target organizations learn about the tool's existence and decide to try it for their strategic planning needs. This includes both EA organizations seeking to improve their theories of change and non-EA organizations attracted by the funding/transparency benefits.",
+              "connectionIds": [
+                "regular-adoption"
+              ],
+              "connections": [
+                {
+                  "targetId": "regular-adoption",
+                  "confidence": 45,
+                  "evidence": "Most organizations try new tools but abandon them quickly when they require significant effort or change existing workflows. Tool adoption typically starts enthusiastic but fades.",
+                  "assumptions": "Organizations maintain interest beyond initial novelty period. Staff have time and motivation to learn new tools properly. Early users share positive experiences rather than staying quiet about mixed results."
+                }
+              ],
+              "yPosition": 361,
+              "width": 192,
+              "color": "#a8ccec"
+            },
+            {
+              "id": "high-quality-output",
+              "title": "Tool creates comprehensive, well-structured theories of change",
+              "text": "The theories of change created using the tool are comprehensive, logically structured, evidence-based, and professional in presentation. Output quality is high enough that organizations are proud to display them publicly and funders find them credible.",
+              "connectionIds": [
+                "regular-adoption",
+                "published-tocs"
+              ],
+              "connections": [
+                {
+                  "targetId": "regular-adoption",
+                  "confidence": 60,
+                  "evidence": "High-quality outputs can drive adoption, but many organizations can't distinguish between good and poor strategic planning. Quality is often judged by appearance rather than substance.",
+                  "assumptions": "Organizations value substance over form in strategic documents. Users invest enough effort to produce genuinely high-quality outputs rather than satisficing. Quality remains consistent as user base grows."
+                },
+                {
+                  "targetId": "published-tocs",
+                  "confidence": 55,
+                  "evidence": "Organizations may be more willing to publish professional-looking documents, but many remain cautious about transparency regardless of quality due to competitive concerns.",
+                  "assumptions": "Organizations prioritize transparency over competitive secrecy. Publication doesn't create vulnerabilities that organizations fear. Quality is sufficient to overcome institutional risk aversion."
+                }
+              ],
+              "yPosition": 10,
+              "width": 192,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "funder-awareness",
+              "title": "Funders learn about the tool and understand its value for transparency",
+              "text": "Funders learn about the tool's existence and understand how it creates value for them through improved organizational transparency and strategic clarity. Awareness leads to preference for organizations using the tool.",
+              "connectionIds": [
+                "funder-recognition"
+              ],
+              "connections": [
+                {
+                  "targetId": "funder-recognition",
+                  "confidence": 40,
+                  "evidence": "Funder behavior change is extremely difficult even when they intellectually support transparency. Established funding patterns and personal relationships typically override new evaluation criteria.",
+                  "assumptions": "Funders change decision-making processes rather than maintaining status quo. Tool-generated transparency provides actionable information rather than just additional documentation. Funder stated preferences align with actual funding behavior."
+                }
+              ],
+              "yPosition": 550,
+              "width": 192,
+              "color": "#7fb3d3"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "regular-adoption",
+              "title": "Organizations integrate the tool into their ongoing planning processes",
+              "text": "Organizations integrate the tool into their ongoing strategic planning processes, using it not just once but as a regular part of organizational development, strategy refinement, and communication with stakeholders.",
+              "connectionIds": [
+                "strategic-clarity"
+              ],
+              "connections": [
+                {
+                  "targetId": "strategic-clarity",
+                  "confidence": 50,
+                  "evidence": "Strategic planning tools can improve clarity when used thoughtfully, but many organizations use them as compliance exercises or abandon them when they require difficult decisions.",
+                  "assumptions": "Organizations engage seriously with strategic planning rather than going through motions. Staff follow through on insights rather than filing them away. Leadership supports strategic changes that emerge from planning process."
+                }
+              ],
+              "yPosition": 10,
+              "width": 208,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "published-tocs",
+              "title": "Organizations display their theories of change publicly on their websites",
+              "text": "Organizations make their theories of change publicly available on their websites (e.g., somecharity.org/theoryofchange), creating transparency about their impact pathways and strategic approaches for funders and stakeholders to review.",
+              "connectionIds": [
+                "strategic-clarity"
+              ],
+              "connections": [
+                {
+                  "targetId": "strategic-clarity",
+                  "confidence": 50,
+                  "evidence": "Public publication may drive some strategic thinking, but many organizations create sanitized versions for external consumption that differ from internal decision-making.",
+                  "assumptions": "Organizations publish honest strategic thinking rather than marketing-friendly versions. Public accountability creates genuine pressure for strategic rigor rather than just better presentation. Published theories reflect actual organizational priorities."
+                }
+              ],
+              "yPosition": 268,
+              "width": 208,
+              "color": "#a8ccec"
+            },
+            {
+              "id": "funder-recognition",
+              "title": "Funding community prefers organizations with clear impact pathways",
+              "text": "The funding community develops a preference for organizations that can clearly articulate their theories of change, leading to better funding outcomes for organizations that use the tool effectively.",
+              "connectionIds": [
+                "strategic-clarity"
+              ],
+              "connections": [
+                {
+                  "targetId": "strategic-clarity",
+                  "confidence": 45,
+                  "evidence": "Funding incentives can drive some organizational changes, but many organizations game the system by improving presentation without changing substance. Strategic clarity is hard to evaluate from outside.",
+                  "assumptions": "Organizations invest in genuine strategic improvement rather than just better documentation. Funders can distinguish between real and superficial strategic clarity. Funding advantages materialize for organizations that invest in strategic improvement."
+                }
+              ],
+              "yPosition": 550,
+              "width": 208,
+              "color": "#7fb3d3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "strategic-clarity",
+              "title": "Organizations understand their impact pathways and secure suitable funding",
+              "text": "Charitable organizations, particularly those outside traditional EA circles, have well-articulated theories of change that enable them to make strategic decisions and successfully access funding aligned with their impact potential.",
+              "connectionIds": [
+                "effective-resource-allocation"
+              ],
+              "connections": [
+                {
+                  "targetId": "effective-resource-allocation",
+                  "confidence": 65,
+                  "evidence": "Strategic clarity can improve decision-making, but organizational inertia, competing priorities, and implementation challenges often prevent theoretical clarity from translating to practice.",
+                  "assumptions": "Organizations actually change behavior based on strategic insights rather than continuing existing patterns. Funding flows to genuinely strategic organizations rather than those with best presentation. Strategic improvements overcome implementation difficulties and staff resistance."
+                }
+              ],
+              "yPosition": 256.75,
+              "width": 180,
+              "color": "#2874a6"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Mission",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "effective-resource-allocation",
+              "title": "Charitable resources flow to organizations with clearest impact potential",
+              "text": "Contributing to more effective allocation of charitable resources globally, particularly bringing high-impact organizations outside EA into the sphere of effective giving and strategic philanthropy, ultimately increasing global welfare and impact.",
+              "connectionIds": [],
+              "connections": [],
+              "yPosition": 256.75,
+              "width": 180,
+              "color": "#2874a6"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "textSize": 1,
+  "curvature": 1,
+  "_metadata": {
+    "exportedAt": "2025-08-31T19:51:36.428Z",
+    "legendPosition": {
+      "x": 20,
+      "y": 70
+    }
+  }
+}
