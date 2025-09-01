@@ -710,8 +710,9 @@ export function ToC({
             {/* Section title positioned to center over actual columns */}
             <div className="flex flex-col">
               <div 
-                className="bg-gray-700 rounded py-3 mb-2 px-3"
+                className="rounded py-3 mb-2 px-3"
                 style={{ 
+                  backgroundColor: data.color || '#374151', // Default to gray-700
                   minWidth: `${sectionWidths[sectionIndex] + (editMode && columnDragMode ? 32 : 0)}px` // Account for drop zones
                 }}
               >
