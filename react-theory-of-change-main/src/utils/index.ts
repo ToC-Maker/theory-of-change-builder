@@ -41,24 +41,38 @@ export function getConfidenceStrokeStyle(confidence: number): {
   // Use black color for all connections
   const stroke = '#000000' // black
   
-  if (clampedConfidence >= 67) {
-    // High confidence: solid line
+  if (clampedConfidence >= 80) {
+    // Very high confidence: solid line
     return {
       strokeDasharray: 'none',
       stroke,
       opacity: 1.0
     }
-  } else if (clampedConfidence >= 34) {
-    // Medium confidence: dashed line
+  } else if (clampedConfidence >= 60) {
+    // High confidence: short dashes with small gaps
     return {
-      strokeDasharray: '8 4', // 8px dash, 4px gap (adjusted for thinner lines)
+      strokeDasharray: '12 3', // 12px dash, 3px gap
+      stroke,
+      opacity: 0.95
+    }
+  } else if (clampedConfidence >= 40) {
+    // Medium confidence: medium dashes with medium gaps
+    return {
+      strokeDasharray: '8 6', // 8px dash, 6px gap
       stroke,
       opacity: 0.9
     }
-  } else {
-    // Low confidence: dotted line
+  } else if (clampedConfidence >= 20) {
+    // Low confidence: short dashes with medium gaps
     return {
-      strokeDasharray: '2 4', // 2px dot, 4px gap (adjusted for thinner lines)
+      strokeDasharray: '6 8', // 6px dash, 8px gap
+      stroke,
+      opacity: 0.85
+    }
+  } else {
+    // Very low confidence: dots with small gaps
+    return {
+      strokeDasharray: '2 6', // 2px dot, 6px gap
       stroke,
       opacity: 0.8
     }

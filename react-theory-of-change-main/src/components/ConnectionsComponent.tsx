@@ -371,7 +371,7 @@ export function ConnectionsComponent({
               style={{
                 stroke: "transparent",
                 strokeWidth: "15px", // Much thicker for easier clicking
-                pointerEvents: "stroke",
+                pointerEvents: hasHighlightedNodes && !isHighlighted ? "none" : "stroke",
               }}
               onClick={(e) => {
                 e.stopPropagation()
