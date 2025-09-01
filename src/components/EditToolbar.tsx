@@ -15,8 +15,6 @@ interface EditToolbarProps {
   nodeColor: string
   setNodeColor: React.Dispatch<React.SetStateAction<string>>
   straightenEdges: () => void
-  connectSelectedNodes: () => void
-  areNodesConnected: (sourceId: string, targetId: string) => boolean
   setData: React.Dispatch<React.SetStateAction<ToCData>>
 }
 
@@ -34,8 +32,6 @@ export function EditToolbar({
   nodeColor,
   setNodeColor,
   straightenEdges,
-  connectSelectedNodes,
-  areNodesConnected,
   setData,
 }: EditToolbarProps) {
   if (!editMode) return null
@@ -66,29 +62,6 @@ export function EditToolbar({
                 <span>Straighten</span>
               </button>
 
-              {/* Connect Nodes Tool */}
-              <button
-                onClick={connectSelectedNodes}
-                disabled={highlightedNodes.size !== 2}
-                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
-                  highlightedNodes.size === 2
-                    ? 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
-                    : 'text-gray-400 cursor-not-allowed'
-                }`}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                <span>
-                  {highlightedNodes.size === 0 && 'Connect (Select 2)'}
-                  {highlightedNodes.size === 1 && 'Connect (Select 1 more)'}
-                  {highlightedNodes.size === 2 && (() => {
-                    const [sourceId, targetId] = Array.from(highlightedNodes)
-                    return areNodesConnected(sourceId, targetId) ? 'Disconnect' : 'Connect'
-                  })()}
-                  {highlightedNodes.size > 2 && 'Connect (Too many selected)'}
-                </span>
-              </button>
 
               {/* Column Drag Mode Toggle */}
               <button

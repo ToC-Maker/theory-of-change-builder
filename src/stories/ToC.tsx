@@ -853,10 +853,114 @@ export function ToC({
         nodeColor={nodeColor}
         setNodeColor={setNodeColor}
         straightenEdges={straightenEdges}
-        connectSelectedNodes={connectSelectedNodes}
-        areNodesConnected={areNodesConnected}
         setData={setDataAndNotify}
       />
+
+      {/* Connect Nodes Popup - shows when exactly 2 nodes are selected in edit mode */}
+      {editMode && highlightedNodes.size === 2 && (() => {
+        const nodeIds = Array.from(highlightedNodes)
+        const [sourceId, targetId] = nodeIds
+        
+        // This component will continuously update position during interactions
+        const ConnectButton = () => {
+          const [position, setPosition] = useState({ x: 0, y: 0 })
+          
+          // Update position continuously, like the ConnectionsComponent does
+          useEffect(() => {
+            let animationFrameId: number
+            
+            const updatePosition = () => {
+              // Find the positions of the selected nodes
+              let sourceNodeRef = null
+              let targetNodeRef = null
+              
+              for (const nodeId of nodeIds) {
+                if (nodeRefs[nodeId]) {
+                  if (!sourceNodeRef) {
+                    sourceNodeRef = nodeRefs[nodeId]
+                  } else {
+                    targetNodeRef = nodeRefs[nodeId]
+                    break
+                  }
+                }
+              }
+              
+              if (sourceNodeRef && targetNodeRef) {
+                const sourceRect = sourceNodeRef.getBoundingClientRect()
+                const targetRect = targetNodeRef.getBoundingClientRect()
+                
+                // Find the main graph container for relative positioning
+                const graphContainer = document.querySelector('.flex.relative.gap-8.min-w-fit.overflow-visible')
+                const containerRect = graphContainer?.getBoundingClientRect()
+                
+                if (containerRect) {
+                  // Calculate connection points like the actual edges do (edge to edge)
+                  const sourceConnectionX = sourceRect.right // Right edge of source node
+                  const sourceConnectionY = sourceRect.top + sourceRect.height / 2 // Vertical center of source
+                  const targetConnectionX = targetRect.left // Left edge of target node  
+                  const targetConnectionY = targetRect.top + targetRect.height / 2 // Vertical center of target
+                  
+                  // Position the popup at the midpoint of the actual connection line
+                  const midX = (sourceConnectionX + targetConnectionX) / 2 - containerRect.left
+                  const midY = (sourceConnectionY + targetConnectionY) / 2 - containerRect.top
+                  
+                  setPosition({ x: midX, y: midY })
+                }
+              }
+              
+              animationFrameId = requestAnimationFrame(updatePosition)
+            }
+            
+            // Start the animation loop
+            updatePosition()
+            
+            return () => {
+              if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId)
+              }
+            }
+          }, []) // Empty dependency array so it only runs once
+          
+          const isConnected = areNodesConnected(sourceId, targetId)
+          
+          return (
+            <div
+              className="absolute z-50 p-3 pointer-events-none"
+              style={{
+                left: `${position.x}px`,
+                top: `${position.y}px`,
+                transform: 'translate(-50%, -50%)'
+              }}
+            >
+              <div className="pointer-events-auto">
+                {isConnected ? (
+                  <button
+                    onClick={connectSelectedNodes}
+                    className="flex items-center justify-center w-5 h-5 bg-white text-gray-600 hover:text-red-600 rounded-full border border-gray-300 hover:border-red-300 transition-colors shadow-sm"
+                    title="Disconnect nodes"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    onClick={connectSelectedNodes}
+                    className="flex items-center justify-center w-5 h-5 bg-white text-gray-600 hover:text-green-600 rounded-full border border-gray-300 hover:border-green-300 transition-colors shadow-sm"
+                    title="Connect nodes"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12m6-6H6" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        }
+        
+        return <ConnectButton />
+      })()}
 
       {/* Hide the draggable legend since we now have it in the info panel */}
       {false && (
