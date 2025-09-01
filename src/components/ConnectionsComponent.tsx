@@ -100,9 +100,10 @@ export function ConnectionsComponent({
       })
     })
     
-    // Add header height and padding
-    const headerHeight = 80 // Approximate header height
-    const padding = 100 // Extra padding for safety
+    // Add header height, title height, and padding
+    const headerHeight = 80 // Approximate section header height
+    const titleHeight = data.title ? 80 : 0 // Graph title height when present (includes margin)
+    const padding = 55 // Extra padding for safety
     const dynamicHeight = Math.max(maxHeight + headerHeight + padding, 800) // Minimum 800px
     
     const newSize = { width: totalWidth, height: dynamicHeight }

@@ -190,9 +190,6 @@ function ToCViewer() {
   return (
     <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-start py-4 px-4 overflow-auto fixed inset-0">
       <div className="flex items-center gap-4 mb-4 flex-shrink-0">
-        <h1 className="text-3xl font-bold text-center text-gray-800">
-          Theory of Change: {title}
-        </h1>
         <div className="flex gap-2">
           <button
             onClick={handleUndo}
