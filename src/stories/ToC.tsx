@@ -670,12 +670,21 @@ export function ToC({
   }, [hoveredNode, data])
 
   return (
+    <div className="flex flex-col">
+      {/* Graph Title */}
+      {data.title && (
+        <div className="mb-6">
+          <h1 className="text-4xl font-bold text-center text-gray-800 tracking-wider">
+            {data.title}
+          </h1>
+        </div>
+      )}
       
       <div 
         className="flex relative gap-8 min-w-fit overflow-visible" 
         style={{ 
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
-          height: svgSize.height > 0 ? `${svgSize.height}px` : '100vh'
+          height: svgSize.height > 0 ? `${svgSize.height-55}px` : '100vh' // I don't understand why I need to subtract 55, but it works
         }}
         onClick={(e) => {
           // Clear selections when clicking empty space in both view and edit mode
@@ -992,7 +1001,7 @@ export function ToC({
         className="absolute z-50"
         style={{
           right: '20px',
-          bottom: editMode ? '80px' : '20px' // Move up when banner is visible
+          bottom: '20px'
         }}
       >
         <button
@@ -1015,7 +1024,7 @@ export function ToC({
             title="Edit Mode"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
             </svg>
           </button>
       </div>
@@ -1045,6 +1054,7 @@ export function ToC({
           svgSize={svgSize}
         />
       )}
+    </div>
     </div>
   )
 }
