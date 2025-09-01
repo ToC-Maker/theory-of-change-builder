@@ -18,6 +18,7 @@ function ToCViewer() {
   const { filename } = useParams<{ filename: string }>()
   const [data, setData] = useState<ToCData | null>(null)
   const [undoHistory, setUndoHistory] = useState<ToCData[]>([])
+  const [redoHistory, setRedoHistory] = useState<ToCData[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -39,6 +40,9 @@ function ToCViewer() {
       saveToHistory(data);
     }
     
+    // Clear redo history when new changes are made
+    setRedoHistory([]);
+    
     setData(newGraphData);
     console.log('setData called with new graph data');
   };
@@ -51,20 +55,39 @@ function ToCViewer() {
       saveToHistory(data);
     }
     
+    // Clear redo history when new changes are made
+    setRedoHistory([]);
+    
     setData(newData);
   };
 
   const handleUndo = useCallback(() => {
-    if (undoHistory.length > 0) {
+    if (undoHistory.length > 0 && data) {
       const previousState = undoHistory[undoHistory.length - 1];
-      const newHistory = undoHistory.slice(0, -1);
+      const newUndoHistory = undoHistory.slice(0, -1);
       
-      setUndoHistory(newHistory);
+      // Save current state to redo history
+      setRedoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
+      setUndoHistory(newUndoHistory);
       setData(previousState);
       
-      console.log('Undo performed, history length:', newHistory.length);
+      console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory]);
+  }, [undoHistory, data]);
+
+  const handleRedo = useCallback(() => {
+    if (redoHistory.length > 0 && data) {
+      const nextState = redoHistory[redoHistory.length - 1];
+      const newRedoHistory = redoHistory.slice(0, -1);
+      
+      // Save current state to undo history
+      setUndoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
+      setRedoHistory(newRedoHistory);
+      setData(nextState);
+      
+      console.log('Redo performed, redo history length:', newRedoHistory.length);
+    }
+  }, [redoHistory, data]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -72,6 +95,12 @@ function ToCViewer() {
       if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
         event.preventDefault();
         handleUndo();
+      } else if (
+        ((event.ctrlKey || event.metaKey) && event.key === 'z' && event.shiftKey) ||
+        ((event.ctrlKey || event.metaKey) && event.key === 'y')
+      ) {
+        event.preventDefault();
+        handleRedo();
       }
     };
 
@@ -79,7 +108,7 @@ function ToCViewer() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleUndo]); // Re-run when handleUndo changes
+  }, [handleUndo, handleRedo]); // Re-run when handlers change
 
   useEffect(() => {
     const loadData = async () => {
@@ -146,17 +175,30 @@ function ToCViewer() {
         <h1 className="text-3xl font-bold text-center text-gray-800">
           Theory of Change: {title}
         </h1>
-        <button
-          onClick={handleUndo}
-          disabled={undoHistory.length === 0}
-          className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          title="Undo last change (Ctrl+Z)"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-          </svg>
-          Undo ({undoHistory.length})
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleUndo}
+            disabled={undoHistory.length === 0}
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Undo last change (Ctrl+Z)"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            Undo ({undoHistory.length})
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={redoHistory.length === 0}
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Redo last undone change (Ctrl+Y or Ctrl+Shift+Z)"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+            </svg>
+            Redo ({redoHistory.length})
+          </button>
+        </div>
       </div>
       
       <div className="flex flex-1 gap-6 justify-center items-start">
