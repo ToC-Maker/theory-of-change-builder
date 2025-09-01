@@ -7,6 +7,7 @@ interface ConnectionsComponentProps {
   data: ToCData
   setData: React.Dispatch<React.SetStateAction<ToCData>>
   nodeRefs: { [key: string]: HTMLDivElement | null }
+  nodeHeights: { [key: string]: number }
   highlightedNodes: Set<string>
   connectedNodes: Set<string>
   hoveredConnections: Set<string>
@@ -21,6 +22,7 @@ export function ConnectionsComponent({
   data,
   setData,
   nodeRefs,
+  nodeHeights,
   highlightedNodes,
   connectedNodes,
   hoveredConnections,
@@ -86,12 +88,12 @@ export function ConnectionsComponent({
     data.sections.forEach(section => {
       section.columns.forEach(column => {
         column.nodes.forEach((node, nodeIndex) => {
-          // Get node position (either custom yPosition or calculated position)
-          const nodeTop = node.yPosition !== undefined ? node.yPosition : (nodeIndex * 180 + 30)
+          // Use cached height or default
+          const nodeHeight = nodeHeights[node.id] || 150
           
-          // Use fixed node height instead of DOM measurement to avoid zoom effects
-          const nodeHeight = 150 // Fixed height
-          
+          // Get node position - yPosition now represents center Y
+          const nodeCenterY = node.yPosition !== undefined ? node.yPosition : (nodeIndex * 180 + 30 + nodeHeight / 2)
+          const nodeTop = nodeCenterY - nodeHeight / 2
           const nodeBottom = nodeTop + nodeHeight
           maxHeight = Math.max(maxHeight, nodeBottom)
         })
@@ -106,7 +108,7 @@ export function ConnectionsComponent({
     const newSize = { width: totalWidth, height: dynamicHeight }
     setSvgSize(newSize)
     onSizeChange(newSize)
-  }, [sectionWidths, data.sections, editMode, columnDragMode])
+  }, [sectionWidths, data.sections, editMode, columnDragMode, nodeHeights])
 
   useEffect(() => {
     // Immediate size calculation
