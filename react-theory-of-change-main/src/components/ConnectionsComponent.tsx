@@ -375,6 +375,13 @@ export function ConnectionsComponent({
               }}
               onClick={(e) => {
                 e.stopPropagation()
+                
+                // Only allow clicking on highlighted edges when nodes are selected
+                // Or allow all edges when no nodes are selected
+                if (hasHighlightedNodes && !isHighlighted) {
+                  return // Don't show popup for non-highlighted edges when nodes are selected
+                }
+                
                 const midX = (startX + endX) / 2
                 const midY = (startY + endY) / 2
                 setEdgePopup({
