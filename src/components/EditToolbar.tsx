@@ -17,7 +17,6 @@ interface EditToolbarProps {
   straightenEdges: () => void
   connectSelectedNodes: () => void
   areNodesConnected: (sourceId: string, targetId: string) => boolean
-  copyGraphJSON: () => Promise<void>
   setData: React.Dispatch<React.SetStateAction<ToCData>>
 }
 
@@ -37,7 +36,6 @@ export function EditToolbar({
   straightenEdges,
   connectSelectedNodes,
   areNodesConnected,
-  copyGraphJSON,
   setData,
 }: EditToolbarProps) {
   if (!editMode) return null
@@ -107,16 +105,6 @@ export function EditToolbar({
                 <span>Column Drag: {columnDragMode ? 'On' : 'Off'}</span>
               </button>
 
-              {/* Copy JSON Button */}
-              <button
-                onClick={copyGraphJSON}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-green-50 hover:text-green-600 rounded-lg transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                <span>Copy JSON</span>
-              </button>
             </div>
           </div>
 

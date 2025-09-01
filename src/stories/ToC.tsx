@@ -735,10 +735,11 @@ export function ToC({
                 
                 {/* Column with drag and keyboard positioning */}
                 <div 
-                  className="relative min-h-screen"
+                  className="relative"
                   style={{ 
                     minWidth: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`, 
-                    width: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px` 
+                    width: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`,
+                    height: editMode ? (svgSize.height > 0 ? `${svgSize.height - 62}px` : '740px') : 'auto'
                   }}
                   onDragOver={editMode ? (e) => {
                     e.preventDefault()
@@ -854,7 +855,6 @@ export function ToC({
         straightenEdges={straightenEdges}
         connectSelectedNodes={connectSelectedNodes}
         areNodesConnected={areNodesConnected}
-        copyGraphJSON={copyGraphJSON}
         setData={setDataAndNotify}
       />
 
