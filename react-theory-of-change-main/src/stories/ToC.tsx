@@ -413,7 +413,7 @@ export function ToC({
 
     const [sourceId, targetId] = Array.from(highlightedNodes)
     
-    setData((prevData) => ({
+    setDataAndNotify((prevData) => ({
       ...prevData,
       sections: prevData.sections.map((section) => ({
         ...section,
@@ -463,7 +463,7 @@ export function ToC({
       return
     }
     
-    setData((prevData) => ({
+    setDataAndNotify((prevData) => ({
       ...prevData,
       sections: prevData.sections.map((section) => ({
         ...section,
