@@ -18,6 +18,7 @@ export interface Node {
 
 export interface ToCData {
   title?: string // Optional title for the theory of change
+  color?: string // Section header background color (default gray-700)
   sections: {
     title: string
     columns: {
