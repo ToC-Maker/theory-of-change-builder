@@ -110,6 +110,24 @@ function ToCViewer() {
     };
   }, [handleUndo, handleRedo]); // Re-run when handlers change
 
+  const copyGraphJSON = useCallback(async () => {
+    if (!data) return;
+    
+    try {
+      const graphData = {
+        ...data,
+        // Include additional UI state in metadata
+        _metadata: {
+          exportedAt: new Date().toISOString(),
+        }
+      }
+      await navigator.clipboard.writeText(JSON.stringify(graphData, null, 2))
+      // Could add a toast notification here if desired
+    } catch (err) {
+      console.error('Failed to copy JSON:', err)
+    }
+  }, [data])
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
@@ -235,7 +253,7 @@ function ToCViewer() {
               width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto'
             }}
           >
-            <JsonDropdown data={data} title="Current Graph JSON" />
+            <JsonDropdown data={data} title="Current Graph JSON" copyGraphJSON={copyGraphJSON} />
           </div>
         </div>
         
