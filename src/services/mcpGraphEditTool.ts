@@ -171,8 +171,7 @@ CRITICAL RULES:
 Remember: Output ONLY the JSON array result of your analysis.`;
 
   try {
-    const response = a
-    wait fetch('/api/mcp-graph-edit', {
+    const response = await fetch('/api/mcp-graph-edit', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
