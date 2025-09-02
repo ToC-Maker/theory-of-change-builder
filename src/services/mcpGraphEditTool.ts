@@ -95,6 +95,18 @@ EXTENSIVE PATTERN RECOGNITION EXAMPLES:
 "transfer [X] to outcomes" → same as above
 "[X] belongs in impacts" → same as above
 
+=== IDENTIFYING NODE CHAINS ===
+"what nodes belong to the bottom chain" → identify the sequential path of nodes at the bottom y-positions across columns
+"bottom chain of nodes" → trace nodes from leftmost column's bottom node through each subsequent column's bottom connection
+"top chain" → trace nodes from leftmost column's top node through each subsequent column's top connection
+"middle chain" → trace nodes following the middle pathway through columns
+
+Chain identification process:
+1. Start with the bottom-most node (highest yPosition) in the first column
+2. Follow its connections to find which node it connects to in the next column
+3. Continue following connections through each subsequent column
+4. The result is the complete "bottom chain" path showing the logical flow
+
 === COLUMN OPERATIONS ===
 "add a new column" → insert new column structure
 "create another column in [section]" → insert column in specific section
@@ -124,6 +136,8 @@ CRITICAL PATH STRUCTURE:
 Graph structure is: sections[X].columns[Y].nodes[Z].property
 - ALWAYS include "columns" in paths: sections.0.columns.0.nodes.0.connections
 - NEVER use: sections.0.nodes.0.connections (missing columns!)
+- Section structure: { title: string, columns: [...] }
+- NEVER use "sectionName" - sections use "title" field
 
 DETAILED ANALYSIS EXAMPLES:
 "Add training programs to activities" → 
