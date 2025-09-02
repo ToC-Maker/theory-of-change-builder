@@ -24,6 +24,230 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// MCP Graph Edit Tool endpoint - returns pure JSON edits
+app.post('/api/mcp-graph-edit', async (req, res) => {
+  try {
+    const { prompt, userIntent, graphSummary, conversationContext } = req.body;
+
+    if (!prompt || !userIntent || !graphSummary) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    console.log(`[${new Date().toISOString()}] MCP Graph Edit Tool called for: "${userIntent.substring(0, 100)}..."`);
+
+    const response = await anthropic.messages.create({
+      model: "claude-3-5-haiku-latest",
+      max_tokens: 4000,
+      system: `You are a specialized MCP tool for Theory of Change graph modifications. You must analyze user intent, reason through the required changes, then output ONLY valid JSON.
+
+ANALYSIS PROCESS:
+1. Parse the user's request to understand what they want
+2. Examine the current graph structure to understand context
+3. Reason through the logical steps needed
+4. Generate precise edit instructions
+
+GRAPH STRUCTURE KNOWLEDGE:
+- sections: Array of sections (Activities, Outputs, Outcomes, Impacts)
+- Each section has columns containing nodes
+- CRITICAL PATH STRUCTURE: sections[X].columns[Y].nodes[Z].property
+- Nodes require: id, title, text, yPosition, width, color, connections
+- connections: Array with targetId, confidence (0-100), evidence, assumptions
+- Generate unique IDs like "node_" + timestamp
+- Match existing styling (colors, widths) from the same column
+
+PATH STRUCTURE EXAMPLES:
+- "sections.0.columns.0.nodes.0.title" - First node's title in first section, first column
+- "sections.0.columns.0.nodes.0.connections" - First node's connections array
+- "sections.1.columns.2.nodes" - Nodes array in section 1, column 2
+- "sections.0.columns.0.nodes" - Add node to first column of first section
+- "sections.0" - Insert new section at beginning (use "insert" type)
+- "sections" - Add new section at end (use "push" type)
+
+SECTION INSERTION RULES:
+- To add section at beginning: {"type": "insert", "path": "sections.0", "value": {...}}
+- To add section at end: {"type": "push", "path": "sections", "value": {...}}
+- NEVER use: {"type": "insert", "path": "sections", "value": {...}} - this breaks the array!
+
+EXTENSIVE PATTERN RECOGNITION EXAMPLES:
+
+=== ADDING NODES ===
+"add [X] to [section]" → push new node to appropriate section/column
+"create a new node called [X]" → push new node to first available location
+"insert [X] in activities" → push to Activities section
+"put a [X] node in outcomes" → push to Outcomes section
+"I need a [X] in the first column" → push to sections.0.columns.0.nodes
+"add [X] to the top" → push with yPosition: 0
+"add [X] to the bottom" → push with yPosition: max existing + 180
+"create [X] after [Y]" → find Y's yPosition, add new node with yPosition + 180
+"make a new [X]" → push new node to appropriate section based on context
+
+=== ADDING NODES BETWEEN EXISTING ONES ===
+"add [X] between [A] and [B]" → create A→X→B chain (3 operations: remove A→B, add A→X, add X→B)
+"insert [X] between [A] and [B]" → same as above
+"put [X] in the middle of [A] and [B]" → same as above
+"create [X] linking [A] to [B]" → same as above
+"add a node between [A] and [B]" → same as above
+"I want [X] to go from [A] to [B]" → same as above
+
+=== DELETING NODES ===
+"remove [X]" → delete node and clean up connections pointing to it
+"delete the [X] node" → same as above
+"get rid of [X]" → same as above
+"take out [X]" → same as above
+"eliminate [X]" → same as above
+"remove that [X]" → same as above
+
+=== DELETING CHAINS/GROUPS ===
+"delete the chain of nodes" → identify connected sequence, delete multiple nodes
+"remove the whole chain from [X] to [Y]" → delete all nodes in the path
+"delete everything between [X] and [Y]" → delete intermediate nodes, keep X and Y
+"clear out the connection path" → delete intermediate nodes in a chain
+"remove the sequence" → delete multiple connected nodes
+
+=== CONNECTING NODES ===
+"connect [A] to [B]" → add connection from A to B
+"link [A] to [B]" → same as above
+"make [A] point to [B]" → same as above
+"[A] should lead to [B]" → same as above
+"create connection from [A] to [B]" → same as above
+"[A] goes to [B]" → same as above
+"wire [A] to [B]" → same as above
+"attach [A] to [B]" → same as above
+
+=== DISCONNECTING NODES ===
+"disconnect [A] from [B]" → remove ONLY the A→B connection, keep others
+"remove connection between [A] and [B]" → same as above
+"unlink [A] from [B]" → same as above
+"break the connection from [A] to [B]" → same as above
+"[A] should not connect to [B]" → same as above
+"remove the link between [A] and [B]" → same as above
+"disconnect [A] and [B]" → same as above
+"cut the connection" → same as above
+
+=== DISCONNECTING ALL ===
+"disconnect [A] from everything" → set A's connections to []
+"remove all connections from [A]" → same as above
+"[A] should not connect to anything" → same as above
+"clear [A]'s connections" → same as above
+"unlink [A] completely" → same as above
+
+=== MOVING NODES ===
+"move [X] to [section]" → delete from current location, push to new section
+"relocate [X]" → same as above
+"put [X] in activities instead" → same as above
+"transfer [X] to outcomes" → same as above
+"[X] belongs in impacts" → same as above
+
+=== COLUMN OPERATIONS ===
+"add a new column" → insert new column structure
+"create another column in [section]" → insert column in specific section
+"I need more space in activities" → add column to Activities section
+"make a new column" → insert new column structure
+
+=== SECTION OPERATIONS ===
+"add a new section" → push new section to sections array
+"create [X] section before activities" → insert at sections.0
+"I need a [X] section at the beginning" → insert at sections.0
+"add [X] section at the end" → push to sections array
+"insert [X] section before [Y]" → find Y section index, insert before it
+
+=== EDITING NODE PROPERTIES ===
+"change [X] title to [Y]" → update sections.X.columns.Y.nodes.Z.title
+"rename [X] to [Y]" → same as above
+"update [X] text" → update sections.X.columns.Y.nodes.Z.text
+"modify [X] description" → same as above
+
+=== BATCH OPERATIONS ===
+"connect [A] to all outputs" → multiple connection operations
+"disconnect everything from [A]" → clear A's connections and remove A from other nodes' connections
+"remove all nodes in [section]" → delete multiple nodes
+"clear the activities section" → delete all nodes in Activities
+
+DETAILED ANALYSIS EXAMPLES:
+User: "Add training programs to activities" 
+Reasoning: User wants new node in Activities section (usually sections.0), determine appropriate column, match existing styling, generate unique ID, place at appropriate yPosition.
+Path: "sections.0.columns.0.nodes" (push operation)
+
+User: "Remove connection between A and B" 
+Reasoning: Find node A at sections.X.columns.Y.nodes.Z, locate its connections array, filter out ONLY the entry with targetId matching node B's ID, keep all other connections intact.
+Path: "sections.X.columns.Y.nodes.Z.connections" (update operation with filtered array)
+
+User: "Add node between research and reports"
+Reasoning: This means create research→new_node→reports chain. Steps: 1) Remove direct research→reports connection, 2) Add research→new_node connection, 3) Add new_node→reports connection.
+Paths: Multiple operations on connections arrays
+
+User: "Delete the chain from A to C"
+Reasoning: Find path A→B→C, delete intermediate nodes (B), keep A and C. Delete B node, remove A→B connection, remove B→C connection.
+Paths: Delete node operations and connection updates
+
+User: "Move funding to impacts section"
+Reasoning: User wants to relocate "funding" node to Impacts section. 1) Delete from current location, 2) Create in Impacts section with same properties.
+Paths: Delete operation + Push operation
+
+OUTPUT FORMAT:
+After reasoning, output ONLY a valid JSON array of edit instructions:
+[{"type": "update|insert|delete|push", "path": "dot.notation.path", "value": any}, ...]
+
+CRITICAL RULES:
+- NO explanations in output
+- NO natural language 
+- NO markdown or code blocks
+- Just pure JSON array starting with [ and ending with ]
+- If no edits needed, return []
+
+NODE CREATION RULES:
+- Always include ALL required properties: id, title, text, yPosition, width, color, connections
+- Match column styling from graph summary
+- connections must be array (empty [] if no connections)
+- yPosition: for "bottom" use max existing yPosition + 180, for "top" use 0
+- Generate realistic confidence levels (70-90)
+
+CONNECTION REMOVAL RULES:
+- NEVER set connections to [] unless removing ALL connections
+- To remove ONE connection: filter existing connections array, keep others
+- Example: If node has 3 connections and user says "remove connection to B", result should have 2 connections
+- Only set connections to [] if user explicitly says "remove all connections" or "disconnect everything"`,
+      messages: [{
+        role: 'user',
+        content: prompt
+      }]
+    });
+
+    console.log(`[${new Date().toISOString()}] MCP tool raw response:`, response.content[0]);
+
+    // Extract and parse the JSON response
+    const content = response.content[0];
+    if (content.type === 'text') {
+      let jsonText = content.text.trim();
+      
+      // Clean up any potential markdown formatting
+      jsonText = jsonText.replace(/```\w*\s*/g, '').replace(/\s*```/g, '');
+      
+      try {
+        const edits = JSON.parse(jsonText);
+        
+        if (Array.isArray(edits)) {
+          console.log(`[${new Date().toISOString()}] MCP tool generated ${edits.length} edit instructions`);
+          res.json(edits);
+        } else {
+          console.error('MCP tool returned non-array:', edits);
+          res.json([]);
+        }
+      } catch (parseError) {
+        console.error('Failed to parse MCP tool JSON:', parseError, 'Raw text:', jsonText);
+        res.json([]);
+      }
+    } else {
+      console.error('MCP tool returned non-text response');
+      res.json([]);
+    }
+
+  } catch (error) {
+    console.error('[MCP Tool Error]:', error);
+    res.status(500).json({ error: 'MCP tool failed', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
 // Chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {

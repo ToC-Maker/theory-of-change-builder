@@ -15,7 +15,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -97,6 +97,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       e.preventDefault();
       handleSendMessage();
     }
+    // Allow Shift+Enter for new lines - no preventDefault needed
   };
 
   const clearChat = () => {
@@ -209,15 +210,23 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           {/* Input Area */}
           <div className="p-3 border-t border-gray-200">
             <div className="flex gap-2">
-              <input
+              <textarea
                 ref={inputRef}
-                type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder="Ask about your Theory of Change..."
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-hidden"
                 disabled={isLoading}
+                rows={1}
+                style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
+                onInput={(e) => {
+                  // Auto-resize textarea based on content
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  const newHeight = Math.min(target.scrollHeight, 128); // Max 8rem (128px)
+                  target.style.height = newHeight + 'px';
+                }}
               />
               <button
                 onClick={handleSendMessage}
