@@ -6,6 +6,8 @@ import { ConnectionsComponent } from "../components/ConnectionsComponent"
 import { EditToolbar } from "../components/EditToolbar"
 import { Legend } from "../components/Legend"
 import { NodePopup } from "../components/NodePopup"
+import { SearchInterface } from "../components/SearchInterface"
+import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
 
 
 
@@ -73,6 +75,33 @@ export function ToC({
       setNodeHeights((prev) => ({ ...prev, [id]: height }))
     }
   }, [])
+
+  const updateNode = useCallback((nodeId: string, title: string, text: string) => {
+    setDataAndNotify(prevData => ({
+      ...prevData,
+      sections: prevData.sections.map(section => ({
+        ...section,
+        columns: section.columns.map(column => ({
+          ...column,
+          nodes: column.nodes.map(node => 
+            node.id === nodeId 
+              ? { ...node, title, text }
+              : node
+          )
+        }))
+      }))
+    }))
+    
+    // Trigger height recalculation for the updated node
+    // We need to wait for the DOM to update first
+    setTimeout(() => {
+      const nodeRef = nodeRefs[nodeId]
+      if (nodeRef) {
+        const height = nodeRef.getBoundingClientRect().height
+        setNodeHeights(prev => ({ ...prev, [nodeId]: height }))
+      }
+    }, 0)
+  }, [setDataAndNotify, nodeRefs])
 
   const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDraggingLegend(true)
@@ -309,27 +338,6 @@ export function ToC({
     })
   }, [editMode, setDataAndNotify, nodeHeights])
 
-  // Keyboard event handler for moving nodes
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Only handle arrow keys when in edit mode and nodes are highlighted
-      if (!editMode || highlightedNodes.size === 0) return
-      
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-        event.preventDefault()
-        const direction = event.key === 'ArrowUp' ? 'up' : 'down'
-        
-        // Move all highlighted nodes
-        highlightedNodes.forEach((nodeId) => {
-          moveNodeVertically(nodeId, direction)
-        })
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [editMode, highlightedNodes, moveNodeVertically])
-
   const handleDragStart = (node: Node, event: React.DragEvent) => {
     if (!editMode) {
       event.preventDefault()
@@ -370,8 +378,16 @@ export function ToC({
     return null
   }, [data.sections])
 
+
+
   // Calculate total width needed for each section (all columns + gaps)
   const sectionWidths = useMemo(() => {
+    // Defensive programming: ensure sections is an array
+    if (!data.sections || !Array.isArray(data.sections)) {
+      console.error('Data corruption detected: sections is not an array', data.sections);
+      return [400]; // Return default width
+    }
+    
     const widths = data.sections.map(section => {
       // Filter out empty columns
       const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0)
@@ -669,6 +685,21 @@ export function ToC({
     return connections
   }, [hoveredNode, data])
 
+  // Initialize keyboard shortcuts hook
+  const keyboardShortcuts = useKeyboardShortcuts({
+    data,
+    setDataAndNotify,
+    highlightedNodes,
+    setHighlightedNodes,
+    editMode,
+    nodeRefs,
+    setNodeWidth,
+    setNodeColor,
+    setNodePopup,
+    moveNodeVertically
+  })
+
+
   return (
     <div className="flex flex-col">
       {/* Graph Title */}
@@ -696,7 +727,7 @@ export function ToC({
           }
         }}
       >
-      {data.sections.map((section, sectionIndex) => (
+      {Array.isArray(data.sections) ? data.sections.map((section, sectionIndex) => (
         <div key={sectionIndex}
              onClick={(e) => {
                // Allow deselection by clicking section area in both view and edit mode
@@ -723,7 +754,12 @@ export function ToC({
                 </h2>
               </div>
               <div className={`flex ${editMode && columnDragMode ? 'gap-8' : 'gap-6'}`}>
-            {section.columns.filter(column => column.nodes.length > 0).map((column, colIndex) => (
+            {(() => {
+              // Always show at least one column per section, even if empty
+              const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0);
+              const columnsToShow = nonEmptyColumns.length > 0 ? nonEmptyColumns : [section.columns[0] || { nodes: [] }];
+              return columnsToShow;
+            })().map((column, colIndex) => (
               <React.Fragment key={colIndex}>
                 {/* Drop zone before first column - only show when column dragging is enabled */}
                 {editMode && columnDragMode && colIndex === 0 && (
@@ -860,7 +896,14 @@ export function ToC({
             </div>
           </div>
         </div>
-      ))}
+      )) : (
+        <div className="flex items-center justify-center h-64 bg-red-50 border-2 border-red-200 rounded-lg">
+          <div className="text-center">
+            <div className="text-red-600 text-lg font-semibold mb-2">Data Error Detected</div>
+            <div className="text-red-500 text-sm">The graph data structure has been corrupted. Please reload the page.</div>
+          </div>
+        </div>
+      )}
       
       <EditToolbar
         editMode={editMode}
@@ -887,62 +930,77 @@ export function ToC({
         // This component will continuously update position during interactions
         const ConnectButton = () => {
           const [position, setPosition] = useState({ x: 0, y: 0 })
+          const [smoothUpdates, setSmoothUpdates] = useState(false)
+          const animationFrameRef = useRef<number | null>(null)
+          const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
           
-          // Update position continuously, like the ConnectionsComponent does
-          useEffect(() => {
-            let animationFrameId: number
+          // Update position like ConnectionsComponent does
+          const updatePosition = useCallback(() => {
+            const sourceNodeRef = nodeRefs[sourceId]
+            const targetNodeRef = nodeRefs[targetId]
             
-            const updatePosition = () => {
-              // Find the positions of the selected nodes
-              let sourceNodeRef = null
-              let targetNodeRef = null
+            if (sourceNodeRef && targetNodeRef) {
+              const sourceRect = sourceNodeRef.getBoundingClientRect()
+              const targetRect = targetNodeRef.getBoundingClientRect()
+              const containerRect = sourceNodeRef.closest(".flex.relative")?.getBoundingClientRect()
               
-              for (const nodeId of nodeIds) {
-                if (nodeRefs[nodeId]) {
-                  if (!sourceNodeRef) {
-                    sourceNodeRef = nodeRefs[nodeId]
-                  } else {
-                    targetNodeRef = nodeRefs[nodeId]
-                    break
-                  }
-                }
-              }
-              
-              if (sourceNodeRef && targetNodeRef) {
-                const sourceRect = sourceNodeRef.getBoundingClientRect()
-                const targetRect = targetNodeRef.getBoundingClientRect()
+              if (containerRect) {
+                // Use exact same logic as ConnectionsComponent
+                const startX = sourceRect.right - containerRect.left
+                const startY = sourceRect.top + sourceRect.height / 2 - containerRect.top
+                const endX = targetRect.left - containerRect.left
+                const endY = targetRect.top + targetRect.height / 2 - containerRect.top
                 
-                // Find the main graph container for relative positioning
-                const graphContainer = document.querySelector('.flex.relative.gap-8.min-w-fit.overflow-visible')
-                const containerRect = graphContainer?.getBoundingClientRect()
+                // Position at midpoint like the edge popup does
+                const midX = (startX + endX) / 2
+                const midY = (startY + endY) / 2
                 
-                if (containerRect) {
-                  // Calculate connection points like the actual edges do (edge to edge)
-                  const sourceConnectionX = sourceRect.right // Right edge of source node
-                  const sourceConnectionY = sourceRect.top + sourceRect.height / 2 // Vertical center of source
-                  const targetConnectionX = targetRect.left // Left edge of target node  
-                  const targetConnectionY = targetRect.top + targetRect.height / 2 // Vertical center of target
-                  
-                  // Position the popup at the midpoint of the actual connection line
-                  const midX = (sourceConnectionX + targetConnectionX) / 2 - containerRect.left
-                  const midY = (sourceConnectionY + targetConnectionY) / 2 - containerRect.top
-                  
-                  setPosition({ x: midX, y: midY })
-                }
+                setPosition({ x: midX, y: midY })
               }
-              
-              animationFrameId = requestAnimationFrame(updatePosition)
             }
-            
-            // Start the animation loop
-            updatePosition()
+          }, [sourceId, targetId, nodeRefs])
+          
+          // Mimic ConnectionsComponent's smooth update logic
+          useEffect(() => {
+            const updateConnections = () => {
+              if (smoothUpdates) {
+                updatePosition()
+                animationFrameRef.current = requestAnimationFrame(updateConnections)
+              }
+            }
+
+            if (smoothUpdates) {
+              animationFrameRef.current = requestAnimationFrame(updateConnections)
+            } else if (animationFrameRef.current) {
+              cancelAnimationFrame(animationFrameRef.current)
+              animationFrameRef.current = null
+            }
+
+            return () => {
+              if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current)
+              }
+            }
+          }, [smoothUpdates, updatePosition])
+
+          // Enable smooth updates when this button is visible (always true since it only renders when 2 nodes selected)
+          useEffect(() => {
+            // Always enable smooth updates since this component only exists when we need it
+            setSmoothUpdates(true)
             
             return () => {
-              if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId)
+              // Clean up when component unmounts
+              if (smoothUpdateTimeoutRef.current) {
+                clearTimeout(smoothUpdateTimeoutRef.current)
+                smoothUpdateTimeoutRef.current = null
               }
             }
-          }, []) // Empty dependency array so it only runs once
+          }, []) // Empty dependency array - only run on mount/unmount
+          
+          // Initial position update
+          useEffect(() => {
+            updatePosition()
+          }, [updatePosition])
           
           const isConnected = areNodesConnected(sourceId, targetId)
           
@@ -969,7 +1027,7 @@ export function ToC({
                 ) : (
                   <button
                     onClick={connectSelectedNodes}
-                    className="flex items-center justify-center w-5 h-5 bg-white text-gray-600 hover:text-green-600 rounded-full border border-gray-300 hover:border-green-300 transition-colors shadow-sm"
+                    className="flex items-center justify-center w-5 h-5 bg-white text-gray-600 hover:text-gray-800 rounded-full border border-gray-300 hover:border-gray-400 transition-colors shadow-sm"
                     title="Connect nodes"
                   >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1053,8 +1111,23 @@ export function ToC({
           nodePopup={nodePopup}
           setNodePopup={setNodePopup}
           svgSize={svgSize}
+          editMode={editMode}
+          onUpdateNode={updateNode}
         />
       )}
+
+      {/* Search Interface */}
+      <SearchInterface
+        showSearch={keyboardShortcuts.showSearch}
+        setShowSearch={keyboardShortcuts.setShowSearch}
+        searchQuery={keyboardShortcuts.searchQuery}
+        setSearchQuery={keyboardShortcuts.setSearchQuery}
+        data={data}
+        nodeRefs={nodeRefs}
+        setHighlightedNodes={setHighlightedNodes}
+        setNodeWidth={setNodeWidth}
+        setNodeColor={setNodeColor}
+      />
     </div>
     </div>
   )
