@@ -696,7 +696,8 @@ export function ToC({
     setNodeWidth,
     setNodeColor,
     setNodePopup,
-    moveNodeVertically
+    moveNodeVertically,
+    nodeHeights
   })
 
 
