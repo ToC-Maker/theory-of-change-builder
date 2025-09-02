@@ -307,6 +307,44 @@ export function ConnectionsComponent({
     }))
   }
 
+  const updateConnection = (sourceId: string, targetId: string, evidence: string, assumptions: string) => {
+    setData((prevData: ToCData): ToCData => ({
+      ...prevData,
+      sections: prevData.sections.map((section) => ({
+        ...section,
+        columns: section.columns.map((column) => ({
+          ...column,
+          nodes: column.nodes.map((node) => {
+            if (node.id === sourceId) {
+              if (node.connections) {
+                return {
+                  ...node,
+                  connections: node.connections.map((conn) => 
+                    conn.targetId === targetId 
+                      ? { ...conn, evidence, assumptions }
+                      : conn
+                  )
+                }
+              } else {
+                // Convert from old format to new format and add evidence/assumptions
+                return {
+                  ...node,
+                  connections: node.connectionIds.map((connId) => ({
+                    targetId: connId,
+                    confidence: 50, // default medium confidence
+                    evidence: connId === targetId ? evidence : '',
+                    assumptions: connId === targetId ? assumptions : ''
+                  }))
+                }
+              }
+            }
+            return node
+          })
+        }))
+      }))
+    }))
+  }
+
   const strokeWidth = 3
   return (
     <>
@@ -414,6 +452,59 @@ export function ConnectionsComponent({
           </g>
         )
       })}
+      
+      {/* Ghost connection preview when exactly 2 nodes are selected */}
+      {editMode && highlightedNodes.size === 2 && (() => {
+        const nodeIds = Array.from(highlightedNodes);
+        const [sourceId, targetId] = nodeIds;
+        
+        // Check if they're already connected
+        const isAlreadyConnected = connections.some(conn => 
+          (conn.sourceId === sourceId && conn.targetId === targetId) ||
+          (conn.sourceId === targetId && conn.targetId === sourceId)
+        );
+        
+        if (isAlreadyConnected) return null; // Don't show ghost if already connected
+        
+        const sourceRef = nodeRefs[sourceId];
+        const targetRef = nodeRefs[targetId];
+        
+        if (!sourceRef || !targetRef) return null;
+        
+        const startRect = sourceRef.getBoundingClientRect();
+        const endRect = targetRef.getBoundingClientRect();
+        const containerRect = sourceRef.closest(".flex.relative")?.getBoundingClientRect();
+        
+        if (!containerRect) return null;
+        
+        const startX = startRect.right - containerRect.left;
+        const startY = startRect.top + startRect.height / 2 - containerRect.top;
+        const endX = endRect.left - containerRect.left;
+        const endY = endRect.top + endRect.height / 2 - containerRect.top;
+        
+        const baseOffset = Math.abs(endX - startX) / 2;
+        const controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
+        
+        // Get the style that a real connection would have (default confidence: 75)
+        const ghostStrokeStyle = getConfidenceStrokeStyle(75);
+        
+        return (
+          <g>
+            {/* Ghost connection path - looks like real connection but more transparent */}
+            <path
+              d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
+              className="fill-none"
+              style={{
+                stroke: ghostStrokeStyle.stroke,
+                strokeWidth: `${strokeWidth}px`, // Use same width as real connections
+                strokeDasharray: ghostStrokeStyle.strokeDasharray === 'none' ? undefined : ghostStrokeStyle.strokeDasharray,
+                opacity: 0.4, // Static transparency - no pulsing
+                pointerEvents: "none"
+              }}
+            />
+          </g>
+        );
+      })()}
     </svg>
     
     {/* Large center modal for edge information */}
@@ -425,6 +516,8 @@ export function ConnectionsComponent({
         findNodeTitle={findNodeTitle}
         findNodeColor={findNodeColor}
         svgSize={svgSize}
+        editMode={editMode}
+        onUpdateConnection={updateConnection}
       />
     )}
   </>

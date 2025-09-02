@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useState, useEffect } from "react"
 import { getContrastTextColor } from "../utils"
 
 interface EdgePopupProps {
@@ -18,6 +18,8 @@ interface EdgePopupProps {
   findNodeTitle: (nodeId: string) => string
   findNodeColor: (nodeId: string) => string
   svgSize: { width: number; height: number }
+  editMode?: boolean
+  onUpdateConnection?: (sourceId: string, targetId: string, evidence: string, assumptions: string) => void
 }
 
 export function EdgePopup({
@@ -27,7 +29,35 @@ export function EdgePopup({
   findNodeTitle,
   findNodeColor,
   svgSize,
+  editMode = false,
+  onUpdateConnection,
 }: EdgePopupProps) {
+  const [editEvidence, setEditEvidence] = useState(edgePopup.evidence || '')
+  const [editAssumptions, setEditAssumptions] = useState(edgePopup.assumptions || '')
+  const [isEditing, setIsEditing] = useState(editMode)
+
+  useEffect(() => {
+    setEditEvidence(edgePopup.evidence || '')
+    setEditAssumptions(edgePopup.assumptions || '')
+    setIsEditing(editMode)
+  }, [edgePopup, editMode])
+
+  const handleEvidenceChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newEvidence = e.target.value
+    setEditEvidence(newEvidence)
+    if (onUpdateConnection) {
+      onUpdateConnection(edgePopup.sourceId, edgePopup.targetId, newEvidence, editAssumptions)
+    }
+  }
+
+  const handleAssumptionsChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newAssumptions = e.target.value
+    setEditAssumptions(newAssumptions)
+    if (onUpdateConnection) {
+      onUpdateConnection(edgePopup.sourceId, edgePopup.targetId, editEvidence, newAssumptions)
+    }
+  }
+
   return (
     <div 
       className="absolute z-50 flex items-center justify-center transition-all duration-150 ease-out"
@@ -219,29 +249,56 @@ export function EdgePopup({
           </div>
           
           <div>
-            <h3 className="text-2xl font-semibold text-gray-800 mb-3">
-              Assumptions & Evidence
-            </h3>
-            {edgePopup.evidence || edgePopup.assumptions ? (
-              <div className="space-y-4">
-                {edgePopup.assumptions && (
-                  <div>
-                    <h4 className="font-medium text-gray-800 mb-2">Key Assumptions:</h4>
-                    <p className="text-gray-600 leading-relaxed">{edgePopup.assumptions}</p>
-                  </div>
-                )}
-                {edgePopup.evidence && (
-                  <div>
-                    <h4 className="font-medium text-gray-800 mb-2">Evidence:</h4>
-                    <p className="text-gray-600 leading-relaxed">{edgePopup.evidence}</p>
-                  </div>
+            <div className="flex items-center justify-center mb-3 relative">
+              <h3 className="text-2xl font-semibold text-gray-800">
+                Assumptions & Evidence
+              </h3>
+              {editMode && !isEditing && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="absolute right-0 text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
+                  title="Edit connection details"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <h4 className="font-medium text-gray-800 mb-2">Key Assumptions:</h4>
+                {editMode && isEditing ? (
+                  <textarea
+                    value={editAssumptions}
+                    onChange={handleAssumptionsChange}
+                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical"
+                    placeholder="What assumptions are being made for this connection to hold true?"
+                  />
+                ) : (
+                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap">
+                    {editAssumptions || "No assumptions documented yet."}
+                  </p>
                 )}
               </div>
-            ) : (
-              <p className="text-gray-500 italic">
-                No assumptions or evidence have been documented for this connection yet.
-              </p>
-            )}
+              
+              <div>
+                <h4 className="font-medium text-gray-800 mb-2">Evidence:</h4>
+                {editMode && isEditing ? (
+                  <textarea
+                    value={editEvidence}
+                    onChange={handleEvidenceChange}
+                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical"
+                    placeholder="What evidence supports this connection?"
+                  />
+                ) : (
+                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap">
+                    {editEvidence || "No evidence documented yet."}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>

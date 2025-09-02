@@ -42,6 +42,13 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
     if (Array.isArray(target) && /^\d+$/.test(lastKey)) {
       const index = parseInt(lastKey);
       target.splice(index, 0, value); // Insert at index without replacing
+    } else if (path.length === 1 && lastKey === 'sections') {
+      // Special case: inserting at root sections array
+      if (Array.isArray(obj.sections)) {
+        obj.sections.splice(0, 0, value); // Insert at beginning
+      } else {
+        console.error('Cannot insert into sections: not an array');
+      }
     } else {
       // For non-arrays or non-numeric keys, just set the value
       setAtPath(obj, path, value);
@@ -169,8 +176,11 @@ export function generateGraphSummary(graphData: any): string {
   return summary;
 }
 
-// Parse edit instructions from AI response
+// Parse edit instructions from AI response (DEPRECATED - now using MCP tool)
+// @deprecated Use MCP tool instead of delimiter parsing
 export function parseEditInstructions(text: string): EditInstruction[] | null {
+  console.warn('parseEditInstructions is deprecated. Using MCP tool for edit generation instead.');
+  
   const startDelimiter = '[EDIT_INSTRUCTIONS]';
   const endDelimiter = '[/EDIT_INSTRUCTIONS]';
   
