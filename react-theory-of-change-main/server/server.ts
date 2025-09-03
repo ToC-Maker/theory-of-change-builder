@@ -36,23 +36,26 @@ app.post('/api/mcp-graph-edit', async (req, res) => {
     console.log(`[${new Date().toISOString()}] MCP Graph Edit Tool called for: "${userIntent.substring(0, 100)}..."`);
 
     const response = await anthropic.messages.create({
-      model: "claude-3-5-haiku-latest",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 4000,
       system: `You are a specialized MCP tool for Theory of Change graph modifications. You must analyze user intent, reason through the required changes, then output ONLY valid JSON.
 
 ANALYSIS PROCESS:
 1. Parse the user's request to understand what they want
-2. Examine the current graph structure to understand context
-3. Reason through the logical steps needed
-4. Generate precise edit instructions
+2. Read the assistant's response to understand what was promised/explained to the user
+3. Examine the current graph structure to understand context
+4. Reason through the logical steps needed to fulfill what the assistant promised
+5. Generate precise edit instructions that match the assistant's explanation
 
 GRAPH STRUCTURE KNOWLEDGE:
-- sections: Array of sections (Activities, Outputs, Outcomes, Impacts)
+- sections: Array of sections (For example: Activities, Outputs, Outcomes, Impacts)
 - Each section has columns containing nodes
 - CRITICAL PATH STRUCTURE: sections[X].columns[Y].nodes[Z].property
 - Nodes require: id, title, text, yPosition, width, color, connections
 - connections: Array with targetId, confidence (0-100), evidence, assumptions
-- Generate unique IDs like "node_" + timestamp
+- Generate unique IDs using lowercase words with dashes (e.g., "capacity-building", "program-execution", "funding-secured")
+- NEVER use timestamp-based IDs like "node_1234567890"
+- NEVER change existing node IDs when moving or modifying nodes - always preserve original IDs
 - Match existing styling (colors, widths) from the same column
 
 PATH STRUCTURE EXAMPLES:
@@ -82,9 +85,9 @@ EXTENSIVE PATTERN RECOGNITION EXAMPLES:
 "make a new [X]" → push new node to appropriate section based on context
 
 === ADDING NODES BETWEEN EXISTING ONES ===
-"add [X] between [A] and [B]" → create A→X→B chain (3 operations: remove A→B, add A→X, add X→B)
+"add [X] between [A] and [B]" → CRITICAL: First check if there's an empty column between A and B's columns. If YES, add X to that existing column. If NO, create new column between them. Then: 1) Remove A→B connection FROM NODE A ONLY, 2) Add A→X connection TO NODE A, 3) Add X→B connection TO NEW NODE X. NEVER modify node B's connections!
 "insert [X] between [A] and [B]" → same as above
-"put [X] in the middle of [A] and [B]" → same as above
+"put [X] in the middle of [A] and [B]" → same as above  
 "create [X] linking [A] to [B]" → same as above
 "add a node between [A] and [B]" → same as above
 "I want [X] to go from [A] to [B]" → same as above
@@ -144,6 +147,12 @@ EXTENSIVE PATTERN RECOGNITION EXAMPLES:
 "I need more space in activities" → add column to Activities section
 "make a new column" → insert new column structure
 
+COLUMN CREATION FOR "BETWEEN" OPERATIONS:
+- If node A is in sections.X.columns.0 and node B is in sections.X.columns.1, then there's NO column between them
+- Must INSERT new column at sections.X.columns.1 (which pushes B to columns.2)
+- If node A is in sections.X.columns.0 and node B is in sections.X.columns.2, then columns.1 exists between them
+- Can ADD node to existing sections.X.columns.1
+
 === SECTION OPERATIONS ===
 "add a new section" → push new section to sections array
 "create [X] section before activities" → insert at sections.0
@@ -172,9 +181,10 @@ User: "Remove connection between A and B"
 Reasoning: Find node A at sections.X.columns.Y.nodes.Z, locate its connections array, filter out ONLY the entry with targetId matching node B's ID, keep all other connections intact.
 Path: "sections.X.columns.Y.nodes.Z.connections" (update operation with filtered array)
 
-User: "Add node between research and reports"
-Reasoning: This means create research→new_node→reports chain. Steps: 1) Remove direct research→reports connection, 2) Add research→new_node connection, 3) Add new_node→reports connection.
-Paths: Multiple operations on connections arrays
+User: "Add node between research and reports"  
+Reasoning: STEP 1: Find research node (e.g., sections.0.columns.1) and reports node (e.g., sections.0.columns.2). STEP 2: Since adjacent columns, INSERT new column at sections.0.columns.2 (pushes reports to columns.3). STEP 3: Add new node with descriptive ID like "data-analysis" to new column. STEP 4: Remove research→reports connection from research node only. STEP 5: Add research→data-analysis connection to research node. STEP 6: Add data-analysis→reports connection to new node.
+CORRECT Operations: 1) INSERT column, 2) PUSH new node to new column, 3) UPDATE research connections only
+WRONG: Don't copy/move existing nodes, don't change existing IDs, don't touch reports node connections
 
 User: "Delete the chain from A to C"
 Reasoning: Find path A→B→C, delete intermediate nodes (B), keep A and C. Delete B node, remove A→B connection, remove B→C connection.
@@ -194,6 +204,10 @@ CRITICAL RULES:
 - NO markdown or code blocks
 - Just pure JSON array starting with [ and ending with ]
 - If no edits needed, return []
+- NEVER modify connections of the target node when adding "between" - only modify source node and new node!
+- When adding X between A and B: modify A's connections, create X with connections, NEVER touch B's connections
+- NEVER change existing node IDs - always preserve original IDs when moving/modifying nodes
+- Use descriptive lowercase-with-dashes IDs for new nodes (e.g., "capacity-building", not "node_123456")
 
 NODE CREATION RULES:
 - Always include ALL required properties: id, title, text, yPosition, width, color, connections
@@ -248,10 +262,10 @@ CONNECTION REMOVAL RULES:
   }
 });
 
-// Chat endpoint
+// Chat endpoint with streaming support
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages, currentGraphData, systemPrompt } = req.body;
+    const { messages, currentGraphData, systemPrompt, stream } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Invalid messages format' });
@@ -261,22 +275,99 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'System prompt is required' });
     }
 
-    console.log(`[${new Date().toISOString()}] Received chat request with ${messages.length} messages`);
+    console.log(`[${new Date().toISOString()}] Received chat request with ${messages.length} messages, streaming: ${stream}`);
 
-    const response = await anthropic.messages.create({
-      model: "claude-3-5-haiku-latest",
-      max_tokens: 8000,
-      system: systemPrompt,
-      messages: messages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }))
-    });
+    if (stream) {
+      // Set up Server-Sent Events
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control'
+      });
 
-    console.log(`[${new Date().toISOString()}] Successfully received response from Anthropic API`);
-    console.log(`Usage: ${response.usage.input_tokens} input tokens, ${response.usage.output_tokens} output tokens`);
+      let fullContent = '';
+      let usage = null;
 
-    res.json(response);
+      try {
+        const stream = await anthropic.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 8000,
+          system: systemPrompt,
+          messages: messages.map(msg => ({
+            role: msg.role,
+            content: msg.content
+          })),
+          stream: true
+        });
+
+        for await (const messageStreamEvent of stream) {
+          if (messageStreamEvent.type === 'message_start') {
+            // Capture usage from the initial message
+            if (messageStreamEvent.message.usage) {
+              usage = messageStreamEvent.message.usage;
+              console.log(`[${new Date().toISOString()}] Usage captured from message_start:`, usage);
+            }
+          } else if (messageStreamEvent.type === 'content_block_delta') {
+            if (messageStreamEvent.delta.type === 'text_delta') {
+              const chunk = messageStreamEvent.delta.text;
+              fullContent += chunk;
+              
+              // Send the text chunk
+              res.write(`data: ${JSON.stringify({ 
+                type: 'content', 
+                chunk: chunk,
+                content: fullContent 
+              })}\n\n`);
+            }
+          } else if (messageStreamEvent.type === 'message_delta') {
+            // Update usage if provided in delta (for final token counts)
+            if (messageStreamEvent.delta.usage) {
+              usage = { ...usage, ...messageStreamEvent.delta.usage };
+              console.log(`[${new Date().toISOString()}] Usage updated from message_delta:`, usage);
+            }
+          } else if (messageStreamEvent.type === 'message_stop') {
+            console.log(`[${new Date().toISOString()}] message_stop event, final usage:`, usage);
+            
+            // Send final message with usage
+            res.write(`data: ${JSON.stringify({ 
+              type: 'done', 
+              content: [{ type: 'text', text: fullContent }],
+              usage: usage
+            })}\n\n`);
+            
+            console.log(`[${new Date().toISOString()}] Streaming complete`);
+            console.log(`Usage: ${usage?.input_tokens} input tokens, ${usage?.output_tokens} output tokens`);
+            break;
+          }
+        }
+      } catch (streamError) {
+        console.error('[Streaming Error]:', streamError);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'error', 
+          error: streamError instanceof Error ? streamError.message : 'Unknown streaming error'
+        })}\n\n`);
+      }
+
+      res.end();
+    } else {
+      // Original non-streaming response
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8000,
+        system: systemPrompt,
+        messages: messages.map(msg => ({
+          role: msg.role,
+          content: msg.content
+        }))
+      });
+
+      console.log(`[${new Date().toISOString()}] Successfully received response from Anthropic API`);
+      console.log(`Usage: ${response.usage.input_tokens} input tokens, ${response.usage.output_tokens} output tokens`);
+
+      res.json(response);
+    }
   } catch (error) {
     console.error('[API Error]:', error);
     
