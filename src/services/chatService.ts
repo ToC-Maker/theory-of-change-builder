@@ -325,7 +325,7 @@ class ChatService {
                     try {
                       editInstructions = await generateGraphEdits(
                         lastUserMessage,
-                        generateGraphSummary(currentGraphData),
+                        JSON.stringify(currentGraphData, null, 2),
                         conversationContext
                       );
                       
