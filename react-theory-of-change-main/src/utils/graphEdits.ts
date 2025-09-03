@@ -176,31 +176,46 @@ export function generateGraphSummary(graphData: any): string {
   return summary;
 }
 
-// Parse edit instructions from AI response (DEPRECATED - now using MCP tool)
-// @deprecated Use MCP tool instead of delimiter parsing
-export function parseEditInstructions(text: string): EditInstruction[] | null {
-  console.warn('parseEditInstructions is deprecated. Using MCP tool for edit generation instead.');
-  
-  const startDelimiter = '[EDIT_INSTRUCTIONS]';
-  const endDelimiter = '[/EDIT_INSTRUCTIONS]';
-  
-  const startIndex = text.indexOf(startDelimiter);
-  const endIndex = text.indexOf(endDelimiter);
-  
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-    return null;
-  }
-  
-  const jsonText = text.substring(startIndex + startDelimiter.length, endIndex).trim();
-  
+// Parse edit instructions from AI response using JSON delimiters
+export function parseEditInstructions(content: string): EditInstruction[] {
   try {
-    const edits = JSON.parse(jsonText);
-    if (Array.isArray(edits)) {
-      return edits as EditInstruction[];
+    const startMarker = '[EDIT_INSTRUCTIONS]';
+    const endMarker = '[/EDIT_INSTRUCTIONS]';
+    
+    const startIndex = content.indexOf(startMarker);
+    const endIndex = content.indexOf(endMarker);
+    
+    if (startIndex === -1 || endIndex === -1) {
+      return [];
     }
-    return null;
+    
+    const jsonStr = content.substring(startIndex + startMarker.length, endIndex).trim();
+    const editInstructions = JSON.parse(jsonStr) as EditInstruction[];
+    
+    console.log('=== PARSED EDIT INSTRUCTIONS ===');
+    console.log(JSON.stringify(editInstructions, null, 2));
+    console.log('=== END PARSED EDITS ===');
+    
+    return Array.isArray(editInstructions) ? editInstructions : [];
   } catch (error) {
-    console.error('Failed to parse edit instructions:', error);
-    return null;
+    console.error('Error parsing edit instructions:', error);
+    return [];
   }
+}
+
+// Clean response content by removing edit instructions for display
+export function cleanResponseContent(content: string): string {
+  const startMarker = '[EDIT_INSTRUCTIONS]';
+  const endMarker = '[/EDIT_INSTRUCTIONS]';
+  
+  const startIndex = content.indexOf(startMarker);
+  const endIndex = content.indexOf(endMarker);
+  
+  if (startIndex === -1 || endIndex === -1) {
+    return content;
+  }
+  
+  // Remove the edit instructions section and clean up extra whitespace
+  const cleanContent = content.substring(0, startIndex) + content.substring(endIndex + endMarker.length);
+  return cleanContent.trim();
 }
