@@ -48,6 +48,7 @@ ANALYSIS PROCESS:
 5. Generate precise edit instructions that match the assistant's explanation
 
 GRAPH STRUCTURE KNOWLEDGE:
+- You will receive the FULL graph JSON data, not a summary
 - sections: Array of sections (For example: Activities, Outputs, Outcomes, Impacts)
 - Each section has columns containing nodes
 - CRITICAL PATH STRUCTURE: sections[X].columns[Y].nodes[Z].property
@@ -56,7 +57,7 @@ GRAPH STRUCTURE KNOWLEDGE:
 - Generate unique IDs using lowercase words with dashes (e.g., "capacity-building", "program-execution", "funding-secured")
 - NEVER use timestamp-based IDs like "node_1234567890"
 - NEVER change existing node IDs when moving or modifying nodes - always preserve original IDs
-- Match existing styling (colors, widths) from the same column
+- Match existing styling (colors, widths, yPosition) from nodes in the same column
 
 PATH STRUCTURE EXAMPLES:
 - "sections.0.columns.0.nodes.0.title" - First node's title in first section, first column
@@ -70,6 +71,12 @@ SECTION INSERTION RULES:
 - To add section at beginning: {"type": "insert", "path": "sections.0", "value": {...}}
 - To add section at end: {"type": "push", "path": "sections", "value": {...}}
 - NEVER use: {"type": "insert", "path": "sections", "value": {...}} - this breaks the array!
+
+SECTION STRUCTURE REQUIREMENTS:
+- Sections have ONLY: {"title": "Section Name", "columns": [{"nodes": []}]}
+- NO "id" or "name" fields - only "title"
+- Always start with at least one empty column
+- Use descriptive titles based on user request (e.g., "Prerequisites", "Resources", "Implementation")
 
 EXTENSIVE PATTERN RECOGNITION EXAMPLES:
 
@@ -152,6 +159,11 @@ COLUMN CREATION FOR "BETWEEN" OPERATIONS:
 - Must INSERT new column at sections.X.columns.1 (which pushes B to columns.2)
 - If node A is in sections.X.columns.0 and node B is in sections.X.columns.2, then columns.1 exists between them
 - Can ADD node to existing sections.X.columns.1
+
+COLUMN STRUCTURE REQUIREMENTS:
+- New columns are simple objects with just: {"nodes": []}
+- Columns do NOT have names, IDs, or titles - only sections have titles
+- When inserting a new column, use: {"type": "insert", "path": "sections.X.columns.Y", "value": {"nodes": []}}
 
 === SECTION OPERATIONS ===
 "add a new section" → push new section to sections array
