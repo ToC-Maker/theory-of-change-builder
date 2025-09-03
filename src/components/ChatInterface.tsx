@@ -14,8 +14,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [streamingContent, setStreamingContent] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const streamingMessageRef = useRef<ChatMessage | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,7 +35,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [isCollapsed]);
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isLoading || isStreaming) return;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -44,49 +47,82 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
     setIsLoading(true);
+    setIsStreaming(true);
+    setStreamingContent('');
+
+    // Create a placeholder streaming message
+    const streamingId = (Date.now() + 1).toString();
+    streamingMessageRef.current = {
+      id: streamingId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date()
+    };
 
     try {
-      const response = await chatService.sendMessage([...messages, userMessage], graphData);
-      
-      if (response.error) {
-        const errorMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: `Error: ${response.error}`,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, errorMessage]);
-      } else {
-        const assistantMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: response.message,
-          timestamp: new Date(),
-          usage: response.usage
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-        
-        // Handle edit instructions if present
-        if (response.editInstructions && onGraphUpdate && graphData) {
-          console.log('Edit instructions detected in ChatInterface:', response.editInstructions);
-          const updatedGraph = applyEdits(graphData, response.editInstructions);
-          onGraphUpdate(updatedGraph);
-        } else {
-          console.log('No edit instructions, callback, or graph data:', {
-            hasEditInstructions: !!response.editInstructions,
-            hasCallback: !!onGraphUpdate,
-            hasGraphData: !!graphData
-          });
+      await chatService.sendStreamingMessage([...messages, userMessage], graphData, {
+        onContent: (chunk: string, fullContent: string) => {
+          setStreamingContent(fullContent);
+        },
+        onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
+          console.log('=== CHAT INTERFACE ONCOMPLETE ===');
+          console.log('Usage parameter:', usage);
+          console.log('=== END CHAT INTERFACE ===');
+          
+          const assistantMessage: ChatMessage = {
+            id: streamingId,
+            role: 'assistant',
+            content: finalMessage,
+            timestamp: new Date(),
+            usage: usage ? {
+              input_tokens: usage.input_tokens || 0,
+              output_tokens: usage.output_tokens || 0,
+              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
+            } : undefined
+          };
+          
+          setMessages(prev => [...prev, assistantMessage]);
+          setIsStreaming(false);
+          setStreamingContent('');
+          streamingMessageRef.current = null;
+          
+          // Handle edit instructions if present
+          if (editInstructions && onGraphUpdate && graphData) {
+            console.log('Edit instructions detected in ChatInterface:', editInstructions);
+            const updatedGraph = applyEdits(graphData, editInstructions);
+            onGraphUpdate(updatedGraph);
+          } else {
+            console.log('No edit instructions, callback, or graph data:', {
+              hasEditInstructions: !!editInstructions,
+              hasCallback: !!onGraphUpdate,
+              hasGraphData: !!graphData
+            });
+          }
+        },
+        onError: (error: string) => {
+          const errorMessage: ChatMessage = {
+            id: streamingId,
+            role: 'assistant',
+            content: `Error: ${error}`,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, errorMessage]);
+          setIsStreaming(false);
+          setStreamingContent('');
+          streamingMessageRef.current = null;
         }
-      }
+      });
     } catch (error) {
       const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: streamingId,
         role: 'assistant',
         content: 'Sorry, there was an error processing your request.',
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
+      setIsStreaming(false);
+      setStreamingContent('');
+      streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
     }
@@ -175,7 +211,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
                       : 'bg-gray-100 text-gray-800 rounded-bl-sm'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap">{message.content}</div>
+                  <div className="whitespace-pre-wrap text-left">{message.content}</div>
                   <div className={`text-xs mt-1 opacity-70 ${
                     message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
                   }`}>
@@ -190,7 +226,22 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               </div>
             ))}
             
-            {isLoading && (
+            {/* Streaming message */}
+            {isStreaming && streamingContent && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
+                  <div className="whitespace-pre-wrap text-left">{streamingContent}</div>
+                  <div className="text-xs mt-1 opacity-70 text-gray-500">
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
+                      <span>Streaming...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {isLoading && !isStreaming && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
                   <div className="flex items-center gap-1">
@@ -217,7 +268,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
                 onKeyPress={handleKeyPress}
                 placeholder="Ask about your Theory of Change..."
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-hidden"
-                disabled={isLoading}
+                disabled={isLoading || isStreaming}
                 rows={1}
                 style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
                 onInput={(e) => {
@@ -230,7 +281,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               />
               <button
                 onClick={handleSendMessage}
-                disabled={!inputValue.trim() || isLoading}
+                disabled={!inputValue.trim() || isLoading || isStreaming}
                 className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
