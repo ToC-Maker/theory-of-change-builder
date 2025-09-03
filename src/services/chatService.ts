@@ -1,5 +1,7 @@
 import { generateGraphSummary, type EditInstruction } from '../utils/graphEdits';
-import { generateGraphEdits, requiresGraphModification } from './mcpGraphEditTool';
+
+// Import the system prompt from external file
+import systemPromptContent from '../prompts/chatSystemPrompt.md?raw';
 
 export interface ChatMessage {
   id: string;
@@ -30,44 +32,54 @@ export interface StreamingChatResponse {
   onError?: (error: string) => void;
 }
 
-const SYSTEM_PROMPT = `You are an AI assistant specialized in helping users build and modify Theory of Change (ToC) graphs. Your role is to provide expert guidance on graph development and analysis.
-
-## Core Responsibilities:
-1. **Theory of Change Development**: Help users create logical, evidence-based pathways from activities to long-term outcomes
-2. **Graph Structure Analysis**: Analyze existing ToC graphs for logical flow, completeness, and clarity
-3. **Node and Connection Suggestions**: Recommend new nodes, connections, or modifications to improve the theory
-4. **Strategic Guidance**: Provide insights on intervention strategies, assumptions, and potential risks
-
-## Graph Data Structure:
-You will receive the full JSON of the current graph in the format [CURRENT_GRAPH_DATA]. The structure includes:
-- sections: Array of sections (typically Activities, Outputs, Outcomes, Impacts)
-- Each section has columns containing nodes
-- Nodes have: id, title, text, connections, yPosition, width, color
-- connections: Array of full connection objects with: targetId, confidence (0-100), evidence, assumptions
-
-## Communication Style:
-- Be concise but thorough in explanations
-- Explain why you recommend specific modifications
-- Ask clarifying questions when user intent is unclear
-- Provide actionable suggestions with reasoning
-- Focus on the strategic and theoretical aspects of the Theory of Change
-
-## Understanding User Intent:
-- When users request modifications, explain the reasoning behind your suggestions
-- For "between" requests: explain creating sequential connection chains (A → New → B)
-- For column requests: clarify creating new columns vs. adding to existing ones
-- Always consider the logical flow and evidence base of proposed changes
-
-## Important Notes:
-- Graph modifications will be handled automatically when you recommend changes
-- Feel free to suggest specific node names, connections, and describe what you think should be added
-- Focus on providing clear explanations and strategic guidance
-- You don't need to specify technical implementation details
-- Emphasize the theory and logic behind suggested modifications
-
-Your expertise should guide users in creating robust, evidence-based Theories of Change that clearly show how activities lead to desired outcomes.`;
+// Use the imported system prompt content
+const SYSTEM_PROMPT = systemPromptContent;
 
 export { SYSTEM_PROMPT };
+
+// Function to parse edit instructions from AI response
+function parseEditInstructions(content: string): EditInstruction[] {
+  try {
+    const startMarker = '[EDIT_INSTRUCTIONS]';
+    const endMarker = '[/EDIT_INSTRUCTIONS]';
+    
+    const startIndex = content.indexOf(startMarker);
+    const endIndex = content.indexOf(endMarker);
+    
+    if (startIndex === -1 || endIndex === -1) {
+      return [];
+    }
+    
+    const jsonStr = content.substring(startIndex + startMarker.length, endIndex).trim();
+    const editInstructions = JSON.parse(jsonStr) as EditInstruction[];
+    
+    console.log('=== PARSED EDIT INSTRUCTIONS ===');
+    console.log(JSON.stringify(editInstructions, null, 2));
+    console.log('=== END PARSED EDITS ===');
+    
+    return Array.isArray(editInstructions) ? editInstructions : [];
+  } catch (error) {
+    console.error('Error parsing edit instructions:', error);
+    return [];
+  }
+}
+
+// Function to clean response content by removing edit instructions
+function cleanResponseContent(content: string): string {
+  const startMarker = '[EDIT_INSTRUCTIONS]';
+  const endMarker = '[/EDIT_INSTRUCTIONS]';
+  
+  const startIndex = content.indexOf(startMarker);
+  const endIndex = content.indexOf(endMarker);
+  
+  if (startIndex === -1 || endIndex === -1) {
+    return content;
+  }
+  
+  // Remove the edit instructions section and clean up extra whitespace
+  const cleanContent = content.substring(0, startIndex) + content.substring(endIndex + endMarker.length);
+  return cleanContent.trim();
+}
 
 function generateEditSummary(editInstructions: EditInstruction[], userRequest: string): string {
   // Analyze the edits to generate an accurate summary
@@ -157,36 +169,11 @@ class ChatService {
         console.log(content.text);
         console.log('=== END AI RESPONSE ===');
         
-        const displayMessage = content.text;
-        let editInstructions: EditInstruction[] | null = null;
+        // Parse edit instructions from the AI response
+        const editInstructions = parseEditInstructions(content.text);
         
-        // Check if the user message requires graph modifications
-        const lastUserMessage = messages[messages.length - 1]?.content || '';
-        if (requiresGraphModification(lastUserMessage) && currentGraphData) {
-          console.log('=== CALLING MCP GRAPH EDIT TOOL ===');
-          
-          // Build conversation context from recent messages
-          const conversationContext = messages
-            .slice(-3) // Last 3 messages for context
-            .map(msg => `${msg.role}: ${msg.content}`)
-            .join('\n');
-          
-          try {
-            editInstructions = await generateGraphEdits(
-              lastUserMessage,
-              generateGraphSummary(currentGraphData),
-              conversationContext
-            );
-            
-            if (editInstructions && editInstructions.length > 0) {
-              console.log('=== MCP GENERATED EDITS ===');
-              console.log(JSON.stringify(editInstructions, null, 2));
-              console.log('=== END MCP EDITS ===');
-            }
-          } catch (error) {
-            console.error('Error calling MCP graph edit tool:', error);
-          }
-        }
+        // Clean the response content to remove edit instructions for display
+        const displayMessage = cleanResponseContent(content.text);
         
         return {
           message: displayMessage,
@@ -303,43 +290,21 @@ class ChatService {
                 
                 if (data.type === 'content') {
                   fullContent = data.content;
-                  callbacks.onContent?.(data.chunk, fullContent);
+                  // Clean the streaming content to hide edit instructions during typing
+                  const cleanStreamingContent = cleanResponseContent(fullContent);
+                  callbacks.onContent?.(data.chunk, cleanStreamingContent);
                 } else if (data.type === 'done') {
                   console.log('=== STREAMING DONE EVENT ===');
                   console.log('Usage data received:', data.usage);
                   console.log('=== END STREAMING DONE ===');
                   
-                  // Process edit instructions if needed, using the chat response as context
-                  let editInstructions: EditInstruction[] | null = null;
-                  const lastUserMessage = messages[messages.length - 1]?.content || '';
+                  // Parse edit instructions from the AI response
+                  const editInstructions = parseEditInstructions(fullContent);
                   
-                  if (requiresGraphModification(lastUserMessage) && currentGraphData) {
-                    console.log('=== CALLING MCP GRAPH EDIT TOOL ===');
-                    
-                    // Include the chat response as context so MCP knows what was promised
-                    const conversationContext = messages
-                      .slice(-3)
-                      .map(msg => `${msg.role}: ${msg.content}`)
-                      .join('\n') + `\nassistant: ${fullContent}`;
-                    
-                    try {
-                      editInstructions = await generateGraphEdits(
-                        lastUserMessage,
-                        JSON.stringify(currentGraphData, null, 2),
-                        conversationContext
-                      );
-                      
-                      if (editInstructions && editInstructions.length > 0) {
-                        console.log('=== MCP GENERATED EDITS ===');
-                        console.log(JSON.stringify(editInstructions, null, 2));
-                        console.log('=== END MCP EDITS ===');
-                      }
-                    } catch (error) {
-                      console.error('Error calling MCP graph edit tool:', error);
-                    }
-                  }
+                  // Clean the response content to remove edit instructions for display
+                  const cleanContent = cleanResponseContent(fullContent);
                   
-                  callbacks.onComplete?.(fullContent, editInstructions, data.usage);
+                  callbacks.onComplete?.(cleanContent, editInstructions, data.usage);
                   return;
                 } else if (data.type === 'error') {
                   callbacks.onError?.(data.error);

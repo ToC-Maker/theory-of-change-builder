@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits } from '../utils/graphEdits';
 
@@ -211,7 +212,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
                       : 'bg-gray-100 text-gray-800 rounded-bl-sm'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap text-left">{message.content}</div>
+                  {message.role === 'assistant' ? (
+                    <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
+                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-left">{message.content}</div>
+                  )}
                   <div className={`text-xs mt-1 opacity-70 ${
                     message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
                   }`}>
@@ -230,7 +237,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             {isStreaming && streamingContent && (
               <div className="flex justify-start">
                 <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
-                  <div className="whitespace-pre-wrap text-left">{streamingContent}</div>
+                  <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
+                    <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                  </div>
                   <div className="text-xs mt-1 opacity-70 text-gray-500">
                     <div className="flex items-center gap-1">
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
