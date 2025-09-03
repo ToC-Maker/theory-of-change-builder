@@ -1,4 +1,4 @@
-import { generateGraphSummary, type EditInstruction } from '../utils/graphEdits';
+import { type EditInstruction, parseEditInstructions, cleanResponseContent } from '../utils/graphEdits';
 
 // Import the system prompt from external file
 import systemPromptContent from '../prompts/chatSystemPrompt.md?raw';
@@ -37,85 +37,6 @@ const SYSTEM_PROMPT = systemPromptContent;
 
 export { SYSTEM_PROMPT };
 
-// Function to parse edit instructions from AI response
-function parseEditInstructions(content: string): EditInstruction[] {
-  try {
-    const startMarker = '[EDIT_INSTRUCTIONS]';
-    const endMarker = '[/EDIT_INSTRUCTIONS]';
-    
-    const startIndex = content.indexOf(startMarker);
-    const endIndex = content.indexOf(endMarker);
-    
-    if (startIndex === -1 || endIndex === -1) {
-      return [];
-    }
-    
-    const jsonStr = content.substring(startIndex + startMarker.length, endIndex).trim();
-    const editInstructions = JSON.parse(jsonStr) as EditInstruction[];
-    
-    console.log('=== PARSED EDIT INSTRUCTIONS ===');
-    console.log(JSON.stringify(editInstructions, null, 2));
-    console.log('=== END PARSED EDITS ===');
-    
-    return Array.isArray(editInstructions) ? editInstructions : [];
-  } catch (error) {
-    console.error('Error parsing edit instructions:', error);
-    return [];
-  }
-}
-
-// Function to clean response content by removing edit instructions
-function cleanResponseContent(content: string): string {
-  const startMarker = '[EDIT_INSTRUCTIONS]';
-  const endMarker = '[/EDIT_INSTRUCTIONS]';
-  
-  const startIndex = content.indexOf(startMarker);
-  const endIndex = content.indexOf(endMarker);
-  
-  if (startIndex === -1 || endIndex === -1) {
-    return content;
-  }
-  
-  // Remove the edit instructions section and clean up extra whitespace
-  const cleanContent = content.substring(0, startIndex) + content.substring(endIndex + endMarker.length);
-  return cleanContent.trim();
-}
-
-function generateEditSummary(editInstructions: EditInstruction[], userRequest: string): string {
-  // Analyze the edits to generate an accurate summary
-  const addedNodes: string[] = [];
-  const modifiedConnections: string[] = [];
-  const addedColumns: number = editInstructions.filter(edit => 
-    edit.type === 'insert' && edit.path.includes('columns')
-  ).length;
-
-  editInstructions.forEach(edit => {
-    if (edit.type === 'push' && edit.path.includes('nodes') && edit.value?.title) {
-      addedNodes.push(`"${edit.value.title}"`);
-    }
-    if (edit.type === 'update' && edit.path.includes('connections')) {
-      modifiedConnections.push('connection');
-    }
-  });
-
-  let summary = "I've made the requested changes to your graph:\n\n";
-  
-  if (addedColumns > 0) {
-    summary += `• Added ${addedColumns} new column${addedColumns > 1 ? 's' : ''}\n`;
-  }
-  
-  if (addedNodes.length > 0) {
-    summary += `• Created ${addedNodes.length} new node${addedNodes.length > 1 ? 's' : ''}: ${addedNodes.join(', ')}\n`;
-  }
-  
-  if (modifiedConnections.length > 0) {
-    summary += `• Updated ${modifiedConnections.length} connection${modifiedConnections.length > 1 ? 's' : ''}\n`;
-  }
-
-  summary += "\nThe changes have been applied to your Theory of Change. You can see the updates reflected in the graph.";
-  
-  return summary;
-}
 
 
 class ChatService {
