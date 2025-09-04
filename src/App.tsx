@@ -6,6 +6,7 @@ import { ChatInterface } from "./components/ChatInterface"
 import { InfoPanel } from "./components/InfoPanel"
 import { StaticLegend } from "./components/StaticLegend"
 import { JsonDropdown } from "./components/JsonDropdown"
+import { ToCGeneratorModal } from "./components/ToCGeneratorModal"
 import "./App.css"
 
 interface ToCData {
@@ -24,6 +25,7 @@ function ToCViewer() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
+  const [showToCGenerator, setShowToCGenerator] = useState(false)
 
   const saveToHistory = (currentData: ToCData) => {
     if (currentData) {
@@ -226,6 +228,16 @@ function ToCViewer() {
             </svg>
             Redo ({redoHistory.length})
           </button>
+          <button
+            onClick={() => setShowToCGenerator(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white border border-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+            title="Generate Theory of Change conversation from documents"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Generate ToC
+          </button>
         </div>
       </div>
       
@@ -277,6 +289,13 @@ function ToCViewer() {
           />
         </div>
       </div>
+      
+      {/* ToC Generator Modal */}
+      <ToCGeneratorModal
+        isOpen={showToCGenerator}
+        onClose={() => setShowToCGenerator(false)}
+        onGraphGenerated={handleGraphUpdate}
+      />
     </div>
   )
 }

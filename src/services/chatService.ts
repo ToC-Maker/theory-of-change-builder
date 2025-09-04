@@ -146,7 +146,8 @@ class ChatService {
   async sendStreamingMessage(
     messages: ChatMessage[], 
     currentGraphData: any, 
-    callbacks: StreamingChatResponse
+    callbacks: StreamingChatResponse,
+    signal?: AbortSignal
   ): Promise<void> {
     try {
       // Prepare messages with full graph JSON for the last user message
@@ -179,7 +180,8 @@ class ChatService {
           currentGraphData,
           systemPrompt: SYSTEM_PROMPT,
           stream: true
-        })
+        }),
+        signal: signal
       });
 
       if (!response.ok) {
@@ -245,6 +247,10 @@ class ChatService {
       
       // Handle different error types
       if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          console.log('Streaming was aborted by user');
+          return; // Don't call onError for user-initiated cancellations
+        }
         if (error.message.includes('Rate limit')) {
           callbacks.onError?.("Rate limit exceeded. Please wait a moment and try again.");
           return;
