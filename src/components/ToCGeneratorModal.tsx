@@ -397,11 +397,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
                 <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
                   {streamingContent ? (
-                    <div className="prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
+                    <div className="prose prose-sm max-w-none text-left prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
                       <ReactMarkdown>{streamingContent}</ReactMarkdown>
                     </div>
                   ) : fullConversation ? (
-                    <div className="prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
+                    <div className="prose prose-sm max-w-none text-left prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
                       <ReactMarkdown>{fullConversation}</ReactMarkdown>
                     </div>
                   ) : (
