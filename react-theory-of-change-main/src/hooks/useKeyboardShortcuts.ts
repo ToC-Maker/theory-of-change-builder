@@ -206,7 +206,7 @@ export function useKeyboardShortcuts({
           ...column,
           nodes: column.nodes.map(node => ({
             ...node,
-            connectionIds: node.connectionIds.filter(id => !highlightedNodes.has(id)),
+            connectionIds: node.connectionIds?.filter(id => !highlightedNodes.has(id)) || [],
             connections: node.connections?.filter(conn => !highlightedNodes.has(conn.targetId))
           }))
         }))

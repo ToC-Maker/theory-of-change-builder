@@ -56,7 +56,7 @@ app.post('/api/chat', async (req, res) => {
       try {
         const stream = await anthropic.messages.create({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 8000,
+          max_tokens: 20000,
           system: systemPrompt,
           messages: messages.map(msg => ({
             role: msg.role,
@@ -118,7 +118,7 @@ app.post('/api/chat', async (req, res) => {
       // Original non-streaming response
       const response = await anthropic.messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 8000,
+        max_tokens: 20000,
         system: systemPrompt,
         messages: messages.map(msg => ({
           role: msg.role,
