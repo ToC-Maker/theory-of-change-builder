@@ -9,6 +9,44 @@ import { JsonDropdown } from "./components/JsonDropdown"
 import { ToCGeneratorModal } from "./components/ToCGeneratorModal"
 import "./App.css"
 
+// Default empty template with 4 sections
+const emptyTemplate: ToCData = {
+  sections: [
+    {
+      title: "Inputs",
+      columns: [
+        {
+          nodes: []
+        }
+      ]
+    },
+    {
+      title: "Outputs", 
+      columns: [
+        {
+          nodes: []
+        }
+      ]
+    },
+    {
+      title: "Outcomes",
+      columns: [
+        {
+          nodes: []
+        }
+      ]
+    },
+    {
+      title: "Goal",
+      columns: [
+        {
+          nodes: []
+        }
+      ]
+    }
+  ]
+};
+
 interface ToCData {
   sections: any[]
   textSize?: number
@@ -33,6 +71,30 @@ function ToCViewer() {
     }
   };
 
+  const saveToLocalStorage = useCallback((dataToSave: ToCData, currentFilename?: string) => {
+    try {
+      const storageKey = `toc_graph_${currentFilename || filename || 'default'}`;
+      localStorage.setItem(storageKey, JSON.stringify(dataToSave));
+      console.log('Saved to localStorage:', storageKey);
+    } catch (error) {
+      console.warn('Failed to save to localStorage:', error);
+    }
+  }, [filename]);
+
+  const loadFromLocalStorage = useCallback((currentFilename?: string): ToCData | null => {
+    try {
+      const storageKey = `toc_graph_${currentFilename || filename || 'default'}`;
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        console.log('Loaded from localStorage:', storageKey);
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.warn('Failed to load from localStorage:', error);
+    }
+    return null;
+  }, [filename]);
+
   const handleGraphUpdate = (newGraphData: ToCData) => {
     console.log('App handleGraphUpdate called with:', newGraphData);
     console.log('Current data before update:', data);
@@ -46,6 +108,7 @@ function ToCViewer() {
     setRedoHistory([]);
     
     setData(newGraphData);
+    saveToLocalStorage(newGraphData);
     console.log('setData called with new graph data');
   };
 
@@ -61,6 +124,7 @@ function ToCViewer() {
     setRedoHistory([]);
     
     setData(newData);
+    saveToLocalStorage(newData);
   };
 
   const handleUndo = useCallback(() => {
@@ -72,10 +136,11 @@ function ToCViewer() {
       setRedoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
       setUndoHistory(newUndoHistory);
       setData(previousState);
+      saveToLocalStorage(previousState);
       
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data]);
+  }, [undoHistory, data, saveToLocalStorage]);
 
   const handleRedo = useCallback(() => {
     if (redoHistory.length > 0 && data) {
@@ -86,10 +151,11 @@ function ToCViewer() {
       setUndoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
       setRedoHistory(newRedoHistory);
       setData(nextState);
+      saveToLocalStorage(nextState);
       
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data]);
+  }, [redoHistory, data, saveToLocalStorage]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -143,12 +209,61 @@ function ToCViewer() {
     }
   }, [data])
 
+  const resetToOriginal = useCallback(async () => {
+    if (!confirm('This will reset your graph to the original version and delete all saved progress. Are you sure?')) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      // Clear localStorage for this file
+      const storageKey = `toc_graph_${filename || 'default'}`;
+      localStorage.removeItem(storageKey);
+      console.log('Cleared localStorage:', storageKey);
+      
+      // Clear undo/redo history
+      setUndoHistory([]);
+      setRedoHistory([]);
+      
+      // Load original data
+      if (filename) {
+        const response = await fetch(`/ToC-graphs/${filename}`)
+        if (!response.ok) {
+          throw new Error(`Failed to load ${filename}`)
+        }
+        const jsonData = await response.json()
+        setData(jsonData)
+      } else {
+        // Default to empty template
+        setData(emptyTemplate)
+      }
+      
+      console.log('Reset to original data');
+    } catch (err) {
+      console.error('Error resetting to original:', err);
+      setError(err instanceof Error ? err.message : 'Failed to reset to original');
+    } finally {
+      setLoading(false);
+    }
+  }, [filename]);
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
       setError(null)
       
       try {
+        // First, try to load from localStorage
+        const savedData = loadFromLocalStorage(filename);
+        if (savedData) {
+          console.log('Using saved data from localStorage');
+          setData(savedData);
+          setLoading(false);
+          return;
+        }
+
+        // If no saved data, load from file or default
         if (filename) {
           const response = await fetch(`/ToC-graphs/${filename}`)
           if (!response.ok) {
@@ -156,9 +271,12 @@ function ToCViewer() {
           }
           const jsonData = await response.json()
           setData(jsonData)
+          // Save the loaded file data to localStorage for future use
+          saveToLocalStorage(jsonData, filename)
         } else {
-          // Default to Charity Entrepreneurship
-          setData(CharityEntrepreneurship.args.data)
+          // Default to empty template
+          setData(emptyTemplate)
+          saveToLocalStorage(emptyTemplate)
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load data')
@@ -169,7 +287,7 @@ function ToCViewer() {
     }
 
     loadData()
-  }, [filename])
+  }, [filename, loadFromLocalStorage, saveToLocalStorage])
 
   if (loading) {
     return (
@@ -275,7 +393,13 @@ function ToCViewer() {
               width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto'
             }}
           >
-            <JsonDropdown data={data} title="Current Graph JSON" copyGraphJSON={copyGraphJSON} />
+            <JsonDropdown 
+              data={data} 
+              title="Current Graph JSON" 
+              copyGraphJSON={copyGraphJSON}
+              resetToOriginal={resetToOriginal}
+              loading={loading}
+            />
           </div>
         </div>
         
