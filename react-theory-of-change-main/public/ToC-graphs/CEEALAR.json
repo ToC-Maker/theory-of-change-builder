@@ -1,0 +1,282 @@
+{
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "input-funding",
+              "title": "CEEALAR secures diversified funding from individual donors and institutional grants including SFF, AISTO, and EAIF",
+              "text": "Based on Manifund project page showing recent grants from Survival & Flourishing Fund (2023), AISTO and EAIF (2024), plus community donors. Charity Commission filings show income streams and reserves position.",
+              "connections": [
+                {
+                  "targetId": "output-accommodation",
+                  "confidence": 90,
+                  "evidence": "Strong operational track record - CEEALAR has been providing accommodation continuously since 2018 EA Hotel days. 2024 funding from multiple sources (SFF, AISTO, EAIF per Manifund page) provides ~1.5 years runway as reported in recent EA Forum updates. Charity Commission filings show established governance and financial management.",
+                  "assumptions": "Funding relationships continue and donors see value in the model. No major operational disruptions. Current cost structure remains viable at ~£800/month per person (2022 figures, may have changed)."
+                },
+                {
+                  "targetId": "output-community",
+                  "confidence": 85,
+                  "evidence": "CEEALAR's funding directly supports community programming costs including event hosting, shared meals, workshop facilitation, and maintaining coworking spaces. Recent EA Forum updates and Manifund project descriptions explicitly mention community building as a core funded activity alongside accommodation.",
+                  "assumptions": "Community programming remains a funding priority vs pure accommodation provision. Staff time and resources continue to be allocated to community building activities. Residents value and participate in community programming."
+                },
+                {
+                  "targetId": "output-programs",
+                  "confidence": 80,
+                  "evidence": "Structured programs require dedicated staff time, external facilitators, and program development resources. CEEALAR's diversified funding base (SFF, AISTO, EAIF grants) provides capacity beyond basic accommodation to develop fellowships, workshops, and mentorship programs as described on their website.",
+                  "assumptions": "Funders support program development activities, not just accommodation costs. CEEALAR has capacity to design and deliver structured learning programs. External expertise and facilitators are available and affordable within the funding model."
+                }
+              ],
+              "yPosition": 321,
+              "width": 200,
+              "color": "#E3F2FD"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "output-accommodation",
+              "title": "Subsidized accommodation provided for EA-focused individuals in 90-day blocks extendable to 12 months",
+              "text": "Core service offering free or low-cost housing, meals, and workspace in Blackpool. Mix of fully-subsidized grantees and reduced-rate patrons.",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-focus",
+                  "confidence": 85,
+                  "evidence": "Direct causal mechanism - removing housing and food costs eliminates immediate financial pressure. Self-reported surveys show ~80% of residents report higher productivity (though this is self-reported, so subject to biases). Historical cost-effectiveness of £800/month (2022 update) vs typical living costs creates clear financial relief.",
+                  "assumptions": "Residents use the financial relief to focus on EA work rather than other activities. Basic needs satisfaction translates to increased focus capacity. The 80% self-reported productivity improvement reflects real gains, not just social desirability bias."
+                }
+              ],
+              "yPosition": 120,
+              "width": 208,
+              "color": "#FFF3E0"
+            },
+            {
+              "id": "output-community",
+              "title": "Peer community, networking events, and skill-building workshops provided",
+              "text": "Community dinners, coworking space, events, and connections among residents and broader EA network.",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-connections",
+                  "confidence": 80,
+                  "evidence": "Website reports average of 12 new meaningful connections per grantee (self-reported). Community meals and shared workspace create natural interaction opportunities. EA Forum posts document events, retreats, and workshops hosted at CEEALAR.",
+                  "assumptions": "Networking events create genuinely useful connections rather than just social interactions. Geographic co-location leads to meaningful professional relationships. EA-focused community provides relevant connections for career development."
+                }
+              ],
+              "yPosition": 321,
+              "width": 208,
+              "color": "#FFF3E0"
+            },
+            {
+              "id": "output-programs",
+              "title": "Structured learning programs and mentorship opportunities",
+              "text": "Fellowships, skill development sessions, and access to EA expertise and feedback.",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-skills",
+                  "confidence": 75,
+                  "evidence": "Website mentions hosting retreats and fellowships. Resident testimonials in EA Forum posts describe learning opportunities. However, limited systematic data on learning outcomes or skill development metrics available in public materials reviewed.",
+                  "assumptions": "Structured programs deliver meaningful skill development beyond what residents would gain through self-study. Access to mentorship translates to accelerated learning. Programs target skills actually needed for EA career success."
+                }
+              ],
+              "yPosition": 520,
+              "width": 208,
+              "color": "#FFF3E0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "outcome-l3-focus",
+              "title": "Residents have sustained time to focus on EA work without financial stress",
+              "text": "Individuals can dedicate full attention to research, learning, and projects without immediate economic pressures.",
+              "connections": [
+                {
+                  "targetId": "outcome-l2-research",
+                  "confidence": 40,
+                  "evidence": "Focused time is necessary but not sufficient for quality research. Success depends heavily on individual skills, research experience, topic selection, and access to expertise - factors CEEALAR can't directly control. No systematic tracking of research outputs by residents in available materials.",
+                  "assumptions": "Having time without financial pressure actually translates to productive work rather than reduced urgency. Residents have sufficient research skills and motivation to utilize the time effectively. Access to basic research resources and expertise is available."
+                },
+                {
+                  "targetId": "outcome-l2-organizations",
+                  "confidence": 45,
+                  "evidence": "Website lists incubated organizations including Orxl, Convergence Analysis, AI Standards Lab, ML4G, Electric Sheep. However, no systematic data on success rates or counterfactuals. Some organizations have secured follow-on funding, but limited evidence of scaled impact available in public materials.",
+                  "assumptions": "Focused time enables organizational development and planning. Residents have entrepreneurial skills and motivation to start organizations. Market conditions and funding environment support new EA organizations."
+                }
+              ],
+              "yPosition": 120,
+              "width": 200,
+              "color": "#E8F5E8"
+            },
+            {
+              "id": "outcome-l3-connections",
+              "title": "Residents build meaningful professional relationships within the EA community",
+              "text": "Networking leads to collaborations, mentorship, career opportunities, and knowledge sharing.",
+              "connections": [
+                {
+                  "targetId": "outcome-l2-organizations",
+                  "confidence": 55,
+                  "evidence": "Average 12 new meaningful connections per grantee according to website (self-reported). Professional networks are well-documented as important for entrepreneurship and career development generally. However, limited evidence on how CEEALAR connections specifically translate to organizational outcomes.",
+                  "assumptions": "Social connections translate to professional collaboration and support. EA community members provide useful advice, introductions, and resources for organization building. Network effects compound over time."
+                },
+                {
+                  "targetId": "outcome-l2-pipeline",
+                  "confidence": 65,
+                  "evidence": "Connections within EA community naturally lead to career opportunities and talent development. EA Forum posts show residents finding positions in EA organizations. Strong theoretical basis for network effects on career development.",
+                  "assumptions": "Professional connections lead to career advancement opportunities. EA organizations prefer to hire people with community connections. Network relationships persist beyond the residency period."
+                }
+              ],
+              "yPosition": 321,
+              "width": 200,
+              "color": "#E8F5E8"
+            },
+            {
+              "id": "outcome-l3-skills",
+              "title": "Residents develop EA-relevant knowledge and skills through focused learning",
+              "text": "Individuals gain expertise in research, strategy, operations, or domain-specific knowledge relevant to EA careers.",
+              "connections": [
+                {
+                  "targetId": "outcome-l2-pipeline",
+                  "confidence": 70,
+                  "evidence": "Skill development is a logical prerequisite for EA career success. Self-reported productivity improvements (~80%) suggest residents are using time for learning and development. However, no systematic measurement of skill gains or comparison to alternative learning approaches.",
+                  "assumptions": "Time at CEEALAR leads to meaningful skill development beyond what residents would achieve elsewhere. Skills developed align with EA career requirements. Learning environment and community provide effective feedback and guidance."
+                }
+              ],
+              "yPosition": 520,
+              "width": 200,
+              "color": "#E8F5E8"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-l2-research",
+              "title": "High-quality EA research and analysis is produced by residents",
+              "text": "Research outputs that advance EA knowledge, inform prioritization, or provide decision-relevant analysis.",
+              "connections": [
+                {
+                  "targetId": "outcome-l1-interventions",
+                  "confidence": 30,
+                  "evidence": "Very limited evidence that resident research directly leads to implemented interventions. Research-to-practice gap is well-documented challenge. AI Standards Lab has produced policy-relevant research but unclear how many other examples exist. No systematic tracking of research impact.",
+                  "assumptions": "Research produced meets quality standards for practical application. Research addresses questions relevant to implementing interventions. Pathways exist for research to inform practice and policy decisions."
+                }
+              ],
+              "yPosition": 120,
+              "width": 200,
+              "color": "#F0F8E8"
+            },
+            {
+              "id": "outcome-l2-organizations",
+              "title": "New effective EA organizations and projects are founded by residents",
+              "text": "Sustainable organizations that implement interventions, coordinate resources, or build infrastructure for EA work.",
+              "connections": [
+                {
+                  "targetId": "outcome-l1-interventions",
+                  "confidence": 50,
+                  "evidence": "Several examples of incubated organizations listed on website (Orxl, Convergence Analysis, AI Standards Lab, ML4G, Electric Sheep). Some have secured follow-on funding suggesting sustainability. However, limited evidence that these organizations are actually implementing scaled interventions rather than remaining in research/development phase.",
+                  "assumptions": "Founded organizations survive beyond initial startup phase. Organizations develop effective intervention models. Organizations can secure ongoing funding and operational sustainability. Founded organizations actually implement interventions rather than just conducting more research."
+                },
+                {
+                  "targetId": "outcome-l1-funding",
+                  "confidence": 60,
+                  "evidence": "Some CEEALAR-incubated organizations have secured follow-on funding according to website. EA funding ecosystem generally supports promising new organizations. However, no systematic data on success rates or funding amounts achieved by CEEALAR alumni organizations.",
+                  "assumptions": "Funders recognize and support organizations incubated at CEEALAR. Organizations develop fundable business models and impact cases. Funding environment remains supportive of new EA organizations."
+                }
+              ],
+              "yPosition": 321,
+              "width": 200,
+              "color": "#F0F8E8"
+            },
+            {
+              "id": "outcome-l2-pipeline",
+              "title": "EA talent pipeline is strengthened with skilled, connected, and committed individuals",
+              "text": "More people equipped and positioned to take on high-impact EA roles across organizations and cause areas.",
+              "connections": [
+                {
+                  "targetId": "outcome-l1-interventions",
+                  "confidence": 55,
+                  "evidence": "Talent development is generally recognized as a key bottleneck for EA impact. EA Forum posts mention residents finding positions in EA organizations. However, no systematic tracking of career outcomes or comparison to alternative talent development programs.",
+                  "assumptions": "Developed talent actually takes on high-impact roles rather than peripheral positions. EA organizations effectively utilize available talent. Talent development at CEEALAR produces better outcomes than alternative pathways."
+                }
+              ],
+              "yPosition": 520,
+              "width": 200,
+              "color": "#F0F8E8"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-l1-interventions",
+              "title": "High-impact EA interventions are implemented at scale",
+              "text": "Evidence-based programs, policies, and initiatives that measurably improve welfare or reduce existential risks.",
+              "connections": [
+                {
+                  "targetId": "end-goal",
+                  "confidence": 70,
+                  "evidence": "Direct logical connection - if interventions are truly high-impact and implemented at scale, they should by definition improve global welfare and reduce existential risks. However, this depends entirely on the accuracy of impact assessments and the ability to achieve genuine scale.",
+                  "assumptions": "Impact assessments accurately predict real-world outcomes. Interventions maintain effectiveness when scaled. Implementation quality remains high at scale. External conditions don't undermine intervention effectiveness."
+                }
+              ],
+              "yPosition": 416.68438720703125,
+              "width": 200,
+              "color": "#E8F0E8"
+            },
+            {
+              "id": "outcome-l1-funding",
+              "title": "EA organizations and projects receive adequate funding to operate effectively",
+              "text": "Sufficient financial resources flow to the most promising EA interventions and organizational approaches.",
+              "connections": [
+                {
+                  "targetId": "end-goal",
+                  "confidence": 60,
+                  "evidence": "Funding is generally necessary for implementing interventions, but not sufficient. EA organizations with adequate funding should be better positioned to achieve impact, but effectiveness depends on execution quality, intervention design, and external factors beyond funding levels.",
+                  "assumptions": "Funding flows to the most effective organizations and interventions. Organizations use funding effectively rather than experiencing mission drift or operational inefficiencies. Funding levels are actually adequate for the intended scale of operations."
+                }
+              ],
+              "yPosition": 230.47161865234375,
+              "width": 200,
+              "color": "#E8F0E8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "end-goal",
+              "title": "Global wellbeing is improved and existential risks are reduced through EA interventions",
+              "text": "Ultimate outcome: measurable improvements in human and animal welfare, reduced likelihood of civilizational catastrophes, and better long-term outcomes for sentient beings.",
+              "connections": [],
+              "yPosition": 327.88751220703125,
+              "width": 200,
+              "color": "#C8E6C9"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "_metadata": {
+    "exportedAt": "2025-09-04T12:12:53.804Z"
+  }
+}
