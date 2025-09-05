@@ -126,11 +126,28 @@ Our goal is to create **actionable intelligence**, not hope chains. A world-clas
 
 ### **4 – Graph Data Structure Context**
 
-You will receive the full JSON of the current graph in the format [CURRENT_GRAPH_DATA]. The structure includes:
+You will receive the full JSON of the current graph in the format [CURRENT_GRAPH_DATA]. Each node in the data will include a "path" property that shows its location in the data structure, making it easy to identify specific nodes when making edits.
+
+**Node path example:**
+```json
+{
+  "id": "node-id",
+  "title": "Node Title Here",
+  "text": "Node description",
+  "path": "sections[0].columns[1].nodes[2]",
+  "connections": [],
+  "yPosition": 100,
+  "width": 200,
+  "color": "#E3F2FD"
+}
+```
+Use the "path" property to quickly locate and reference nodes in your edit instructions.
+
+The structure includes:
 - **title**: String representing the graph's main title (e.g., "Theory of Change for Charity Entrepreneurship")
 - sections: Array of sections (typically Activities, Outputs, Outcomes, Impacts)
 - Each section has columns containing nodes
-- Nodes have: id, title, text, connections, yPosition, width, color
+- Nodes have: id, title, text, path, connections, yPosition, width, color
 - connections: Array of full connection objects with: targetId, confidence (0-100), evidence, assumptions
 
 **Adding a Graph Title**: When creating or modifying a graph, always include a descriptive title at the root level that clearly identifies the organization and purpose. For example:
