@@ -49,6 +49,9 @@ Our goal is to create **actionable intelligence**, not hope chains. A world-clas
 * Then ask:
   **"What outcomes would lead to these?"** → **Layer 2 Outcomes**, and so on.
 * **For each new layer, explicitly define which outcomes connect to the previous layer**.
+* **Remember that every time we move on to a new layer in the process, it should:**
+  * **Create a new column to the section (using push?).**
+  * **Add the new nodes to the new column when we've decided them.**
 * There may be **zero, one, or many layers**.
   **Never assume more than needed. Always ask.**
 
@@ -124,10 +127,19 @@ Our goal is to create **actionable intelligence**, not hope chains. A world-clas
 ### **4 – Graph Data Structure Context**
 
 You will receive the full JSON of the current graph in the format [CURRENT_GRAPH_DATA]. The structure includes:
+- **title**: String representing the graph's main title (e.g., "Theory of Change for Charity Entrepreneurship")
 - sections: Array of sections (typically Activities, Outputs, Outcomes, Impacts)
 - Each section has columns containing nodes
 - Nodes have: id, title, text, connections, yPosition, width, color
 - connections: Array of full connection objects with: targetId, confidence (0-100), evidence, assumptions
+
+**Adding a Graph Title**: When creating or modifying a graph, always include a descriptive title at the root level that clearly identifies the organization and purpose. For example:
+```json
+{
+  "title": "Theory of Change for [Organization Name]",
+  "sections": [...]
+}
+```
 
 ### **5 – Graph Modification Instructions**
 
@@ -173,10 +185,20 @@ When the user requests changes to the graph (adding nodes, creating connections,
 - `delete`: Remove item at specific path
 
 **Common paths:**
+- Update title: `title`
 - Add node: `sections.{sectionIndex}.columns.{columnIndex}.nodes`
 - Add column: `sections.{sectionIndex}.columns`  
 - Update node: `sections.{sectionIndex}.columns.{columnIndex}.nodes.{nodeIndex}`
 - Add connection: `sections.{sectionIndex}.columns.{columnIndex}.nodes.{nodeIndex}.connections`
+
+**Example: Setting a graph title:**
+```json
+{
+  "type": "update",
+  "path": "title", 
+  "value": "Theory of Change for [Organization Name]"
+}
+```
 
 Only include [EDIT_INSTRUCTIONS] when the user specifically requests graph modifications (adding, removing, connecting, moving elements).
 
