@@ -1,0 +1,488 @@
+{
+    "title": "Theory of Change for Scale Welfare",
+    "sections": [
+      {
+        "title": "Inputs",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "input-1",
+                "title": "$1.2M+ multi-year funding commitment from EA-aligned donors and institutional grants",
+                "text": "Based on cost projections of $100k year one scaling to $400k+ for developing country direct implementation, with evidence that Fish Welfare Initiative secured funding from EA Animal Welfare Fund without major issues",
+                "connections": [
+                  {
+                    "targetId": "output-1",
+                    "confidence": 75,
+                    "evidence": "FWI has not had funding issues and gets most funding from EA sources like EA Animal Welfare Fund (CE Report, Section 4.2). However, risk exists if multiple fish welfare orgs compete for same funding pools.",
+                    "assumptions": "EA funding ecosystem continues prioritizing fish welfare interventions and donors don't experience fatigue from multiple similar organizations requesting funding"
+                  },
+                  {
+                    "targetId": "output-5",
+                    "confidence": 70,
+                    "evidence": "Pilot projects require substantial funding for implementation costs, farmer incentives, monitoring equipment, and staff time. CE research estimates significant scaling costs from $100k year 1 to $400k+ for direct implementation work.",
+                    "assumptions": "Funding will be sufficient to cover pilot project costs including potential farmer compensation for participation and risk-taking"
+                  }
+                ],
+                "yPosition": 960,
+                "width": 272,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "input-2",
+                "title": "Co-founder expertise in animal welfare, aquaculture, and international development with 6+ months/year in-country commitment",
+                "text": "Research emphasizes that 'at least one co-founder will likely have to spend significant (~6 months/year) time in country, particularly at the beginning of the charity's life'",
+                "connections": [
+                  {
+                    "targetId": "output-2",
+                    "confidence": 85,
+                    "evidence": "CE research emphasizes critical importance of country visits: 'we are less certain about what intervention this organization should work on, what approach they should take, and where this work should be done' without ground-truthing (CE Report, Section 1.2).",
+                    "assumptions": "Co-founders are willing and able to spend extended time in developing countries and can effectively navigate local contexts and farming systems"
+                  },
+                  {
+                    "targetId": "output-4",
+                    "confidence": 80,
+                    "evidence": "Research shows need for locally-adapted protocols as 'local context and conditions on farms, the species of fish being farmed, the type of farming system being used...will be completely different between different countries' (CE Report, Section 2.1).",
+                    "assumptions": "Co-founders can translate international animal welfare expertise into practical, locally-relevant protocols that farmers can implement"
+                  },
+                  {
+                    "targetId": "output-5",
+                    "confidence": 85,
+                    "evidence": "Research emphasizes that pilot projects require significant in-country presence: 'at least one co-founder will likely have to spend significant (~6 months/year) time in country' for effective ground-truthing and implementation.",
+                    "assumptions": "Co-founders will be able to provide hands-on support for pilot project design, farmer relationship building, and monitoring protocol implementation"
+                  }
+                ],
+                "yPosition": 435,
+                "width": 272,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "input-3",
+                "title": "Access to existing research from Fish Welfare Initiative, FAI Farms, and academic aquaculture welfare studies",
+                "text": "Building on established evidence base including FWI's work improving lives of nearly 2 million fish and research on water quality, stocking density, and mortality reduction",
+                "connections": [
+                  {
+                    "targetId": "output-4",
+                    "confidence": 90,
+                    "evidence": "FWI has proven that welfare improvements are tractable with their Alliance for Responsible Aquaculture successfully implementing welfare standards. Research identifies specific interventions: water quality (dissolved oxygen), stocking density limits (CE Report, Section 1.1).",
+                    "assumptions": "Existing research findings on welfare improvements will translate to different species, farming systems, and geographic contexts with appropriate adaptation"
+                  },
+                  {
+                    "targetId": "output-5",
+                    "confidence": 80,
+                    "evidence": "FWI's existing research on water quality and stocking density improvements provides the evidence base for pilot project design. Their work demonstrates specific welfare interventions that can be tested and measured.",
+                    "assumptions": "Existing research findings can be successfully adapted into pilot project protocols that are testable and measurable in local farming contexts"
+                  }
+                ],
+                "yPosition": 118,
+                "width": 272,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "input-4",
+                "title": "Established networks through EA Philippines, Animal Empathy Philippines, and aquaculture industry connections",
+                "text": "Leveraging existing movement infrastructure, particularly strong EA and animal advocacy presence in the Philippines as identified in country analysis",
+                "connections": [
+                  {
+                    "targetId": "output-3",
+                    "confidence": 70,
+                    "evidence": "CE Report identifies Philippines as particularly promising due to 'movement and capacity building of Animal Empathy Philippines and the general strength of the Effective Altruism movement in the country thanks to EA Philippines' (Section 1.2.2).",
+                    "assumptions": "Existing networks will be willing to support Scale Welfare recruitment and operations, and network strength translates to available qualified talent"
+                  },
+                  {
+                    "targetId": "output-5",
+                    "confidence": 65,
+                    "evidence": "Local networks through EA Philippines and Animal Empathy Philippines are essential for identifying and recruiting farmers willing to participate in pilot projects and building trust with farming communities.",
+                    "assumptions": "Network relationships will translate into farmer willingness to participate in pilot projects and accept potential risks of trying new welfare practices"
+                  }
+                ],
+                "yPosition": 646,
+                "width": 272,
+                "color": "#E8F5E8"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Outputs",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "output-1",
+                "title": "Targeted grant applications to EA Animal Welfare Fund, Open Philanthropy, and institutional donors with evidence-based impact projections",
+                "text": "Comprehensive funding proposals leveraging cost-effectiveness analysis showing 24.39 welfare points affected per dollar",
+                "connections": [
+                  {
+                    "targetId": "outcome-4-1",
+                    "confidence": 75,
+                    "evidence": "Similar funding approach worked for FWI which 'currently get most of their funding from EA sources such as the EA Animal Welfare Fund' and hasn't had funding issues (CE Report, Section 4.2).",
+                    "assumptions": "EA funders continue prioritizing fish welfare interventions and Scale Welfare can differentiate itself sufficiently from existing organizations like FWI"
+                  }
+                ],
+                "yPosition": 757,
+                "width": 240,
+                "color": "#D4F4D4"
+              },
+              {
+                "id": "output-2",
+                "title": "Comprehensive country assessment reports for Philippines, Taiwan, and Indonesia including farm visits and stakeholder mapping",
+                "text": "Detailed on-ground research to validate desk research assumptions and identify specific implementation opportunities and challenges",
+                "connections": [
+                  {
+                    "targetId": "outcome-4-3",
+                    "confidence": 85,
+                    "evidence": "Research emphasizes critical need for country visits: 'you should aim to visit farms and stakeholders in the top countries that you are considering. Doing these scoping visits will enable you to make a more informed decision' (CE Report, Section 1.2).",
+                    "assumptions": "Farmers and stakeholders will be willing to meet and provide access for assessments, and findings will clearly indicate optimal country selection"
+                  }
+                ],
+                "yPosition": 335,
+                "width": 240,
+                "color": "#D4F4D4"
+              },
+              {
+                "id": "output-3",
+                "title": "Local staff recruitment campaigns leveraging Animal Empathy Philippines and EA Philippines networks",
+                "text": "Targeted hiring for country directors, aquaculture specialists, and farmer relationship managers in priority countries",
+                "connections": [
+                  {
+                    "targetId": "outcome-4-2",
+                    "confidence": 70,
+                    "evidence": "Philippines identified as having strongest talent availability among top fish-producing countries due to Animal Empathy Philippines and EA Philippines presence. However, uncertainty exists as 'a big uncertainty is the talent availability in the country' for other locations like Taiwan (CE Report, Section 1.2.3).",
+                    "assumptions": "Network strength translates to availability of qualified candidates with relevant skills, and compensation packages will be competitive enough to attract talent"
+                  }
+                ],
+                "yPosition": 544,
+                "width": 240,
+                "color": "#D4F4D4"
+              },
+              {
+                "id": "output-4",
+                "title": "Species-specific welfare protocols for milkfish and tilapia based on water quality and stocking density research",
+                "text": "Practical implementation guidelines adapted to local farming systems, covering dissolved oxygen monitoring, stocking density limits, and disease prevention",
+                "connections": [
+                  {
+                    "targetId": "outcome-3-1",
+                    "confidence": 80,
+                    "evidence": "Research identifies specific welfare improvements: water quality (dissolved oxygen) and stocking density as 'most important welfare issues'. FWI successfully included stocking density decrease in their welfare standards (CE Report, Section 1.1).",
+                    "assumptions": "Welfare improvements that worked in FWI's Indian context can be successfully adapted to different species and farming systems in East Asia"
+                  }
+                ],
+                "yPosition": 118,
+                "width": 240,
+                "color": "#D4F4D4"
+              },
+              {
+                "id": "output-5",
+                "title": "Pilot farm implementation projects demonstrating welfare improvement cost-effectiveness",
+                "text": "Initial on-farm trials with 10-15 farms to test protocols and demonstrate economic benefits before broader scaling",
+                "connections": [
+                  {
+                    "targetId": "outcome-3-2",
+                    "confidence": 75,
+                    "evidence": "FWI model shows this approach works - they've successfully worked with ~70 farms similar to Scale Welfare's projections. Key insight that welfare improvements are 'win-win, as fish with higher welfare have better survival rates and increase farm efficiency' (CE Report, Section 1.2.2).",
+                    "assumptions": "Pilot farms will be representative of broader farming population and economic benefits will be compelling enough to motivate wider adoption"
+                  },
+                  {
+                    "targetId": "outcome-2-2",
+                    "confidence": 65,
+                    "evidence": "Direct evidence from pilot projects could skip layers to immediately convince farmers of economic benefits, similar to how FWI showed 'increased survival and lower disease susceptibility' (CE Report, Section 1.3.1).",
+                    "assumptions": "Economic benefits will be visible within pilot timeframe and farmers will trust evidence from pilot projects conducted by outside organization"
+                  }
+                ],
+                "yPosition": 960,
+                "width": 240,
+                "color": "#D4F4D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Outcomes",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "outcome-4-1",
+                "title": "Scale Welfare secures sufficient funding from EA-aligned donors and institutional funders to support multi-year operations",
+                "text": "Established funding base enabling sustained operations through the critical first 3 years to reach scale",
+                "connections": [
+                  {
+                    "targetId": "outcome-3-1",
+                    "confidence": 85,
+                    "evidence": "All protocol development requires sustained funding. CE cost analysis models $100k year 1, scaling to $400k+ by year 3 for developing country direct implementation (CE Report, Section 3.1).",
+                    "assumptions": "Funding will be sufficient to support necessary research and development activities without major budget constraints limiting protocol quality"
+                  },
+                  {
+                    "targetId": "outcome-3-2",
+                    "confidence": 85,
+                    "evidence": "Demonstration farm work is resource-intensive. Cost estimates directly correlate with number of farms worked with as you need 'more staff to do water quality measurements on each of the farms, more training costs' (CE Report, Section 3.1).",
+                    "assumptions": "Multi-year funding commitments will provide stability needed for farmers to trust and engage with demonstration projects"
+                  },
+                  {
+                    "targetId": "outcome-3-3",
+                    "confidence": 80,
+                    "evidence": "Training programs require sustained investment. Research emphasizes importance of local capacity building and farmer education for sustainable impact (CE Report, Section 1.3.1).",
+                    "assumptions": "Funding levels will be adequate to develop comprehensive training programs rather than one-off interventions"
+                  }
+                ],
+                "yPosition": 757,
+                "width": 240,
+                "color": "#C1E9C1"
+              },
+              {
+                "id": "outcome-4-2",
+                "title": "Scale Welfare recruits talented local teams with aquaculture expertise and farmer relationships in target countries",
+                "text": "Strong in-country teams capable of understanding local contexts and building trust with farming communities",
+                "connections": [
+                  {
+                    "targetId": "outcome-3-1",
+                    "confidence": 75,
+                    "evidence": "Protocol development requires local knowledge. Research emphasizes 'local context and conditions on farms, the species of fish being farmed, the type of farming system being used...will be completely different between different countries' (CE Report, Section 2.1).",
+                    "assumptions": "Local teams will have sufficient technical expertise to adapt international welfare standards to local farming contexts and species"
+                  },
+                  {
+                    "targetId": "outcome-3-2",
+                    "confidence": 80,
+                    "evidence": "Farmer relationships critical for demonstration projects. Research notes importance of local talent as 'the strength of your local team will be an important determining factor in how much progress you are able to make' (CE Report, Introduction).",
+                    "assumptions": "Local teams will be able to build trust and credibility with farmers sufficient to gain access for demonstration projects"
+                  },
+                  {
+                    "targetId": "outcome-3-3",
+                    "confidence": 85,
+                    "evidence": "Training delivery requires local presence and relationships. Research emphasizes need for teams who understand 'what farmers are concerned about, what farmers are willing and able to do' (CE Report, Section 1.3.1).",
+                    "assumptions": "Local teams will be effective at designing and delivering training that resonates with farmer concerns and capabilities"
+                  }
+                ],
+                "yPosition": 544,
+                "width": 240,
+                "color": "#C1E9C1"
+              },
+              {
+                "id": "outcome-4-3",
+                "title": "Scale Welfare establishes operational presence and stakeholder relationships in priority countries",
+                "text": "Strong local networks and partnerships enabling effective program delivery and stakeholder engagement",
+                "connections": [
+                  {
+                    "targetId": "outcome-3-1",
+                    "confidence": 80,
+                    "evidence": "Local presence needed for protocol validation. Research emphasizes need to 'visit farms and stakeholders' to make informed decisions about what interventions work (CE Report, Section 1.2).",
+                    "assumptions": "Operational presence will provide sufficient access to farms and farming systems to conduct thorough protocol testing and validation"
+                  },
+                  {
+                    "targetId": "outcome-3-2",
+                    "confidence": 85,
+                    "evidence": "Stakeholder relationships essential for demonstration farm recruitment and credibility. FWI's success partly due to building trust and partnerships in local context (CE Report, Section 2.1).",
+                    "assumptions": "Stakeholder relationships will translate into farmer willingness to participate in demonstration projects and trust in Scale Welfare's recommendations"
+                  },
+                  {
+                    "targetId": "outcome-3-3",
+                    "confidence": 75,
+                    "evidence": "Training programs need institutional partnerships for delivery and sustainability. Research suggests working with local institutions for capacity building (CE Report, Section 1.3.1).",
+                    "assumptions": "Stakeholder relationships will include partnerships with institutions capable of supporting training program delivery and sustainability"
+                  }
+                ],
+                "yPosition": 335,
+                "width": 240,
+                "color": "#C1E9C1"
+              }
+            ]
+          },
+          {
+            "nodes": [
+              {
+                "id": "outcome-3-2",
+                "title": "Demonstration farms successfully show economic benefits of welfare improvements including reduced mortality and increased efficiency",
+                "text": "Pilot farms demonstrate measurable improvements in survival rates, reduced disease, and economic returns from welfare improvements",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-2",
+                    "confidence": 65,
+                    "evidence": "FWI demonstrated that welfare improvements led to 'increased survival and lower disease susceptibility - which can be seen as a win-win for farmers and fish'. However, research notes 'it may be difficult to convince some farmers to reduce stocking densities' (CE Report, Sections 1.1.2, 1.3.1).",
+                    "assumptions": "Economic benefits from demonstration farms will be substantial enough to overcome farmer skepticism and resistance to changing established practices"
+                  }
+                ],
+                "yPosition": 960,
+                "width": 240,
+                "color": "#AFDAAF"
+              },
+              {
+                "id": "outcome-3-3",
+                "title": "Training programs and financial support mechanisms are established to build farmer capacity for welfare implementation",
+                "text": "Comprehensive farmer education and support systems enabling widespread adoption of welfare improvements",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-3",
+                    "confidence": 75,
+                    "evidence": "Research emphasizes farmers need both knowledge and resources: 'what farmers are willing and able to do' depends on capacity building. FWI's approach includes farmer training as core component (CE Report, Section 1.3.1).",
+                    "assumptions": "Training programs will be effective at building genuine technical competency rather than just awareness, and financial support will be adequate to remove resource barriers"
+                  }
+                ],
+                "yPosition": 544,
+                "width": 240,
+                "color": "#AFDAAF"
+              },
+              {
+                "id": "outcome-3-1",
+                "title": "Locally-adapted welfare improvement protocols are developed and validated through on-farm testing in target countries",
+                "text": "Evidence-based protocols specifically designed for milkfish and tilapia farming systems in East Asia, covering water quality, stocking density, and disease prevention",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-1",
+                    "confidence": 80,
+                    "evidence": "Research shows protocol development enables farmer access to practical guidance. FWI successfully developed protocols that farmers could implement, including specific welfare standards with stocking density requirements (CE Report, Section 1.1.2).",
+                    "assumptions": "Protocols developed will be sufficiently practical and clear for farmers to understand and implement without extensive ongoing support"
+                  }
+                ],
+                "yPosition": 118,
+                "width": 240,
+                "color": "#AFDAAF"
+              }
+            ]
+          },
+          {
+            "nodes": [
+              {
+                "id": "outcome-2-1",
+                "title": "Farmers have access to evidence-based, locally-tested welfare improvement protocols adapted to their species and farming systems",
+                "text": "Clear, practical guidance available to farmers on implementing welfare improvements specific to their context",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-1",
+                    "confidence": 70,
+                    "evidence": "Access to protocols is necessary but not sufficient for implementation. Research shows need for protocols to be practical and locally relevant, but implementation also depends on farmer willingness and capacity (CE Report, Section 1.1).",
+                    "assumptions": "Availability of protocols will translate into farmer usage and that protocols will be sufficiently clear and practical for independent implementation"
+                  }
+                ],
+                "yPosition": 335,
+                "width": 240,
+                "color": "#9DCC9D"
+              },
+              {
+                "id": "outcome-2-2",
+                "title": "Farmers are convinced that welfare improvements provide economic benefits including reduced mortality and improved efficiency",
+                "text": "Farmers believe welfare improvements will improve their farm profitability rather than just impose costs",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-1",
+                    "confidence": 65,
+                    "evidence": "Economic conviction is critical but challenging. Research shows FWI achieved this through demonstrating 'increased survival and lower disease susceptibility', but notes 'it may be difficult to convince some farmers to reduce stocking densities' (CE Report, Section 1.1.2).",
+                    "assumptions": "Farmer economic calculations will prioritize welfare improvement benefits over short-term costs and perceived risks of changing established practices"
+                  }
+                ],
+                "yPosition": 757,
+                "width": 240,
+                "color": "#9DCC9D"
+              },
+              {
+                "id": "outcome-2-3",
+                "title": "Farmers possess the technical knowledge and financial resources to implement welfare monitoring and improvement systems",
+                "text": "Farmers have both the skills and resources needed to actually carry out welfare improvements on their farms",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-1",
+                    "confidence": 75,
+                    "evidence": "Technical capacity building has proven effective. FWI successfully trained farmers to implement welfare standards including water quality monitoring and stocking density management (CE Report, Section 1.1).",
+                    "assumptions": "Training will build sufficient technical competency for independent implementation and financial resources will be adequate to cover implementation costs"
+                  },
+                  {
+                    "targetId": "outcome-1-2",
+                    "confidence": 70,
+                    "evidence": "Technical knowledge supports mortality reduction through better disease prevention and welfare monitoring. Research shows correlation between welfare improvements and reduced mortality (CE Report, Section 1.1.3).",
+                    "assumptions": "Technical knowledge gained will be applied consistently and effectively to achieve measurable mortality reductions"
+                  }
+                ],
+                "yPosition": 544,
+                "width": 240,
+                "color": "#9DCC9D"
+              }
+            ]
+          },
+          {
+            "nodes": [
+              {
+                "id": "outcome-1-1",
+                "title": "Fish farms implement and maintain evidence-based welfare improvements including optimal water quality parameters and appropriate stocking densities",
+                "text": "Farms actively maintain dissolved oxygen levels, manage stocking densities, and follow welfare protocols on an ongoing basis",
+                "connections": [
+                  {
+                    "targetId": "end-goal",
+                    "confidence": 60,
+                    "evidence": "FWI has demonstrated this connection works - their welfare improvements have 'improved the lives of nearly 2 million fishes so far' through direct farm implementation. However, concern exists about persistence as 'impact may not persist after the charity is operational, as farms will no longer be accountable to anyone' (CE Report, Introduction and Section 1.3.1).",
+                    "assumptions": "Welfare improvements will be maintained consistently over time without external oversight and that farmers will continue seeing economic benefits that motivate continued implementation"
+                  }
+                ],
+                "yPosition": 435,
+                "width": 240,
+                "color": "#8ABE8A"
+              },
+              {
+                "id": "outcome-1-2",
+                "title": "Fish farms achieve reduced mortality rates through improved disease prevention and welfare monitoring systems",
+                "text": "Farms experience measurably lower fish mortality through better welfare practices and early intervention systems",
+                "connections": [
+                  {
+                    "targetId": "end-goal",
+                    "confidence": 65,
+                    "evidence": "Strong evidence linking welfare improvements to mortality reduction. Norwegian research shows mortality differences between hatcheries suggests rates 'are not biology/natural, but rather caused by poor production methods' and can be improved (CE Report, Section 1.4.1).",
+                    "assumptions": "Mortality reductions achieved in pilot projects will be maintained at scale and that reduced mortality translates directly into reduced suffering for individual fish"
+                  }
+                ],
+                "yPosition": 646,
+                "width": 240,
+                "color": "#8ABE8A"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Goal",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "end-goal",
+                "title": "Reduced suffering and improved wellbeing for sentient aquatic animals",
+                "text": "Measurable reduction in chronic welfare issues affecting farmed fish including water quality stress, overcrowding, and disease-related suffering",
+                "connections": [
+                  {
+                    "targetId": "end-mission",
+                    "confidence": 90,
+                    "evidence": "Direct causal connection between improved fish welfare and broader moral consideration. Research establishes fish suffering as significant moral concern given scale of 78-171 billion individual fish farmed globally (CE Report, Introduction).",
+                    "assumptions": "Improved treatment of farmed fish will contribute to broader recognition of animal sentience and moral consideration in food production systems"
+                  }
+                ],
+                "yPosition": 544,
+                "width": 240,
+                "color": "#66A866"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Mission",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "end-mission",
+                "title": "A world where the moral consideration of all sentient beings is reflected in food production systems and policies",
+                "text": "Broader transformation toward recognition and protection of animal sentience across all food production systems",
+                "connections": [],
+                "yPosition": 544,
+                "width": 240,
+                "color": "#66a866"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "_metadata": {
+      "exportedAt": "2025-09-05T12:16:13.312Z"
+    }
+  }
