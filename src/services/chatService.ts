@@ -2,6 +2,7 @@ import { type EditInstruction, parseEditInstructions, cleanResponseContent } fro
 
 // Import the system prompt from external file
 import systemPromptContent from '../prompts/chatSystemPrompt.md?raw';
+import { addNodePaths } from '../utils/addNodePaths';
 
 export interface ChatMessage {
   id: string;
@@ -48,12 +49,14 @@ class ChatService {
       const processedMessages = messages.map((msg, index) => {
         let content = msg.content;
         
-        // Append current graph JSON to user messages
+        // Append current graph JSON with node paths to user messages
         if (msg.role === 'user' && currentGraphData && index === messages.length - 1) {
           console.log('=== GRAPH JSON SENT TO AI ===');
           console.log('Graph data size:', JSON.stringify(currentGraphData).length, 'characters');
           console.log('=== END GRAPH JSON ===');
-          content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(currentGraphData, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
+          
+          const dataWithPaths = addNodePaths(currentGraphData);
+          content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
         }
         
         return {
@@ -154,12 +157,14 @@ class ChatService {
       const processedMessages = messages.map((msg, index) => {
         let content = msg.content;
         
-        // Append current graph JSON to user messages
+        // Append current graph JSON with node paths to user messages
         if (msg.role === 'user' && currentGraphData && index === messages.length - 1) {
           console.log('=== GRAPH JSON SENT TO AI ===');
           console.log('Graph data size:', JSON.stringify(currentGraphData).length, 'characters');
           console.log('=== END GRAPH JSON ===');
-          content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(currentGraphData, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
+          
+          const dataWithPaths = addNodePaths(currentGraphData);
+          content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
         }
         
         return {
