@@ -7,7 +7,16 @@ export type EditInstruction =
 
 // Apply structured edits to a graph object
 export function applyEdits(graphData: any, edits: EditInstruction[]): any {
+  if (!graphData) {
+    throw new Error("Graph data is null or undefined");
+  }
+  
+  if (!Array.isArray(edits)) {
+    throw new Error("Edit instructions must be an array");
+  }
+  
   let updated = JSON.parse(JSON.stringify(graphData)); // Deep clone
+  const errors: string[] = [];
 
   const getAtPath = (obj: any, path: string[]): any => {
     return path.reduce((acc, key) => {
@@ -17,10 +26,9 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
   };
 
   const setAtPath = (obj: any, path: string[], value: any): void => {
-    if (path.length === 0) return;
-    
     const lastKey = path[path.length - 1];
     const parentPath = path.slice(0, -1);
+    
     const target = parentPath.reduce((acc, key) => {
       if (acc[key] === undefined) {
         // If the key is numeric, create an array, otherwise create an object
@@ -94,37 +102,111 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
     }
   };
 
-  // Apply edits in order
+  // First, validate all edits before applying any
+  const validationErrors: string[] = [];
+  
+  edits.forEach((edit, index) => {
+    // Validate edit structure
+    if (!edit.type || typeof edit.type !== 'string') {
+      validationErrors.push(`Edit ${index}: Missing or invalid type`);
+      return;
+    }
+    
+    if (!edit.path || typeof edit.path !== 'string') {
+      validationErrors.push(`Edit ${index}: Missing or invalid path`);
+      return;
+    }
+    
+    // Check for valid edit types
+    if (!['update', 'insert', 'delete', 'push'].includes(edit.type)) {
+      validationErrors.push(`Edit ${index}: Unknown edit type "${edit.type}"`);
+      return;
+    }
+    
+    // Validate path format
+    const path = edit.path.split('.');
+    if (path.length === 0 || path.some(segment => segment.trim() === '')) {
+      validationErrors.push(`Edit ${index}: Invalid path format "${edit.path}"`);
+      return;
+    }
+    
+    // Check for invalid array indices
+    const hasNegativeIndex = path.some(segment => /^-\d+$/.test(segment));
+    if (hasNegativeIndex) {
+      validationErrors.push(`Edit ${index}: Negative array indices not allowed in path "${edit.path}"`);
+      return;
+    }
+    
+    // Validate that the path exists in the current data structure
+    try {
+      const pathArray = edit.path.split('.');
+      let current = updated;
+      
+      for (let i = 0; i < pathArray.length - 1; i++) {
+        const segment = pathArray[i];
+        
+        if (current === null || current === undefined) {
+          throw new Error(`Path segment "${segment}" leads to null/undefined`);
+        }
+        
+        if (typeof current !== 'object') {
+          throw new Error(`Path segment "${segment}" is not an object`);
+        }
+        
+        // For array indices, check if they're within bounds
+        if (/^\d+$/.test(segment)) {
+          const index = parseInt(segment);
+          if (Array.isArray(current) && (index < 0 || index >= current.length)) {
+            throw new Error(`Array index ${index} is out of bounds (length: ${current.length})`);
+          }
+        }
+        
+        current = current[segment];
+      }
+      
+      // For delete operations, check that the final target exists
+      if (edit.type === 'delete') {
+        const lastSegment = pathArray[pathArray.length - 1];
+        if (current === null || current === undefined || !(lastSegment in current)) {
+          throw new Error(`Cannot delete non-existent property "${lastSegment}"`);
+        }
+      }
+      
+    } catch (pathError) {
+      validationErrors.push(`Edit ${index}: Invalid path "${edit.path}" - ${pathError instanceof Error ? pathError.message : 'Unknown path error'}`);
+    }
+  });
+  
+  // If there are validation errors, throw without applying any edits
+  if (validationErrors.length > 0) {
+    throw new Error(`Invalid edit instructions (no changes applied):\n${validationErrors.join('\n')}`);
+  }
+
+  // Now apply edits (we know they're all valid)
   edits.forEach((edit) => {
     const path = edit.path.split('.');
     
-    try {
-      switch (edit.type) {
-        case "update":
-          setAtPath(updated, path, edit.value);
-          break;
-        case "insert":
-          // Ensure nodes have connections array
-          if (edit.value && typeof edit.value === 'object' && 'id' in edit.value && !edit.value.connections) {
-            edit.value.connections = [];
-          }
-          insertAtIndex(updated, path, edit.value);
-          break;
-        case "delete":
-          deleteAtPath(updated, path);
-          break;
-        case "push":
-          // Ensure nodes have connections array
-          if (edit.value && typeof edit.value === 'object' && 'id' in edit.value && !edit.value.connections) {
-            edit.value.connections = [];
-          }
-          pushToPath(updated, path, edit.value);
-          break;
-        default:
-          console.warn(`Unknown edit type: ${(edit as any).type}`);
-      }
-    } catch (error) {
-      console.error(`Error applying edit:`, edit, error);
+    switch (edit.type) {
+      case "update":
+        setAtPath(updated, path, edit.value);
+        break;
+      case "insert":
+        // Ensure nodes have connections array
+        if (edit.value && typeof edit.value === 'object' && 'id' in edit.value && !edit.value.connections) {
+          edit.value.connections = [];
+        }
+        insertAtIndex(updated, path, edit.value);
+        break;
+      case "delete":
+        deleteAtPath(updated, path);
+        break;
+      case "push":
+        // Ensure nodes have connections array
+        if (edit.value && typeof edit.value === 'object' && 'id' in edit.value && !edit.value.connections) {
+          edit.value.connections = [];
+        }
+        pushToPath(updated, path, edit.value);
+        break;
     }
   });
 
