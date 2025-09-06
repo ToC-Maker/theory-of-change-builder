@@ -123,6 +123,21 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
       return;
     }
     
+    // Check for invalid properties - only allow known properties
+    const validProperties = ['type', 'path', 'value'];
+    const editKeys = Object.keys(edit);
+    const invalidProperties = editKeys.filter(key => !validProperties.includes(key));
+    if (invalidProperties.length > 0) {
+      validationErrors.push(`Edit ${index}: Invalid properties: ${invalidProperties.join(', ')}. Only 'type', 'path', and 'value' are allowed.`);
+      return;
+    }
+    
+    // For insert operations, the index should be part of the path, not a separate property
+    if (edit.type === 'insert' && edit.path && !edit.path.match(/\.\d+$/)) {
+      validationErrors.push(`Edit ${index}: Insert operations must specify the index in the path (e.g., "sections.2.columns.0" not "sections.2.columns")`);
+      return;
+    }
+    
     // Validate path format
     const path = edit.path.split('.');
     if (path.length === 0 || path.some(segment => segment.trim() === '')) {
