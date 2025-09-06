@@ -103,6 +103,18 @@ export function ToC({
     }, 0)
   }, [setDataAndNotify, nodeRefs])
 
+  const recalculateAllNodeHeights = useCallback(() => {
+    // Force recalculation of all node heights
+    setTimeout(() => {
+      Object.entries(nodeRefs).forEach(([nodeId, ref]) => {
+        if (ref) {
+          const height = ref.getBoundingClientRect().height
+          setNodeHeights(prev => ({ ...prev, [nodeId]: height }))
+        }
+      })
+    }, 50) // Slightly longer delay to ensure DOM updates
+  }, [nodeRefs])
+
   const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDraggingLegend(true)
     setLegendDragOffset({
@@ -139,7 +151,9 @@ export function ToC({
   useEffect(() => {
     console.log('ToC component received new initialData:', initialData);
     setData(initialData);
-  }, [initialData]);
+    // Recalculate node heights when data changes (e.g., from AI edits)
+    recalculateAllNodeHeights();
+  }, [initialData, recalculateAllNodeHeights]);
 
   // Update textSize and curvature when data changes
   useEffect(() => {
