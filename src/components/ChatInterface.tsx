@@ -90,8 +90,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // Handle edit instructions if present
           if (editInstructions && onGraphUpdate && graphData) {
             console.log('Edit instructions detected in ChatInterface:', editInstructions);
-            const updatedGraph = applyEdits(graphData, editInstructions);
-            onGraphUpdate(updatedGraph);
+            try {
+              const updatedGraph = applyEdits(graphData, editInstructions);
+              onGraphUpdate(updatedGraph);
+            } catch (error) {
+              console.error('Error applying graph edits:', error);
+              // Add an error message to the chat
+              const errorMessage: ChatMessage = {
+                id: (Date.now() + 1).toString(),
+                role: 'assistant',
+                content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
+                timestamp: new Date()
+              };
+              setMessages(prev => [...prev, errorMessage]);
+            }
           } else {
             console.log('No edit instructions, callback, or graph data:', {
               hasEditInstructions: !!editInstructions,
