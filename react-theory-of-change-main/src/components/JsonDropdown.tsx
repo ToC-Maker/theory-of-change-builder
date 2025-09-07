@@ -5,13 +5,15 @@ interface JsonDropdownProps {
   title?: string;
   copyGraphJSON?: () => Promise<void>;
   resetToOriginal?: () => void;
+  onUploadJSON?: (jsonData: any) => void;
   loading?: boolean;
 }
 
-export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON, resetToOriginal, loading }: JsonDropdownProps) {
+export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON, resetToOriginal, onUploadJSON, loading }: JsonDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleCopyClick = async () => {
     if (copyGraphJSON) {
@@ -19,6 +21,53 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
       setShowCopiedMessage(true);
       setTimeout(() => setShowCopiedMessage(false), 2000); // Hide after 2 seconds
     }
+  };
+
+  const handleDownloadClick = () => {
+    const graphData = {
+      ...data,
+      _metadata: {
+        exportedAt: new Date().toISOString(),
+      }
+    };
+    
+    const jsonString = JSON.stringify(graphData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `toc-graph-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const jsonData = JSON.parse(e.target?.result as string);
+        if (onUploadJSON) {
+          onUploadJSON(jsonData);
+        }
+      } catch (error) {
+        alert('Invalid JSON file. Please check the file format.');
+        console.error('Error parsing JSON:', error);
+      }
+    };
+    reader.readAsText(file);
+    
+    // Reset the input so the same file can be selected again
+    event.target.value = '';
   };
 
   return (
@@ -41,9 +90,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
       
       {isOpen && (
         <div className="border-t border-gray-200 p-4">
-          {(resetToOriginal || copyGraphJSON) && (
-            <div className="mb-3 flex justify-between items-center">
-              {/* Reset to Original button on the left */}
+          {/* Hidden file input for upload */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept=".json"
+            style={{ display: 'none' }}
+          />
+          
+          {(resetToOriginal || copyGraphJSON || onUploadJSON) && (
+            <div className="mb-3 flex flex-wrap gap-2 items-center">
+              {/* Reset to Original button */}
               {resetToOriginal && (
                 <button
                   onClick={resetToOriginal}
@@ -58,6 +116,32 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                 </button>
               )}
               
+              {/* Download JSON button */}
+              <button
+                onClick={handleDownloadClick}
+                className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200"
+                title="Download graph as JSON file"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Download JSON</span>
+              </button>
+
+              {/* Upload JSON button */}
+              {onUploadJSON && (
+                <button
+                  onClick={handleUploadClick}
+                  className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-purple-50 hover:text-purple-600 hover:border-purple-200"
+                  title="Upload graph from JSON file"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  <span>Upload JSON</span>
+                </button>
+              )}
+
               {/* Copy JSON button on the right */}
               {copyGraphJSON && (
                 <button

@@ -17,7 +17,7 @@ interface UploadedFile {
 
 export function ToCGeneratorModal({ isOpen, onClose, onGraphGenerated }: ToCGeneratorModalProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
-  const [organizationName, setOrganizationName] = useState('');
+  const [additionalInstructions, setAdditionalInstructions] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -90,7 +90,7 @@ export function ToCGeneratorModal({ isOpen, onClose, onGraphGenerated }: ToCGene
   };
 
   const startConversation = async () => {
-    if (!organizationName.trim() || files.filter(f => f.status === 'ready').length === 0) {
+    if (files.filter(f => f.status === 'ready').length === 0) {
       return;
     }
 
@@ -111,13 +111,13 @@ export function ToCGeneratorModal({ isOpen, onClose, onGraphGenerated }: ToCGene
     // Create the specialized conversation prompt
     const conversationPrompt = `${conversationPromptContent}
 
-## Organization Context:
-**Organization Name**: ${organizationName}
-
 ## Document Content:
 ${documentContent}
 
-Based on this information, generate a comprehensive Theory of Change development conversation following the gold standard process. The conversation should demonstrate evidence-based thinking, counterfactual discipline, and result in a complete, implementable JSON graph structure.
+${additionalInstructions.trim() ? `## Additional Instructions:
+${additionalInstructions.trim()}
+
+` : ''}Based on this information, generate a comprehensive Theory of Change development conversation following the gold standard process. The conversation should demonstrate evidence-based thinking, counterfactual discipline, and result in a complete, implementable JSON graph structure.
 
 IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot and Organization Representative, with back-and-forth exchanges that show the thinking process.`;
 
@@ -170,7 +170,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${organizationName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_theory_of_change_conversation.md`;
+    a.download = `theory_of_change_conversation_${new Date().toISOString().split('T')[0]}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -224,7 +224,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     }
     
     setFiles([]);
-    setOrganizationName('');
+    setAdditionalInstructions('');
     setMessages([]);
     setStreamingContent('');
     setIsStreaming(false);
@@ -253,7 +253,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-xl font-semibold text-gray-900">
-                {conversationStarted ? `Theory of Change: ${organizationName}` : 'Generate Theory of Change Conversation'}
+                {conversationStarted ? 'Theory of Change Generation' : 'Generate Theory of Change Conversation'}
               </h2>
               {conversationStarted && (
                 <p className="text-sm text-gray-600 mt-1">
@@ -304,18 +304,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           {!conversationStarted ? (
             /* Setup Form */
             <div className="p-6 overflow-y-auto w-full">
-              {/* Organization Name */}
+              {/* Additional Instructions */}
               <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Organization Name
+                  Additional Instructions (Optional)
                 </label>
-                <input
-                  type="text"
-                  value={organizationName}
-                  onChange={(e) => setOrganizationName(e.target.value)}
-                  placeholder="Enter organization name..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                <textarea
+                  value={additionalInstructions}
+                  onChange={(e) => setAdditionalInstructions(e.target.value)}
+                  placeholder="Enter any specific instructions or requirements for the Theory of Change generation..."
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-vertical"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Optional: Provide specific guidance, focus areas, or requirements for the Theory of Change development process.
+                </p>
               </div>
 
               {/* File Upload */}
@@ -384,7 +387,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 <button
                   type="button"
                   onClick={startConversation}
-                  disabled={!organizationName.trim() || files.filter(f => f.status === 'ready').length === 0}
+                  disabled={files.filter(f => f.status === 'ready').length === 0}
                   className="px-6 py-3 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Start Theory of Change Generation
