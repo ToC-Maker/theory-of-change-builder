@@ -95,6 +95,35 @@ function ToCViewer() {
     return null;
   }, [filename]);
 
+  const handleUploadJSON = useCallback((jsonData: any) => {
+    // Validate that the uploaded data has the expected structure
+    if (!jsonData || typeof jsonData !== 'object') {
+      alert('Invalid JSON file: Data must be an object');
+      return;
+    }
+
+    if (!jsonData.sections || !Array.isArray(jsonData.sections)) {
+      alert('Invalid JSON file: Missing or invalid sections array');
+      return;
+    }
+
+    console.log('Uploading JSON data:', jsonData);
+    
+    // Save current state to history before updating
+    if (data) {
+      saveToHistory(data);
+    }
+    
+    // Clear redo history when new changes are made
+    setRedoHistory([]);
+    
+    // Set the uploaded data
+    setData(jsonData);
+    saveToLocalStorage(jsonData);
+    
+    console.log('JSON data uploaded successfully');
+  }, [data, saveToHistory, saveToLocalStorage]);
+
   const handleGraphUpdate = (newGraphData: ToCData) => {
     console.log('App handleGraphUpdate called with:', newGraphData);
     console.log('Current data before update:', data);
@@ -398,6 +427,7 @@ function ToCViewer() {
               title="Current Graph JSON" 
               copyGraphJSON={copyGraphJSON}
               resetToOriginal={resetToOriginal}
+              onUploadJSON={handleUploadJSON}
               loading={loading}
             />
           </div>
