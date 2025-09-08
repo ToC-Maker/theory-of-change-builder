@@ -1,374 +1,374 @@
 {
-    "sections": [
-      {
-        "title": "Inputs",
-        "columns": [
-          {
-            "nodes": [
-              {
-                "id": "input-consulting-orgs",
-                "title": "Consulting orgs",
-                "text": "We consult orgs on how to build theories of change using the tool, then get feedback on how to improve it.",
-                "connections": [
-                  {
-                    "targetId": "output-tool-improvements",
-                    "confidence": 60,
-                    "evidence": "Consulting feedback loops improve products, but effect size varies widely (2-5x improvement possible)",
-                    "assumptions": "Consultants represent actual user needs; feedback is actionable; improvements are technically feasible within resource constraints"
-                  }
-                ],
-                "yPosition": 137,
-                "width": 144,
-                "color": "#b8e6ff"
-              },
-              {
-                "id": "input-development",
-                "title": "Development",
-                "text": "Software development resources, technical expertise, and engineering capacity to build and maintain the tool",
-                "connections": [
-                  {
-                    "targetId": "output-tool-exists",
-                    "confidence": 95,
-                    "evidence": "Software development is necessary and sufficient for tool existence (definitional relationship)",
-                    "assumptions": "Requirements are well-defined; technical architecture is sound; hosting/deployment infrastructure is reliable"
-                  },
-                  {
-                    "targetId": "output-tool-improvements",
-                    "confidence": 85,
-                    "evidence": "Dedicated development resources typically improve software quality and user experience",
-                    "assumptions": "Development team prioritizes user experience; feedback mechanisms exist; technical debt doesn't accumulate"
-                  }
-                ],
-                "yPosition": 272,
-                "width": 144,
-                "color": "#d4e6f1"
-              },
-              {
-                "id": "input-outreach",
-                "title": "Outreach",
-                "text": "Marketing, communication, and community engagement resources to reach potential users",
-                "connections": [
-                  {
-                    "targetId": "output-people-reached",
-                    "confidence": 70,
-                    "evidence": "Targeted outreach typically achieves 5-15% engagement rates in professional contexts",
-                    "assumptions": "Target audience is reachable through chosen channels; messaging resonates with EA strategy needs; timing aligns with planning cycles"
-                  }
-                ],
-                "yPosition": 413,
-                "width": 144,
-                "color": "#7fb3d3"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "title": "Outputs",
-        "columns": [
-          {
-            "nodes": [
-              {
-                "id": "output-tool-improvements",
-                "title": "Improvements to the tool",
-                "text": "Continuous development and refinement to make the ToC builder tool as effective as possible",
-                "connections": [
-                  {
-                    "targetId": "outcome-toc-tool-used",
-                    "confidence": 45,
-                    "evidence": "Tool improvements often don't drive adoption - workflow integration matters more than features (see: enterprise software adoption rates ~20-40%)",
-                    "assumptions": "Users can distinguish quality improvements; benefits outweigh switching costs; improvements address actual pain points not perceived ones"
-                  }
-                ],
-                "yPosition": 137,
-                "width": 144,
-                "color": "#b8e6ff"
-              },
-              {
-                "id": "output-tool-exists",
-                "title": "Tool actually exists",
-                "text": "A functional Theory of Change builder tool is built, deployed, and accessible to users",
-                "connections": [
-                  {
-                    "targetId": "outcome-toc-tool-used",
-                    "confidence": 90,
-                    "evidence": "Tool existence is necessary precondition for usage (definitional relationship)",
-                    "assumptions": "Tool is accessible, stable, and meets minimum usability standards; users have technical capability to access it"
-                  }
-                ],
-                "yPosition": 272,
-                "width": 144,
-                "color": "#d4e6f1"
-              },
-              {
-                "id": "output-people-reached",
-                "title": "People reached who want tool",
-                "text": "EA organizations and strategists who would benefit from ToC tools are made aware and engaged",
-                "connections": [
-                  {
-                    "targetId": "outcome-toc-tool-used",
-                    "confidence": 35,
-                    "evidence": "Awareness-to-adoption rates for B2B tools are typically 10-20%; strategy tools face additional adoption barriers due to workflow changes required",
-                    "assumptions": "Target users actually want structured ToC processes; current planning methods are insufficient; adoption barriers are surmountable"
-                  }
-                ],
-                "yPosition": 413,
-                "width": 144,
-                "color": "#7fb3d3"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "title": "Outcomes",
-        "columns": [
-          {
-            "nodes": [
-              {
-                "id": "outcome-toc-tool-used",
-                "title": "Users build theories of change with the tool",
-                "text": "EA organizations and individuals actively use the Theory of Change builder tool for strategic planning",
-                "connections": [
-                  {
-                    "targetId": "outcome-efficiency",
-                    "confidence": 75,
-                    "evidence": "Structured planning tools can reduce meeting time by 20-40% once adopted, but initial learning curve adds overhead",
-                    "assumptions": "Tool design is intuitive enough to minimize learning curve; teams adopt structured processes; efficiency gains outweigh initial time investment"
-                  },
-                  {
-                    "targetId": "outcome-transparency",
-                    "confidence": 70,
-                    "evidence": "ToC frameworks force explicit assumption mapping, but transparency depends on sharing practices (many orgs keep ToCs internal)",
-                    "assumptions": "Organizations actually share ToCs publicly or with stakeholders; tool generates formats suitable for external communication; transparency is valued over competitive advantage"
-                  },
-                  {
-                    "targetId": "outcome-world-models",
-                    "confidence": 55,
-                    "evidence": "Structured ToC processes can improve world model articulation, but don't necessarily improve world model accuracy (garbage in, garbage out)",
-                    "assumptions": "Users engage deeply with causal reasoning rather than just filling templates; tool prompts improve rather than constrain thinking; teams have sufficient domain expertise"
-                  }
-                ],
-                "yPosition": 272,
-                "width": 144,
-                "color": "#d4e6f1"
-              }
-            ]
-          },
-          {
-            "nodes": [
-              {
-                "id": "outcome-world-models",
-                "title": "Users identify leverage points",
-                "text": "Improved world modelsEA orgs develop better understanding of cause areas, intervention effects, and global priorities",
-                "connections": [
-                  {
-                    "targetId": "outcome-cause-prio",
-                    "confidence": 40,
-                    "evidence": "Research-to-practice gap is enormous in EA: most cause prioritization research doesn't change organizational focus (path dependence dominates)",
-                    "assumptions": "Organizations are willing to change cause focus based on new models; switching costs are manageable; funders support cause area pivots"
-                  },
-                  {
-                    "targetId": "outcome-decision-making",
-                    "confidence": 50,
-                    "evidence": "Better world models can improve decision-making, but cognitive biases and organizational inertia often dominate over analytical improvements",
-                    "assumptions": "Decision-makers use improved world models rather than relying on intuition; organizational processes incorporate new insights; analysis translates to strategy changes"
-                  }
-                ],
-                "yPosition": 75,
-                "width": 144,
-                "color": "#b8e6ff"
-              },
-              {
-                "id": "outcome-efficiency",
-                "title": "Strategic planning takes less time",
-                "text": "EA orgs achieve at least the same quality of strategic planning in less time through structured processes and tools. Time savings include: faster internal team communication about strategy, more efficient writing of funding applications and funder communications, and streamlined processes for developing theories of change.",
-                "connections": [
-                  {
-                    "targetId": "outcome-resources",
-                    "confidence": 75,
-                    "evidence": "Time savings directly convert to increased organizational capacity if reallocated effectively (not just absorbed by other low-value activities)",
-                    "assumptions": "Saved time is reallocated to high-value activities rather than absorbed by organizational slack; efficiency gains are sustained over time"
-                  }
-                ],
-                "yPosition": 494,
-                "width": 144,
-                "color": "#7fb3d3"
-              }
-            ]
-          },
-          {
-            "nodes": [
-              {
-                "id": "outcome-decision-making",
-                "title": "Improved strategic plans",
-                "text": "EA orgs make better strategic and operational decisions through enhanced processes and frameworks",
-                "connections": [
-                  {
-                    "targetId": "outcome-interventions-identified",
-                    "confidence": 65,
-                    "evidence": "Better decision-making processes improve research quality, but intervention identification requires domain expertise and field knowledge beyond process improvements",
-                    "assumptions": "Organizations apply improved processes to research activities; decision-making improvements address the right bottlenecks; teams have sufficient domain expertise"
-                  }
-                ],
-                "yPosition": 215,
-                "width": 144,
-                "color": "#d4e6f1"
-              },
-              {
-                "id": "outcome-transparency",
-                "title": "Epistemic transparency/comms",
-                "text": "EA orgs improve transparency in reasoning, evidence, and decision-making processes",
-                "connections": [
-                  {
-                    "targetId": "outcome-funding-approved",
-                    "confidence": 60,
-                    "evidence": "EA funders value transparency, but impact evidence and team track record typically matter more than process transparency in funding decisions",
-                    "assumptions": "Funders actually reward transparency over other factors; transparent reasoning improves rather than hurts funding prospects; projects have sufficient underlying merit"
-                  }
-                ],
-                "yPosition": 353,
-                "width": 144,
-                "color": "#d4e6f1"
-              }
-            ]
-          },
-          {
-            "nodes": [
-              {
-                "id": "outcome-interventions-identified",
-                "title": "Better interventions identified",
-                "text": "Research identifies more cost-effective interventions within cause areas",
-                "connections": [
-                  {
-                    "targetId": "outcome-intervention-prio",
-                    "confidence": 70,
-                    "evidence": "Intervention research has identified high-impact opportunities (e.g., deworming, bednets), but adoption rates vary significantly by organization and context",
-                    "assumptions": "Organizations have capacity to adopt new interventions; new interventions fit organizational strengths and context; implementation quality matches research expectations"
-                  }
-                ],
-                "yPosition": 215,
-                "width": 144,
-                "color": "#d4e6f1"
-              },
-              {
-                "id": "outcome-funding-approved",
-                "title": "Funding applications approved",
-                "text": "More funding applications to major EA funders are approved and deployed",
-                "connections": [
-                  {
-                    "targetId": "outcome-resources",
-                    "confidence": 80,
-                    "evidence": "Funding approval directly increases organizational resources by definition, though deployment effectiveness varies",
-                    "assumptions": "Funding is deployed effectively rather than absorbed by overhead; resources are allocated to high-impact activities; organizational capacity scales with funding"
-                  }
-                ],
-                "yPosition": 353,
-                "width": 144,
-                "color": "#d4e6f1"
-              }
-            ]
-          },
-          {
-            "nodes": [
-              {
-                "id": "outcome-cause-prio",
-                "title": "EA orgs work on highest-impact causes",
-                "text": "EA orgs focus resources on the most effective cause areas based on scale, neglectedness, and tractability",
-                "connections": [
-                  {
-                    "targetId": "goal-ea-orgs-more-good",
-                    "confidence": 80,
-                    "evidence": "Top EA cause areas show 10-100x+ impact differences, but organizational comparative advantage and execution capacity matter significantly",
-                    "assumptions": "Cause prioritization research identifies truly highest-impact areas; organizations can execute effectively in top cause areas; impact differences persist across contexts"
-                  }
-                ],
-                "yPosition": 75,
-                "width": 144,
-                "color": "#b8e6ff"
-              },
-              {
-                "id": "outcome-intervention-prio",
-                "title": "EA orgs use most effective interventions",
-                "text": "EA orgs select the most cost-effective interventions within their chosen cause areas",
-                "connections": [
-                  {
-                    "targetId": "goal-ea-orgs-more-good",
-                    "confidence": 75,
-                    "evidence": "Cost-effectiveness analysis shows 100x+ differences between interventions within cause areas, but implementation context affects real-world impact",
-                    "assumptions": "Cost-effectiveness assessments accurately predict real-world impact; organizations can implement interventions as effectively as modeled; external validity holds across contexts"
-                  }
-                ],
-                "yPosition": 272,
-                "width": 144,
-                "color": "#d4e6f1"
-              },
-              {
-                "id": "outcome-resources",
-                "title": "EA orgs that have strong ToCs get more resources",
-                "text": "EA orgs have access to adequate funding, talent, and other key resources needed to execute their programs effectively",
-                "connections": [
-                  {
-                    "targetId": "goal-ea-orgs-more-good",
-                    "confidence": 70,
-                    "evidence": "Additional resources enable scaling of proven interventions, but diminishing returns and organizational capacity constraints limit impact per additional dollar",
-                    "assumptions": "Additional resources are deployed effectively; organizational systems can absorb increased capacity; scaling maintains intervention quality"
-                  }
-                ],
-                "yPosition": 494,
-                "width": 144,
-                "color": "#7fb3d3"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "title": "Goal",
-        "columns": [
-          {
-            "nodes": [
-              {
-                "id": "goal-ea-orgs-more-good",
-                "title": "EA orgs maximize their impact",
-                "text": "Effective Altruism organizations optimize their impact by working on the right causes, using the best interventions, and securing adequate resources",
-                "connections": [
-                  {
-                    "targetId": "impact-reduced-suffering",
-                    "confidence": 80,
-                    "evidence": "EA organizations have delivered measurable impact in global health (saving millions of lives), animal welfare (corporate campaigns), and x-risk (AI safety research)",
-                    "assumptions": "EA organizations maintain evidence-based approach; impact measurement remains robust; cause area selection continues to be based on scale/neglectedness/tractability"
-                  }
-                ],
-                "yPosition": 272,
-                "width": 144,
-                "color": "#2874a6"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "title": "Impact",
-        "columns": [
-          {
-            "nodes": [
-              {
-                "id": "impact-reduced-suffering",
-                "title": "Reduced suffering for humans and animals",
-                "text": "Less suffering experienced by sentient beings worldwide",
-                "connections": [],
-                "yPosition": 272,
-                "width": 144,
-                "color": "#2874a6"
-              }
-            ]
-          }
-        ]
-      }
-    ],
-    "title": "Theory of Change Tool Theory of Change",
-    "_metadata": {
-      "exportedAt": "2025-09-06T18:28:49.830Z"
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "input-consulting-orgs",
+              "title": "Consulting orgs",
+              "text": "We consult organizations on how to build theories of change using the tool, then gather feedback on how to improve it.",
+              "connections": [
+                {
+                  "targetId": "output-tool-improvements",
+                  "confidence": 60,
+                  "evidence": "We have run two workshops demoing the beta tool and collected actionable feedback from participants. We already implemented many of their suggestions, which improved the tool's usability as reflected in higher user ratings post-modifications.",
+                  "assumptions": "Consultants represent actual user needs; feedback is actionable; improvements are technically feasible within resource constraints"
+                }
+              ],
+              "yPosition": 137,
+              "width": 144,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "input-development",
+              "title": "Development",
+              "text": "Software development resources, technical expertise, and engineering capacity to build and maintain the tool.",
+              "connections": [
+                {
+                  "targetId": "output-tool-exists",
+                  "confidence": 95,
+                  "evidence": "We have already completed the beta version of the tool and can use it to make ToCs (like this one).",
+                  "assumptions": "Requirements are well-defined; technical architecture is sound; hosting/deployment infrastructure is reliable"
+                },
+                {
+                  "targetId": "output-tool-improvements",
+                  "confidence": 85,
+                  "evidence": "We've pivoted the tool significantly from the original vision based on feedback. Developers have already implemented most suggested features, and all project deadlines to date have been met, including the most difficult MVP deadline.",
+                  "assumptions": "Development team prioritizes user experience; feedback mechanisms exist; technical debt doesn't accumulate"
+                }
+              ],
+              "yPosition": 272,
+              "width": 144,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "input-outreach",
+              "title": "Outreach",
+              "text": "Marketing, communication, and community engagement resources to reach potential users.",
+              "connections": [
+                {
+                  "targetId": "output-people-reached",
+                  "confidence": 95,
+                  "evidence": "Over 30 people from various organizations have already signed up to use the tool through targeted outreach and workshops at conferences.",
+                  "assumptions": "Target audience is reachable through chosen channels; messaging resonates with EA strategy needs; timing aligns with planning cycles"
+                }
+              ],
+              "yPosition": 413,
+              "width": 144,
+              "color": "#7fb3d3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "output-tool-improvements",
+              "title": "Improvements to the tool",
+              "text": "Continuous development and refinement to make the ToC builder tool as effective as possible.",
+              "connections": [
+                {
+                  "targetId": "outcome-toc-tool-used",
+                  "confidence": 75,
+                  "evidence": "We have already improved the tool’s features and usability. AIM, the largest organization setting the standard for ToCs, has committed to using the improved tool.",
+                  "assumptions": "Users can distinguish quality improvements; benefits outweigh switching costs; improvements address actual pain points not perceived ones"
+                }
+              ],
+              "yPosition": 137,
+              "width": 144,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "output-tool-exists",
+              "title": "Tool actually exists",
+              "text": "A functional Theory of Change builder tool is built, deployed, and accessible to users.",
+              "connections": [
+                {
+                  "targetId": "outcome-toc-tool-used",
+                  "confidence": 90,
+                  "evidence": "We have had frequent follow-ups from organizations asking if the tool is ready to be used.",
+                  "assumptions": "Tool is accessible, stable, and meets minimum usability standards; users have technical capability to access it"
+                }
+              ],
+              "yPosition": 272,
+              "width": 144,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "output-people-reached",
+              "title": "People reached who want tool",
+              "text": "EA organizations and strategists who would benefit from ToC tools are made aware and engaged.",
+              "connections": [
+                {
+                  "targetId": "outcome-toc-tool-used",
+                  "confidence": 80,
+                  "evidence": "We have already worked with two organizations to build their theories of change using the tool.",
+                  "assumptions": "Target users actually want structured ToC processes; current planning methods are insufficient; adoption barriers are surmountable"
+                }
+              ],
+              "yPosition": 413,
+              "width": 144,
+              "color": "#7fb3d3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "outcome-toc-tool-used",
+              "title": "Users build theories of change with the tool",
+              "text": "EA organizations and individuals actively use the Theory of Change builder tool for strategic planning.",
+              "connections": [
+                {
+                  "targetId": "outcome-efficiency",
+                  "confidence": 75,
+                  "evidence": "The tool has already generated superior theories of change in under 30 minutes just by uploading internal documentation with minimal user input.",
+                  "assumptions": "Tool design is intuitive enough to minimize learning curve; teams adopt structured processes; efficiency gains outweigh initial time investment"
+                },
+                {
+                  "targetId": "outcome-transparency",
+                  "confidence": 70,
+                  "evidence": "The tool requires explicit assumption maps. Assuming organizations provide their ToC to their stakeholders or put it on their website, this will increase transparency.",
+                  "assumptions": "Organizations actually share ToCs publicly or with stakeholders; tool generates formats suitable for external communication; transparency is valued over competitive advantage"
+                },
+                {
+                  "targetId": "outcome-world-models",
+                  "confidence": 55,
+                  "evidence": "",
+                  "assumptions": "Users engage deeply with causal reasoning rather than just filling templates; tool prompts improve rather than constrain thinking; teams have sufficient domain expertise"
+                }
+              ],
+              "yPosition": 272,
+              "width": 144,
+              "color": "#d4e6f1"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-world-models",
+              "title": "Users identify leverage points",
+              "text": "Improved world models help EA orgs understand cause areas, intervention effects, and global priorities.",
+              "connections": [
+                {
+                  "targetId": "outcome-cause-prio",
+                  "confidence": 40,
+                  "evidence": "",
+                  "assumptions": "Organizations are willing to change cause focus based on new models; switching costs are manageable; funders support cause area pivots"
+                },
+                {
+                  "targetId": "outcome-decision-making",
+                  "confidence": 50,
+                  "evidence": "Using the tool has already helped some teams make more informed strategic decisions, though organizational inertia still affects outcomes.",
+                  "assumptions": "Decision-makers use improved world models rather than relying on intuition; organizational processes incorporate new insights; analysis translates to strategy changes"
+                }
+              ],
+              "yPosition": 75,
+              "width": 144,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "outcome-efficiency",
+              "title": "Strategic planning takes less time",
+              "text": "EA orgs achieve the same quality of strategic planning in less time using structured processes and tools, freeing capacity for high-impact activities.",
+              "connections": [
+                {
+                  "targetId": "outcome-resources",
+                  "confidence": 25,
+                  "evidence": "Teams have already saved time using the tool and reallocated it to research and planning activities.",
+                  "assumptions": "Saved time is reallocated to high-value activities rather than absorbed by organizational slack; efficiency gains are sustained over time"
+                }
+              ],
+              "yPosition": 494,
+              "width": 144,
+              "color": "#7fb3d3"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-decision-making",
+              "title": "Improved strategic plans",
+              "text": "EA orgs make better strategic and operational decisions through enhanced processes and frameworks.",
+              "connections": [
+                {
+                  "targetId": "outcome-interventions-identified",
+                  "confidence": 65,
+                  "evidence": "",
+                  "assumptions": "Organizations apply improved processes to research activities; decision-making improvements address the right bottlenecks; teams have sufficient domain expertise"
+                }
+              ],
+              "yPosition": 215,
+              "width": 144,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "outcome-transparency",
+              "title": "Epistemic transparency/comms",
+              "text": "EA orgs improve transparency in reasoning, evidence, and decision-making processes.",
+              "connections": [
+                {
+                  "targetId": "outcome-funding-approved",
+                  "confidence": 60,
+                  "evidence": "",
+                  "assumptions": "Funders actually reward transparency over other factors; transparent reasoning improves rather than hurts funding prospects; projects have sufficient underlying merit"
+                }
+              ],
+              "yPosition": 353,
+              "width": 144,
+              "color": "#d4e6f1"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-interventions-identified",
+              "title": "Better interventions identified",
+              "text": "Research identifies more cost-effective interventions within cause areas.",
+              "connections": [
+                {
+                  "targetId": "outcome-intervention-prio",
+                  "confidence": 70,
+                  "evidence": "",
+                  "assumptions": "Organizations have capacity to adopt new interventions; new interventions fit organizational strengths and context; implementation quality matches research expectations"
+                }
+              ],
+              "yPosition": 215,
+              "width": 144,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "outcome-funding-approved",
+              "title": "Funding applications approved",
+              "text": "More funding applications to major EA funders are approved and deployed effectively.",
+              "connections": [
+                {
+                  "targetId": "outcome-resources",
+                  "confidence": 80,
+                  "evidence": "",
+                  "assumptions": "Funding is deployed effectively rather than absorbed by overhead; resources are allocated to high-impact activities; organizational capacity scales with funding"
+                }
+              ],
+              "yPosition": 353,
+              "width": 144,
+              "color": "#d4e6f1"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-cause-prio",
+              "title": "EA orgs work on highest-impact causes",
+              "text": "EA orgs focus resources on the most effective cause areas based on scale, neglectedness, and tractability.",
+              "connections": [
+                {
+                  "targetId": "goal-ea-orgs-more-good",
+                  "confidence": 80,
+                  "evidence": "",
+                  "assumptions": "Cause prioritization research identifies truly highest-impact areas; organizations can execute effectively in top cause areas; impact differences persist across contexts"
+                }
+              ],
+              "yPosition": 75,
+              "width": 144,
+              "color": "#b8e6ff"
+            },
+            {
+              "id": "outcome-intervention-prio",
+              "title": "EA orgs use most effective interventions",
+              "text": "EA orgs select the most cost-effective interventions within their chosen cause areas.",
+              "connections": [
+                {
+                  "targetId": "goal-ea-orgs-more-good",
+                  "confidence": 75,
+                  "evidence": "",
+                  "assumptions": "Cost-effectiveness assessments accurately predict real-world impact; organizations can implement interventions as effectively as modeled; external validity holds across contexts"
+                }
+              ],
+              "yPosition": 272,
+              "width": 144,
+              "color": "#d4e6f1"
+            },
+            {
+              "id": "outcome-resources",
+              "title": "EA orgs that have strong ToCs get more resources",
+              "text": "EA orgs gain access to funding, talent, and other resources needed to execute programs effectively.",
+              "connections": [
+                {
+                  "targetId": "goal-ea-orgs-more-good",
+                  "confidence": 70,
+                  "evidence": "",
+                  "assumptions": "Additional resources are deployed effectively; organizational systems can absorb increased capacity; scaling maintains intervention quality"
+                }
+              ],
+              "yPosition": 494,
+              "width": 144,
+              "color": "#7fb3d3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "goal-ea-orgs-more-good",
+              "title": "EA orgs maximize their impact",
+              "text": "Effective Altruism organizations optimize their impact by working on the right causes, using the best interventions, and securing adequate resources.",
+              "connections": [
+                {
+                  "targetId": "impact-reduced-suffering",
+                  "confidence": 80,
+                  "evidence": "EA organizations have already delivered measurable impact in global health, animal welfare, and x-risk, demonstrating that effective use of resources leads to reduced suffering.",
+                  "assumptions": "EA organizations maintain evidence-based approach; impact measurement remains robust; cause area selection continues to be based on scale/neglectedness/tractability"
+                }
+              ],
+              "yPosition": 272,
+              "width": 144,
+              "color": "#2874a6"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Impact",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "impact-reduced-suffering",
+              "title": "Reduced suffering for humans and animals",
+              "text": "Less suffering experienced by sentient beings worldwide.",
+              "connections": [],
+              "yPosition": 272,
+              "width": 144,
+              "color": "#2874a6"
+            }
+          ]
+        }
+      ]
     }
+  ],
+  "title": "Theory of Change Tool Theory of Change",
+  "_metadata": {
+    "exportedAt": "2025-09-08T10:16:32.429Z"
   }
+}

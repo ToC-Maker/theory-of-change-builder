@@ -1,0 +1,314 @@
+{
+    "title": "Theory of Change for Hive",
+    "sections": [
+      {
+        "title": "Inputs", 
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "input-1", 
+                "title": "Hive secures $240,000+ annual funding from foundations and individual donors",
+                "text": "Organization maintains financial resources needed for operations, with 88% from foundations including Open Philanthropy ($350,000+ total) and EA Animal Welfare Fund, though individual donor base remains under 2% creating acknowledged concentration risk",
+                "connections": [
+                  {
+                    "targetId": "output-1",
+                    "confidence": 90,
+                    "evidence": "2024 budget of $240,000 successfully supported 4.5 FTE operations with documented program delivery. Open Philanthropy provided $350,000+ total funding ($100,000 in 2023, $250,000 over two years). Organization maintained operations throughout rapid growth from $52,000 (2023) to $240,000 (2024) budget.",
+                    "assumptions": "Foundation funding will continue at current levels despite 88% concentration risk. Grant renewal confidence estimated at ~70% based on funder feedback. Individual donor diversification efforts will succeed to reduce foundation dependency."
+                  },
+                  {
+                    "targetId": "output-2",
+                    "confidence": 90,
+                    "evidence": "Funding directly enables $16,000 annual Slack fees (with 85% nonprofit discount) supporting 3,500+ member community infrastructure. Budget allocation shows clear connection between funding and platform maintenance costs.",
+                    "assumptions": "Slack pricing model remains stable and nonprofit discount continues. Community growth doesn't exceed platform capacity or significantly increase costs."
+                  }
+                ],
+                "yPosition": 100,
+                "width": 200,
+                "color": "#E3F2FD"
+              },
+              {
+                "id": "input-2",
+                "title": "Team of 4.5 FTE staff provides specialized expertise and leadership",
+                "text": "Sofia Balderson (Executive Director, 6+ years animal advocacy experience), Kevin Xia (Managing Director, philosophy background), plus communications, regional ambassadors, and technical specialists deliver coordinated programming",
+                "connections": [
+                  {
+                    "targetId": "output-1",
+                    "confidence": 85,
+                    "evidence": "Newsletter production costs only $380 per edition reaching 3,160+ subscribers with 50% open rate, demonstrating team efficiency. Megan Jamer as Communications Lead ensures consistent quality and engagement metrics.",
+                    "assumptions": "Key team members remain with organization and maintain productivity levels. Skills and expertise continue matching program needs as organization scales."
+                  },
+                  {
+                    "targetId": "output-3",
+                    "confidence": 80,
+                    "evidence": "60+ events in 2024 achieved 4.68/5 satisfaction score with consistent maximum capacity attendance. Team coordination enables global programming across multiple time zones.",
+                    "assumptions": "Team has sufficient capacity to maintain event quality while scaling. Event management skills transfer effectively to new regions and formats."
+                  }
+                ],
+                "yPosition": 300,
+                "width": 200,
+                "color": "#E3F2FD"
+              },
+              {
+                "id": "input-3",
+                "title": "Extensive network connections built through 2+ years of relationship-building",
+                "text": "Leadership team has deep connections across farmed animal advocacy ecosystem, including Charity Entrepreneurship alumni, Animal Charity Evaluators staff, major organization leaders, and advocates in 100+ countries",
+                "connections": [
+                  {
+                    "targetId": "output-4",
+                    "confidence": 85,
+                    "evidence": "100+ strategic connections facilitated in 2024 leveraging team's network knowledge. 29 documented job placements and 10 funding connections show network effectiveness. Board includes Cameron King (Slack co-founder) and Constance Li providing additional connectivity.",
+                    "assumptions": "Network relationships remain strong and continue growing. Network contacts maintain willingness to engage in introductions and collaborations. Quality of network connections translates to valuable opportunities for community members."
+                  }
+                ],
+                "yPosition": 500,
+                "width": 200,
+                "color": "#E3F2FD"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Outputs",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "output-1",
+                "title": "Bi-weekly newsletter reaches 3,160+ advocates with curated opportunities and research",
+                "text": "Hive Highlights delivers movement news, funding opportunities, job listings, and research updates with exceptional 50% open rate and 10% click rate at $380 production cost per edition",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-1",
+                    "confidence": 80,
+                    "evidence": "Newsletter includes automated Faunalytics research feeds, job board integrations from Animal Advocacy Careers and Tälist, and funding opportunity compilations. 50% open rate and 10% click rate significantly exceed industry averages, indicating effective knowledge transfer.",
+                    "assumptions": "Advocates actually read and apply knowledge from newsletter content rather than just opening emails. Curated information leads to behavior change rather than information overwhelm."
+                  }
+                ],
+                "yPosition": 100,
+                "width": 200,
+                "color": "#FFF3E0"
+              },
+              {
+                "id": "output-2",
+                "title": "Active Slack community connects 3,500+ advocates across 90+ specialized channels",
+                "text": "Flagship platform generated 100,000+ messages in 2024 with 700+ weekly active users across regional channels (30+), cause areas, and specialized topics, featuring automated matching and content integration",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-2",
+                    "confidence": 75,
+                    "evidence": "Serendipitous matching system facilitated 313 one-on-one connections in 2024. 11 'highly engaged channels' have 100+ monthly viewers. Community survey shows 84% receive expected value from Slack and 92% feel stronger movement connection.",
+                    "assumptions": "Digital connections translate to meaningful collaboration rather than superficial networking. Community members follow through on collaborative opportunities discovered through platform."
+                  },
+                  {
+                    "targetId": "outcome-2-4",
+                    "confidence": 70,
+                    "evidence": "Community survey shows 92% of members feel stronger movement connection and increased motivation for long-term involvement (78% report). Platform provides ongoing support and reduces isolation, particularly for advocates in neglected regions.",
+                    "assumptions": "Online community support translates to sustained advocacy work rather than temporary motivation boosts. Community connection reduces burnout and increases retention in the movement."
+                  }
+                ],
+                "yPosition": 300,
+                "width": 200,
+                "color": "#FFF3E0"
+              },
+              {
+                "id": "output-3",
+                "title": "60+ annual events facilitate networking and skill development across global time zones",
+                "text": "Speed networking sessions, conference afterparties, coworking meetups, skill-building workshops, and fireside chats achieve 4.68/5 satisfaction score with consistent maximum capacity attendance",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-2",
+                    "confidence": 65,
+                    "evidence": "Events consistently reach maximum capacity with 4.68/5 satisfaction scores. Speed networking and conference afterparties create structured opportunities for advocate connections. Global programming accommodates different time zones and regional needs.",
+                    "assumptions": "Event-based connections lead to ongoing collaborations rather than one-time meetings. Networking translates to strategic partnerships and reduced duplication of efforts."
+                  },
+                  {
+                    "targetId": "outcome-2-3",
+                    "confidence": 60,
+                    "evidence": "Skill-building workshops and fireside chats with movement leaders provide career development opportunities. Events create pathways for advocates to learn about different organizations and roles in the movement.",
+                    "assumptions": "Event content translates to improved advocacy skills and career advancement. Exposure to movement leaders and organizations leads to concrete career opportunities."
+                  }
+                ],
+                "yPosition": 500,
+                "width": 200,
+                "color": "#FFF3E0"
+              },
+              {
+                "id": "output-4",
+                "title": "Strategic introductions connect 100+ advocates annually with relevant opportunities",
+                "text": "Leveraging team network knowledge to facilitate targeted connections between advocates seeking opportunities, collaborators, mentors, or strategic partnerships",
+                "connections": [
+                  {
+                    "targetId": "outcome-2-2",
+                    "confidence": 80,
+                    "evidence": "100+ strategic connections documented in 2024 with measurable outcomes. Team's extensive network knowledge enables high-quality matching between advocates and opportunities.",
+                    "assumptions": "Strategic introductions lead to meaningful collaborations rather than failed connections. Team network knowledge remains current and comprehensive across different regions and specializations."
+                  },
+                  {
+                    "targetId": "outcome-2-3",
+                    "confidence": 85,
+                    "evidence": "29 advocates secured paid jobs (13 permanent, 16 freelance/short-term) in 2024. 42 volunteers found meaningful placements. 10 instances of community members receiving funding documented through High Impact Outcomes tracking.",
+                    "assumptions": "Job placements and funding opportunities accessed through connections are high-quality and contribute to movement effectiveness. Career pathways lead to sustained advocacy work rather than short-term positions."
+                  }
+                ],
+                "yPosition": 700,
+                "width": 200,
+                "color": "#FFF3E0"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Outcomes",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "outcome-2-1",
+                "title": "Advocates have access to knowledge about effective interventions and strategies",
+                "text": "Farmed animal advocates receive curated research updates, strategy guides, and best practices from across the global movement, enabling evidence-based decision making",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-1",
+                    "confidence": 65,
+                    "evidence": "Newsletter delivers research from Faunalytics, strategy updates from major organizations, and funding database access to 3,160+ advocates. Resource hub received 7,500 page views in 2024 though engagement remains limited at ~2 views per member annually.",
+                    "assumptions": "Knowledge access translates to improved intervention selection rather than information overwhelm. Advocates apply research findings to their local contexts effectively."
+                  }
+                ],
+                "yPosition": 100,
+                "width": 200,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "outcome-2-2",
+                "title": "Advocates can easily discover collaboration opportunities and avoid duplication",
+                "text": "Global network of advocates coordinates efforts through shared channels, identifies strategic partnerships, and avoids duplicating work across regions and cause areas",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-1",
+                    "confidence": 70,
+                    "evidence": "313 one-on-one connections facilitated in 2024, with 11 new initiatives started through community connections. 90+ specialized channels enable coordination across regions and cause areas, reducing duplication.",
+                    "assumptions": "Collaboration opportunities discovered through platform lead to actual strategic coordination rather than just networking. Regional coordination reduces duplication without stifling local innovation."
+                  },
+                  {
+                    "targetId": "outcome-1-2",
+                    "confidence": 75,
+                    "evidence": "Community spans 100+ countries with 30+ regional channels enabling cross-regional learning and coordination. Survey shows 92% feel stronger movement connection, indicating successful network effects.",
+                    "assumptions": "Cross-regional connections translate to strategic coordination rather than just information sharing. Global network effects multiply impact across different advocacy contexts."
+                  }
+                ],
+                "yPosition": 300,
+                "width": 200,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "outcome-2-3",
+                "title": "People discover meaningful pathways into farmed animal advocacy careers",
+                "text": "Individuals find entry points into advocacy work through job placements, volunteer opportunities, and mentorship connections, building movement capacity",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-3",
+                    "confidence": 80,
+                    "evidence": "29 advocates secured paid positions and 42 found volunteer placements in 2024. Strategic introductions connect people with career opportunities across different organizations and regions. Job board integration provides centralized access to opportunities.",
+                    "assumptions": "Career pathways created through Hive lead to effective advocates rather than just filling positions. New entrants remain engaged in movement long-term rather than churning out quickly."
+                  }
+                ],
+                "yPosition": 500,
+                "width": 200,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "outcome-2-4",
+                "title": "Advocates maintain motivation and avoid burnout through community support",
+                "text": "Isolated advocates, particularly in neglected regions, receive peer support, mentorship, and community connection that sustains long-term advocacy work",
+                "connections": [
+                  {
+                    "targetId": "outcome-1-3",
+                    "confidence": 65,
+                    "evidence": "Community survey shows 78% report increased motivation and likelihood of long-term involvement. 250+ members each in Latin America and Africa receive support unavailable through regional networks. 92% feel stronger movement connection.",
+                    "assumptions": "Community support translates to sustained advocacy effectiveness rather than just improved feelings. Online community connection compensates for lack of local advocacy networks in neglected regions."
+                  }
+                ],
+                "yPosition": 700,
+                "width": 200,
+                "color": "#E8F5E8"
+              }
+            ]
+          },
+          {
+            "nodes": [
+              {
+                "id": "outcome-1-1",
+                "title": "Farmed animal advocacy organizations implement high-impact interventions at sufficient scale globally",
+                "text": "Organizations across different regions deploy evidence-based strategies including corporate campaigns, policy work, and alternative protein development with coordinated approaches",
+                "connections": [
+                  {
+                    "targetId": "goal-1",
+                    "confidence": 25,
+                    "evidence": "Organizations in Hive community include Animal Charity Evaluators staff, Charity Entrepreneurship alumni, and major advocacy groups who report using community knowledge for strategy development. However, direct causal attribution from community participation to intervention choices remains difficult to measure.",
+                    "assumptions": "Improved knowledge and coordination leads organizations to select more effective interventions rather than just maintaining existing approaches. High-impact interventions are correctly identified and scale enough to affect global factory farming systems."
+                  }
+                ],
+                "yPosition": 100,
+                "width": 200,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "outcome-1-2",
+                "title": "Advocacy efforts across regions are strategically coordinated rather than duplicated or conflicting",
+                "text": "Global advocacy movement works synergistically with shared strategies, coordinated campaigns, and regional specialization rather than competing or duplicating efforts",
+                "connections": [
+                  {
+                    "targetId": "goal-1",
+                    "confidence": 20,
+                    "evidence": "Cross-regional connections through 30+ regional channels enable knowledge sharing and coordination. Global Ambassador Program focuses on neglected regions (Asia, Latin America, Africa) with 300+, 250+, and 250+ members respectively. However, measuring coordination outcomes versus baseline requires long-term tracking.",
+                    "assumptions": "Digital connections translate to actual strategic coordination in real-world campaigns. Regional coordination improves without stifling local adaptation to cultural contexts. Coordination effects scale to global impact rather than remaining localized."
+                  }
+                ],
+                "yPosition": 300,
+                "width": 200,
+                "color": "#E8F5E8"
+              },
+              {
+                "id": "outcome-1-3",
+                "title": "Sufficient numbers of skilled advocates are working effectively on ending factory farming",
+                "text": "The movement has adequate human capital with advocates remaining engaged long-term, developing necessary skills, and working in high-impact roles rather than burning out or leaving",
+                "connections": [
+                  {
+                    "targetId": "goal-1",
+                    "confidence": 30,
+                    "evidence": "29 job placements and 42 volunteer placements documented in 2024 expand movement capacity. 78% of community members report increased likelihood of long-term involvement. However, measuring whether advocate numbers are 'sufficient' requires counterfactual analysis against factory farming reduction needs.",
+                    "assumptions": "Career pathways and community support translate to sustained advocacy effectiveness rather than just initial engagement. Skilled advocates work in roles that meaningfully contribute to ending factory farming rather than less impactful positions. Movement capacity building keeps pace with or exceeds the scale needed to address factory farming globally."
+                  }
+                ],
+                "yPosition": 500,
+                "width": 200,
+                "color": "#E8F5E8"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Goal",
+        "columns": [
+          {
+            "nodes": [
+              {
+                "id": "goal-1",
+                "title": "Factory farming is ended and farmed animal suffering is eliminated globally",
+                "text": "Industrial animal agriculture systems are transformed or replaced worldwide, with farmed animals no longer subjected to confinement, painful procedures, or slaughter at scale",
+                "connections": [],
+                "yPosition": 100,
+                "width": 200,
+                "color": "#FFEBEE"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }

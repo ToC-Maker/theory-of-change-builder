@@ -102,6 +102,12 @@ Each assumption should include:
 4. **Note Assumptions**: What the organization believes but may not have proven
 5. **Spot Gaps**: Missing connections, weak evidence, unclear logic
 
+## CRITICAL OUTPUT REQUIREMENTS:
+
+**DO NOT output edit instructions (push/update/insert commands) - you must output a COMPLETE JSON graph structure.**
+
+This prompt is for generating Theory of Change conversations that end with complete implementable JSON graphs. You are NOT making edits to existing graphs - you are creating brand new complete graphs from scratch.
+
 ## Output Format:
 
 ```markdown
@@ -114,6 +120,8 @@ Each assumption should include:
 **Strategy Co-Pilot**: Excellent! A comprehensive Theory of Change that represents actionable intelligence has been completed. The final graph structure with all the evidence that was discussed will now be generated.
 
 ## Final Theory of Change Graph
+
+**IMPORTANT: Output the complete JSON graph structure below - NOT edit instructions. This should be a full, implementable graph that can be loaded directly into the application.**
 
 ```json
 {

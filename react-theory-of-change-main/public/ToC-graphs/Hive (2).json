@@ -1,0 +1,317 @@
+{
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "input-1",
+              "title": "Cultivating community",
+              "text": "Building and nurturing relationships within the animal advocacy community to foster connection and collaboration",
+              "connections": [
+                {
+                  "targetId": "output-1",
+                  "confidence": 80,
+                  "evidence": "Slack community doubled from 1,631 to 3,312 members in 2024, with 700+ weekly active users and 100,000+ messages exchanged (2024 Annual Report). Platform recognized as 'most active Slack community in broader EA Ecosystem' with 1,000+ monthly active users across 90+ channels.",
+                  "assumptions": "Building authentic community relationships translates to increased platform value and engagement. Assumes community growth correlates with advocacy effectiveness and that digital community can substitute for some in-person relationship building."
+                },
+                {
+                  "targetId": "output-2",
+                  "confidence": 75,
+                  "evidence": "Community building activities directly feed resource development - events achieve 4.68/5 satisfaction scores with consistent maximum attendance. Newsletter content sourced from community discussions and needs assessment, achieving 50% open rate vs 21% industry average.",
+                  "assumptions": "Community insights accurately reflect movement needs and that community-driven content development produces higher quality resources than expert-only approaches."
+                }
+              ],
+              "yPosition": 381,
+              "width": 192,
+              "color": "#f9c153"
+            },
+            {
+              "id": "input-2",
+              "title": "Centralizing key information",
+              "text": "Gathering, organizing, and making accessible important resources and knowledge for the movement",
+              "connections": [
+                {
+                  "targetId": "output-2",
+                  "confidence": 85,
+                  "evidence": "Newsletter reaches 3,160+ subscribers with 50% open rate and 10% click rate, significantly above industry standards. Automated Faunalytics research feeds provide access to 5,000+ study summaries. Resource hub received 7,500 page views in 2024 with fundraising database and conference listings.",
+                  "assumptions": "Centralized information curation is more efficient than individual searching and that automated feeds maintain quality while scaling access. Quality of curated information remains high as volume increases."
+                }
+              ],
+              "yPosition": 239,
+              "width": 192,
+              "color": "#f9c153"
+            },
+            {
+              "id": "input-3",
+              "title": "Facilitating strategic connections",
+              "text": "Actively identifying and enabling valuable relationships between advocates, organizations, and opportunities",
+              "connections": [
+                {
+                  "targetId": "output-3",
+                  "confidence": 90,
+                  "evidence": "Team successfully facilitated 100+ strategic connections in 2024 plus 313 serendipitous matches through automated system. Documented outcomes include 29 paid job placements (13 permanent, 16 freelance/short-term) and 42 volunteer role placements.",
+                  "assumptions": "Team's network knowledge and matching capabilities can scale with community growth. Strategic connection facilitation creates more value than organic networking alone."
+                }
+              ],
+              "yPosition": 521,
+              "width": 192,
+              "color": "#f9c153"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "output-1",
+              "title": "Value of the Hive Slack and space for advocates promoted and improved",
+              "text": "Activities to enhance and promote The Hive's digital platform and physical spaces as valuable resources for animal advocates",
+              "connections": [
+                {
+                  "targetId": "outcome-layer2-1",
+                  "confidence": 75,
+                  "evidence": "92% of community members report feeling stronger movement connection through platform (Community Survey 2024). Platform hosts 11 'highly engaged channels' with 100+ monthly viewers facilitating cross-organizational collaboration. ACE staff, Faunalytics researchers, and practitioners actively share insights.",
+                  "assumptions": "Digital platform improvements translate to real-world collaboration increases and that Slack engagement metrics reflect genuine collaboration rather than just social activity."
+                }
+              ],
+              "yPosition": 381,
+              "width": 256,
+              "color": "#f8ab54"
+            },
+            {
+              "id": "output-2",
+              "title": "Hive resources, events, and newsletter promoted and improved",
+              "text": "Development and promotion of educational resources, community events, and regular communications to serve the movement",
+              "connections": [
+                {
+                  "targetId": "outcome-layer2-1",
+                  "confidence": 70,
+                  "evidence": "Newsletter achieves 50% open rate reaching 3,160+ subscribers with regular features on funding opportunities, research updates, and movement news. Each edition costs $380 to produce ($9,120 annually) providing centralized information hub for global advocates.",
+                  "assumptions": "Newsletter engagement rates reflect actual information consumption and that centralized information distribution improves movement-wide knowledge sharing more than decentralized approaches."
+                },
+                {
+                  "targetId": "outcome-layer2-2",
+                  "confidence": 65,
+                  "evidence": "Events program hosted 60+ events in 2024 with 4.68/5 satisfaction scores including skill-building workshops and fireside chats with movement leaders. Mental health partnership with CEVA resulted in 44 course sign-ups for advocate support.",
+                  "assumptions": "Event participation translates to improved advocate capacity and that virtual/hybrid events can effectively build skills across geographic boundaries."
+                }
+              ],
+              "yPosition": 239,
+              "width": 256,
+              "color": "#f8ab54"
+            },
+            {
+              "id": "output-3",
+              "title": "Promising connections identified and warm introductions made",
+              "text": "Active networking and matchmaking to connect advocates with complementary skills, resources, or opportunities",
+              "connections": [
+                {
+                  "targetId": "outcome-layer2-3",
+                  "confidence": 70,
+                  "evidence": "100+ strategic connections facilitated directly by team in 2024, plus 313 automated matches through serendipitous matching system. Community surveys show advocates successfully finding co-founders, researchers connecting with implementers, and funders discovering promising projects.",
+                  "assumptions": "Team's network knowledge enables identification of high-value connections and that warm introductions significantly increase connection success rates compared to cold outreach."
+                }
+              ],
+              "yPosition": 521,
+              "width": 256,
+              "color": "#f8ab54"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "outcome-layer2-1",
+              "title": "Better collaboration and coordination in animal advocacy ",
+              "text": "Organizations, advocates, and stakeholders work together more effectively, sharing resources and aligning strategies",
+              "connections": [
+                {
+                  "targetId": "outcome-1",
+                  "confidence": 80,
+                  "evidence": "Platform facilitates information sharing between ACE staff, Faunalytics researchers, and practitioners that wouldn't otherwise circulate. 30+ regional channels and cause-specific channels enable coordinated information distribution across geographic and sectoral boundaries.",
+                  "assumptions": "Enhanced collaboration leads to better information sharing and that cross-organizational information flows improve movement-wide decision making quality."
+                },
+                {
+                  "targetId": "outcome-2",
+                  "confidence": 75,
+                  "evidence": "400+ help requests answered in Slack community, plus serendipitous matching system saves advocates 2-3 hours each by avoiding cold outreach (estimated 626-939 hours saved from 313 matches alone). Organizations report avoiding duplicated research efforts through platform.",
+                  "assumptions": "Improved coordination reduces duplication more than it creates coordination overhead and that time savings are redirected to high-impact activities rather than consumed by increased coordination costs."
+                }
+              ],
+              "yPosition": 381,
+              "width": 192,
+              "color": "#f89249"
+            },
+            {
+              "id": "outcome-layer2-2",
+              "title": "Advocates are better able to contribute",
+              "text": "Individual advocates have improved skills, knowledge, and capacity to make meaningful contributions to the movement",
+              "connections": [
+                {
+                  "targetId": "outcome-3",
+                  "confidence": 70,
+                  "evidence": "Mental health partnership with CEVA shows advocates accessing support (44 sign-ups). Platform enables mutual aid through help requests and resource sharing. Community surveys show high levels of peer support and knowledge exchange.",
+                  "assumptions": "Increased advocate capacity translates to increased willingness and ability to support others and that skill/knowledge development creates positive feedback loops in community support."
+                },
+                {
+                  "targetId": "outcome-4",
+                  "confidence": 65,
+                  "evidence": "11 new initiatives started through community connections in 2024. Community members report improved project quality through access to feedback, collaborators, and resources. Platform helps identify and avoid duplicate efforts through visibility.",
+                  "assumptions": "Skilled advocates with better connections produce higher quality projects and that community feedback and collaboration improve project outcomes compared to solo efforts."
+                }
+              ],
+              "yPosition": 239,
+              "width": 192,
+              "color": "#f89249"
+            },
+            {
+              "id": "outcome-layer2-3",
+              "title": "The right people meet at the right time",
+              "text": "Strategic connections form between individuals with complementary skills, resources, and opportunities",
+              "connections": [
+                {
+                  "targetId": "outcome-2",
+                  "confidence": 70,
+                  "evidence": "313 serendipitous matches in 2024 saved approximately 626-939 hours of individual searching time. Strategic connections help advocates find resources, collaborators, and opportunities faster than traditional networking.",
+                  "assumptions": "Right-time connections create efficiency gains and that strategic matching accelerates outcomes rather than just reallocating them within the movement."
+                },
+                {
+                  "targetId": "outcome-3",
+                  "confidence": 80,
+                  "evidence": "Strong evidence from documented outcomes where connections led to mutual support, collaboration opportunities, and resource sharing. Platform design specifically facilitates peer-to-peer assistance through help channels.",
+                  "assumptions": "Strategic connections naturally evolve into ongoing support relationships and that platform design can effectively facilitate organic peer support networks."
+                },
+                {
+                  "targetId": "outcome-5",
+                  "confidence": 75,
+                  "evidence": "29 paid job placements documented in 2024 (13 permanent, 16 freelance) plus 42 volunteer role placements. Success stories include advocates finding co-founders, researchers connecting with implementation opportunities, and funders discovering projects.",
+                  "assumptions": "Strategic timing of talent-opportunity connections significantly increases placement success rates and that quality of connections matters more than quantity for talent placement."
+                }
+              ],
+              "yPosition": 521,
+              "width": 192,
+              "color": "#f89249"
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-1",
+              "title": "A more and better-informed movement",
+              "text": "The animal advocacy movement has access to higher-quality information and research, enabling better strategic decisions",
+              "connections": [
+                {
+                  "targetId": "end-goal-1",
+                  "confidence": 40,
+                  "evidence": "Newsletter achieves 50% open rate with 3,160+ subscribers accessing curated research from Faunalytics (5,000+ study summaries) and movement updates. Resource hub provides 7,500 page views annually of strategic guidance and evidence-based tools.",
+                  "assumptions": "Evidence-based advocacy strategies significantly outperform intuition-based approaches and that access to high-quality information translates to better strategic decisions by movement actors. This is a critical assumption requiring testing through before/after outcome measurement of organizations using our resources."
+                }
+              ],
+              "yPosition": 239,
+              "width": 192,
+              "color": "#f57b42"
+            },
+            {
+              "id": "outcome-2",
+              "title": "Time and effort saved",
+              "text": "Organizations and advocates avoid duplicated work and inefficient approaches, redirecting resources to high-impact activities",
+              "connections": [
+                {
+                  "targetId": "end-goal-1",
+                  "confidence": 50,
+                  "evidence": "Estimated 626-939 hours saved through serendipitous matching alone, plus 400+ help requests answered. Time savings enable advocates to focus on high-impact activities rather than searching, duplicating efforts, or reinventing solutions.",
+                  "assumptions": "Time and effort savings are redirected to higher impact activities rather than consumed by coordination overhead or other low-impact work. Efficiency gains at individual level aggregate to movement-level impact acceleration."
+                }
+              ],
+              "yPosition": 521,
+              "width": 192,
+              "color": "#f57b42"
+            },
+            {
+              "id": "outcome-3",
+              "title": "Support offered and received",
+              "text": "Movement actors provide and access mutual support, resources, and collaboration opportunities",
+              "connections": [
+                {
+                  "targetId": "end-goal-1",
+                  "confidence": 45,
+                  "evidence": "Mental health partnership (44 CEVA course sign-ups) and peer support systems help retain advocates longer in movement. Community surveys show 78% report increased motivation and likelihood of long-term involvement.",
+                  "assumptions": "Supported advocates remain engaged longer and are more productive than unsupported advocates. Peer support systems reduce burnout rates and improve advocacy effectiveness over time."
+                }
+              ],
+              "yPosition": 381,
+              "width": 192,
+              "color": "#f57b42"
+            },
+            {
+              "id": "outcome-4",
+              "title": "Projects are started, quality is improved, and duplicates are avoided",
+              "text": "New high-quality initiatives emerge while redundant efforts are minimized through better coordination",
+              "connections": [
+                {
+                  "targetId": "end-goal-1",
+                  "confidence": 55,
+                  "evidence": "11 new initiatives started in 2024 through community connections, with quality improvements reported through feedback and collaboration. Duplication avoidance enables resources to flow to new projects rather than redundant efforts.",
+                  "assumptions": "New high-quality projects create more impact than prevented duplicate projects would have created and that community feedback and collaboration improve project success rates and impact."
+                }
+              ],
+              "yPosition": 92.49858856201172,
+              "width": 192,
+              "color": "#f57b42"
+            },
+            {
+              "id": "outcome-5",
+              "title": "New better talent connected to opportunities",
+              "text": "Skilled individuals discover and engage with high-impact opportunities in animal advocacy",
+              "connections": [
+                {
+                  "targetId": "end-goal-1",
+                  "confidence": 60,
+                  "evidence": "29 paid job placements plus 42 volunteer roles placed in 2024. Strong anecdotal evidence of skilled advocates finding high-impact opportunities they wouldn't have discovered otherwise, particularly in neglected regions through Global Ambassador Program.",
+                  "assumptions": "Better talent allocation to opportunities increases overall movement effectiveness and that strategic connections accelerate talent placement rather than just reallocating existing talent within the movement."
+                }
+              ],
+              "yPosition": 650,
+              "width": 192,
+              "color": "#f57b42"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "end-goal-1",
+              "title": "Less animal suffering and a faster end to factory farming",
+              "text": "",
+              "connections": [],
+              "yPosition": 381,
+              "width": 192,
+              "color": "#f56032"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "title": "Theory of Change for Hive",
+  "_metadata": {
+    "exportedAt": "2025-09-08T14:28:37.170Z"
+  }
+}
