@@ -9,9 +9,10 @@ interface ChatInterfaceProps {
   onToggle: () => void;
   graphData?: any;
   onGraphUpdate?: (newGraphData: any) => void;
+  onShowToCGenerator?: () => void;
 }
 
-export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate }: ChatInterfaceProps) {
+export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, onShowToCGenerator }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -191,13 +192,31 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               <div className="w-2 h-2 bg-green-400 rounded-full"></div>
               <span className="text-sm font-medium text-gray-700">Theory of Change Assistant</span>
             </div>
-            {messages.length > 0 && (
+            <div className="flex items-center gap-2">
+              {messages.length > 0 && (
+                <button
+                  onClick={clearChat}
+                  className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
+                  title="Clear chat"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="px-3 py-2 border-b border-gray-200 flex flex-col gap-2">
+            {onShowToCGenerator && (
               <button
-                onClick={clearChat}
-                className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
-                title="Clear chat"
+                onClick={onShowToCGenerator}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700 transition-colors"
+                title="Generate Theory of Change conversation from documents"
               >
-                Clear
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Generate from documents
               </button>
             )}
           </div>
