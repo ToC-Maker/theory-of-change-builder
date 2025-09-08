@@ -7,7 +7,7 @@
     "dev": "vite",
     "dev:server": "cd server && npm install && npm run dev",
     "dev:full": "concurrently \"npm run dev:server\" \"npm run dev\"",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
     "build:server": "cd server && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
