@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Routes, Route, useParams, Link } from "react-router-dom"
 import { ToC } from "./stories/ToC"
 import { CharityEntrepreneurship } from "./stories/ToC.stories"
@@ -66,11 +66,31 @@ function ToCViewer() {
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
   const [showToCGenerator, setShowToCGenerator] = useState(false)
 
-  const saveToHistory = (currentData: ToCData) => {
-    if (currentData) {
-      setUndoHistory(prev => [...prev, JSON.parse(JSON.stringify(currentData))]);
+  // Debounced undo history to group rapid successive operations
+  const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingUndoState = useRef<ToCData | null>(null)
+
+  const saveToHistory = useCallback((currentData: ToCData) => {
+    if (!currentData) return;
+
+    // Store the state that should be saved to undo history
+    if (!pendingUndoState.current) {
+      pendingUndoState.current = JSON.parse(JSON.stringify(currentData));
     }
-  };
+
+    // Clear existing timeout
+    if (undoTimeoutRef.current) {
+      clearTimeout(undoTimeoutRef.current);
+    }
+
+    // Set new timeout to save to history after a brief delay
+    undoTimeoutRef.current = setTimeout(() => {
+      if (pendingUndoState.current) {
+        setUndoHistory(prev => [...prev, pendingUndoState.current!]);
+        pendingUndoState.current = null;
+      }
+    }, 300); // 300ms delay to group rapid operations
+  }, []);
 
   const saveToLocalStorage = useCallback((dataToSave: ToCData, currentFilename?: string) => {
     try {
@@ -277,6 +297,15 @@ function ToCViewer() {
       setLoading(false);
     }
   }, [filename]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (undoTimeoutRef.current) {
+        clearTimeout(undoTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
