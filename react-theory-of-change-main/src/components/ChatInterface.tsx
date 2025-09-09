@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits } from '../utils/graphEdits';
+import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
 
 interface ChatInterfaceProps {
   height?: number;
@@ -13,11 +14,15 @@ interface ChatInterfaceProps {
 }
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, onShowToCGenerator }: ChatInterfaceProps) {
+  const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiKeyError, setApiKeyError] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
@@ -31,10 +36,34 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [messages]);
 
   useEffect(() => {
-    if (!isCollapsed && inputRef.current) {
+    if (!isCollapsed && inputRef.current && isConfigured) {
       inputRef.current.focus();
     }
-  }, [isCollapsed]);
+  }, [isCollapsed, isConfigured]);
+
+  useEffect(() => {
+    // Initialize API key input with current value
+    setApiKeyInput(apiKey);
+  }, [apiKey]);
+
+  const handleSaveApiKey = () => {
+    const validation = validateApiKey(apiKeyInput);
+    
+    if (!validation.isValid) {
+      setApiKeyError(validation.error || 'Invalid API key');
+      return;
+    }
+
+    setApiKey(apiKeyInput);
+    setApiKeyError('');
+  };
+
+  const handleApiKeyKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSaveApiKey();
+    }
+  };
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isStreaming) return;
@@ -125,7 +154,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setStreamingContent('');
           streamingMessageRef.current = null;
         }
-      });
+      }, apiKey);
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: streamingId,
@@ -193,7 +222,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               <span className="text-sm font-medium text-gray-700">Theory of Change Assistant</span>
             </div>
             <div className="flex items-center gap-2">
-              {messages.length > 0 && (
+              {messages.length > 0 && isConfigured && (
                 <button
                   onClick={clearChat}
                   className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
@@ -206,32 +235,85 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           </div>
 
           {/* Action Buttons */}
-          <div className="px-3 py-2 border-b border-gray-200 flex flex-col gap-2">
-            {onShowToCGenerator && (
-              <button
-                onClick={onShowToCGenerator}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700 transition-colors"
-                title="Generate Theory of Change conversation from documents"
-              >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Generate from documents
-              </button>
-            )}
-          </div>
+          {isConfigured && (
+            <div className="px-3 py-2 border-b border-gray-200 flex flex-col gap-2">
+              {onShowToCGenerator && (
+                <button
+                  onClick={onShowToCGenerator}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700 transition-colors"
+                  title="Generate Theory of Change conversation from documents"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Generate from documents
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {messages.length === 0 && (
+            {!isConfigured ? (
+              <div className="p-4">
+                <div className="mb-4">
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Setup Required</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    To use the AI assistant, please enter your Anthropic API key below.
+                  </p>
+                </div>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label htmlFor="apiKey" className="block text-sm font-medium text-gray-700 mb-1">
+                      Anthropic API Key
+                    </label>
+                    <input
+                      id="apiKey"
+                      type="password"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      onKeyPress={handleApiKeyKeyPress}
+                      placeholder="sk-ant-api03-..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                    />
+                    {apiKeyError && (
+                      <p className="text-red-600 text-xs mt-1">{apiKeyError}</p>
+                    )}
+                  </div>
+                  
+                  <button
+                    onClick={handleSaveApiKey}
+                    disabled={!apiKeyInput.trim()}
+                    className="w-full px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Save API Key
+                  </button>
+                </div>
+                
+                <div className="mt-4 p-3 bg-blue-50 rounded-md">
+                  <p className="text-xs text-blue-800">
+                    <strong>How to get your API key:</strong><br/>
+                    1. Visit <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-900">console.anthropic.com</a><br/>
+                    2. Sign up or log in to your Anthropic account<br/>
+                    3. Go to "API Keys" in the left sidebar<br/>
+                    4. Click "Create Key" and give it a name<br/>
+                    5. Copy the key (starts with "sk-ant-api03-...")
+                  </p>
+                  <p className="text-xs text-blue-700 mt-2">
+                    <strong>Security:</strong> Your API key is stored locally in your browser and never sent to our servers.
+                  </p>
+                </div>
+              </div>
+            ) : messages.length === 0 ? (
               <div className="text-center text-gray-500 text-sm py-8">
                 <div className="mb-2">👋</div>
                 <p>Hi! I'm here to help you build and improve your Theory of Change.</p>
                 <p className="mt-2 text-xs">Ask me about connections, suggest new nodes, or get strategic advice!</p>
               </div>
-            )}
+            ) : null}
             
-            {messages.map((message) => (
+            {isConfigured && messages.map((message) => (
               <div
                 key={message.id}
                 className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -265,7 +347,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             ))}
             
             {/* Streaming message */}
-            {isStreaming && streamingContent && (
+            {isConfigured && isStreaming && streamingContent && (
               <div className="flex justify-start">
                 <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
                   <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
@@ -281,7 +363,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               </div>
             )}
             
-            {isLoading && !isStreaming && (
+            {isConfigured && isLoading && !isStreaming && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
                   <div className="flex items-center gap-1">
