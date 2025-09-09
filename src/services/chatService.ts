@@ -3,6 +3,7 @@ import { type EditInstruction, parseEditInstructions, cleanResponseContent } fro
 // Import the system prompt from external file
 import systemPromptContent from '../prompts/chatSystemPrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface ChatMessage {
   id: string;
@@ -41,9 +42,20 @@ export { SYSTEM_PROMPT };
 
 
 class ChatService {
-  private baseURL = '/api'; // Vite will proxy this to backend
+  private getAnthropicClient(apiKey: string): Anthropic {
+    return new Anthropic({ 
+      apiKey,
+      dangerouslyAllowBrowser: true // Required for browser usage
+    });
+  }
 
-  async sendMessage(messages: ChatMessage[], currentGraphData?: any): Promise<ChatResponse> {
+  async sendMessage(messages: ChatMessage[], currentGraphData?: any, apiKey?: string): Promise<ChatResponse> {
+    if (!apiKey || !apiKey.trim()) {
+      return {
+        message: "Please configure your Anthropic API key to use the chat feature.",
+        error: "NO_API_KEY"
+      };
+    }
     try {
       // Prepare messages with full graph JSON for the last user message
       const processedMessages = messages.map((msg, index) => {
@@ -65,29 +77,19 @@ class ChatService {
         };
       });
 
-      console.log(`Sending ${processedMessages.length} messages to backend API`);
+      console.log(`Sending ${processedMessages.length} messages to Anthropic API`);
 
-      const response = await fetch(`${this.baseURL}/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: processedMessages,
-          currentGraphData,
-          systemPrompt: SYSTEM_PROMPT
-        })
+      const client = this.getAnthropicClient(apiKey);
+      
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 20000,
+        system: SYSTEM_PROMPT,
+        messages: processedMessages
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-
       // Extract the text content from the response
-      const content = data.content[0];
+      const content = response.content[0];
       if (content.type === 'text') {
         console.log('=== COMPLETE AI RESPONSE ===');
         console.log(content.text);
@@ -103,9 +105,9 @@ class ChatService {
           message: displayMessage,
           editInstructions: editInstructions,
           usage: {
-            input_tokens: data.usage?.input_tokens ?? 0,
-            output_tokens: data.usage?.output_tokens ?? 0,
-            total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0)
+            input_tokens: response.usage?.input_tokens ?? 0,
+            output_tokens: response.usage?.output_tokens ?? 0,
+            total_tokens: (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0)
           }
         };
       } else {
@@ -115,26 +117,32 @@ class ChatService {
         };
       }
     } catch (error) {
-      console.error('Error calling backend API:', error);
+      console.error('Error calling Anthropic API:', error);
       
-      // Handle different error types
+      // Handle Anthropic API errors
       if (error instanceof Error) {
-        if (error.message.includes('Rate limit')) {
+        if (error.message.includes('rate_limit') || error.message.includes('429')) {
           return {
             message: "Rate limit exceeded. Please wait a moment and try again.",
             error: "RATE_LIMIT"
           };
         }
-        if (error.message.includes('Invalid API key')) {
+        if (error.message.includes('invalid_api_key') || error.message.includes('401')) {
           return {
-            message: "API key is invalid. Please check your configuration.",
+            message: "API key is invalid. Please check your API key in settings.",
             error: "INVALID_API_KEY"
           };
         }
-        if (error.message.includes('fetch')) {
+        if (error.message.includes('insufficient_quota') || error.message.includes('402')) {
           return {
-            message: "Unable to connect to the backend server. Please ensure the server is running.",
-            error: "BACKEND_UNAVAILABLE"
+            message: "Insufficient API quota. Please check your Anthropic account.",
+            error: "INSUFFICIENT_QUOTA"
+          };
+        }
+        if (error.message.includes('network') || error.message.includes('fetch')) {
+          return {
+            message: "Network error. Please check your internet connection and try again.",
+            error: "NETWORK_ERROR"
           };
         }
       }
@@ -150,8 +158,13 @@ class ChatService {
     messages: ChatMessage[], 
     currentGraphData: any, 
     callbacks: StreamingChatResponse,
+    apiKey?: string,
     signal?: AbortSignal
   ): Promise<void> {
+    if (!apiKey || !apiKey.trim()) {
+      callbacks.onError?.("Please configure your Anthropic API key to use the chat feature.");
+      return;
+    }
     try {
       // Prepare messages with full graph JSON for the last user message
       const processedMessages = messages.map((msg, index) => {
@@ -173,79 +186,62 @@ class ChatService {
         };
       });
 
-      console.log(`Sending ${processedMessages.length} messages to backend API (streaming)`);
+      console.log(`Sending ${processedMessages.length} messages to Anthropic API (streaming)`);
 
-      const response = await fetch(`${this.baseURL}/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: processedMessages,
-          currentGraphData,
-          systemPrompt: SYSTEM_PROMPT,
-          stream: true
-        }),
-        signal: signal
+      const client = this.getAnthropicClient(apiKey);
+      let fullContent = '';
+      let usage = null;
+
+      const stream = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 20000,
+        system: SYSTEM_PROMPT,
+        messages: processedMessages,
+        stream: true
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      if (!response.body) {
-        throw new Error('No response body for streaming');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = '';
-
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          
-          if (done) break;
-          
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                
-                if (data.type === 'content') {
-                  fullContent = data.content;
-                  // Clean the streaming content to hide edit instructions during typing
-                  const cleanStreamingContent = cleanResponseContent(fullContent);
-                  callbacks.onContent?.(data.chunk, cleanStreamingContent);
-                } else if (data.type === 'done') {
-                  console.log('=== STREAMING DONE EVENT ===');
-                  console.log('Usage data received:', data.usage);
-                  console.log('=== END STREAMING DONE ===');
-                  
-                  // Parse edit instructions from the AI response
-                  const editInstructions = parseEditInstructions(fullContent);
-                  
-                  // Clean the response content to remove edit instructions for display
-                  const cleanContent = cleanResponseContent(fullContent);
-                  
-                  callbacks.onComplete?.(cleanContent, editInstructions, data.usage);
-                  return;
-                } else if (data.type === 'error') {
-                  callbacks.onError?.(data.error);
-                  return;
-                }
-              } catch (parseError) {
-                console.error('Error parsing SSE data:', parseError, line);
-              }
-            }
-          }
+      for await (const messageStreamEvent of stream) {
+        // Check for abort signal
+        if (signal?.aborted) {
+          throw new DOMException('Request was aborted', 'AbortError');
         }
-      } finally {
-        reader.releaseLock();
+
+        if (messageStreamEvent.type === 'message_start') {
+          // Capture usage from the initial message
+          if (messageStreamEvent.message.usage) {
+            usage = messageStreamEvent.message.usage;
+            console.log(`Usage captured from message_start:`, usage);
+          }
+        } else if (messageStreamEvent.type === 'content_block_delta') {
+          if (messageStreamEvent.delta.type === 'text_delta') {
+            const chunk = messageStreamEvent.delta.text;
+            fullContent += chunk;
+            
+            // Clean the streaming content to hide edit instructions during typing
+            const cleanStreamingContent = cleanResponseContent(fullContent);
+            callbacks.onContent?.(chunk, cleanStreamingContent);
+          }
+        } else if (messageStreamEvent.type === 'message_delta') {
+          // Update usage if provided in delta (for final token counts)
+          if (messageStreamEvent.delta.usage) {
+            usage = { ...usage, ...messageStreamEvent.delta.usage };
+            console.log(`Usage updated from message_delta:`, usage);
+          }
+        } else if (messageStreamEvent.type === 'message_stop') {
+          console.log(`message_stop event, final usage:`, usage);
+          
+          // Parse edit instructions from the AI response
+          const editInstructions = parseEditInstructions(fullContent);
+          
+          // Clean the response content to remove edit instructions for display
+          const cleanContent = cleanResponseContent(fullContent);
+          
+          callbacks.onComplete?.(cleanContent, editInstructions, usage);
+          
+          console.log(`Streaming complete`);
+          console.log(`Usage: ${usage?.input_tokens} input tokens, ${usage?.output_tokens} output tokens`);
+          return;
+        }
       }
     } catch (error) {
       console.error('Error in streaming chat:', error);
@@ -256,16 +252,20 @@ class ChatService {
           console.log('Streaming was aborted by user');
           return; // Don't call onError for user-initiated cancellations
         }
-        if (error.message.includes('Rate limit')) {
+        if (error.message.includes('rate_limit') || error.message.includes('429')) {
           callbacks.onError?.("Rate limit exceeded. Please wait a moment and try again.");
           return;
         }
-        if (error.message.includes('Invalid API key')) {
-          callbacks.onError?.("API key is invalid. Please check your configuration.");
+        if (error.message.includes('invalid_api_key') || error.message.includes('401')) {
+          callbacks.onError?.("API key is invalid. Please check your API key in settings.");
           return;
         }
-        if (error.message.includes('fetch')) {
-          callbacks.onError?.("Unable to connect to the backend server. Please ensure the server is running.");
+        if (error.message.includes('insufficient_quota') || error.message.includes('402')) {
+          callbacks.onError?.("Insufficient API quota. Please check your Anthropic account.");
+          return;
+        }
+        if (error.message.includes('network') || error.message.includes('fetch')) {
+          callbacks.onError?.("Network error. Please check your internet connection and try again.");
           return;
         }
       }
@@ -274,18 +274,27 @@ class ChatService {
     }
   }
 
-  async checkHealth(): Promise<boolean> {
+  async checkHealth(apiKey?: string): Promise<boolean> {
+    if (!apiKey || !apiKey.trim()) {
+      return false;
+    }
+    
     try {
-      const response = await fetch(`${this.baseURL}/health`);
-      return response.ok;
+      const client = this.getAnthropicClient(apiKey);
+      // Make a minimal API call to test the key
+      await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'Hi' }]
+      });
+      return true;
     } catch {
       return false;
     }
   }
 
-  isConfigured(): boolean {
-    // Always return true since backend handles the API key
-    return true;
+  isConfigured(apiKey?: string): boolean {
+    return !!(apiKey && apiKey.trim() && apiKey.startsWith('sk-'));
   }
 }
 

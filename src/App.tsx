@@ -7,6 +7,7 @@ import { InfoPanel } from "./components/InfoPanel"
 import { StaticLegend } from "./components/StaticLegend"
 import { JsonDropdown } from "./components/JsonDropdown"
 import { ToCGeneratorModal } from "./components/ToCGeneratorModal"
+import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import "./App.css"
 
 // Default empty template with 4 sections
@@ -447,10 +448,12 @@ function ToCViewer() {
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<ToCViewer />} />
-      <Route path="/:filename" element={<ToCViewer />} />
-    </Routes>
+    <ApiKeyProvider>
+      <Routes>
+        <Route path="/" element={<ToCViewer />} />
+        <Route path="/:filename" element={<ToCViewer />} />
+      </Routes>
+    </ApiKeyProvider>
   )
 }
 
