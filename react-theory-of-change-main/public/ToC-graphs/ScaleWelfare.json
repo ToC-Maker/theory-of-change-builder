@@ -1,0 +1,280 @@
+{
+  "title": "Theory of Change for Scale Welfare: East Asian Fish Welfare",
+  "sections": [
+    {
+      "title": "Inputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "output-1",
+              "title": "Develop welfare improvement training programs for target species",
+              "text": "Creation of species-specific protocols and training materials for tilapia and milkfish welfare improvements",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-1",
+                  "confidence": 40,
+                  "evidence": "FWI has developed welfare improvement approaches, but CE research emphasizes this work is 'unprecedented' and 'co-founders will have to generate your own research, run your own tests' (CE Report, p.30). Research notes difficulty identifying 'the how' of water quality improvements (CE Report, p.4).",
+                  "assumptions": "Effective training programs can be developed despite limited existing knowledge base. Local farming contexts allow for practical application of welfare principles developed elsewhere."
+                }
+              ],
+              "yPosition": 483,
+              "width": 200,
+              "color": "#263046",
+              "connectionIds": []
+            },
+            {
+              "id": "output-2",
+              "title": "Conduct pilot welfare improvement projects with partner farmers",
+              "text": "Direct implementation of welfare improvements on selected farms to test approaches and generate evidence",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-1",
+                  "confidence": 50,
+                  "evidence": "FWI's farmer-level approach has shown tractability, with impact on 1.84M fish as of 2024 (Fish Welfare Initiative, 2024). CE research notes farmer-level work provides 'great information value' about conditions and implementable improvements (CE Report, p.17).",
+                  "assumptions": "Farmers will be willing to participate in pilot projects. Pilot results will be representative of broader farmer population and applicable across different farm contexts."
+                }
+              ],
+              "yPosition": 271,
+              "width": 200,
+              "color": "#263046",
+              "connectionIds": []
+            },
+            {
+              "id": "output-3",
+              "title": "Publish research demonstrating economic benefits of welfare improvements",
+              "text": "Cost-benefit analyses and case studies showing financial viability of welfare improvements for farmers",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-2",
+                  "confidence": 35,
+                  "evidence": "CE research notes reduced stocking densities 'may have benefits of increased survival and lower disease susceptibility' creating 'win-win for farmers and fish' (CE Report, p.9). However, research acknowledges uncertainty about economic impacts and warns improvements could help 'proliferate the industry' (CE Report, p.32).",
+                  "assumptions": "Welfare improvements will show measurable economic benefits under real-world conditions. Economic benefits will be sufficient to motivate farmer behavior change without external incentives."
+                }
+              ],
+              "yPosition": 667.9306640625,
+              "width": 200,
+              "color": "#445277",
+              "connectionIds": []
+            },
+            {
+              "id": "output-4",
+              "title": "Build relationships with equipment suppliers and potential corporate partners",
+              "text": "Establishing supply chains and market connections to support welfare implementation",
+              "connections": [
+                {
+                  "targetId": "outcome-l3-3",
+                  "confidence": 45,
+                  "evidence": "FWI has secured corporate commitments from SAGE Organics and Fipola (Fish Welfare Initiative, 2021b; 2022b). CE research notes corporate approach may be promising but uncertain due to different market structures in developing countries with more middlemen (CE Report, p.18).",
+                  "assumptions": "Equipment suppliers exist and can be convinced to serve welfare-focused market. Corporate partners will be willing to engage despite limited consumer demand for fish welfare in target regions."
+                }
+              ],
+              "yPosition": 90.1875,
+              "width": 200,
+              "color": "#f1f2f6",
+              "connectionIds": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outputs",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "outcome-l3-1",
+              "title": "Evidence-based welfare improvement training programs scale to reach farmers",
+              "text": "Training programs exist, are delivered to farmers, and provide practical knowledge for welfare improvements",
+              "connections": [
+                {
+                  "targetId": "outcome-l2-1",
+                  "confidence": 30,
+                  "evidence": "CE research emphasizes this is 'explore' phase work with limited precedent. Research warns that 'there is not yet an obvious, tested, and scalable ask and approach to improving fish welfare' (CE Report, p.3). Training effectiveness depends on local context that is largely unknown.",
+                  "assumptions": "Training can be effectively delivered across language and cultural barriers. Farmers have time and motivation to participate in training programs. Training leads to actual knowledge retention and application."
+                }
+              ],
+              "yPosition": 378,
+              "width": 200,
+              "color": "#263046",
+              "connectionIds": []
+            },
+            {
+              "id": "outcome-l3-2",
+              "title": "Research demonstrates economic viability of welfare improvements to farmers",
+              "text": "Credible evidence exists showing that welfare improvements provide financial benefits to farmers",
+              "connections": [
+                {
+                  "targetId": "outcome-l2-2",
+                  "confidence": 25,
+                  "evidence": "CE research suggests potential for 'win-win' outcomes but acknowledges uncertainty. Research notes improving water quality 'can be quite difficult' and may increase carrying capacity, potentially leading to more fish produced (CE Report, p.32). Economic benefits remain largely theoretical.",
+                  "assumptions": "Welfare improvements will consistently provide economic benefits rather than imposing costs. Benefits will be sufficient to outweigh implementation costs and farmer risk aversion."
+                }
+              ],
+              "yPosition": 578,
+              "width": 200,
+              "color": "#445277",
+              "connectionIds": []
+            },
+            {
+              "id": "outcome-l3-3",
+              "title": "Supply chains for welfare equipment are established and market demand is created",
+              "text": "Equipment and services needed for welfare improvements are accessible to farmers with market incentives in place",
+              "connections": [
+                {
+                  "targetId": "outcome-l2-1",
+                  "confidence": 35,
+                  "evidence": "CE research notes importance of equipment access for water quality management including aerators (CE Report, p.8). However, research acknowledges uncertainty about corporate market structures in developing countries with 'much more informal/traditional commerce' (CE Report, p.18).",
+                  "assumptions": "Supply chains can be developed to serve small-scale farmers cost-effectively. Market demand will be sufficient to sustain supply chain development."
+                },
+                {
+                  "targetId": "outcome-l2-3",
+                  "confidence": 35,
+                  "evidence": "CE research notes importance of equipment access for water quality management including aerators (CE Report, p.8). However, research acknowledges uncertainty about corporate market structures in developing countries with 'much more informal/traditional commerce' (CE Report, p.18).",
+                  "assumptions": "Supply chains can be developed to serve small-scale farmers cost-effectively. Market demand will be sufficient to sustain supply chain development."
+                }
+              ],
+              "yPosition": 177,
+              "width": 200,
+              "color": "#f1f2f6",
+              "connectionIds": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Outcomes",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "outcome-l2-1",
+              "title": "Farmers have technical knowledge and equipment access for water quality management",
+              "text": "Farmers understand water quality parameters and have tools to monitor and improve conditions",
+              "connections": [
+                {
+                  "targetId": "outcome-l1-1",
+                  "confidence": 30,
+                  "evidence": "CE research identifies water quality as 'most important aspect of maintaining good fish welfare' (Cooke, 2016; MacIntyre et al., 2008) but notes implementation can be 'quite difficult' with unclear methods. Parameters include dissolved oxygen, ammonia, pH, and others requiring technical expertise.",
+                  "assumptions": "Technical knowledge can be effectively transferred to farmers with varying education levels. Equipment will be affordable and maintainable by small-scale farmers. Water quality monitoring and management is feasible for typical farm operations."
+                }
+              ],
+              "yPosition": 378,
+              "width": 200,
+              "color": "#263046",
+              "connectionIds": []
+            },
+            {
+              "id": "outcome-l2-2",
+              "title": "Farmers understand and believe in economic benefits of improved welfare practices",
+              "text": "Farmers are convinced that welfare improvements will enhance farm profitability through reduced mortality and disease",
+              "connections": [
+                {
+                  "targetId": "outcome-l1-1",
+                  "confidence": 25,
+                  "evidence": "CE research suggests welfare improvements could provide 'increased survival and lower disease susceptibility' (CE Report, p.9) but these benefits are theoretical. Research notes high uncertainty about farmer willingness and whether improvements actually provide economic benefits in practice.",
+                  "assumptions": "Farmers will change established practices based on new information. Economic benefits will be clear and immediate enough to motivate behavior change. Farmers have capacity to invest in improvements even if payback period is extended."
+                },
+                {
+                  "targetId": "outcome-l1-2",
+                  "confidence": 25,
+                  "evidence": "CE research suggests welfare improvements could provide 'increased survival and lower disease susceptibility' (CE Report, p.9) but these benefits are theoretical. Research notes high uncertainty about farmer willingness and whether improvements actually provide economic benefits in practice.",
+                  "assumptions": "Farmers will change established practices based on new information. Economic benefits will be clear and immediate enough to motivate behavior change. Farmers have capacity to invest in improvements even if payback period is extended."
+                }
+              ],
+              "yPosition": 578,
+              "width": 200,
+              "color": "#445277",
+              "connectionIds": []
+            },
+            {
+              "id": "outcome-l2-3",
+              "title": "Market incentives reward higher welfare practices through premium prices or preferred access",
+              "text": "Economic incentives exist that make welfare improvements financially attractive to farmers",
+              "connections": [
+                {
+                  "targetId": "outcome-l1-1",
+                  "confidence": 20,
+                  "evidence": "CE research notes limited consumer support for fish welfare especially in developing countries, unlike cage-free campaigns. Corporate structures involve many middlemen reducing corporate influence on farm practices (CE Report, p.18). FWI has secured some corporate commitments but scale remains unclear.",
+                  "assumptions": "Market premiums for welfare can be developed despite limited consumer demand. Corporate commitments will translate into meaningful incentives for farmers. Premium markets will be accessible to small-scale farmers rather than just large producers."
+                },
+                {
+                  "targetId": "outcome-l1-2",
+                  "confidence": 20,
+                  "evidence": "CE research notes limited consumer support for fish welfare especially in developing countries, unlike cage-free campaigns. Corporate structures involve many middlemen reducing corporate influence on farm practices (CE Report, p.18). FWI has secured some corporate commitments but scale remains unclear.",
+                  "assumptions": "Market premiums for welfare can be developed despite limited consumer demand. Corporate commitments will translate into meaningful incentives for farmers. Premium markets will be accessible to small-scale farmers rather than just large producers."
+                }
+              ],
+              "yPosition": 177,
+              "width": 200,
+              "color": "#f1f2f6",
+              "connectionIds": []
+            }
+          ]
+        },
+        {
+          "nodes": [
+            {
+              "id": "outcome-l1-1",
+              "title": "Farmers consistently maintain optimal water quality parameters including dissolved oxygen levels",
+              "text": "Farmers implement and sustain water quality management practices that keep parameters within welfare-appropriate ranges",
+              "connections": [
+                {
+                  "targetId": "goal-1",
+                  "confidence": 70,
+                  "evidence": "CE research identifies water quality as 'most important component of ensuring good fish welfare' with dissolved oxygen being critical parameter (CE Report, p.8). Multiple sources confirm water quality directly impacts fish stress, mortality, and disease susceptibility (Cooke, 2016; MacIntyre et al., 2008).",
+                  "assumptions": "Water quality improvements directly translate to measurable welfare improvements for fish. Farmers can sustain practices without constant external support. Water quality management doesn't inadvertently increase stocking densities or other welfare problems."
+                }
+              ],
+              "yPosition": 483,
+              "width": 200,
+              "color": "#6e7ca0",
+              "connectionIds": []
+            },
+            {
+              "id": "outcome-l1-2",
+              "title": "Farmers implement and maintain appropriate stocking density limits for different species and systems",
+              "text": "Farmers reduce overcrowding and maintain stocking densities that allow for natural behavior and reduce stress",
+              "connections": [
+                {
+                  "targetId": "goal-1",
+                  "confidence": 75,
+                  "evidence": "CE research identifies high stocking densities as welfare concern leading to 'increased mortalities, high stress, higher rates of injuries, increased aggression' and reduced behavioral expression (CE Report, p.9). FWI has successfully included stocking density decreases in welfare standards (Fish Welfare Initiative - Alliance for Responsible Aquaculture, n.d.).",
+                  "assumptions": "Farmers will maintain lower stocking densities even when facing economic pressure to maximize production. Reduced stocking doesn't simply shift fish production to other farms. Lower densities provide sufficient economic benefits through reduced mortality to offset lower total production."
+                }
+              ],
+              "yPosition": 271,
+              "width": 200,
+              "color": "#6e7ca0",
+              "connectionIds": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Goal",
+      "columns": [
+        {
+          "nodes": [
+            {
+              "id": "goal-1",
+              "title": "Measurable improvements in welfare indicators for millions of farmed fish",
+              "text": "Farmed fish in East Asia experience reduced chronic suffering and improved quality of life throughout their production cycles, with reduced stress, disease, and mortality",
+              "connections": [],
+              "yPosition": 378,
+              "width": 200,
+              "color": "#6e7ca0",
+              "connectionIds": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "_metadata": {
+    "exportedAt": "2025-09-09T14:17:11.307Z"
+  }
+}
