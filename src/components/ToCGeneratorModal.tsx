@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { chatService, ChatMessage } from '../services/chatService';
 import conversationPromptContent from '../prompts/tocConversationPrompt.md?raw';
+import { useApiKey } from '../contexts/ApiKeyContext';
 
 interface ToCGeneratorModalProps {
   isOpen: boolean;
@@ -16,6 +17,7 @@ interface UploadedFile {
 }
 
 export function ToCGeneratorModal({ isOpen, onClose, onGraphGenerated }: ToCGeneratorModalProps) {
+  const { apiKey, isConfigured } = useApiKey();
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [additionalInstructions, setAdditionalInstructions] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -94,6 +96,12 @@ export function ToCGeneratorModal({ isOpen, onClose, onGraphGenerated }: ToCGene
       return;
     }
 
+    // Check if API key is configured
+    if (!isConfigured) {
+      alert('Please configure your Anthropic API key in the chat panel first.');
+      return;
+    }
+
     setConversationStarted(true);
     setIsStreaming(true);
     setStreamingContent('');
@@ -155,7 +163,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setIsStreaming(false);
           setAbortController(null);
         }
-      }, controller.signal);
+      }, apiKey, controller.signal);
     } catch (error) {
       console.error('Error starting conversation:', error);
       setIsStreaming(false);
