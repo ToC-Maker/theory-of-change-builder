@@ -185,6 +185,43 @@ export function ToC({
     }
   }, [data, curvature, textSize, legendPosition])
 
+  // Generate unique node ID
+  const generateNodeId = useCallback((): string => {
+    return `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  }, [])
+
+  // Create new node at specified position
+  const createNewNode = useCallback((sectionIndex: number, columnIndex: number, yPosition: number) => {
+    if (!editMode) return
+    
+    const newNode: Node = {
+      id: generateNodeId(),
+      title: "New Node",
+      text: "",
+      connectionIds: [],
+      connections: [],
+      yPosition: yPosition,
+      width: nodeWidth, // Use current width setting
+      color: nodeColor  // Use current color setting
+    }
+    
+    setDataAndNotify(prevData => {
+      const newData = { ...prevData }
+      newData.sections[sectionIndex].columns[columnIndex].nodes.push(newNode)
+      return newData
+    })
+    
+    // Select the new node and open it for editing
+    setHighlightedNodes(new Set([newNode.id]))
+    setTimeout(() => {
+      setNodePopup({
+        id: newNode.id,
+        title: newNode.title,
+        text: newNode.text
+      })
+    }, 100)
+  }, [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId])
+
   const toggleHighlight = (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
     setHighlightedNodes((prev) => {
       if (selectionMode === 'multi') {
@@ -835,6 +872,16 @@ export function ToC({
                       setNodeColor('#ffffff')
                     }
                   }}
+                  onDoubleClick={editMode ? (e) => {
+                    // Only create node if double-clicking empty space
+                    if (e.target === e.currentTarget) {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const yPosition = e.clientY - rect.top
+                      createNewNode(sectionIndex, colIndex, yPosition)
+                    }
+                  } : undefined}
                 >
                   {column.nodes
                     .map((node, nodeIndex) => {
