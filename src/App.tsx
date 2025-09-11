@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Routes, Route, useParams, Link } from "react-router-dom"
 import { ToC } from "./stories/ToC"
-import { CharityEntrepreneurship } from "./stories/ToC.stories"
 import { ChatInterface } from "./components/ChatInterface"
 import { InfoPanel } from "./components/InfoPanel"
 import { StaticLegend } from "./components/StaticLegend"
@@ -52,6 +51,114 @@ interface ToCData {
   sections: any[]
   textSize?: number
   curvature?: number
+}
+
+function ToCViewerOnly() {
+  const { filename } = useParams<{ filename: string }>()
+  const [data, setData] = useState<ToCData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+
+  const loadFromLocalStorage = useCallback((currentFilename?: string): ToCData | null => {
+    try {
+      const storageKey = `toc_graph_${currentFilename || filename || 'default'}`;
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        console.log('Loaded from localStorage:', storageKey);
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.warn('Failed to load from localStorage:', error);
+    }
+    return null;
+  }, [filename]);
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true)
+      setError(null)
+      
+      try {
+        // First, try to load from localStorage
+        const savedData = loadFromLocalStorage(filename);
+        if (savedData) {
+          console.log('Using saved data from localStorage');
+          setData(savedData);
+          setLoading(false);
+          return;
+        }
+
+        // If no saved data, load from file or default
+        if (filename) {
+          const response = await fetch(`/ToC-graphs/${filename}`)
+          if (!response.ok) {
+            throw new Error(`Failed to load ${filename}`)
+          }
+          const jsonData = await response.json()
+          setData(jsonData)
+        } else {
+          // Default to empty template
+          setData(emptyTemplate)
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load data')
+        console.error('Error loading ToC data:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadData()
+  }, [filename, loadFromLocalStorage])
+
+  if (loading) {
+    return (
+      <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-xl text-gray-600">Loading Theory of Change...</div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-center">
+        <div className="text-xl text-red-600 mb-4">Error: {error}</div>
+        <Link to="/" className="text-blue-600 hover:underline">
+          Return to Home
+        </Link>
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-xl text-gray-600">No data available</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-center py-4 px-4 overflow-auto fixed inset-0">
+      {/* Only the Main Graph Container */}
+      <div className="flex flex-col flex-shrink-0 items-center">
+        <div 
+          className="bg-white rounded-xl shadow-lg p-4"
+          style={{
+            width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+            height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+            minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+            minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+            maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
+            maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
+          }}
+        >
+          <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function ToCViewer() {
@@ -481,6 +588,8 @@ function App() {
       <Routes>
         <Route path="/" element={<ToCViewer />} />
         <Route path="/:filename" element={<ToCViewer />} />
+        <Route path="/:filename/view" element={<ToCViewerOnly />} />
+        <Route path="/view" element={<ToCViewerOnly />} />
       </Routes>
     </ApiKeyProvider>
   )

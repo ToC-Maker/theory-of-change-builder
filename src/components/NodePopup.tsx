@@ -49,12 +49,8 @@ export function NodePopup({
 
   return (
     <div 
-      className="absolute z-50 flex items-center justify-center transition-all duration-150 ease-out"
+      className="fixed inset-0 z-50 flex items-center justify-center transition-all duration-150 ease-out"
       style={{
-        top: 0,
-        left: 0,
-        width: `${svgSize.width}px`,
-        height: `${svgSize.height}px`,
         pointerEvents: 'auto',
         animation: 'fadeIn 0.15s ease-out'
       }}
