@@ -7,6 +7,7 @@ import { EditToolbar } from "../components/EditToolbar"
 import { Legend } from "../components/Legend"
 import { NodePopup } from "../components/NodePopup"
 import { SearchInterface } from "../components/SearchInterface"
+import { EditModeToggle } from "../components/EditModeToggle"
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
 
 
@@ -15,11 +16,13 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
 export function ToC({ 
   data: initialData, 
   onSizeChange,
-  onDataChange
+  onDataChange,
+  showEditButton = true
 }: { 
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void 
   onDataChange?: (data: ToCData) => void
+  showEditButton?: boolean
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -1117,38 +1120,16 @@ export function ToC({
         />
       )}
 
-      {/* Edit Mode Toggle Button - positioned at bottom right corner */}
-      <div 
-        className="absolute z-50"
-        style={{
-          right: '20px',
-          bottom: '20px'
-        }}
-      >
-        <button
-            onClick={() => {
-              const newEditMode = !editMode
-              setEditMode(newEditMode)
-              if (!newEditMode) {
-                // Clear selections and column drag mode when exiting edit mode
-                setHighlightedNodes(new Set())
-                setColumnDragMode(false)
-                setNodeWidth(192)
-                setNodeColor('#ffffff')
-              }
-            }}
-            className={`w-12 h-12 rounded-full shadow-lg transition-all duration-200 flex items-center justify-center ${
-              editMode 
-                ? 'bg-gray-800 text-white border border-gray-600' 
-                : 'bg-gray-700 text-white hover:bg-gray-800 border border-gray-600'
-            }`}
-            title="Edit Mode"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-            </svg>
-          </button>
-      </div>
+      {/* Edit Mode Toggle Button */}
+      <EditModeToggle
+        editMode={editMode}
+        setEditMode={setEditMode}
+        setHighlightedNodes={setHighlightedNodes}
+        setColumnDragMode={setColumnDragMode}
+        setNodeWidth={setNodeWidth}
+        setNodeColor={setNodeColor}
+        show={showEditButton}
+      />
       
       <ConnectionsComponent
         data={data}
