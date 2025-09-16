@@ -200,7 +200,7 @@ export function ToC({
     const newNode: Node = {
       id: generateNodeId(),
       title: "New Node",
-      text: "",
+      text: "Details of New Node.",
       connectionIds: [],
       connections: [],
       yPosition: yPosition,
