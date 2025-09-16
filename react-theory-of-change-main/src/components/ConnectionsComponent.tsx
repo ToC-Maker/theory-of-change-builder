@@ -59,12 +59,12 @@ export function ConnectionsComponent({
       
       // Add extra width for column drag mode drop zones
       if (editMode && columnDragMode) {
-        // Count columns in this section
-        const columnCount = data.sections[sectionIndex].columns.filter(column => column.nodes.length > 0).length
-        
+        // Count ALL columns in this section (including empty ones)
+        const columnCount = data.sections[sectionIndex].columns.length || 1
+
         // Drop zones: N+1 zones × 32px each
         const dropZonesWidth = (columnCount + 1) * 32
-        
+
         // Gap calculation:
         // Normal mode: (N-1) gaps × 24px
         // Drag mode: 2N gaps × 32px (between dropzones and columns)
@@ -72,7 +72,7 @@ export function ConnectionsComponent({
         const normalGapWidth = Math.max(0, columnCount - 1) * 24
         const dragGapWidth = 2 * columnCount * 32
         const extraGapWidth = dragGapWidth - normalGapWidth
-        
+
         totalWidth += dropZonesWidth + extraGapWidth
       }
       
