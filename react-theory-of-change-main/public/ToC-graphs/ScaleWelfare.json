@@ -18,7 +18,7 @@
                   "assumptions": "Effective training programs can be developed despite limited existing knowledge base. Local farming contexts allow for practical application of welfare principles developed elsewhere."
                 }
               ],
-              "yPosition": 483,
+              "yPosition": 689.8500061035156,
               "width": 200,
               "color": "#263046",
               "connectionIds": []
@@ -35,7 +35,7 @@
                   "assumptions": "Farmers will be willing to participate in pilot projects. Pilot results will be representative of broader farmer population and applicable across different farm contexts."
                 }
               ],
-              "yPosition": 271,
+              "yPosition": 518,
               "width": 200,
               "color": "#263046",
               "connectionIds": []
@@ -52,7 +52,7 @@
                   "assumptions": "Welfare improvements will show measurable economic benefits under real-world conditions. Economic benefits will be sufficient to motivate farmer behavior change without external incentives."
                 }
               ],
-              "yPosition": 667.9306640625,
+              "yPosition": 317,
               "width": 200,
               "color": "#445277",
               "connectionIds": []
@@ -69,7 +69,7 @@
                   "assumptions": "Equipment suppliers exist and can be convinced to serve welfare-focused market. Corporate partners will be willing to engage despite limited consumer demand for fish welfare in target regions."
                 }
               ],
-              "yPosition": 90.1875,
+              "yPosition": 114,
               "width": 200,
               "color": "#f1f2f6",
               "connectionIds": []
@@ -95,7 +95,7 @@
                   "assumptions": "Training can be effectively delivered across language and cultural barriers. Farmers have time and motivation to participate in training programs. Training leads to actual knowledge retention and application."
                 }
               ],
-              "yPosition": 378,
+              "yPosition": 518,
               "width": 200,
               "color": "#263046",
               "connectionIds": []
@@ -112,7 +112,7 @@
                   "assumptions": "Welfare improvements will consistently provide economic benefits rather than imposing costs. Benefits will be sufficient to outweigh implementation costs and farmer risk aversion."
                 }
               ],
-              "yPosition": 578,
+              "yPosition": 317,
               "width": 200,
               "color": "#445277",
               "connectionIds": []
@@ -135,7 +135,7 @@
                   "assumptions": "Supply chains can be developed to serve small-scale farmers cost-effectively. Market demand will be sufficient to sustain supply chain development."
                 }
               ],
-              "yPosition": 177,
+              "yPosition": 114,
               "width": 200,
               "color": "#f1f2f6",
               "connectionIds": []
@@ -161,7 +161,7 @@
                   "assumptions": "Technical knowledge can be effectively transferred to farmers with varying education levels. Equipment will be affordable and maintainable by small-scale farmers. Water quality monitoring and management is feasible for typical farm operations."
                 }
               ],
-              "yPosition": 378,
+              "yPosition": 518,
               "width": 200,
               "color": "#263046",
               "connectionIds": []
@@ -184,7 +184,7 @@
                   "assumptions": "Farmers will change established practices based on new information. Economic benefits will be clear and immediate enough to motivate behavior change. Farmers have capacity to invest in improvements even if payback period is extended."
                 }
               ],
-              "yPosition": 578,
+              "yPosition": 317,
               "width": 200,
               "color": "#445277",
               "connectionIds": []
@@ -207,7 +207,7 @@
                   "assumptions": "Market premiums for welfare can be developed despite limited consumer demand. Corporate commitments will translate into meaningful incentives for farmers. Premium markets will be accessible to small-scale farmers rather than just large producers."
                 }
               ],
-              "yPosition": 177,
+              "yPosition": 114,
               "width": 200,
               "color": "#f1f2f6",
               "connectionIds": []
@@ -216,23 +216,6 @@
         },
         {
           "nodes": [
-            {
-              "id": "outcome-l1-1",
-              "title": "Farmers consistently maintain optimal water quality parameters including dissolved oxygen levels",
-              "text": "Farmers implement and sustain water quality management practices that keep parameters within welfare-appropriate ranges",
-              "connections": [
-                {
-                  "targetId": "goal-1",
-                  "confidence": 70,
-                  "evidence": "CE research identifies water quality as 'most important component of ensuring good fish welfare' with dissolved oxygen being critical parameter (CE Report, p.8). Multiple sources confirm water quality directly impacts fish stress, mortality, and disease susceptibility (Cooke, 2016; MacIntyre et al., 2008).",
-                  "assumptions": "Water quality improvements directly translate to measurable welfare improvements for fish. Farmers can sustain practices without constant external support. Water quality management doesn't inadvertently increase stocking densities or other welfare problems."
-                }
-              ],
-              "yPosition": 483,
-              "width": 200,
-              "color": "#6e7ca0",
-              "connectionIds": []
-            },
             {
               "id": "outcome-l1-2",
               "title": "Farmers implement and maintain appropriate stocking density limits for different species and systems",
@@ -245,7 +228,24 @@
                   "assumptions": "Farmers will maintain lower stocking densities even when facing economic pressure to maximize production. Reduced stocking doesn't simply shift fish production to other farms. Lower densities provide sufficient economic benefits through reduced mortality to offset lower total production."
                 }
               ],
-              "yPosition": 271,
+              "yPosition": 114,
+              "width": 200,
+              "color": "#6e7ca0",
+              "connectionIds": []
+            },
+            {
+              "id": "outcome-l1-1",
+              "title": "Farmers consistently maintain optimal water quality parameters including dissolved oxygen levels",
+              "text": "Farmers implement and sustain water quality management practices that keep parameters within welfare-appropriate ranges",
+              "connections": [
+                {
+                  "targetId": "goal-1",
+                  "confidence": 70,
+                  "evidence": "CE research identifies water quality as 'most important component of ensuring good fish welfare' with dissolved oxygen being critical parameter (CE Report, p.8). Multiple sources confirm water quality directly impacts fish stress, mortality, and disease susceptibility (Cooke, 2016; MacIntyre et al., 2008).",
+                  "assumptions": "Water quality improvements directly translate to measurable welfare improvements for fish. Farmers can sustain practices without constant external support. Water quality management doesn't inadvertently increase stocking densities or other welfare problems."
+                }
+              ],
+              "yPosition": 317,
               "width": 200,
               "color": "#6e7ca0",
               "connectionIds": []
@@ -264,7 +264,7 @@
               "title": "Measurable improvements in welfare indicators for millions of farmed fish",
               "text": "Farmed fish in East Asia experience reduced chronic suffering and improved quality of life throughout their production cycles, with reduced stress, disease, and mortality",
               "connections": [],
-              "yPosition": 378,
+              "yPosition": 218.87084197998047,
               "width": 200,
               "color": "#6e7ca0",
               "connectionIds": []
@@ -275,6 +275,6 @@
     }
   ],
   "_metadata": {
-    "exportedAt": "2025-09-09T14:17:11.307Z"
+    "exportedAt": "2025-09-14T08:39:49.901Z"
   }
 }
