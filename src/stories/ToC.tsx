@@ -196,7 +196,7 @@ export function ToC({
   // Create new node at specified position
   const createNewNode = useCallback((sectionIndex: number, columnIndex: number, yPosition: number) => {
     if (!editMode) return
-    
+
     const newNode: Node = {
       id: generateNodeId(),
       title: "New Node",
@@ -207,13 +207,22 @@ export function ToC({
       width: nodeWidth, // Use current width setting
       color: nodeColor  // Use current color setting
     }
-    
-    setDataAndNotify(prevData => {
-      const newData = { ...prevData }
-      newData.sections[sectionIndex].columns[columnIndex].nodes.push(newNode)
-      return newData
-    })
-    
+
+    setDataAndNotify(prevData => ({
+      ...prevData,
+      sections: prevData.sections.map((section, sIdx) =>
+        sIdx === sectionIndex ? {
+          ...section,
+          columns: section.columns.map((column, cIdx) =>
+            cIdx === columnIndex ? {
+              ...column,
+              nodes: [...column.nodes, newNode]
+            } : column
+          )
+        } : section
+      )
+    }))
+
     // Select the new node and open it for editing
     setHighlightedNodes(new Set([newNode.id]))
     setTimeout(() => {
@@ -876,10 +885,8 @@ export function ToC({
                     }
                   }}
                   onDoubleClick={editMode ? (e) => {
-                    // Only create node if double-clicking empty space
+                    // Only create new node if double-clicking in blank column area
                     if (e.target === e.currentTarget) {
-                      e.preventDefault()
-                      e.stopPropagation()
                       const rect = e.currentTarget.getBoundingClientRect()
                       const yPosition = e.clientY - rect.top
                       createNewNode(sectionIndex, colIndex, yPosition)
