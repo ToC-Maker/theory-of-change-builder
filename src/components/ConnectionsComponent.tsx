@@ -16,6 +16,7 @@ interface ConnectionsComponentProps {
   columnDragMode: boolean
   sectionWidths: number[]
   onSizeChange: (size: { width: number; height: number }) => void
+  onDeleteConnection?: (sourceId: string, targetId: string) => void
 }
 
 export function ConnectionsComponent({
@@ -31,6 +32,7 @@ export function ConnectionsComponent({
   columnDragMode,
   sectionWidths,
   onSizeChange,
+  onDeleteConnection,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [edgePopup, setEdgePopup] = useState<{
@@ -518,6 +520,7 @@ export function ConnectionsComponent({
         svgSize={svgSize}
         editMode={editMode}
         onUpdateConnection={updateConnection}
+        onDeleteConnection={onDeleteConnection}
       />
     )}
   </>
