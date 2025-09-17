@@ -489,15 +489,10 @@ export function ToC({
     return false
   }, [findNodeLocation])
 
-  const disconnectSelectedNodes = useCallback(() => {
+  // Generic function to delete a specific connection
+  const deleteConnection = useCallback((sourceId: string, targetId: string) => {
     if (!editMode) return
-    
-    if (highlightedNodes.size !== 2) {
-      return
-    }
 
-    const [sourceId, targetId] = Array.from(highlightedNodes)
-    
     setDataAndNotify((prevData) => ({
       ...prevData,
       sections: prevData.sections.map((section) => ({
@@ -524,12 +519,62 @@ export function ToC({
         }))
       }))
     }))
+  }, [editMode, setDataAndNotify])
+
+  // Generic function to delete a specific node
+  const deleteNode = useCallback((nodeId: string) => {
+    if (!editMode) return
+
+    setDataAndNotify(prevData => ({
+      ...prevData,
+      sections: prevData.sections.map(section => ({
+        ...section,
+        columns: section.columns.map(column => ({
+          ...column,
+          nodes: column.nodes.filter(node => node.id !== nodeId)
+        }))
+      }))
+    }))
+
+    // Also remove any connections to deleted node
+    setDataAndNotify(prevData => ({
+      ...prevData,
+      sections: prevData.sections.map(section => ({
+        ...section,
+        columns: section.columns.map(column => ({
+          ...column,
+          nodes: column.nodes.map(node => ({
+            ...node,
+            connectionIds: node.connectionIds?.filter(id => id !== nodeId) || [],
+            connections: node.connections?.filter(conn => conn.targetId !== nodeId)
+          }))
+        }))
+      }))
+    }))
+
+    // Clear any selection of the deleted node
+    setHighlightedNodes(prev => {
+      const newSet = new Set(prev)
+      newSet.delete(nodeId)
+      return newSet
+    })
+  }, [editMode, setDataAndNotify])
+
+  const disconnectSelectedNodes = useCallback(() => {
+    if (!editMode) return
+
+    if (highlightedNodes.size !== 2) {
+      return
+    }
+
+    const [sourceId, targetId] = Array.from(highlightedNodes)
+    deleteConnection(sourceId, targetId)
 
     // Clear selection after disconnecting
     setHighlightedNodes(new Set())
     setNodeWidth(192)
     setNodeColor('#ffffff')
-  }, [editMode, highlightedNodes, setDataAndNotify])
+  }, [editMode, highlightedNodes, deleteConnection])
 
   const connectSelectedNodes = useCallback(() => {
     if (!editMode) return
@@ -1154,6 +1199,7 @@ export function ToC({
           setSvgSize(size)
           onSizeChange?.(size)
         }}
+        onDeleteConnection={deleteConnection}
       />
       
       {nodePopup && (
@@ -1163,6 +1209,7 @@ export function ToC({
           svgSize={svgSize}
           editMode={editMode}
           onUpdateNode={updateNode}
+          onDeleteNode={deleteNode}
         />
       )}
 
