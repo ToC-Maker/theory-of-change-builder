@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useState, useRef, useEffect } from "react"
 import { ToCData } from "../types"
 
 interface EditToolbarProps {
@@ -14,6 +14,10 @@ interface EditToolbarProps {
   setNodeWidth: React.Dispatch<React.SetStateAction<number>>
   nodeColor: string
   setNodeColor: React.Dispatch<React.SetStateAction<string>>
+  columnPadding: number
+  setColumnPadding: React.Dispatch<React.SetStateAction<number>>
+  sectionPadding: number
+  setSectionPadding: React.Dispatch<React.SetStateAction<number>>
   straightenEdges: () => void
   setData: React.Dispatch<React.SetStateAction<ToCData>>
 }
@@ -31,9 +35,30 @@ export function EditToolbar({
   setNodeWidth,
   nodeColor,
   setNodeColor,
+  columnPadding,
+  setColumnPadding,
+  sectionPadding,
+  setSectionPadding,
   straightenEdges,
   setData,
 }: EditToolbarProps) {
+  const [showWidthDropdown, setShowWidthDropdown] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowWidthDropdown(false)
+      }
+    }
+
+    if (showWidthDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showWidthDropdown])
+
   if (!editMode) return null
 
   return (
@@ -59,7 +84,7 @@ export function EditToolbar({
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
-                <span>Straighten</span>
+                <span>Straighten Edges</span>
               </button>
 
 
@@ -119,42 +144,115 @@ export function EditToolbar({
               </div>
             </div>
 
-            {/* Node Width Control */}
-            <div className="flex items-center gap-3">
-              <label className="text-sm text-gray-700">Width:</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="128"
-                  max="320"
-                  step="16"
-                  value={nodeWidth}
-                  onChange={(e) => {
-                    const newWidth = parseInt(e.target.value)
-                    setNodeWidth(newWidth)
-                    // Auto-apply to selected nodes
-                    if (highlightedNodes.size > 0) {
-                      setData((prevData) => ({
-                        ...prevData,
-                        sections: prevData.sections.map((section) => ({
-                          ...section,
-                          columns: section.columns.map((column) => ({
-                            ...column,
-                            nodes: column.nodes.map((node) => {
-                              if (highlightedNodes.has(node.id)) {
-                                return { ...node, width: newWidth }
-                              }
-                              return node
-                            })
-                          }))
-                        }))
-                      }))
-                    }
-                  }}
-                  className="w-20 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-orange-300 to-orange-600"
-                />
-                <span className="text-xs text-gray-500 w-10">{nodeWidth}px</span>
-              </div>
+            {/* Width Controls Dropdown */}
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setShowWidthDropdown(!showWidthDropdown)}
+                className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
+                  showWidthDropdown
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                    : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                }`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h8m-8 6h16" />
+                </svg>
+                <span>Width</span>
+                <svg
+                  className={`w-3 h-3 transition-transform ${
+                    showWidthDropdown ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {/* Dropdown Menu - Opens Upward */}
+              {showWidthDropdown && (
+                <div className="absolute bottom-full mb-2 left-0 w-72 bg-white rounded-lg shadow-xl border border-gray-200 p-4 z-50">
+                  <div className="space-y-4">
+                    {/* Node Width Control */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Node Width</label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="128"
+                          max="320"
+                          step="16"
+                          value={nodeWidth}
+                          onChange={(e) => {
+                            const newWidth = parseInt(e.target.value)
+                            setNodeWidth(newWidth)
+                            // Auto-apply to selected nodes
+                            if (highlightedNodes.size > 0) {
+                              setData((prevData) => ({
+                                ...prevData,
+                                sections: prevData.sections.map((section) => ({
+                                  ...section,
+                                  columns: section.columns.map((column) => ({
+                                    ...column,
+                                    nodes: column.nodes.map((node) => {
+                                      if (highlightedNodes.has(node.id)) {
+                                        return { ...node, width: newWidth }
+                                      }
+                                      return node
+                                    })
+                                  }))
+                                }))
+                              }))
+                            }
+                          }}
+                          className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-orange-300 to-orange-600"
+                        />
+                        <span className="text-xs text-gray-500 w-12 text-right">{nodeWidth}px</span>
+                      </div>
+                      {highlightedNodes.size > 0 && (
+                        <span className="text-xs text-gray-500">
+                          ({highlightedNodes.size} node{highlightedNodes.size > 1 ? 's' : ''} selected)
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Column Padding Control */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Column Spacing</label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="8"
+                          max="64"
+                          step="8"
+                          value={columnPadding}
+                          onChange={(e) => setColumnPadding(parseInt(e.target.value))}
+                          className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-purple-300 to-purple-600"
+                        />
+                        <span className="text-xs text-gray-500 w-12 text-right">{columnPadding}px</span>
+                      </div>
+                    </div>
+
+                    {/* Section Padding Control */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">Section Spacing</label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="8"
+                          max="80"
+                          step="8"
+                          value={sectionPadding}
+                          onChange={(e) => setSectionPadding(parseInt(e.target.value))}
+                          className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-indigo-300 to-indigo-600"
+                        />
+                        <span className="text-xs text-gray-500 w-12 text-right">{sectionPadding}px</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Node Color Control */}
