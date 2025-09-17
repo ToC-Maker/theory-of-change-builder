@@ -140,21 +140,23 @@ function ToCViewerOnly() {
   }
 
   return (
-    <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-center py-4 px-4 overflow-auto fixed inset-0">
-      {/* Only the Main Graph Container */}
-      <div className="flex flex-col flex-shrink-0 items-center">
-        <div 
-          className="bg-white rounded-xl shadow-lg p-4"
-          style={{
-            width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-            height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-            minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-            minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-            maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
-            maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
-          }}
-        >
-          <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
+    <div className="h-screen w-screen bg-gray-50 overflow-auto fixed inset-0">
+      {/* Remove horizontal centering to allow full left-right scrolling */}
+      <div className="min-h-full flex flex-col justify-center py-4 px-4">
+        <div className="flex flex-col flex-shrink-0 mx-auto">
+          <div
+            className="bg-white rounded-xl shadow-lg p-4"
+            style={{
+              width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+              height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+              minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
+              minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
+              maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
+              maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
+            }}
+          >
+            <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
+          </div>
         </div>
       </div>
     </div>
@@ -487,10 +489,11 @@ function ToCViewer() {
     : 'Charity Entrepreneurship'
 
   return (
-    <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-start py-4 px-4 overflow-auto fixed inset-0">
-      <div className="flex items-center gap-4 mb-4 flex-shrink-0">
-        <div className="flex gap-2">
-          <button
+    <div className="h-screen w-screen bg-gray-50 overflow-auto fixed inset-0">
+      <div className="min-h-full flex flex-col py-4 px-4">
+        <div className="flex items-center gap-4 mb-4 flex-shrink-0 mx-auto">
+          <div className="flex gap-2">
+            <button
             onClick={handleUndo}
             disabled={undoHistory.length === 0}
             className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -515,18 +518,18 @@ function ToCViewer() {
         </div>
       </div>
       
-      <div className="flex flex-1 gap-6 justify-center items-start">
-        {/* Left Side Panel - AI Assistant */}
-        <div className="flex-shrink-0">
-          <ChatInterface 
-            height={containerSize.height > 0 ? containerSize.height + 32 : undefined}
-            isCollapsed={isLeftPanelCollapsed}
-            onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
-            graphData={data}
-            onGraphUpdate={handleGraphUpdate}
-            onShowToCGenerator={() => setShowToCGenerator(true)}
-          />
-        </div>
+        <div className="flex flex-1 gap-6 justify-center items-start mx-auto">
+          {/* Left Side Panel - AI Assistant */}
+          <div className="flex-shrink-0">
+            <ChatInterface
+              height={containerSize.height > 0 ? containerSize.height + 32 : undefined}
+              isCollapsed={isLeftPanelCollapsed}
+              onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
+              graphData={data}
+              onGraphUpdate={handleGraphUpdate}
+              onShowToCGenerator={() => setShowToCGenerator(true)}
+            />
+          </div>
         
         {/* Main Graph Container and JSON Dropdown */}
         <div className="flex flex-col flex-shrink-0 items-start">
@@ -572,12 +575,13 @@ function ToCViewer() {
         </div>
       </div>
       
-      {/* ToC Generator Modal */}
-      <ToCGeneratorModal
-        isOpen={showToCGenerator}
-        onClose={() => setShowToCGenerator(false)}
-        onGraphGenerated={handleGraphUpdate}
-      />
+        {/* ToC Generator Modal */}
+        <ToCGeneratorModal
+          isOpen={showToCGenerator}
+          onClose={() => setShowToCGenerator(false)}
+          onGraphGenerated={handleGraphUpdate}
+        />
+      </div>
     </div>
   )
 }
