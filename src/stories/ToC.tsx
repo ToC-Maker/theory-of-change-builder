@@ -59,6 +59,8 @@ export function ToC({
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1) // 0.5 to 2.0 scale
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff') // Default white background
+  const [columnPadding, setColumnPadding] = useState(24) // Default column padding in pixels
+  const [sectionPadding, setSectionPadding] = useState(32) // Default section padding in pixels
   const [nodePopup, setNodePopup] = useState<{
     id: string
     title: string
@@ -465,12 +467,12 @@ export function ToC({
       
       // Total width = sum of all column widths + gaps between columns
       const totalColumnWidth = columnWidths.reduce((sum, width) => sum + width, 0)
-      const gaps = Math.max(0, columnWidths.length - 1) * 24 // gap-6 = 24px between columns
+      const gaps = Math.max(0, columnWidths.length - 1) * columnPadding // Use dynamic column padding
       
       return totalColumnWidth + gaps
     })
     return widths
-  }, [data.sections])
+  }, [data.sections, columnPadding])
 
 
   const areNodesConnected = useCallback((sourceId: string, targetId: string) => {
@@ -812,9 +814,10 @@ export function ToC({
         </div>
       )}
       
-      <div 
-        className="flex relative gap-8 min-w-fit overflow-visible" 
-        style={{ 
+      <div
+        className="flex relative min-w-fit overflow-visible"
+        style={{
+          gap: `${sectionPadding}px`,
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
           height: svgSize.height > 0 ? `${svgSize.height-55}px` : '100vh' // I don't understand why I need to subtract 55, but it works
         }}
@@ -838,14 +841,14 @@ export function ToC({
                  setNodeColor('#ffffff')
                }
              }}>
-          <div className={`flex ${editMode ? 'gap-6' : 'gap-4'}`}>
+          <div className="flex">
             {/* Section title positioned to center over actual columns */}
             <div className="flex flex-col">
               <div 
                 className="rounded py-3 mb-2 px-3"
                 style={{ 
                   backgroundColor: data.color || '#374151', // Default to gray-700
-                  minWidth: `${sectionWidths[sectionIndex] + (editMode && columnDragMode ? 32 : 0)}px` // Account for drop zones
+                  minWidth: `${sectionWidths[sectionIndex] + (editMode && columnDragMode ? columnPadding + 16 : 0)}px` // Account for drop zones
                 }}
               >
                 <h2
@@ -854,7 +857,7 @@ export function ToC({
                   {section.title}
                 </h2>
               </div>
-              <div className={`flex ${editMode && columnDragMode ? 'gap-8' : 'gap-6'}`}>
+              <div className="flex" style={{ gap: `${columnPadding}px` }}>
             {(() => {
               // Always show at least one column per section, even if empty
               const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0);
@@ -864,16 +867,17 @@ export function ToC({
               <React.Fragment key={colIndex}>
                 {/* Drop zone before first column - only show when column dragging is enabled */}
                 {editMode && columnDragMode && colIndex === 0 && (
-                  <div 
+                  <div
                     className={clsx(
-                      "w-8 min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
-                      dragOverLocation?.sectionIndex === sectionIndex && 
-                      dragOverLocation?.columnIndex === 0 && 
+                      "min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
+                      dragOverLocation?.sectionIndex === sectionIndex &&
+                      dragOverLocation?.columnIndex === 0 &&
                       dragOverLocation?.isNewColumn
                         ? "border-green-400 bg-green-50"
                         : "border-transparent",
                       draggedNode ? "hover:border-green-300" : ""
                     )}
+                    style={{ width: `${columnPadding / 2}px` }}
                     onDragOver={(e) => {
                       e.preventDefault()
                       handleDragOver(sectionIndex, 0, true)
@@ -971,16 +975,17 @@ export function ToC({
 
                 {/* Drop zone after column - only show when column dragging is enabled */}
                 {editMode && columnDragMode && (
-                  <div 
+                  <div
                     className={clsx(
-                      "w-8 min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
-                      dragOverLocation?.sectionIndex === sectionIndex && 
-                      dragOverLocation?.columnIndex === colIndex + 1 && 
+                      "min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
+                      dragOverLocation?.sectionIndex === sectionIndex &&
+                      dragOverLocation?.columnIndex === colIndex + 1 &&
                       dragOverLocation?.isNewColumn
                         ? "border-green-400 bg-green-50"
                         : "border-transparent",
                       draggedNode ? "hover:border-green-300" : ""
                     )}
+                    style={{ width: `${columnPadding / 2}px` }}
                     onDragOver={(e) => {
                       e.preventDefault()
                       handleDragOver(sectionIndex, colIndex + 1, true)
@@ -1026,6 +1031,8 @@ export function ToC({
         editMode={editMode}
         columnDragMode={columnDragMode}
         sectionWidths={sectionWidths}
+        columnPadding={columnPadding}
+        sectionPadding={sectionPadding}
         onSizeChange={(size) => {
           setSvgSize(size)
           onSizeChange?.(size)
@@ -1046,6 +1053,10 @@ export function ToC({
         setNodeWidth={setNodeWidth}
         nodeColor={nodeColor}
         setNodeColor={setNodeColor}
+        columnPadding={columnPadding}
+        setColumnPadding={setColumnPadding}
+        sectionPadding={sectionPadding}
+        setSectionPadding={setSectionPadding}
         straightenEdges={straightenEdges}
         setData={setDataAndNotify}
       />
