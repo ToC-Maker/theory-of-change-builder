@@ -7,6 +7,8 @@ interface EditModeToggleProps {
   setColumnDragMode: (enabled: boolean) => void
   setNodeWidth: (width: number) => void
   setNodeColor: (color: string) => void
+  setEditingTitle?: (editing: boolean) => void
+  setEditingSectionIndex?: (index: number | null) => void
   show?: boolean
 }
 
@@ -17,6 +19,8 @@ export function EditModeToggle({
   setColumnDragMode,
   setNodeWidth,
   setNodeColor,
+  setEditingTitle,
+  setEditingSectionIndex,
   show = true
 }: EditModeToggleProps) {
   if (!show) return null
@@ -39,6 +43,9 @@ export function EditModeToggle({
             setColumnDragMode(false)
             setNodeWidth(192)
             setNodeColor('#ffffff')
+            // Clear any active inline editing
+            setEditingTitle?.(false)
+            setEditingSectionIndex?.(null)
           }
         }}
         className={`w-12 h-12 rounded-full shadow-lg transition-all duration-200 flex items-center justify-center ${
