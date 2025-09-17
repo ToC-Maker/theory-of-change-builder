@@ -179,15 +179,12 @@ function ToCViewer() {
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const pendingUndoState = useRef<ToCData | null>(null)
 
   const saveToHistory = useCallback((currentData: ToCData) => {
     if (!currentData) return;
 
-    // Store the state that should be saved to undo history
-    if (!pendingUndoState.current) {
-      pendingUndoState.current = JSON.parse(JSON.stringify(currentData));
-    }
+    // Deep clone the data to avoid reference issues
+    const clonedData = JSON.parse(JSON.stringify(currentData));
 
     // Clear existing timeout
     if (undoTimeoutRef.current) {
@@ -196,10 +193,7 @@ function ToCViewer() {
 
     // Set new timeout to save to history after a brief delay
     undoTimeoutRef.current = setTimeout(() => {
-      if (pendingUndoState.current) {
-        setUndoHistory(prev => [...prev, pendingUndoState.current!]);
-        pendingUndoState.current = null;
-      }
+      setUndoHistory(prev => [...prev, clonedData]);
     }, 300); // 300ms delay to group rapid operations
   }, []);
 
@@ -289,31 +283,55 @@ function ToCViewer() {
   };
 
   const handleUndo = useCallback(() => {
+    // Clear any pending saves first
+    if (undoTimeoutRef.current) {
+      clearTimeout(undoTimeoutRef.current);
+      undoTimeoutRef.current = null;
+    }
+
     if (undoHistory.length > 0 && data) {
       const previousState = undoHistory[undoHistory.length - 1];
       const newUndoHistory = undoHistory.slice(0, -1);
-      
+
+      // Validate the previous state has required structure
+      if (!previousState || !previousState.sections || !Array.isArray(previousState.sections)) {
+        console.error('Invalid undo state detected:', previousState);
+        return;
+      }
+
       // Save current state to redo history
       setRedoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
       setUndoHistory(newUndoHistory);
       setData(previousState);
       saveToLocalStorage(previousState);
-      
+
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
   }, [undoHistory, data, saveToLocalStorage]);
 
   const handleRedo = useCallback(() => {
+    // Clear any pending saves first
+    if (undoTimeoutRef.current) {
+      clearTimeout(undoTimeoutRef.current);
+      undoTimeoutRef.current = null;
+    }
+
     if (redoHistory.length > 0 && data) {
       const nextState = redoHistory[redoHistory.length - 1];
       const newRedoHistory = redoHistory.slice(0, -1);
-      
+
+      // Validate the next state has required structure
+      if (!nextState || !nextState.sections || !Array.isArray(nextState.sections)) {
+        console.error('Invalid redo state detected:', nextState);
+        return;
+      }
+
       // Save current state to undo history
       setUndoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
       setRedoHistory(newRedoHistory);
       setData(nextState);
       saveToLocalStorage(nextState);
-      
+
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
   }, [redoHistory, data, saveToLocalStorage]);
