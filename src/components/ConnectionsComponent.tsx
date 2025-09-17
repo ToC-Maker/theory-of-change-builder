@@ -355,6 +355,21 @@ export function ConnectionsComponent({
       width={svgSize.width}
       height={svgSize.height}
     >
+      <defs>
+        <marker
+          id="arrowhead"
+          markerWidth="5"
+          markerHeight="5"
+          refX="0"
+          refY="3"
+          orient="auto"
+        >
+          <polygon
+            points="0 1, 5 3, 0 5"
+            fill="#000000"
+          />
+        </marker>
+      </defs>
       {connections.map((connection, index) => {
         if (!connection.start || !connection.end) return null
 
@@ -368,7 +383,7 @@ export function ConnectionsComponent({
 
         const startX = startRect.right - containerRect.left
         const startY = startRect.top + startRect.height / 2 - containerRect.top
-        const endX = endRect.left - containerRect.left
+        const endX = endRect.left - containerRect.left - 14 // Offset by arrow width
         const endY = endRect.top + endRect.height / 2 - containerRect.top
 
         const baseOffset = Math.abs(endX - startX) / 2
@@ -442,6 +457,7 @@ export function ConnectionsComponent({
             <path
               d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
               className="fill-none"
+              markerEnd="url(#arrowhead)"
               style={{
                 stroke: strokeStyle.stroke,
                 strokeWidth: `${strokeWidth}px`,
@@ -454,7 +470,7 @@ export function ConnectionsComponent({
           </g>
         )
       })}
-      
+
       {/* Ghost connection preview when exactly 2 nodes are selected */}
       {editMode && highlightedNodes.size === 2 && (() => {
         const nodeIds = Array.from(highlightedNodes);
@@ -481,7 +497,7 @@ export function ConnectionsComponent({
         
         const startX = startRect.right - containerRect.left;
         const startY = startRect.top + startRect.height / 2 - containerRect.top;
-        const endX = endRect.left - containerRect.left;
+        const endX = endRect.left - containerRect.left - 8; // Offset by arrow width
         const endY = endRect.top + endRect.height / 2 - containerRect.top;
         
         const baseOffset = Math.abs(endX - startX) / 2;
@@ -496,6 +512,7 @@ export function ConnectionsComponent({
             <path
               d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
               className="fill-none"
+              markerEnd="url(#arrowhead)"
               style={{
                 stroke: ghostStrokeStyle.stroke,
                 strokeWidth: `${strokeWidth}px`, // Use same width as real connections
