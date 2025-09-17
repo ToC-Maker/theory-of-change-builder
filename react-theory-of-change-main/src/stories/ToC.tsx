@@ -61,6 +61,8 @@ export function ToC({
   const [nodeColor, setNodeColor] = useState('#ffffff') // Default white background
   const [columnPadding, setColumnPadding] = useState(initialData.columnPadding ?? 24) // Default column padding in pixels
   const [sectionPadding, setSectionPadding] = useState(initialData.sectionPadding ?? 32) // Default section padding in pixels
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null)
   const [nodePopup, setNodePopup] = useState<{
     id: string
     title: string
@@ -814,11 +816,33 @@ export function ToC({
   return (
     <div className="flex flex-col">
       {/* Graph Title */}
-      {data.title && (
+      {(data.title || editMode) && (
         <div className="mb-6">
-          <h1 className="text-4xl font-bold text-center text-gray-800 tracking-wider">
-            {data.title}
-          </h1>
+          {editMode && editingTitle ? (
+            <input
+              type="text"
+              value={data.title || ''}
+              onChange={(e) => {
+                setDataAndNotify(prev => ({ ...prev, title: e.target.value }))
+              }}
+              onBlur={() => setEditingTitle(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setEditingTitle(false)
+                }
+              }}
+              className="text-4xl font-bold text-center text-gray-800 tracking-wider w-full bg-transparent border-b-2 border-gray-400 outline-none focus:border-indigo-500"
+              autoFocus
+            />
+          ) : (
+            <h1
+              className={`text-4xl font-bold text-center text-gray-800 tracking-wider ${editMode ? 'cursor-pointer hover:text-indigo-600 transition-colors' : ''}`}
+              onClick={() => editMode && setEditingTitle(true)}
+              title={editMode ? 'Click to edit title' : ''}
+            >
+              {data.title || (editMode ? 'Click to add title' : '')}
+            </h1>
+          )}
         </div>
       )}
       
@@ -859,11 +883,36 @@ export function ToC({
                   minWidth: `${sectionWidths[sectionIndex] + (editMode && columnDragMode ? columnPadding + 16 : 0)}px` // Account for drop zones
                 }}
               >
-                <h2
-                  className="text-3xl font-bold text-center text-white uppercase"
-                >
-                  {section.title}
-                </h2>
+                {editMode && editingSectionIndex === sectionIndex ? (
+                  <input
+                    type="text"
+                    value={section.title}
+                    onChange={(e) => {
+                      setDataAndNotify(prev => ({
+                        ...prev,
+                        sections: prev.sections.map((s, idx) =>
+                          idx === sectionIndex ? { ...s, title: e.target.value } : s
+                        )
+                      }))
+                    }}
+                    onBlur={() => setEditingSectionIndex(null)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setEditingSectionIndex(null)
+                      }
+                    }}
+                    className="text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white w-full"
+                    autoFocus
+                  />
+                ) : (
+                  <h2
+                    className={`text-3xl font-bold text-center text-white uppercase ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                    onClick={() => editMode && setEditingSectionIndex(sectionIndex)}
+                    title={editMode ? 'Click to edit section label' : ''}
+                  >
+                    {section.title}
+                  </h2>
+                )}
               </div>
               <div className="flex" style={{ gap: `${columnPadding}px` }}>
             {(() => {
@@ -1226,6 +1275,8 @@ export function ToC({
         setColumnDragMode={setColumnDragMode}
         setNodeWidth={setNodeWidth}
         setNodeColor={setNodeColor}
+        setEditingTitle={setEditingTitle}
+        setEditingSectionIndex={setEditingSectionIndex}
         show={showEditButton}
       />
 
