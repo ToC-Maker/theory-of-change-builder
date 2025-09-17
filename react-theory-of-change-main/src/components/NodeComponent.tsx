@@ -84,7 +84,7 @@ export function NodeComponent({
   }
 
   return (
-    <div className="relative">
+    <div className="relative z-10">
       <div
         ref={nodeRef}
         draggable={editMode}

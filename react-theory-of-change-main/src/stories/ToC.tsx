@@ -1013,7 +1013,26 @@ export function ToC({
           </div>
         </div>
       )}
-      
+
+      <ConnectionsComponent
+        data={data}
+        setData={setDataAndNotify}
+        nodeRefs={nodeRefs}
+        nodeHeights={nodeHeights}
+        highlightedNodes={highlightedNodes}
+        connectedNodes={connectedNodes}
+        hoveredConnections={hoveredConnections}
+        curvature={curvature}
+        editMode={editMode}
+        columnDragMode={columnDragMode}
+        sectionWidths={sectionWidths}
+        onSizeChange={(size) => {
+          setSvgSize(size)
+          onSizeChange?.(size)
+        }}
+        onDeleteConnection={deleteConnection}
+      />
+
       <EditToolbar
         editMode={editMode}
         highlightedNodes={highlightedNodes}
@@ -1174,26 +1193,7 @@ export function ToC({
         setNodeColor={setNodeColor}
         show={showEditButton}
       />
-      
-      <ConnectionsComponent
-        data={data}
-        setData={setDataAndNotify}
-        nodeRefs={nodeRefs}
-        nodeHeights={nodeHeights}
-        highlightedNodes={highlightedNodes}
-        connectedNodes={connectedNodes}
-        hoveredConnections={hoveredConnections}
-        curvature={curvature}
-        editMode={editMode}
-        columnDragMode={columnDragMode}
-        sectionWidths={sectionWidths}
-        onSizeChange={(size) => {
-          setSvgSize(size)
-          onSizeChange?.(size)
-        }}
-        onDeleteConnection={deleteConnection}
-      />
-      
+
       {nodePopup && (
         <NodePopup
           nodePopup={nodePopup}
