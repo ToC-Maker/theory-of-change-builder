@@ -525,29 +525,21 @@ export function ToC({
   const deleteNode = useCallback((nodeId: string) => {
     if (!editMode) return
 
+    // Combine node deletion and connection cleanup in a single atomic update
     setDataAndNotify(prevData => ({
       ...prevData,
       sections: prevData.sections.map(section => ({
         ...section,
         columns: section.columns.map(column => ({
           ...column,
-          nodes: column.nodes.filter(node => node.id !== nodeId)
-        }))
-      }))
-    }))
-
-    // Also remove any connections to deleted node
-    setDataAndNotify(prevData => ({
-      ...prevData,
-      sections: prevData.sections.map(section => ({
-        ...section,
-        columns: section.columns.map(column => ({
-          ...column,
-          nodes: column.nodes.map(node => ({
-            ...node,
-            connectionIds: node.connectionIds?.filter(id => id !== nodeId) || [],
-            connections: node.connections?.filter(conn => conn.targetId !== nodeId)
-          }))
+          nodes: column.nodes
+            .filter(node => node.id !== nodeId) // Remove the deleted node
+            .map(node => ({
+              ...node,
+              // Clean up any connections to the deleted node
+              connectionIds: node.connectionIds?.filter(id => id !== nodeId) || [],
+              connections: node.connections?.filter(conn => conn.targetId !== nodeId)
+            }))
         }))
       }))
     }))
