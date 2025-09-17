@@ -59,8 +59,8 @@ export function ToC({
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1) // 0.5 to 2.0 scale
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff') // Default white background
-  const [columnPadding, setColumnPadding] = useState(24) // Default column padding in pixels
-  const [sectionPadding, setSectionPadding] = useState(32) // Default section padding in pixels
+  const [columnPadding, setColumnPadding] = useState(initialData.columnPadding ?? 24) // Default column padding in pixels
+  const [sectionPadding, setSectionPadding] = useState(initialData.sectionPadding ?? 32) // Default section padding in pixels
   const [nodePopup, setNodePopup] = useState<{
     id: string
     title: string
@@ -160,7 +160,7 @@ export function ToC({
     recalculateAllNodeHeights();
   }, [initialData, recalculateAllNodeHeights]);
 
-  // Update textSize and curvature when data changes
+  // Update settings when data changes
   useEffect(() => {
     if (initialData.textSize !== undefined) {
       setTextSize(initialData.textSize)
@@ -168,15 +168,23 @@ export function ToC({
     if (initialData.curvature !== undefined) {
       setCurvature(initialData.curvature)
     }
-  }, [initialData.textSize, initialData.curvature])
+    if (initialData.columnPadding !== undefined) {
+      setColumnPadding(initialData.columnPadding)
+    }
+    if (initialData.sectionPadding !== undefined) {
+      setSectionPadding(initialData.sectionPadding)
+    }
+  }, [initialData.textSize, initialData.curvature, initialData.columnPadding, initialData.sectionPadding])
 
   const copyGraphJSON = useCallback(async () => {
     try {
       const graphData = {
         ...data,
-        // Include text size and curve shape as part of main data
+        // Include all settings as part of main data
         textSize,
         curvature,
+        columnPadding,
+        sectionPadding,
         // Include additional UI state in metadata
         _metadata: {
           exportedAt: new Date().toISOString(),
@@ -188,7 +196,7 @@ export function ToC({
     } catch (err) {
       console.error('Failed to copy JSON:', err)
     }
-  }, [data, curvature, textSize, legendPosition])
+  }, [data, curvature, textSize, columnPadding, sectionPadding, legendPosition])
 
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
@@ -1046,17 +1054,33 @@ export function ToC({
         columnDragMode={columnDragMode}
         setColumnDragMode={setColumnDragMode}
         curvature={curvature}
-        setCurvature={setCurvature}
+        setCurvature={(value) => {
+          setCurvature(value)
+          // Update data with new curvature
+          setDataAndNotify(prev => ({ ...prev, curvature: value }))
+        }}
         textSize={textSize}
-        setTextSize={setTextSize}
+        setTextSize={(value) => {
+          setTextSize(value)
+          // Update data with new text size
+          setDataAndNotify(prev => ({ ...prev, textSize: value }))
+        }}
         nodeWidth={nodeWidth}
         setNodeWidth={setNodeWidth}
         nodeColor={nodeColor}
         setNodeColor={setNodeColor}
         columnPadding={columnPadding}
-        setColumnPadding={setColumnPadding}
+        setColumnPadding={(value) => {
+          setColumnPadding(value)
+          // Update data with new padding
+          setDataAndNotify(prev => ({ ...prev, columnPadding: value }))
+        }}
         sectionPadding={sectionPadding}
-        setSectionPadding={setSectionPadding}
+        setSectionPadding={(value) => {
+          setSectionPadding(value)
+          // Update data with new padding
+          setDataAndNotify(prev => ({ ...prev, sectionPadding: value }))
+        }}
         straightenEdges={straightenEdges}
         setData={setDataAndNotify}
       />
