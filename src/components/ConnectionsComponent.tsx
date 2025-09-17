@@ -15,6 +15,8 @@ interface ConnectionsComponentProps {
   editMode: boolean
   columnDragMode: boolean
   sectionWidths: number[]
+  columnPadding: number
+  sectionPadding: number
   onSizeChange: (size: { width: number; height: number }) => void
   onDeleteConnection?: (sourceId: string, targetId: string) => void
 }
@@ -31,6 +33,8 @@ export function ConnectionsComponent({
   editMode,
   columnDragMode,
   sectionWidths,
+  columnPadding,
+  sectionPadding,
   onSizeChange,
   onDeleteConnection,
 }: ConnectionsComponentProps) {
@@ -64,23 +68,23 @@ export function ConnectionsComponent({
         // Count ALL columns in this section (including empty ones)
         const columnCount = data.sections[sectionIndex].columns.length || 1
 
-        // Drop zones: N+1 zones × 32px each
-        const dropZonesWidth = (columnCount + 1) * 32
+        // Drop zones: N+1 zones × (columnPadding/2)px each
+        const dropZonesWidth = (columnCount + 1) * (columnPadding / 2)
 
         // Gap calculation:
-        // Normal mode: (N-1) gaps × 24px
-        // Drag mode: 2N gaps × 32px (between dropzones and columns)
-        // Extra gap width = 2N × 32 - (N-1) × 24 = 64N - 24N + 24 = 40N + 24
-        const normalGapWidth = Math.max(0, columnCount - 1) * 24
-        const dragGapWidth = 2 * columnCount * 32
+        // Normal mode: (N-1) gaps × columnPadding px
+        // Drag mode: 2N gaps × columnPadding (between dropzones and columns)
+        // Extra gap width = 2N × columnPadding - (N-1) × columnPadding = (N+1) × columnPadding
+        const normalGapWidth = Math.max(0, columnCount - 1) * columnPadding
+        const dragGapWidth = 2 * columnCount * columnPadding
         const extraGapWidth = dragGapWidth - normalGapWidth
 
         totalWidth += dropZonesWidth + extraGapWidth
       }
-      
-      // Add gap between sections (gap-8 = 32px) - only between sections, not on edges
+
+      // Add gap between sections - only between sections, not on edges
       if (sectionIndex < sectionWidths.length - 1) {
-        totalWidth += 32
+        totalWidth += sectionPadding
       }
     })
     
@@ -111,7 +115,7 @@ export function ConnectionsComponent({
     const newSize = { width: totalWidth, height: dynamicHeight }
     setSvgSize(newSize)
     onSizeChange(newSize)
-  }, [sectionWidths, data.sections, editMode, columnDragMode, nodeHeights])
+  }, [sectionWidths, data.sections, editMode, columnDragMode, nodeHeights, columnPadding, sectionPadding])
 
   useEffect(() => {
     // Immediate size calculation
@@ -136,6 +140,11 @@ export function ConnectionsComponent({
   useEffect(() => {
     updateSize()
   }, [sectionWidths, updateSize])
+
+  // Refresh connections when column or section padding changes
+  useEffect(() => {
+    setRefreshCounter(prev => prev + 1)
+  }, [columnPadding, sectionPadding])
 
   // Smooth edge updates during interactions using RAF
   useEffect(() => {
