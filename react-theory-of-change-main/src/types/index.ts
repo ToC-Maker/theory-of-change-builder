@@ -27,4 +27,6 @@ export interface ToCData {
   }[]
   textSize?: number // Optional text size scaling factor (0.5 to 2.0)
   curvature?: number // Optional curve shape setting (0.0 to 1.0)
+  columnPadding?: number // Optional column spacing in pixels (default 24px)
+  sectionPadding?: number // Optional section spacing in pixels (default 32px)
 }

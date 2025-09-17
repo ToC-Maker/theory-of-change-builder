@@ -51,6 +51,8 @@ interface ToCData {
   sections: any[]
   textSize?: number
   curvature?: number
+  columnPadding?: number
+  sectionPadding?: number
 }
 
 function ToCViewerOnly() {
