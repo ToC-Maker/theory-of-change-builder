@@ -351,7 +351,7 @@ export function ConnectionsComponent({
   return (
     <>
     <svg
-      className="absolute top-0 left-0 pointer-events-none"
+      className="absolute top-0 left-0 pointer-events-none z-0"
       width={svgSize.width}
       height={svgSize.height}
     >

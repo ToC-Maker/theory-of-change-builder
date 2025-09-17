@@ -69,7 +69,7 @@ export function EdgePopup({
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center transition-all duration-150 ease-out"
+      className="fixed inset-0 z-[100] flex items-center justify-center transition-all duration-150 ease-out"
       style={{
         pointerEvents: 'auto',
         animation: 'fadeIn 0.15s ease-out'
