@@ -6,7 +6,9 @@ import { InfoPanel } from "./components/InfoPanel"
 import { StaticLegend } from "./components/StaticLegend"
 import { JsonDropdown } from "./components/JsonDropdown"
 import { ToCGeneratorModal } from "./components/ToCGeneratorModal"
+import { ShareModal } from "./components/ShareModal"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
+import { ChartService } from "./services/chartService"
 import "./App.css"
 
 // Default empty template with 4 sections
@@ -56,7 +58,7 @@ interface ToCData {
 }
 
 function ToCViewerOnly() {
-  const { filename } = useParams<{ filename: string }>()
+  const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>()
   const [data, setData] = useState<ToCData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -80,19 +82,22 @@ function ToCViewerOnly() {
     const loadData = async () => {
       setLoading(true)
       setError(null)
-      
-      try {
-        // First, try to load from localStorage
-        const savedData = loadFromLocalStorage(filename);
-        if (savedData) {
-          console.log('Using saved data from localStorage');
-          setData(savedData);
-          setLoading(false);
-          return;
-        }
 
-        // If no saved data, load from file or default
-        if (filename) {
+      try {
+        if (chartId) {
+          // Load from database using chartId
+          console.log('Loading chart from database:', chartId);
+          const chartData = await ChartService.getChart(chartId);
+          setData(chartData);
+        } else if (filename) {
+          // Fallback to file-based loading for backwards compatibility
+          const savedData = loadFromLocalStorage(filename);
+          if (savedData) {
+            console.log('Using saved data from localStorage');
+            setData(savedData);
+            return;
+          }
+
           const response = await fetch(`/ToC-graphs/${filename}`)
           if (!response.ok) {
             throw new Error(`Failed to load ${filename}`)
@@ -112,7 +117,7 @@ function ToCViewerOnly() {
     }
 
     loadData()
-  }, [filename, loadFromLocalStorage])
+  }, [filename, chartId, loadFromLocalStorage])
 
   if (loading) {
     return (
@@ -166,7 +171,7 @@ function ToCViewerOnly() {
 }
 
 function ToCViewer() {
-  const { filename } = useParams<{ filename: string }>()
+  const { filename, editToken } = useParams<{ filename?: string; editToken?: string }>()
   const [data, setData] = useState<ToCData | null>(null)
   const [undoHistory, setUndoHistory] = useState<ToCData[]>([])
   const [redoHistory, setRedoHistory] = useState<ToCData[]>([])
@@ -176,6 +181,8 @@ function ToCViewer() {
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
   const [showToCGenerator, setShowToCGenerator] = useState(false)
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -269,17 +276,29 @@ function ToCViewer() {
 
   const handleDataChange = (newData: ToCData) => {
     console.log('App handleDataChange called with:', newData);
-    
+
     // Save current state to history before updating
     if (data) {
       saveToHistory(data);
     }
-    
+
     // Clear redo history when new changes are made
     setRedoHistory([]);
-    
+
     setData(newData);
-    saveToLocalStorage(newData);
+
+    // Save to appropriate storage
+    if (currentEditToken) {
+      // Save to database
+      ChartService.updateChart(currentEditToken, newData).catch(err => {
+        console.error('Failed to save to database:', err);
+        // Fallback to localStorage if database fails
+        saveToLocalStorage(newData);
+      });
+    } else {
+      // Save to localStorage
+      saveToLocalStorage(newData);
+    }
   };
 
   const handleUndo = useCallback(() => {
@@ -440,19 +459,24 @@ function ToCViewer() {
     const loadData = async () => {
       setLoading(true)
       setError(null)
-      
-      try {
-        // First, try to load from localStorage
-        const savedData = loadFromLocalStorage(filename);
-        if (savedData) {
-          console.log('Using saved data from localStorage');
-          setData(savedData);
-          setLoading(false);
-          return;
-        }
 
-        // If no saved data, load from file or default
-        if (filename) {
+      try {
+        if (editToken) {
+          // Load from database using editToken
+          console.log('Loading chart from database with edit token:', editToken);
+          const result = await ChartService.getChartByEditToken(editToken);
+          setData(result.chartData);
+          setCurrentEditToken(editToken);
+        } else if (filename) {
+          // Fallback to file-based loading for backwards compatibility
+          const savedData = loadFromLocalStorage(filename);
+          if (savedData) {
+            console.log('Using saved data from localStorage');
+            setData(savedData);
+            setLoading(false);
+            return;
+          }
+
           const response = await fetch(`/ToC-graphs/${filename}`)
           if (!response.ok) {
             throw new Error(`Failed to load ${filename}`)
@@ -475,7 +499,7 @@ function ToCViewer() {
     }
 
     loadData()
-  }, [filename, loadFromLocalStorage, saveToLocalStorage])
+  }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage])
 
   if (loading) {
     return (
@@ -534,6 +558,16 @@ function ToCViewer() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
             </svg>
             Redo ({redoHistory.length})
+          </button>
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+            title="Share chart with others"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m9.032 4.026a9.001 9.001 0 01-7.432 0m9.032-4.026A9.001 9.001 0 0112 3c-4.474 0-8.268 3.12-9.032 7.326m9.032 4.026A9.001 9.001 0 019.968 7.326" />
+            </svg>
+            Share
           </button>
         </div>
       </div>
@@ -601,6 +635,14 @@ function ToCViewer() {
           onClose={() => setShowToCGenerator(false)}
           onGraphGenerated={handleGraphUpdate}
         />
+
+        {/* Share Modal */}
+        <ShareModal
+          isOpen={showShareModal}
+          onClose={() => setShowShareModal(false)}
+          chartData={data}
+          currentEditToken={currentEditToken}
+        />
       </div>
     </div>
   )
@@ -610,7 +652,12 @@ function App() {
   return (
     <ApiKeyProvider>
       <Routes>
+        {/* New URL-based routes */}
         <Route path="/" element={<ToCViewer />} />
+        <Route path="/chart/:chartId" element={<ToCViewerOnly />} />
+        <Route path="/edit/:editToken" element={<ToCViewer />} />
+
+        {/* Legacy file-based routes for backwards compatibility */}
         <Route path="/:filename" element={<ToCViewer />} />
         <Route path="/:filename/view" element={<ToCViewerOnly />} />
         <Route path="/view" element={<ToCViewerOnly />} />

@@ -1,50 +1,67 @@
-# React + TypeScript + Vite
+# Theory of Change Graph Builder
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An interactive web application for creating and sharing Theory of Change diagrams with persistent URLs and collaborative editing.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- 📊 Interactive drag-and-drop graph creation
+- 🔗 Shareable URLs with view/edit permissions
+- 💾 Automatic cloud saving
+- 📱 Responsive design
+- ⚡ Real-time collaboration ready
 
-## Expanding the ESLint configuration
+## Quick Start
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ["./tsconfig.node.json", "./tsconfig.app.json"],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+### Development
+```bash
+npm install
+npm run dev
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+### Production Deploy (Netlify)
+```bash
+npm run build
+```
 
-```js
-// eslint.config.js
-import react from "eslint-plugin-react"
+## Environment Setup
 
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: "18.3" } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs["jsx-runtime"].rules,
-  },
-})
+### Required Environment Variables
+Add these to your `.env.local` for development and Netlify environment for production:
+
+```env
+DATABASE_URL=your-neon-postgresql-connection-string
+```
+
+### Database Setup
+1. Create a [Neon](https://neon.tech) PostgreSQL database
+2. Run the schema creation (table will be auto-created on first use)
+3. Add your DATABASE_URL to environment variables
+
+## Architecture
+
+- **Frontend**: React + TypeScript + Vite
+- **Backend**: Netlify Functions (serverless)
+- **Database**: PostgreSQL (Neon)
+- **Deployment**: Netlify
+
+## API Endpoints
+
+- `POST /.netlify/functions/createChart` - Create new chart
+- `GET /.netlify/functions/getChart` - Fetch chart by ID or edit token
+- `POST /.netlify/functions/updateChart` - Update existing chart
+
+## URL Structure
+
+- `/` - Create new chart
+- `/chart/{id}` - View chart (read-only)
+- `/edit/{token}` - Edit chart (full permissions)
+
+## Local Testing
+
+```bash
+# With Netlify Dev (recommended)
+npm install -g netlify-cli
+netlify dev
+
+# App will be available at http://localhost:8888
 ```
