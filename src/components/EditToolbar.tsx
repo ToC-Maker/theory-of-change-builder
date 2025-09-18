@@ -223,9 +223,9 @@ export function EditToolbar({
                       <div className="flex items-center gap-3">
                         <input
                           type="range"
-                          min="8"
-                          max="64"
-                          step="8"
+                          min="0"
+                          max="100"
+                          step="4"
                           value={columnPadding}
                           onChange={(e) => setColumnPadding(parseInt(e.target.value))}
                           className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-purple-300 to-purple-600"
@@ -240,9 +240,9 @@ export function EditToolbar({
                       <div className="flex items-center gap-3">
                         <input
                           type="range"
-                          min="8"
-                          max="80"
-                          step="8"
+                          min="0"
+                          max="100"
+                          step="4"
                           value={sectionPadding}
                           onChange={(e) => setSectionPadding(parseInt(e.target.value))}
                           className="flex-1 h-2 rounded-lg appearance-none cursor-pointer bg-gradient-to-r from-indigo-300 to-indigo-600"
