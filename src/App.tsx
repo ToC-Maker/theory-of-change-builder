@@ -352,25 +352,78 @@ function ToCViewer() {
     
     // Set the uploaded data
     setData(jsonData);
+    pendingChangesRef.current = jsonData;
     saveToLocalStorage(jsonData);
-    
+
+    // Trigger debounced database save for JSON upload
+    if (currentEditToken) {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      setIsSaving(true);
+      saveTimeoutRef.current = setTimeout(() => {
+        if (pendingChangesRef.current && currentEditToken) {
+          console.log('Saving uploaded JSON to database');
+          ChartService.updateChart(currentEditToken, pendingChangesRef.current)
+            .then(() => {
+              pendingChangesRef.current = null;
+              setIsSaving(false);
+            })
+            .catch(err => {
+              console.error('Failed to save uploaded JSON to database:', err);
+              setIsSaving(false);
+            });
+        } else {
+          setIsSaving(false);
+        }
+        saveTimeoutRef.current = null;
+      }, 1000);
+    }
+
     console.log('JSON data uploaded successfully');
-  }, [data, saveToHistory, saveToLocalStorage]);
+  }, [data, saveToHistory, saveToLocalStorage, currentEditToken]);
 
   const handleGraphUpdate = (newGraphData: ToCData) => {
     console.log('App handleGraphUpdate called with:', newGraphData);
     console.log('Current data before update:', data);
-    
+
     // Save current state to history before updating
     if (data) {
       saveToHistory(data);
     }
-    
+
     // Clear redo history when new changes are made
     setRedoHistory([]);
-    
+
     setData(newGraphData);
+    pendingChangesRef.current = newGraphData;
     saveToLocalStorage(newGraphData);
+
+    // Trigger debounced database save for LLM edits
+    if (currentEditToken) {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      setIsSaving(true);
+      saveTimeoutRef.current = setTimeout(() => {
+        if (pendingChangesRef.current && currentEditToken) {
+          console.log('Saving LLM edit to database');
+          ChartService.updateChart(currentEditToken, pendingChangesRef.current)
+            .then(() => {
+              pendingChangesRef.current = null;
+              setIsSaving(false);
+            })
+            .catch(err => {
+              console.error('Failed to save LLM edit to database:', err);
+              setIsSaving(false);
+            });
+        } else {
+          setIsSaving(false);
+        }
+        saveTimeoutRef.current = null;
+      }, 1000);
+    }
+
     console.log('setData called with new graph data');
   };
 
@@ -452,12 +505,41 @@ function ToCViewer() {
       // Save current state to redo history
       setRedoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
       setUndoHistory(newUndoHistory);
+
+      // Use handleDataChange to trigger debounced save, but skip history management
+      const skipHistory = true;
       setData(previousState);
+      pendingChangesRef.current = previousState;
       saveToLocalStorage(previousState);
+
+      // Trigger debounced database save for undo
+      if (currentEditToken) {
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        setIsSaving(true);
+        saveTimeoutRef.current = setTimeout(() => {
+          if (pendingChangesRef.current && currentEditToken) {
+            console.log('Saving undo state to database');
+            ChartService.updateChart(currentEditToken, pendingChangesRef.current)
+              .then(() => {
+                pendingChangesRef.current = null;
+                setIsSaving(false);
+              })
+              .catch(err => {
+                console.error('Failed to save undo to database:', err);
+                setIsSaving(false);
+              });
+          } else {
+            setIsSaving(false);
+          }
+          saveTimeoutRef.current = null;
+        }, 1000);
+      }
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage]);
+  }, [undoHistory, data, saveToLocalStorage, currentEditToken]);
 
   const handleRedo = useCallback(() => {
     // Clear any pending saves first
@@ -479,12 +561,40 @@ function ToCViewer() {
       // Save current state to undo history
       setUndoHistory(prev => [...prev, JSON.parse(JSON.stringify(data))]);
       setRedoHistory(newRedoHistory);
+
+      // Use debounced save for redo as well
       setData(nextState);
+      pendingChangesRef.current = nextState;
       saveToLocalStorage(nextState);
+
+      // Trigger debounced database save for redo
+      if (currentEditToken) {
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        setIsSaving(true);
+        saveTimeoutRef.current = setTimeout(() => {
+          if (pendingChangesRef.current && currentEditToken) {
+            console.log('Saving redo state to database');
+            ChartService.updateChart(currentEditToken, pendingChangesRef.current)
+              .then(() => {
+                pendingChangesRef.current = null;
+                setIsSaving(false);
+              })
+              .catch(err => {
+                console.error('Failed to save redo to database:', err);
+                setIsSaving(false);
+              });
+          } else {
+            setIsSaving(false);
+          }
+          saveTimeoutRef.current = null;
+        }, 1000);
+      }
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage]);
+  }, [redoHistory, data, saveToLocalStorage, currentEditToken]);
 
   // Keyboard shortcut handler
   useEffect(() => {
