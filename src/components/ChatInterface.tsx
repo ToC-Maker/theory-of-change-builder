@@ -20,6 +20,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [apiKeyError, setApiKeyError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -92,6 +93,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
     try {
       await chatService.sendStreamingMessage([...messages, userMessage], graphData, {
+        onSearchStart: () => {
+          setIsSearching(true);
+        },
+        onSearchComplete: () => {
+          setIsSearching(false);
+        },
         onContent: (chunk: string, fullContent: string) => {
           setStreamingContent(fullContent);
         },
@@ -152,6 +159,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setMessages(prev => [...prev, errorMessage]);
           setIsStreaming(false);
           setStreamingContent('');
+          setIsSearching(false);
           streamingMessageRef.current = null;
         }
       }, apiKey);
@@ -165,6 +173,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       setMessages(prev => [...prev, errorMessage]);
       setIsStreaming(false);
       setStreamingContent('');
+      setIsSearching(false);
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
@@ -346,6 +355,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               </div>
             ))}
             
+            {/* Search indicator */}
+            {isConfigured && isSearching && (
+              <div className="flex justify-start">
+                <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 animate-spin text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span className="text-blue-700">Searching the web for current information...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Streaming message */}
             {isConfigured && isStreaming && streamingContent && (
               <div className="flex justify-start">
@@ -362,8 +385,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
                 </div>
               </div>
             )}
-            
-            {isConfigured && isLoading && !isStreaming && (
+
+            {isConfigured && isLoading && !isStreaming && !isSearching && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
                   <div className="flex items-center gap-1">
