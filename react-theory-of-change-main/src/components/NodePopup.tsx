@@ -127,7 +127,7 @@ export function NodePopup({
             />
           ) : (
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900 mb-2 whitespace-pre-wrap">
+              <h2 className="text-lg font-bold text-gray-900 mb-2 whitespace-pre-wrap text-left">
                 {nodePopup.title}
               </h2>
               {editMode && !isEditing && (
@@ -157,7 +157,7 @@ export function NodePopup({
                 placeholder="Node description..."
               />
             ) : (
-              <p className="text-gray-600 leading-relaxed text-sm">
+              <p className="text-gray-600 leading-relaxed text-sm text-left">
                 {nodePopup.text}
               </p>
             )}
