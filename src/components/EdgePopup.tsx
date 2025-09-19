@@ -193,54 +193,53 @@ export function EdgePopup({
                 <span className="text-2xl font-bold text-gray-800">
                   {Math.round(edgePopup.confidence)}%
                 </span>
-                <span className="text-sm text-gray-500 ml-2">
-                  ({edgePopup.confidence <= 33 ? 'Low' : edgePopup.confidence <= 66 ? 'Medium' : 'High'})
-                </span>
               </div>
               
               <div className="space-y-3">
-                <div className="flex items-center space-x-4">
-                  <span className="text-xs text-gray-600 font-medium">0%</span>
-                  <div className="flex-1 relative">
-                    <style>
-                      {`
-                        .black-slider::-webkit-slider-thumb {
-                          appearance: none;
-                          height: 16px;
-                          width: 16px;
-                          border-radius: 50%;
-                          background: #000000;
-                          cursor: pointer;
-                          border: none;
-                          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-                        }
-                        .black-slider::-moz-range-thumb {
-                          height: 16px;
-                          width: 16px;
-                          border-radius: 50%;
-                          background: #000000;
-                          cursor: pointer;
-                          border: none;
-                          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-                        }
-                      `}
-                    </style>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={edgePopup.confidence}
-                      onChange={(e) => {
-                        const newConfidence = parseInt(e.target.value)
-                        updateConfidence(edgePopup.sourceId, edgePopup.targetId, newConfidence)
-                        setEdgePopup({ ...edgePopup, confidence: newConfidence })
-                      }}
-                      className="black-slider w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-200"
-                    />
+                {editMode && (
+                  <div className="flex items-center space-x-4">
+                    <span className="text-xs text-gray-600 font-medium">0%</span>
+                    <div className="flex-1 relative">
+                      <style>
+                        {`
+                          .black-slider::-webkit-slider-thumb {
+                            appearance: none;
+                            height: 16px;
+                            width: 16px;
+                            border-radius: 50%;
+                            background: #000000;
+                            cursor: pointer;
+                            border: none;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                          }
+                          .black-slider::-moz-range-thumb {
+                            height: 16px;
+                            width: 16px;
+                            border-radius: 50%;
+                            background: #000000;
+                            cursor: pointer;
+                            border: none;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                          }
+                        `}
+                      </style>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={edgePopup.confidence}
+                        onChange={(e) => {
+                          const newConfidence = parseInt(e.target.value)
+                          updateConfidence(edgePopup.sourceId, edgePopup.targetId, newConfidence)
+                          setEdgePopup({ ...edgePopup, confidence: newConfidence })
+                        }}
+                        className="black-slider w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-200"
+                      />
+                    </div>
+                    <span className="text-xs text-gray-600 font-medium">100%</span>
                   </div>
-                  <span className="text-xs text-gray-600 font-medium">100%</span>
-                </div>
+                )}
                 <div className="text-xs text-gray-700 text-center">
                   {edgePopup.confidence >= 80
                     ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
@@ -257,24 +256,14 @@ export function EdgePopup({
           </div>
           
           <div>
-            <h3 className="text-2xl font-semibold text-gray-800 mb-3">
-              Why this connection exists
-            </h3>
-            <p className="text-gray-600 leading-relaxed">
-              This connection represents the causal relationship between these two elements in the theory of change. 
-              The source element directly contributes to or enables the target element.
-            </p>
-          </div>
-          
-          <div>
-            <div className="flex items-center justify-center mb-3 relative">
-              <h3 className="text-2xl font-semibold text-gray-800">
+            <div className="flex items-center justify-between mb-3 relative">
+              <h3 className="text-2xl font-semibold text-gray-800 text-left">
                 Assumptions & Evidence
               </h3>
               {editMode && !isEditing && (
                 <button
                   onClick={() => setIsEditing(true)}
-                  className="absolute right-0 text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
+                  className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
                   title="Edit connection details"
                 >
                   <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -283,41 +272,49 @@ export function EdgePopup({
                 </button>
               )}
             </div>
-            
-            <div className="space-y-4">
+
+            <div className="space-y-4 text-left">
               <div>
-                <h4 className="font-medium text-gray-800 mb-2">Key Assumptions:</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left">Key Assumptions:</h4>
                 {editMode && isEditing ? (
                   <textarea
                     value={editAssumptions}
                     onChange={handleAssumptionsChange}
-                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical"
+                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical text-left"
                     placeholder="What assumptions are being made for this connection to hold true?"
                   />
                 ) : (
-                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap">
+                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap text-left">
                     {editAssumptions || "No assumptions documented yet."}
                   </p>
                 )}
               </div>
-              
+
               <div>
-                <h4 className="font-medium text-gray-800 mb-2">Evidence:</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left">Evidence:</h4>
                 {editMode && isEditing ? (
                   <textarea
                     value={editEvidence}
                     onChange={handleEvidenceChange}
-                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical"
+                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical text-left"
                     placeholder="What evidence supports this connection?"
                   />
                 ) : (
-                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap">
+                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap text-left">
                     {editEvidence || "No evidence documented yet."}
                   </p>
                 )}
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Footnote */}
+        <div className="mt-6 pt-4 border-t border-gray-200">
+          <p className="text-xs text-gray-500 text-left">
+            * This connection represents the causal relationship between these two elements in the theory of change.
+            The source element directly contributes to or enables the target element.
+          </p>
         </div>
       </div>
     </div>
