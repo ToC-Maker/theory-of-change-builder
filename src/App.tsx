@@ -283,6 +283,58 @@ function ToCViewer() {
   const [showShareModal, setShowShareModal] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
+  const [isManualSyncing, setIsManualSyncing] = useState(false)
+
+  // Helper function to format relative time
+  const getTimeAgo = (date: Date) => {
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+    if (diffInSeconds < 10) {
+      return 'less than 10 seconds ago';
+    }
+
+    if (diffInSeconds < 60) {
+      return 'less than 1 minute ago';
+    }
+
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    if (diffInMinutes < 60) {
+      return `${diffInMinutes} minute${diffInMinutes !== 1 ? 's' : ''} ago`;
+    }
+
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) {
+      return `${diffInHours} hour${diffInHours !== 1 ? 's' : ''} ago`;
+    }
+
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays} day${diffInDays !== 1 ? 's' : ''} ago`;
+  };
+
+  // Manual sync function
+  const handleManualSync = async () => {
+    if (!currentEditToken || isManualSyncing) return;
+
+    setIsManualSyncing(true);
+    try {
+      console.log('Manual sync triggered');
+      const result = await ChartService.getChartByEditToken(currentEditToken);
+      const newDataStr = JSON.stringify(result.chartData);
+      const currentDataStr = JSON.stringify(data);
+
+      if (newDataStr !== currentDataStr) {
+        setData(result.chartData);
+        console.log('Chart data updated from manual sync');
+      }
+      setLastSyncTime(new Date());
+    } catch (err) {
+      console.error('Manual sync failed:', err);
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -777,6 +829,7 @@ function ToCViewer() {
           lastSyncedData = newDataStr;
           setData(result.chartData);
           console.log('Chart data updated from sync');
+          setLastSyncTime(new Date());
           consecutiveUnchanged = 0;
           syncInterval = 10000; // Reset to 10 seconds
         } else {
@@ -847,6 +900,19 @@ function ToCViewer() {
       document.removeEventListener('scroll', handleActivity);
     };
   }, [editToken])
+
+  // Update the "time ago" display every second
+  const [, forceUpdate] = useState({});
+  useEffect(() => {
+    if (!lastSyncTime) return;
+
+    const interval = setInterval(() => {
+      // Force re-render to update the "time ago" display
+      forceUpdate({});
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [lastSyncTime]);
 
   if (loading) {
     return (
@@ -931,6 +997,29 @@ function ToCViewer() {
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
               <span className="text-sm">Saved</span>
+            </div>
+          )}
+          {currentEditToken && (
+            <div className="flex items-center gap-2">
+              {lastSyncTime && (
+                <div className="flex items-center gap-1 px-2 py-1 text-gray-600 text-xs">
+                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Last synced: {getTimeAgo(lastSyncTime)}</span>
+                </div>
+              )}
+              <button
+                onClick={handleManualSync}
+                disabled={isManualSyncing}
+                className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Manually sync with server"
+              >
+                <svg className={`h-3 w-3 ${isManualSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {isManualSyncing ? 'Syncing...' : 'Sync'}
+              </button>
             </div>
           )}
         </div>
