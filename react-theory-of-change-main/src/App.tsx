@@ -119,6 +119,105 @@ function ToCViewerOnly() {
     loadData()
   }, [filename, chartId, loadFromLocalStorage])
 
+  // Smart periodic sync with idle detection
+  useEffect(() => {
+    if (!chartId) return;
+
+    let interval: NodeJS.Timeout;
+    let isTabVisible = true;
+    let lastActivity = Date.now();
+    let syncInterval = 10000; // Start with 10 seconds
+    let consecutiveUnchanged = 0;
+    let lastDataString = JSON.stringify(data);
+
+    const syncData = async () => {
+      // Don't sync if tab is hidden or user is idle
+      if (!isTabVisible || Date.now() - lastActivity > 300000) { // 5 min idle timeout
+        console.log('Skipping sync - tab hidden or user idle');
+        return;
+      }
+
+      try {
+        console.log(`Syncing chart (interval: ${syncInterval}ms)`);
+        const chartData = await ChartService.getChart(chartId);
+        const newDataString = JSON.stringify(chartData);
+
+        // Check if data changed
+        if (newDataString !== lastDataString) {
+          setData(chartData);
+          lastDataString = newDataString;
+          consecutiveUnchanged = 0;
+          syncInterval = 10000; // Reset to 10 seconds
+          console.log('Data changed, resetting to 10s interval');
+        } else {
+          consecutiveUnchanged++;
+          // Exponential backoff: 10s -> 15s -> 22s -> 33s -> 50s -> 60s max
+          if (consecutiveUnchanged > 2) {
+            const newInterval = Math.min(Math.floor(syncInterval * 1.5), 60000);
+            if (newInterval !== syncInterval) {
+              syncInterval = newInterval;
+              console.log(`No changes for ${consecutiveUnchanged} syncs, interval now ${syncInterval}ms`);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error syncing chart data:', err);
+      }
+    };
+
+    // Handle visibility change
+    const handleVisibilityChange = () => {
+      isTabVisible = !document.hidden;
+      if (isTabVisible) {
+        console.log('Tab became visible, syncing immediately');
+        syncData(); // Sync immediately when tab becomes visible
+        lastActivity = Date.now();
+      }
+    };
+
+    // Handle user activity
+    const handleActivity = () => {
+      const timeSinceLastActivity = Date.now() - lastActivity;
+      lastActivity = Date.now();
+
+      // If user was idle and becomes active, sync immediately
+      if (timeSinceLastActivity > 300000) {
+        console.log('User became active after being idle, syncing');
+        syncData();
+      }
+    };
+
+    // Listen for events
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('mousemove', handleActivity);
+    document.addEventListener('keydown', handleActivity);
+    document.addEventListener('click', handleActivity);
+    document.addEventListener('scroll', handleActivity);
+
+    // Initial sync after a short delay
+    const initialTimer = setTimeout(syncData, 1000);
+
+    // Dynamic interval
+    const runSync = () => {
+      syncData();
+      clearInterval(interval);
+      if (syncInterval < 60000 || consecutiveUnchanged < 10) {
+        interval = setInterval(runSync, syncInterval);
+      }
+    };
+    interval = setInterval(runSync, syncInterval);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('mousemove', handleActivity);
+      document.removeEventListener('keydown', handleActivity);
+      document.removeEventListener('click', handleActivity);
+      document.removeEventListener('scroll', handleActivity);
+    };
+  }, [chartId]) // Remove data dependency to avoid recreation
+
   if (loading) {
     return (
       <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
@@ -183,6 +282,7 @@ function ToCViewer() {
   const [showToCGenerator, setShowToCGenerator] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -274,8 +374,12 @@ function ToCViewer() {
     console.log('setData called with new graph data');
   };
 
+  // Debounced save to database
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingChangesRef = useRef<ToCData | null>(null);
+
   const handleDataChange = (newData: ToCData) => {
-    console.log('App handleDataChange called with:', newData);
+    console.log('App handleDataChange called');
 
     // Save current state to history before updating
     if (data) {
@@ -286,19 +390,46 @@ function ToCViewer() {
     setRedoHistory([]);
 
     setData(newData);
+    pendingChangesRef.current = newData;
 
-    // Save to appropriate storage
-    if (currentEditToken) {
-      // Save to database
-      ChartService.updateChart(currentEditToken, newData).catch(err => {
-        console.error('Failed to save to database:', err);
-        // Fallback to localStorage if database fails
-        saveToLocalStorage(newData);
-      });
-    } else {
-      // Save to localStorage
+    // Always save to localStorage immediately (local backup)
+    if (!currentEditToken) {
       saveToLocalStorage(newData);
+      return;
     }
+
+    // Debounce database saves
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      console.log('Debouncing - delaying save...');
+    }
+
+    // Show saving indicator
+    setIsSaving(true);
+
+    // Save to database after 1 second of no changes
+    saveTimeoutRef.current = setTimeout(() => {
+      if (pendingChangesRef.current && currentEditToken) {
+        console.log('Saving to database after debounce period');
+        ChartService.updateChart(currentEditToken, pendingChangesRef.current)
+          .then(() => {
+            console.log('Database save successful');
+            pendingChangesRef.current = null;
+            setIsSaving(false);
+          })
+          .catch(err => {
+            console.error('Failed to save to database:', err);
+            // Fallback to localStorage if database fails
+            if (pendingChangesRef.current) {
+              saveToLocalStorage(pendingChangesRef.current);
+            }
+            setIsSaving(false);
+          });
+      } else {
+        setIsSaving(false);
+      }
+      saveTimeoutRef.current = null;
+    }, 1000); // 1 second debounce
   };
 
   const handleUndo = useCallback(() => {
@@ -446,14 +577,21 @@ function ToCViewer() {
     }
   }, [filename]);
 
-  // Cleanup timeout on unmount
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       if (undoTimeoutRef.current) {
         clearTimeout(undoTimeoutRef.current);
       }
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        // Save any pending changes immediately on unmount
+        if (pendingChangesRef.current && currentEditToken) {
+          ChartService.updateChart(currentEditToken, pendingChangesRef.current).catch(console.error);
+        }
+      }
     };
-  }, []);
+  }, [currentEditToken]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -500,6 +638,105 @@ function ToCViewer() {
 
     loadData()
   }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage])
+
+  // Smart periodic sync with idle detection for edit mode
+  useEffect(() => {
+    if (!editToken) return;
+
+    let interval: NodeJS.Timeout;
+    let lastSyncedData: string | null = null;
+    let isTabVisible = true;
+    let lastActivity = Date.now();
+    let syncInterval = 10000; // Start with 10 seconds
+    let consecutiveUnchanged = 0;
+
+    const syncData = async () => {
+      // Don't sync if tab is hidden or user is idle
+      if (!isTabVisible || Date.now() - lastActivity > 300000) { // 5 min idle timeout
+        console.log('Skipping sync - tab hidden or user idle');
+        return;
+      }
+
+      try {
+        console.log(`Syncing chart in edit mode (interval: ${syncInterval}ms)`);
+        const result = await ChartService.getChartByEditToken(editToken);
+        const newDataStr = JSON.stringify(result.chartData);
+
+        // Only update if the data has changed (to preserve undo/redo history)
+        if (lastSyncedData !== newDataStr) {
+          lastSyncedData = newDataStr;
+          setData(result.chartData);
+          console.log('Chart data updated from sync');
+          consecutiveUnchanged = 0;
+          syncInterval = 10000; // Reset to 10 seconds
+        } else {
+          consecutiveUnchanged++;
+          // Exponential backoff: 10s -> 15s -> 22s -> 33s -> 50s -> 60s max
+          if (consecutiveUnchanged > 2) {
+            const newInterval = Math.min(Math.floor(syncInterval * 1.5), 60000);
+            if (newInterval !== syncInterval) {
+              syncInterval = newInterval;
+              console.log(`No changes for ${consecutiveUnchanged} syncs, interval now ${syncInterval}ms`);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error syncing chart data:', err);
+      }
+    };
+
+    // Handle visibility change
+    const handleVisibilityChange = () => {
+      isTabVisible = !document.hidden;
+      if (isTabVisible) {
+        console.log('Tab became visible, syncing immediately');
+        syncData(); // Sync immediately when tab becomes visible
+        lastActivity = Date.now();
+      }
+    };
+
+    // Handle user activity
+    const handleActivity = () => {
+      const timeSinceLastActivity = Date.now() - lastActivity;
+      lastActivity = Date.now();
+
+      // If user was idle and becomes active, sync immediately
+      if (timeSinceLastActivity > 300000) {
+        console.log('User became active after being idle, syncing');
+        syncData();
+      }
+    };
+
+    // Listen for events
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('mousemove', handleActivity);
+    document.addEventListener('keydown', handleActivity);
+    document.addEventListener('click', handleActivity);
+    document.addEventListener('scroll', handleActivity);
+
+    // Initial sync after a short delay
+    const initialTimer = setTimeout(syncData, 1000);
+
+    // Dynamic interval
+    const runSync = () => {
+      syncData();
+      clearInterval(interval);
+      if (syncInterval < 60000 || consecutiveUnchanged < 10) {
+        interval = setInterval(runSync, syncInterval);
+      }
+    };
+    interval = setInterval(runSync, syncInterval);
+
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('mousemove', handleActivity);
+      document.removeEventListener('keydown', handleActivity);
+      document.removeEventListener('click', handleActivity);
+      document.removeEventListener('scroll', handleActivity);
+    };
+  }, [editToken])
 
   if (loading) {
     return (
@@ -569,6 +806,23 @@ function ToCViewer() {
             </svg>
             Share
           </button>
+          {isSaving && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-yellow-100 text-yellow-800 rounded-lg">
+              <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span className="text-sm font-medium">Saving...</span>
+            </div>
+          )}
+          {!isSaving && currentEditToken && (
+            <div className="flex items-center gap-1 px-3 py-2 text-green-700">
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              <span className="text-sm">Saved</span>
+            </div>
+          )}
         </div>
       </div>
       
