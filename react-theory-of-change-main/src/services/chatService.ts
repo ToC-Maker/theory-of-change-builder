@@ -3,6 +3,7 @@ import { type EditInstruction, parseEditInstructions, cleanResponseContent } fro
 // Import the system prompt from external file
 import systemPromptContent from '../prompts/chatSystemPrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
+import { tavilyService } from './tavilyService';
 import Anthropic from '@anthropic-ai/sdk';
 
 export interface ChatMessage {
@@ -32,6 +33,8 @@ export interface StreamingChatResponse {
   onContent?: (chunk: string, fullContent: string) => void;
   onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
   onError?: (error: string) => void;
+  onSearchStart?: () => void;
+  onSearchComplete?: () => void;
 }
 
 // Use the imported system prompt content
@@ -43,10 +46,66 @@ export { SYSTEM_PROMPT };
 
 class ChatService {
   private getAnthropicClient(apiKey: string): Anthropic {
-    return new Anthropic({ 
+    return new Anthropic({
       apiKey,
       dangerouslyAllowBrowser: true // Required for browser usage
     });
+  }
+
+  private detectSearchIntent(message: string): boolean {
+    const searchIndicators = [
+      // Direct search requests
+      'search for', 'look up', 'find information about', 'research',
+
+      // Question patterns that benefit from current info
+      'what are the latest', 'current trends in', 'recent developments',
+      'what is happening with', 'latest news about', 'recent studies on',
+
+      // Specific research needs
+      'evidence for', 'data on', 'statistics about', 'examples of',
+      'case studies', 'best practices for', 'how other organizations',
+
+      // Current state questions
+      'what organizations are working on', 'who is doing', 'existing solutions',
+      'current approaches to', 'state of the art', 'cutting edge'
+    ];
+
+    const lowerMessage = message.toLowerCase();
+    return searchIndicators.some(indicator => lowerMessage.includes(indicator));
+  }
+
+  private async enhanceMessageWithSearch(message: string, callbacks?: { onSearchStart?: () => void; onSearchComplete?: () => void }): Promise<string> {
+    if (!this.detectSearchIntent(message) || !tavilyService.isConfigured()) {
+      return message;
+    }
+
+    console.log('🔍 Search intent detected, fetching web context...');
+    callbacks?.onSearchStart?.();
+
+    try {
+      const contextResult = await tavilyService.getContextForQuery(message, 3, true);
+
+      if (contextResult.error) {
+        console.error('Tavily search failed:', contextResult.error);
+        callbacks?.onSearchComplete?.();
+        return message;
+      }
+
+      if (contextResult.context) {
+        console.log('✅ Added web search context to message');
+        callbacks?.onSearchComplete?.();
+        return `${message}
+
+[WEB_SEARCH_CONTEXT]
+${contextResult.context}
+[/WEB_SEARCH_CONTEXT]`;
+      }
+    } catch (error) {
+      console.error('Error enhancing message with search:', error);
+    }
+
+    callbacks?.onSearchComplete?.();
+    return message;
   }
 
   async sendMessage(messages: ChatMessage[], currentGraphData?: any, apiKey?: string): Promise<ChatResponse> {
@@ -57,20 +116,33 @@ class ChatService {
       };
     }
     try {
+      // Enhance the last user message with web search if needed
+      const enhancedMessages = await Promise.all(
+        messages.map(async (msg, index) => {
+          if (msg.role === 'user' && index === messages.length - 1) {
+            return {
+              ...msg,
+              content: await this.enhanceMessageWithSearch(msg.content)
+            };
+          }
+          return msg;
+        })
+      );
+
       // Prepare messages with full graph JSON for the last user message
-      const processedMessages = messages.map((msg, index) => {
+      const processedMessages = enhancedMessages.map((msg, index) => {
         let content = msg.content;
-        
+
         // Append current graph JSON with node paths to user messages
-        if (msg.role === 'user' && currentGraphData && index === messages.length - 1) {
+        if (msg.role === 'user' && currentGraphData && index === enhancedMessages.length - 1) {
           console.log('=== GRAPH JSON SENT TO AI ===');
           console.log('Graph data size:', JSON.stringify(currentGraphData).length, 'characters');
           console.log('=== END GRAPH JSON ===');
-          
+
           const dataWithPaths = addNodePaths(currentGraphData);
           content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
         }
-        
+
         return {
           role: msg.role as 'user' | 'assistant',
           content: content
@@ -155,8 +227,8 @@ class ChatService {
   }
 
   async sendStreamingMessage(
-    messages: ChatMessage[], 
-    currentGraphData: any, 
+    messages: ChatMessage[],
+    currentGraphData: any,
     callbacks: StreamingChatResponse,
     apiKey?: string,
     signal?: AbortSignal
@@ -166,20 +238,36 @@ class ChatService {
       return;
     }
     try {
+      // Enhance the last user message with web search if needed
+      const enhancedMessages = await Promise.all(
+        messages.map(async (msg, index) => {
+          if (msg.role === 'user' && index === messages.length - 1) {
+            return {
+              ...msg,
+              content: await this.enhanceMessageWithSearch(msg.content, {
+                onSearchStart: callbacks.onSearchStart,
+                onSearchComplete: callbacks.onSearchComplete
+              })
+            };
+          }
+          return msg;
+        })
+      );
+
       // Prepare messages with full graph JSON for the last user message
-      const processedMessages = messages.map((msg, index) => {
+      const processedMessages = enhancedMessages.map((msg, index) => {
         let content = msg.content;
-        
+
         // Append current graph JSON with node paths to user messages
-        if (msg.role === 'user' && currentGraphData && index === messages.length - 1) {
+        if (msg.role === 'user' && currentGraphData && index === enhancedMessages.length - 1) {
           console.log('=== GRAPH JSON SENT TO AI ===');
           console.log('Graph data size:', JSON.stringify(currentGraphData).length, 'characters');
           console.log('=== END GRAPH JSON ===');
-          
+
           const dataWithPaths = addNodePaths(currentGraphData);
           content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
         }
-        
+
         return {
           role: msg.role as 'user' | 'assistant',
           content: content
