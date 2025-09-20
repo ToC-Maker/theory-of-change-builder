@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { chatService, ChatMessage } from '../services/chatService';
-import conversationPromptContent from '../prompts/tocConversationPrompt.md?raw';
+import conversationPromptContent from '../prompts/generateModePrompt.md?raw';
 import { useApiKey } from '../contexts/ApiKeyContext';
 
 interface ToCGeneratorModalProps {

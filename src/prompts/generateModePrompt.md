@@ -123,7 +123,7 @@ This prompt is for generating Theory of Change conversations that end with compl
 
 **IMPORTANT: Output the complete JSON graph structure below - NOT edit instructions. This should be a full, implementable graph that can be loaded directly into the application.**
 
-```json
+[GRAPH_JSON]
 {
   "title": "Theory of Change for [Organization Name]",
   "sections": [
@@ -190,7 +190,7 @@ This prompt is for generating Theory of Change conversations that end with compl
     }
   ]
 }
-```
+[/GRAPH_JSON]
 
 ## Key Insights from This ToC:
 - **Critical Assumptions**: [List 2-3 most important testable assumptions with monitoring approaches and source citations]
