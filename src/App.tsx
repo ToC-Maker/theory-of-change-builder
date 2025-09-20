@@ -5,7 +5,6 @@ import { ChatInterface } from "./components/ChatInterface"
 import { InfoPanel } from "./components/InfoPanel"
 import { StaticLegend } from "./components/StaticLegend"
 import { JsonDropdown } from "./components/JsonDropdown"
-import { ToCGeneratorModal } from "./components/ToCGeneratorModal"
 import { ShareModal } from "./components/ShareModal"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
@@ -279,7 +278,6 @@ function ToCViewer() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
-  const [showToCGenerator, setShowToCGenerator] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -436,47 +434,12 @@ function ToCViewer() {
   }, [data, saveToHistory, saveToLocalStorage, currentEditToken]);
 
   const handleGraphUpdate = (newGraphData: ToCData) => {
-    console.log('App handleGraphUpdate called with:', newGraphData);
+    console.log('App handleGraphUpdate called - delegating to handleUploadJSON');
     console.log('Current data before update:', data);
-
-    // Save current state to history before updating
-    if (data) {
-      saveToHistory(data);
-    }
-
-    // Clear redo history when new changes are made
-    setRedoHistory([]);
-
-    setData(newGraphData);
-    pendingChangesRef.current = newGraphData;
-    saveToLocalStorage(newGraphData);
-
-    // Trigger debounced database save for LLM edits
-    if (currentEditToken) {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      setIsSaving(true);
-      saveTimeoutRef.current = setTimeout(() => {
-        if (pendingChangesRef.current && currentEditToken) {
-          console.log('Saving LLM edit to database');
-          ChartService.updateChart(currentEditToken, pendingChangesRef.current)
-            .then(() => {
-              pendingChangesRef.current = null;
-              setIsSaving(false);
-            })
-            .catch(err => {
-              console.error('Failed to save LLM edit to database:', err);
-              setIsSaving(false);
-            });
-        } else {
-          setIsSaving(false);
-        }
-        saveTimeoutRef.current = null;
-      }, 1000);
-    }
-
-    console.log('setData called with new graph data');
+    console.log('New data to update:', newGraphData);
+    // Simply delegate to handleUploadJSON which has the proper logic
+    handleUploadJSON(newGraphData);
+    console.log('Data after handleUploadJSON call:', data);
   };
 
   // Debounced save to database
@@ -1034,7 +997,6 @@ function ToCViewer() {
               onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
               graphData={data}
               onGraphUpdate={handleGraphUpdate}
-              onShowToCGenerator={() => setShowToCGenerator(true)}
             />
           </div>
         
@@ -1082,12 +1044,6 @@ function ToCViewer() {
         </div>
       </div>
       
-        {/* ToC Generator Modal */}
-        <ToCGeneratorModal
-          isOpen={showToCGenerator}
-          onClose={() => setShowToCGenerator(false)}
-          onGraphGenerated={handleGraphUpdate}
-        />
 
         {/* Share Modal */}
         <ShareModal
