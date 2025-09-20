@@ -1,7 +1,8 @@
 import { type EditInstruction, parseEditInstructions, cleanResponseContent } from '../utils/graphEdits';
 
-// Import the system prompt from external file
-import systemPromptContent from '../prompts/chatSystemPrompt.md?raw';
+// Import the prompts from external files
+import systemPromptContent from '../prompts/systemPrompt.md?raw';
+import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { tavilyService } from './tavilyService';
 import Anthropic from '@anthropic-ai/sdk';
@@ -37,10 +38,14 @@ export interface StreamingChatResponse {
   onSearchComplete?: () => void;
 }
 
-// Use the imported system prompt content
-const SYSTEM_PROMPT = systemPromptContent;
+// Create separate system prompts for different modes
+const CHAT_SYSTEM_PROMPT = `${systemPromptContent}
 
-export { SYSTEM_PROMPT };
+${chatModePromptContent}`;
+
+const GENERATE_SYSTEM_PROMPT = systemPromptContent;
+
+export { CHAT_SYSTEM_PROMPT, GENERATE_SYSTEM_PROMPT };
 
 
 
@@ -108,7 +113,7 @@ ${contextResult.context}
     return message;
   }
 
-  async sendMessage(messages: ChatMessage[], currentGraphData?: any, apiKey?: string): Promise<ChatResponse> {
+  async sendMessage(messages: ChatMessage[], currentGraphData?: any, apiKey?: string, useGenerateMode: boolean = false): Promise<ChatResponse> {
     if (!apiKey || !apiKey.trim()) {
       return {
         message: "Please configure your Anthropic API key to use the chat feature.",
@@ -156,7 +161,7 @@ ${contextResult.context}
       const response = await client.messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 20000,
-        system: SYSTEM_PROMPT,
+        system: useGenerateMode ? GENERATE_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT,
         messages: processedMessages
       });
 
@@ -231,7 +236,8 @@ ${contextResult.context}
     currentGraphData: any,
     callbacks: StreamingChatResponse,
     apiKey?: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    useGenerateMode: boolean = false
   ): Promise<void> {
     if (!apiKey || !apiKey.trim()) {
       callbacks.onError?.("Please configure your Anthropic API key to use the chat feature.");
@@ -283,7 +289,7 @@ ${contextResult.context}
       const stream = await client.messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 20000,
-        system: SYSTEM_PROMPT,
+        system: useGenerateMode ? GENERATE_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT,
         messages: processedMessages,
         stream: true
       });
