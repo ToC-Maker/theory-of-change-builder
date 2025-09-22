@@ -58,14 +58,37 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Check if user is near the bottom of the chat
+  const checkIfNearBottom = () => {
+    if (!chatContainerRef.current) return false;
+
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+    const threshold = 100; // pixels from bottom
+    return scrollHeight - scrollTop - clientHeight < threshold;
+  };
+
+  // Handle scroll events to track if user is near bottom
+  const handleScroll = () => {
+    setIsNearBottom(checkIfNearBottom());
+  };
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Smart auto-scroll during streaming - only if user is near bottom
+  useEffect(() => {
+    if (isStreaming && streamingContent && isNearBottom) {
+      scrollToBottom();
+    }
+  }, [isStreaming, streamingContent, isNearBottom]);
 
   useEffect(() => {
     if (!isCollapsed && inputRef.current && isConfigured) {
@@ -112,6 +135,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
+    // Assume user wants to see the response, so set near bottom to true
+    setIsNearBottom(true);
 
     // Create a placeholder streaming message
     const streamingId = (Date.now() + 1).toString();
@@ -132,8 +157,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           onSearchStart: () => {
             setIsSearching(true);
           },
-          onSearchComplete: () => {
+          onSearchComplete: (results?: any[]) => {
             setIsSearching(false);
+            // Update search section with results from chat searches
+            if (results && results.length > 0) {
+              setSearchResults(results.map(result => ({
+                title: result.title || '',
+                url: result.url || '',
+                content: result.content || '',
+                score: result.score || 0
+              })));
+            }
           },
           onContent: (chunk: string, fullContent: string) => {
             setStreamingContent(fullContent);
@@ -577,7 +611,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
 
 
           {/* Content Area */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+          <div
+            ref={chatContainerRef}
+            className="flex-1 overflow-y-auto p-3 space-y-3"
+            onScroll={handleScroll}
+          >
             {!isConfigured ? (
               <div className="p-4">
                 <div className="mb-4">
@@ -905,7 +943,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     onChange={(e) => setInputValue(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="Ask about your Theory of Change..."
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-hidden"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
                     disabled={isLoading || isStreaming}
                     rows={1}
                     style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
