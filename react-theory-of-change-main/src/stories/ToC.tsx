@@ -1159,7 +1159,7 @@ export function ToC({
                 // Use exact same logic as ConnectionsComponent
                 const startX = sourceRect.right - containerRect.left
                 const startY = sourceRect.top + sourceRect.height / 2 - containerRect.top
-                const endX = targetRect.left - containerRect.left
+                const endX = targetRect.left - containerRect.left - 14 // Offset by arrow width
                 const endY = targetRect.top + targetRect.height / 2 - containerRect.top
                 
                 // Position at midpoint like the edge popup does
