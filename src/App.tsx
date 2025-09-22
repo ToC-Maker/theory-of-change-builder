@@ -702,6 +702,23 @@ function ToCViewer() {
     }
   }, [filename]);
 
+  // Add beforeunload warning for unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Check if there are pending changes or currently saving
+      if (pendingChangesRef.current || isSaving) {
+        e.preventDefault();
+        e.returnValue = ''; // Chrome requires returnValue to be set
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isSaving]);
+
   // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
