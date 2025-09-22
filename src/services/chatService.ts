@@ -26,7 +26,13 @@ class ChatService {
     });
   }
 
-  private async enhanceWithSearch(message: string, callbacks?: { onSearchStart?: () => void; onSearchComplete?: () => void }): Promise<string> {
+  private async enhanceWithSearch(
+    message: string,
+    callbacks?: {
+      onSearchStart?: () => void;
+      onSearchComplete?: (results?: any[]) => void;
+    }
+  ): Promise<string> {
     // Simple search keywords check
     const needsSearch = ['search', 'look up', 'find', 'research', 'latest', 'current', 'recent']
       .some(keyword => message.toLowerCase().includes(keyword));
@@ -39,11 +45,23 @@ class ChatService {
     callbacks?.onSearchStart?.();
 
     try {
-      const result = await tavilyService.getContextForQuery(message, 3, true);
-      callbacks?.onSearchComplete?.();
+      // Get both context and full search results
+      const searchResult = await tavilyService.search(message, {
+        max_results: 5,
+        search_depth: 'advanced',
+        include_answer: true,
+        time_range: 'week'
+      });
 
-      if (result.context) {
-        return `${message}\n\n[WEB_SEARCH_CONTEXT]\n${result.context}\n[/WEB_SEARCH_CONTEXT]`;
+      callbacks?.onSearchComplete?.(searchResult.data?.results);
+
+      if (searchResult.data?.results) {
+        // Format search results for context
+        const context = searchResult.data.results
+          .map(result => `**${result.title}**\n${result.content}\nSource: ${result.url}`)
+          .join('\n\n---\n\n');
+
+        return `${message}\n\n[WEB_SEARCH_CONTEXT]\n${context}\n[/WEB_SEARCH_CONTEXT]`;
       }
     } catch (error) {
       console.error('Search failed:', error);
