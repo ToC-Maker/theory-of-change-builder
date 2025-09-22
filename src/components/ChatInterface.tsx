@@ -123,17 +123,22 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     };
 
     try {
-      await chatService.sendStreamingMessage([...messages, userMessage], graphData, {
-        onSearchStart: () => {
-          setIsSearching(true);
-        },
-        onSearchComplete: () => {
-          setIsSearching(false);
-        },
-        onContent: (chunk: string, fullContent: string) => {
-          setStreamingContent(fullContent);
-        },
-        onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
+      await chatService.streamMessage(
+        [...messages, userMessage],
+        graphData,
+        'chat',
+        apiKey,
+        {
+          onSearchStart: () => {
+            setIsSearching(true);
+          },
+          onSearchComplete: () => {
+            setIsSearching(false);
+          },
+          onContent: (chunk: string, fullContent: string) => {
+            setStreamingContent(fullContent);
+          },
+          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
           console.log('=== CHAT INTERFACE ONCOMPLETE ===');
           console.log('Usage parameter:', usage);
           console.log('=== END CHAT INTERFACE ===');
@@ -193,7 +198,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setIsSearching(false);
           streamingMessageRef.current = null;
         }
-      }, apiKey);
+      });
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: streamingId,
@@ -382,11 +387,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     };
 
     try {
-      await chatService.sendStreamingMessage([generationMessage], graphData, {
-        onContent: (chunk: string, fullContent: string) => {
-          setStreamingContent(fullContent);
-        },
-        onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
+      await chatService.streamMessage(
+        [generationMessage],
+        graphData,
+        'generate',
+        apiKey,
+        {
+          onContent: (chunk: string, fullContent: string) => {
+            setStreamingContent(fullContent);
+          },
+          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
           const assistantMessage: ChatMessage = {
             id: streamingId,
             role: 'assistant',
@@ -458,7 +468,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setStreamingContent('');
           streamingMessageRef.current = null;
         }
-      }, apiKey, undefined, true); // useGenerateMode = true
+      });
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: streamingId,
