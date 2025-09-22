@@ -511,10 +511,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           <div className="p-3 border-b border-gray-200">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-                <span className="text-sm font-medium text-gray-700">AI Assistant</span>
-              </div>
-              <div className="flex items-center gap-2">
                 {((currentMode === 'chat' && messages.length > 0) || (currentMode === 'search' && searchResults.length > 0)) && isConfigured && (
                   <button
                     onClick={() => {
