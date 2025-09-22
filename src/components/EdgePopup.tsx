@@ -88,43 +88,43 @@ export function EdgePopup({
       />
       
       {/* Modal content */}
-      <div 
-        className="relative bg-white rounded-xl shadow-2xl p-8 overflow-y-auto transform transition-all duration-150 ease-out"
+      <div
+        className="relative bg-white rounded-xl shadow-2xl flex flex-col transform transition-all duration-150 ease-out"
         style={{
           width: '800px',
           height: '600px',
           animation: 'scaleIn 0.15s ease-out'
         }}
       >
-        {/* Delete button - top left */}
-        {editMode && onDeleteConnection && (
-          <button
-            className="absolute top-4 left-4 text-gray-400 hover:text-red-600 transition-colors"
-            onClick={handleDeleteConnection}
-            title="Delete connection"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
-        )}
+        {/* Fixed Header */}
+        <div className="relative flex-shrink-0 p-8 pb-4 border-b border-gray-200">
+          {/* Delete button - top left */}
+          {editMode && onDeleteConnection && (
+            <button
+              className="absolute top-4 left-4 text-gray-400 hover:text-red-600 transition-colors"
+              onClick={handleDeleteConnection}
+              title="Delete connection"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          )}
 
-        {/* Close button - top right */}
-        <button
-          className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl leading-none"
-          onClick={() => setEdgePopup(null)}
-        >
-          ×
-        </button>
-        
-        {/* Header */}
-        <div className="mb-6">
+          {/* Close button - top right */}
+          <button
+            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl leading-none"
+            onClick={() => setEdgePopup(null)}
+          >
+            ×
+          </button>
+
           <h2 className="text-4xl font-bold text-gray-900 mb-2">
             Connection Details
           </h2>
-          <div 
+          <div
             className="bg-gray-50 rounded-lg p-4 border-l-4 border-r-4"
-            style={{ 
+            style={{
               borderLeftColor: '#000000',
               borderRightColor: '#000000'
             }}
@@ -133,17 +133,17 @@ export function EdgePopup({
               Connection
             </div>
             <div className="flex items-center gap-4">
-              <div 
+              <div
                 className="flex-1 rounded-xl p-3 border-0 shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] text-center"
                 style={{ backgroundColor: findNodeColor(edgePopup.sourceId) }}
               >
-                <div 
+                <div
                   className="text-sm mb-1 opacity-75"
                   style={{ color: getContrastTextColor(findNodeColor(edgePopup.sourceId)) }}
                 >
                   From
                 </div>
-                <div 
+                <div
                   className="text-lg font-medium"
                   style={{ color: getContrastTextColor(findNodeColor(edgePopup.sourceId)) }}
                 >
@@ -151,7 +151,7 @@ export function EdgePopup({
                 </div>
               </div>
               <div className="flex flex-col items-center">
-                <div 
+                <div
                   className="w-8 h-8 rounded-full flex items-center justify-center"
                   style={{ backgroundColor: '#000000' }}
                 >
@@ -161,17 +161,17 @@ export function EdgePopup({
                 </div>
                 <div className="text-xs text-gray-500 mt-1">leads to</div>
               </div>
-              <div 
+              <div
                 className="flex-1 rounded-xl p-3 border-0 shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] text-center"
                 style={{ backgroundColor: findNodeColor(edgePopup.targetId) }}
               >
-                <div 
+                <div
                   className="text-sm mb-1 opacity-75"
                   style={{ color: getContrastTextColor(findNodeColor(edgePopup.targetId)) }}
                 >
                   To
                 </div>
-                <div 
+                <div
                   className="text-lg font-medium"
                   style={{ color: getContrastTextColor(findNodeColor(edgePopup.targetId)) }}
                 >
@@ -181,9 +181,10 @@ export function EdgePopup({
             </div>
           </div>
         </div>
-        
-        {/* Content */}
-        <div className="space-y-6">
+
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto p-8">
+          <div className="space-y-6">
           <div>
             <h3 className="text-2xl font-semibold text-gray-800 mb-3">
               Confidence Level
@@ -307,14 +308,15 @@ export function EdgePopup({
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Footnote */}
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <p className="text-xs text-gray-500 text-left">
-            * This connection represents the causal relationship between these two elements in the theory of change.
-            The source element directly contributes to or enables the target element.
-          </p>
+          {/* Footnote */}
+          <div className="mt-6 pt-4 border-t border-gray-200">
+            <p className="text-xs text-gray-500 text-left">
+              * This connection represents the causal relationship between these two elements in the theory of change.
+              The source element directly contributes to or enables the target element.
+            </p>
+          </div>
+        </div>
         </div>
       </div>
     </div>
