@@ -1156,13 +1156,39 @@ export function ToC({
               const containerRect = sourceNodeRef.closest(".flex.relative")?.getBoundingClientRect()
               
               if (containerRect) {
-                // Use exact same logic as ConnectionsComponent
-                const startX = sourceRect.right - containerRect.left
-                const startY = sourceRect.top + sourceRect.height / 2 - containerRect.top
-                const endX = targetRect.left - containerRect.left - 14 // Offset by arrow width
-                const endY = targetRect.top + targetRect.height / 2 - containerRect.top
-                
-                // Position at midpoint like the edge popup does
+                // Check if nodes are in the same column for vertical connections
+                const sourceLocation = findNodeLocation(sourceId)
+                const targetLocation = findNodeLocation(targetId)
+                const isSameColumn = sourceLocation && targetLocation &&
+                                   sourceLocation.sectionIndex === targetLocation.sectionIndex &&
+                                   sourceLocation.columnIndex === targetLocation.columnIndex
+
+                let startX, startY, endX, endY
+
+                if (isSameColumn) {
+                  // Vertical connection logic
+                  startX = sourceRect.left + sourceRect.width / 2 - containerRect.left
+                  endX = targetRect.left + targetRect.width / 2 - containerRect.left
+
+                  const sourceTop = sourceRect.top - containerRect.top
+                  const targetTop = targetRect.top - containerRect.top
+
+                  if (sourceTop < targetTop) {
+                    startY = sourceRect.bottom - containerRect.top
+                    endY = targetRect.top - containerRect.top - 14
+                  } else {
+                    startY = sourceRect.top - containerRect.top
+                    endY = targetRect.bottom - containerRect.top + 14
+                  }
+                } else {
+                  // Horizontal connection logic
+                  startX = sourceRect.right - containerRect.left
+                  startY = sourceRect.top + sourceRect.height / 2 - containerRect.top
+                  endX = targetRect.left - containerRect.left - 14
+                  endY = targetRect.top + targetRect.height / 2 - containerRect.top
+                }
+
+                // Position at midpoint
                 const midX = (startX + endX) / 2
                 const midY = (startY + endY) / 2
                 

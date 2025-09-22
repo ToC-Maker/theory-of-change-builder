@@ -390,13 +390,48 @@ export function ConnectionsComponent({
 
         if (!containerRect) return null
 
-        const startX = startRect.right - containerRect.left
-        const startY = startRect.top + startRect.height / 2 - containerRect.top
-        const endX = endRect.left - containerRect.left - 14 // Offset by arrow width
-        const endY = endRect.top + endRect.height / 2 - containerRect.top
+        // Check if nodes are in the same column for vertical connections
+        const isSameColumn = connection.sourceSectionIndex === connection.targetSectionIndex &&
+                            connection.sourceColumnIndex === connection.targetColumnIndex
 
-        const baseOffset = Math.abs(endX - startX) / 2
-        const controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9)
+        let startX, startY, endX, endY
+
+        if (isSameColumn) {
+          // Vertical connection logic
+          startX = startRect.left + startRect.width / 2 - containerRect.left
+          endX = endRect.left + endRect.width / 2 - containerRect.left
+
+          // Determine which node is higher (lower y position)
+          const sourceTop = startRect.top - containerRect.top
+          const targetTop = endRect.top - containerRect.top
+
+          if (sourceTop < targetTop) {
+            // Source is above target: go from bottom of source to top of target
+            startY = startRect.bottom - containerRect.top
+            endY = endRect.top - containerRect.top - 14 // Offset by arrow height
+          } else {
+            // Source is below target: go from top of source to bottom of target
+            startY = startRect.top - containerRect.top
+            endY = endRect.bottom - containerRect.top + 14 // Offset by arrow height
+          }
+        } else {
+          // Horizontal connection logic (existing)
+          startX = startRect.right - containerRect.left
+          startY = startRect.top + startRect.height / 2 - containerRect.top
+          endX = endRect.left - containerRect.left - 14 // Offset by arrow width
+          endY = endRect.top + endRect.height / 2 - containerRect.top
+        }
+
+        // Calculate control points based on connection type
+        let controlPointOffset
+        if (isSameColumn) {
+          // Straight line for vertical connections
+          controlPointOffset = 0
+        } else {
+          // For horizontal connections, use X distance for curvature
+          const baseOffset = Math.abs(endX - startX) / 2
+          controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9)
+        }
 
         const isHighlighted =
           highlightedNodes.has(connection.sourceId) ||
@@ -433,7 +468,10 @@ export function ConnectionsComponent({
           <g key={index}>
             {/* Invisible thicker path for easier clicking */}
             <path
-              d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
+              d={isSameColumn
+                ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+              }
               className="fill-none cursor-pointer"
               style={{
                 stroke: "transparent",
@@ -442,13 +480,13 @@ export function ConnectionsComponent({
               }}
               onClick={(e) => {
                 e.stopPropagation()
-                
+
                 // Only allow clicking on highlighted edges when nodes are selected
                 // Or allow all edges when no nodes are selected
                 if (hasHighlightedNodes && !isHighlighted) {
                   return // Don't show popup for non-highlighted edges when nodes are selected
                 }
-                
+
                 const midX = (startX + endX) / 2
                 const midY = (startY + endY) / 2
                 setEdgePopup({
@@ -464,7 +502,10 @@ export function ConnectionsComponent({
             />
             {/* Visible styled path */}
             <path
-              d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
+              d={isSameColumn
+                ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+              }
               className="fill-none"
               markerEnd="url(#arrowhead)"
               style={{
@@ -504,13 +545,47 @@ export function ConnectionsComponent({
         
         if (!containerRect) return null;
         
-        const startX = startRect.right - containerRect.left;
-        const startY = startRect.top + startRect.height / 2 - containerRect.top;
-        const endX = endRect.left - containerRect.left - 14; // Offset by arrow width
-        const endY = endRect.top + endRect.height / 2 - containerRect.top;
-        
-        const baseOffset = Math.abs(endX - startX) / 2;
-        const controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
+        // Check if nodes are in the same column for ghost connection
+        const sourceLocation = findNodeLocation(sourceId);
+        const targetLocation = findNodeLocation(targetId);
+        const isGhostSameColumn = sourceLocation && targetLocation &&
+                                 sourceLocation.sectionIndex === targetLocation.sectionIndex &&
+                                 sourceLocation.columnIndex === targetLocation.columnIndex;
+
+        let startX, startY, endX, endY;
+
+        if (isGhostSameColumn) {
+          // Vertical ghost connection logic
+          startX = startRect.left + startRect.width / 2 - containerRect.left;
+          endX = endRect.left + endRect.width / 2 - containerRect.left;
+
+          const sourceTop = startRect.top - containerRect.top;
+          const targetTop = endRect.top - containerRect.top;
+
+          if (sourceTop < targetTop) {
+            startY = startRect.bottom - containerRect.top;
+            endY = endRect.top - containerRect.top - 14;
+          } else {
+            startY = startRect.top - containerRect.top;
+            endY = endRect.bottom - containerRect.top + 14;
+          }
+        } else {
+          // Horizontal ghost connection logic
+          startX = startRect.right - containerRect.left;
+          startY = startRect.top + startRect.height / 2 - containerRect.top;
+          endX = endRect.left - containerRect.left - 14;
+          endY = endRect.top + endRect.height / 2 - containerRect.top;
+        }
+
+        // Calculate control points based on connection type
+        let controlPointOffset;
+        if (isGhostSameColumn) {
+          // Straight line for vertical ghost connections
+          controlPointOffset = 0;
+        } else {
+          const baseOffset = Math.abs(endX - startX) / 2;
+          controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
+        }
         
         // Get the style that a real connection would have (default confidence: 75)
         const ghostStrokeStyle = getConfidenceStrokeStyle(75);
@@ -519,7 +594,10 @@ export function ConnectionsComponent({
           <g>
             {/* Ghost connection path - looks like real connection but more transparent */}
             <path
-              d={`M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`}
+              d={isGhostSameColumn
+                ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+              }
               className="fill-none"
               markerEnd="url(#arrowhead)"
               style={{
