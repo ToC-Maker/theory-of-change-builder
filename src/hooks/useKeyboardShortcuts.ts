@@ -29,8 +29,6 @@ export function useKeyboardShortcuts({
   nodeHeights
 }: UseKeyboardShortcutsProps) {
   const [copiedNodes, setCopiedNodes] = useState<Node[]>([])
-  const [searchQuery, setSearchQuery] = useState('')
-  const [showSearch, setShowSearch] = useState(false)
   const [currentTabIndex, setCurrentTabIndex] = useState(-1)
 
   // Find node location helper
@@ -77,8 +75,6 @@ export function useKeyboardShortcuts({
     setHighlightedNodes(new Set())
     setNodeWidth(192)
     setNodeColor('#ffffff')
-    setShowSearch(false)
-    setSearchQuery('')
     setNodePopup(null)
   }, [setHighlightedNodes, setNodeWidth, setNodeColor, setNodePopup])
 
@@ -261,13 +257,6 @@ export function useKeyboardShortcuts({
         return
       }
 
-      // Handle Ctrl+F - Open search interface
-      if (event.ctrlKey && event.key === 'f') {
-        event.preventDefault()
-        setShowSearch(true)
-        return
-      }
-
       // Handle arrow keys for moving nodes
       if (editMode && highlightedNodes.size > 0 && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
         event.preventDefault()
@@ -297,10 +286,6 @@ export function useKeyboardShortcuts({
   return {
     // State
     copiedNodes,
-    searchQuery,
-    setSearchQuery,
-    showSearch,
-    setShowSearch,
     currentTabIndex,
     
     // Functions
