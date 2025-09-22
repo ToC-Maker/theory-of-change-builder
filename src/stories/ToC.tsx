@@ -6,7 +6,6 @@ import { ConnectionsComponent } from "../components/ConnectionsComponent"
 import { EditToolbar } from "../components/EditToolbar"
 import { Legend } from "../components/Legend"
 import { NodePopup } from "../components/NodePopup"
-import { SearchInterface } from "../components/SearchInterface"
 import { EditModeToggle } from "../components/EditModeToggle"
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
 
@@ -1291,18 +1290,6 @@ export function ToC({
         />
       )}
 
-      {/* Search Interface */}
-      <SearchInterface
-        showSearch={keyboardShortcuts.showSearch}
-        setShowSearch={keyboardShortcuts.setShowSearch}
-        searchQuery={keyboardShortcuts.searchQuery}
-        setSearchQuery={keyboardShortcuts.setSearchQuery}
-        data={data}
-        nodeRefs={nodeRefs}
-        setHighlightedNodes={setHighlightedNodes}
-        setNodeWidth={setNodeWidth}
-        setNodeColor={setNodeColor}
-      />
     </div>
     </div>
   )

@@ -114,7 +114,6 @@ export function InfoPanel({ legendComponent, height, isCollapsed, onToggle }: In
                 <ul className="space-y-1 text-xs">
                   <li>• <strong>Ctrl+Z:</strong> Undo last change</li>
                   <li>• <strong>Ctrl+Y:</strong> Redo last change</li>
-                  <li>• <strong>Ctrl+F:</strong> Search nodes</li>
                   <li>• <strong>Tab/Shift+Tab:</strong> Navigate nodes</li>
                 </ul>
               </div>
