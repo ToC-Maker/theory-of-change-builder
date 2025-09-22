@@ -506,7 +506,7 @@ export function ConnectionsComponent({
         
         const startX = startRect.right - containerRect.left;
         const startY = startRect.top + startRect.height / 2 - containerRect.top;
-        const endX = endRect.left - containerRect.left - 8; // Offset by arrow width
+        const endX = endRect.left - containerRect.left - 14; // Offset by arrow width
         const endY = endRect.top + endRect.height / 2 - containerRect.top;
         
         const baseOffset = Math.abs(endX - startX) / 2;
