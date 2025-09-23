@@ -145,7 +145,7 @@ This prompt is for generating Theory of Change conversations that end with compl
                 }
               ],
               "yPosition": 100, // First node at 100, next would be at 300, then 500, etc. (200px spacing)
-              "width": 200,
+              "width": 192,
               "color": "#E3F2FD"
             }
           ]

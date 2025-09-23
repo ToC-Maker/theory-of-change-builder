@@ -30,11 +30,16 @@ When users ask questions that require current information, research, or external
   "path": "sections[0].columns[1].nodes[2]",
   "connections": [],
   "yPosition": 100,
-  "width": 200,
+  "width": 192,
   "color": "#E3F2FD"
 }
 ```
 Use the "path" property to quickly locate and reference nodes in your edit instructions.
+
+**CRITICAL Spacing Rules**:
+- Nodes within the same column MUST have at least 200 pixels Y-spacing between them
+- If first node has yPosition: 100, second node should have yPosition: 300, third should have yPosition: 500, etc.
+- This prevents visual overlap and ensures readable graph layout
 
 The structure includes:
 - **title**: String representing the graph's main title (e.g., "Theory of Change for Charity Entrepreneurship")
@@ -53,7 +58,7 @@ The structure includes:
 
 ### **Graph Modification Instructions**
 
-When the user requests changes to the graph (adding nodes, creating connections, modifying elements), you should:
+ Each time a new section/column is "locked" OR when the user requests changes to the graph (adding nodes, creating connections, modifying elements), you should:
 
 1. **Provide your normal conversational response** about the changes you're making
 2. **Include JSON-delimited edit instructions** at the end of your response using this exact format:
@@ -66,11 +71,11 @@ When the user requests changes to the graph (adding nodes, creating connections,
     "path": "sections.1.columns.0.nodes",
     "value": {
       "id": "new-node-id",
-      "title": "Node Title",
+      "title": "Node Title (should be exactly what you and the user agreed upon in the chat)",
       "text": "Node description",
       "connections": [],
-      "yPosition": 100,
-      "width": 200,
+      "yPosition": 100,  // IMPORTANT: Ensure 200px spacing from other nodes!
+      "width": 192,
       "color": "#E3F2FD"
     }
   },
@@ -110,7 +115,7 @@ When the user requests changes to the graph (adding nodes, creating connections,
 }
 ```
 
-Only include [EDIT_INSTRUCTIONS] when the user specifically requests graph modifications (adding, removing, connecting, moving elements).
+Only include [EDIT_INSTRUCTIONS] when the user specifically requests graph modifications (adding, removing, connecting, moving elements) OR when a new section/column is "locked."
 
 ---
 
