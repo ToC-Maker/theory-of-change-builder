@@ -4,7 +4,7 @@ interface EditModeToggleProps {
   editMode: boolean
   setEditMode: (editMode: boolean) => void
   setHighlightedNodes: (nodes: Set<string>) => void
-  setColumnDragMode: (enabled: boolean) => void
+  setLayoutMode: (enabled: boolean) => void
   setNodeWidth: (width: number) => void
   setNodeColor: (color: string) => void
   setEditingTitle?: (editing: boolean) => void
@@ -16,7 +16,7 @@ export function EditModeToggle({
   editMode,
   setEditMode,
   setHighlightedNodes,
-  setColumnDragMode,
+  setLayoutMode,
   setNodeWidth,
   setNodeColor,
   setEditingTitle,
@@ -38,9 +38,9 @@ export function EditModeToggle({
           const newEditMode = !editMode
           setEditMode(newEditMode)
           if (!newEditMode) {
-            // Clear selections and column drag mode when exiting edit mode
+            // Clear selections and add/remove mode when exiting edit mode
             setHighlightedNodes(new Set())
-            setColumnDragMode(false)
+            setLayoutMode(false)
             setNodeWidth(192)
             setNodeColor('#ffffff')
             // Clear any active inline editing
