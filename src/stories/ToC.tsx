@@ -12,16 +12,38 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
 
 
 
-export function ToC({ 
-  data: initialData, 
+export function ToC({
+  data: initialData,
   onSizeChange,
   onDataChange,
-  showEditButton = true
-}: { 
+  showEditButton = true,
+  undoHistory = [],
+  redoHistory = [],
+  handleUndo = () => {},
+  handleRedo = () => {},
+  setShowShareModal = () => {},
+  isSaving = false,
+  currentEditToken = null,
+  lastSyncTime = null,
+  isManualSyncing = false,
+  handleManualSync = () => {},
+  getTimeAgo = () => ""
+}: {
   data: ToCData
-  onSizeChange?: (size: { width: number; height: number }) => void 
+  onSizeChange?: (size: { width: number; height: number }) => void
   onDataChange?: (data: ToCData) => void
   showEditButton?: boolean
+  undoHistory?: ToCData[]
+  redoHistory?: ToCData[]
+  handleUndo?: () => void
+  handleRedo?: () => void
+  setShowShareModal?: React.Dispatch<React.SetStateAction<boolean>>
+  isSaving?: boolean
+  currentEditToken?: string | null
+  lastSyncTime?: Date | null
+  isManualSyncing?: boolean
+  handleManualSync?: () => void
+  getTimeAgo?: (date: Date) => string
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -1099,6 +1121,7 @@ export function ToC({
       <EditToolbar
         editMode={editMode}
         highlightedNodes={highlightedNodes}
+        setHighlightedNodes={setHighlightedNodes}
         columnDragMode={columnDragMode}
         setColumnDragMode={setColumnDragMode}
         curvature={curvature}
@@ -1131,6 +1154,19 @@ export function ToC({
         }}
         straightenEdges={straightenEdges}
         setData={setDataAndNotify}
+        undoHistory={undoHistory}
+        redoHistory={redoHistory}
+        handleUndo={handleUndo}
+        handleRedo={handleRedo}
+        setShowShareModal={setShowShareModal}
+        isSaving={isSaving}
+        currentEditToken={currentEditToken}
+        lastSyncTime={lastSyncTime}
+        isManualSyncing={isManualSyncing}
+        handleManualSync={handleManualSync}
+        getTimeAgo={getTimeAgo}
+        data={data}
+        onDeleteNode={deleteNode}
       />
 
       {/* Connect Nodes Popup - shows when exactly 2 nodes are selected in edit mode */}
