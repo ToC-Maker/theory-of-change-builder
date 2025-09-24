@@ -6,8 +6,8 @@ interface EditToolbarProps {
   editMode: boolean
   highlightedNodes: Set<string>
   setHighlightedNodes: React.Dispatch<React.SetStateAction<Set<string>>>
-  columnDragMode: boolean
-  setColumnDragMode: React.Dispatch<React.SetStateAction<boolean>>
+  layoutMode: boolean
+  setLayoutMode: React.Dispatch<React.SetStateAction<boolean>>
   curvature: number
   setCurvature: React.Dispatch<React.SetStateAction<number>>
   textSize: number
@@ -42,8 +42,8 @@ export function EditToolbar({
   editMode,
   highlightedNodes,
   setHighlightedNodes,
-  columnDragMode,
-  setColumnDragMode,
+  layoutMode,
+  setLayoutMode,
   curvature,
   setCurvature,
   textSize,
@@ -190,16 +190,16 @@ export function EditToolbar({
             {/* Edit Tools */}
             <div className="flex items-center">
               <button
-                onClick={() => setColumnDragMode(!columnDragMode)}
+                onClick={() => setLayoutMode(!layoutMode)}
                 className={`p-2 rounded transition-all duration-200 ${
-                  columnDragMode
+                  layoutMode
                     ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                     : 'text-gray-600 hover:bg-gray-100 hover:text-gray-800'
                 }`}
-                title={`Column Drag Mode: ${columnDragMode ? 'On' : 'Off'}`}
+                title={`Layout Mode: ${layoutMode ? 'On' : 'Off'}`}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
                 </svg>
               </button>
 

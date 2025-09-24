@@ -13,7 +13,7 @@ interface ConnectionsComponentProps {
   hoveredConnections: Set<string>
   curvature: number
   editMode: boolean
-  columnDragMode: boolean
+  layoutMode: boolean
   sectionWidths: number[]
   columnPadding: number
   sectionPadding: number
@@ -31,7 +31,7 @@ export function ConnectionsComponent({
   hoveredConnections,
   curvature,
   editMode,
-  columnDragMode,
+  layoutMode,
   sectionWidths,
   columnPadding,
   sectionPadding,
@@ -58,35 +58,37 @@ export function ConnectionsComponent({
   const updateSize = useCallback(() => {
     // Calculate width based on actual section widths + gaps only
     let totalWidth = 0
-    
+
+    // In add/remove mode, add section drop zone before first section
+    if (editMode && layoutMode) {
+      totalWidth += sectionPadding
+    }
+
     // Use the actual calculated section widths
     sectionWidths.forEach((sectionWidth, sectionIndex) => {
       totalWidth += sectionWidth
-      
-      // Add extra width for column drag mode drop zones
-      if (editMode && columnDragMode) {
+
+      // Add extra width for add/remove mode drop zones
+      if (editMode && layoutMode) {
         // Count ALL columns in this section (including empty ones)
         const columnCount = data.sections[sectionIndex].columns.length || 1
 
-        // Drop zones: N+1 zones × (columnPadding/2)px each
-        const dropZonesWidth = (columnCount + 1) * (columnPadding / 2)
+        // Drop zones: (N+1) zones × columnPadding px each (before first + after each column)
+        const dropZonesWidth = (columnCount + 1) * columnPadding
 
-        // Gap calculation:
-        // Normal mode: (N-1) gaps × columnPadding px
-        // Drag mode: 2N gaps × columnPadding (between dropzones and columns)
-        // Extra gap width = 2N × columnPadding - (N-1) × columnPadding = (N+1) × columnPadding
-        const normalGapWidth = Math.max(0, columnCount - 1) * columnPadding
-        const dragGapWidth = 2 * columnCount * columnPadding
-        const extraGapWidth = dragGapWidth - normalGapWidth
-
-        totalWidth += dropZonesWidth + extraGapWidth
+        totalWidth += dropZonesWidth
       }
 
-      // Add gap between sections - only between sections, not on edges
+      // Add gap between sections (or section drop zone in add/remove mode)
       if (sectionIndex < sectionWidths.length - 1) {
         totalWidth += sectionPadding
       }
     })
+
+    // In add/remove mode, add section drop zone after last section
+    if (editMode && layoutMode) {
+      totalWidth += sectionPadding
+    }
     
     // Calculate height based on content positions (avoid DOM measurements that change with zoom)
     let maxHeight = 0
@@ -107,15 +109,15 @@ export function ConnectionsComponent({
     })
     
     // Add header height, title height, and padding
-    const headerHeight = 80 // Approximate section header height
+    const headerHeight = 62 // Section header height (matches the -62px offset in columns)
     const titleHeight = data.title ? 80 : 0 // Graph title height when present (includes margin)
-    const padding = 55 // Extra padding for safety
-    const dynamicHeight = Math.max(maxHeight + headerHeight + padding, 800) // Minimum 800px
-    
+    const padding = 0 // No extra padding needed
+    const dynamicHeight = Math.max(maxHeight + headerHeight + titleHeight + padding, 800) // Minimum 800px
+
     const newSize = { width: totalWidth, height: dynamicHeight }
     setSvgSize(newSize)
     onSizeChange(newSize)
-  }, [sectionWidths, data.sections, editMode, columnDragMode, nodeHeights, columnPadding, sectionPadding])
+  }, [sectionWidths, data.sections, layoutMode, nodeHeights, columnPadding, sectionPadding])
 
   useEffect(() => {
     // Immediate size calculation

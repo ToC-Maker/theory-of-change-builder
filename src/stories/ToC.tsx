@@ -75,7 +75,7 @@ export function ToC({
     isNewColumn?: boolean
   } | null>(null)
   const [editMode, setEditMode] = useState(false)
-  const [columnDragMode, setColumnDragMode] = useState(false)
+  const [layoutMode, setLayoutMode] = useState(false)
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5)
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1) // 0.5 to 2.0 scale
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
@@ -483,27 +483,37 @@ export function ToC({
       console.error('Data corruption detected: sections is not an array', data.sections);
       return [400]; // Return default width
     }
-    
+
     const widths = data.sections.map(section => {
-      // Filter out empty columns
-      const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0)
-      
-      if (nonEmptyColumns.length === 0) return 192 // Default width if no columns
-      
+      // In add/remove mode, include all columns (even empty ones)
+      // Otherwise, filter out empty columns
+      const columnsToCalculate = (editMode && layoutMode)
+        ? section.columns
+        : section.columns.filter(column => column.nodes.length > 0)
+
+      if (columnsToCalculate.length === 0) return 192 // Default width for empty sections
+
       // Calculate width needed for each column (max node width in that column)
-      const columnWidths = nonEmptyColumns.map(column => {
+      const columnWidths = columnsToCalculate.map(column => {
+        if (column.nodes.length === 0) return 192 // Empty columns get default width
         const nodeWidths = column.nodes.map(node => node.width || 192)
         return Math.max(...nodeWidths, 192) // At least 192px per column
       })
-      
-      // Total width = sum of all column widths + gaps between columns
+
+      // Total width = sum of all column widths
       const totalColumnWidth = columnWidths.reduce((sum, width) => sum + width, 0)
-      const gaps = Math.max(0, columnWidths.length - 1) * columnPadding // Use dynamic column padding
-      
+
+      // In add/remove mode, gaps become drop zones and are added in ConnectionsComponent
+      // So we don't add gaps here, but the drop zones are calculated as (N+1) * columnPadding
+      // which is already handled in ConnectionsComponent
+      const gaps = (editMode && layoutMode)
+        ? 0
+        : Math.max(0, columnWidths.length - 1) * columnPadding
+
       return totalColumnWidth + gaps
     })
     return widths
-  }, [data.sections, columnPadding])
+  }, [data.sections, columnPadding, editMode, layoutMode, data.sections.map(s => s.columns.length).join(',')])
 
 
   const areNodesConnected = useCallback((sourceId: string, targetId: string) => {
@@ -664,13 +674,6 @@ export function ToC({
       return
     }
 
-    // If column dragging is disabled, only allow drops within the same column
-    if (!columnDragMode && 
-        (sourceLocation.sectionIndex !== targetSectionIndex || 
-         sourceLocation.columnIndex !== targetColumnIndex || 
-         isNewColumn)) {
-      return
-    }
 
     // Adjust yPosition by the drag offset so the node appears where the user grabbed it
     // Since yPosition now represents center, we need to get the actual node height
@@ -870,7 +873,7 @@ export function ToC({
       <div
         className="flex relative min-w-fit overflow-visible"
         style={{
-          gap: `${sectionPadding}px`,
+          gap: editMode && layoutMode ? '0px' : `${sectionPadding}px`,
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
           height: svgSize.height > 0 ? `${svgSize.height-55}px` : '100vh' // I don't understand why I need to subtract 55, but it works
         }}
@@ -885,7 +888,30 @@ export function ToC({
         }}
       >
       {Array.isArray(data.sections) ? data.sections.map((section, sectionIndex) => (
-        <div key={sectionIndex}
+        <React.Fragment key={sectionIndex}>
+          {/* Gap before first section or between sections with double-click to add section */}
+          {editMode && layoutMode && (
+            <div
+              className="hover:bg-green-50 transition-colors flex items-center justify-center cursor-pointer group"
+              style={{ width: `${sectionPadding}px`, minHeight: '400px' }}
+              onDoubleClick={() => {
+                setDataAndNotify(prevData => {
+                  const newData = { ...prevData }
+                  newData.sections.splice(sectionIndex, 0, {
+                    title: 'New Section',
+                    columns: [{ nodes: [] }]
+                  })
+                  return newData
+                })
+              }}
+              title="Double-click to add section"
+            >
+              <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                + Section
+              </div>
+            </div>
+          )}
+          <div
              onClick={(e) => {
                // Allow deselection by clicking section area in both view and edit mode
                if (e.target === e.currentTarget) {
@@ -901,7 +927,7 @@ export function ToC({
                 className="rounded py-3 mb-2 px-3"
                 style={{ 
                   backgroundColor: data.color || '#374151', // Default to gray-700
-                  minWidth: `${sectionWidths[sectionIndex] + (editMode && columnDragMode ? columnPadding + 16 : 0)}px` // Account for drop zones
+                  minWidth: `${sectionWidths[sectionIndex]}px`
                 }}
               >
                 {editMode && editingSectionIndex === sectionIndex ? (
@@ -935,53 +961,61 @@ export function ToC({
                   </h2>
                 )}
               </div>
-              <div className="flex" style={{ gap: `${columnPadding}px` }}>
+              <div className="flex" style={{ gap: editMode && layoutMode ? '0px' : `${columnPadding}px` }}>
             {(() => {
-              // Always show at least one column per section, even if empty
-              const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0);
-              const columnsToShow = nonEmptyColumns.length > 0 ? nonEmptyColumns : [section.columns[0] || { nodes: [] }];
-              return columnsToShow;
+              // In add/remove mode, show all columns including empty ones
+              // Otherwise, only show non-empty columns (or at least one if all are empty)
+              if (editMode && layoutMode) {
+                return section.columns;
+              } else {
+                const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0);
+                const columnsToShow = nonEmptyColumns.length > 0 ? nonEmptyColumns : [section.columns[0] || { nodes: [] }];
+                return columnsToShow;
+              }
             })().map((column, colIndex) => (
-              <React.Fragment key={colIndex}>
-                {/* Drop zone before first column - only show when column dragging is enabled */}
-                {editMode && columnDragMode && colIndex === 0 && (
+              <React.Fragment key={`${sectionIndex}-${colIndex}`}>
+                {/* Gap before first column with double-click to add column */}
+                {editMode && layoutMode && colIndex === 0 && (
                   <div
-                    className={clsx(
-                      "min-h-96 rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
-                      dragOverLocation?.sectionIndex === sectionIndex &&
-                      dragOverLocation?.columnIndex === 0 &&
-                      dragOverLocation?.isNewColumn
-                        ? "border-green-400 bg-green-50"
-                        : "border-transparent",
-                      draggedNode ? "hover:border-green-300" : ""
-                    )}
-                    style={{ width: `${columnPadding / 2}px` }}
+                    className="hover:bg-blue-50 transition-colors flex items-center justify-center cursor-pointer group"
+                    style={{ width: `${columnPadding}px`, height: svgSize.height > 0 ? `${svgSize.height  - 124}px` : '740px' }}
                     onDragOver={(e) => {
                       e.preventDefault()
-                      handleDragOver(sectionIndex, 0, true)
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const yPosition = e.clientY - rect.top
+                      handleDragOver(sectionIndex, 0, true, yPosition)
                     }}
                     onDrop={(e) => {
                       e.preventDefault()
-                      handleDrop(sectionIndex, 0, true)
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const yPosition = e.clientY - rect.top
+                      handleDrop(sectionIndex, 0, true, yPosition)
                     }}
+                    onDoubleClick={() => {
+                      setDataAndNotify(prevData => {
+                        const newData = { ...prevData }
+                        newData.sections[sectionIndex].columns.splice(0, 0, { nodes: [] })
+                        return newData
+                      })
+                    }}
+                    title="Double-click to add column"
                   >
-                    {dragOverLocation?.sectionIndex === sectionIndex && 
-                     dragOverLocation?.columnIndex === 0 && 
-                     dragOverLocation?.isNewColumn && (
-                      <div className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap">
-                        New Column
-                      </div>
-                    )}
+                    <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                      + Column
+                    </div>
                   </div>
                 )}
-                
+
                 {/* Column with drag and keyboard positioning */}
-                <div 
-                  className="relative"
-                  style={{ 
-                    minWidth: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`, 
+                <div
+                  className={clsx(
+                    "relative",
+                    editMode && layoutMode && column.nodes.length === 0 && "hover:bg-red-50 transition-colors flex items-center justify-center cursor-pointer group"
+                  )}
+                  style={{
+                    minWidth: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`,
                     width: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`,
-                    height: editMode ? (svgSize.height > 0 ? `${svgSize.height - 62}px` : '740px') : 'auto'
+                    height: editMode ? (svgSize.height > 0 ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px` : '740px') : 'auto'
                   }}
                   onDragOver={editMode ? (e) => {
                     e.preventDefault()
@@ -1006,9 +1040,29 @@ export function ToC({
                   onDoubleClick={editMode ? (e) => {
                     // Only create new node if double-clicking in blank column area
                     if (e.target === e.currentTarget) {
-                      const rect = e.currentTarget.getBoundingClientRect()
-                      const yPosition = e.clientY - rect.top
-                      createNewNode(sectionIndex, colIndex, yPosition)
+                      if (layoutMode && column.nodes.length === 0) {
+                        // Delete the empty column
+                        setDataAndNotify(prevData => {
+                          const updatedSection = {
+                            ...prevData.sections[sectionIndex],
+                            columns: prevData.sections[sectionIndex].columns.filter((_, i) => i !== colIndex)
+                          }
+
+                          // If this was the last column in the section, delete the section entirely
+                          const newSections = updatedSection.columns.length === 0
+                            ? prevData.sections.filter((_, i) => i !== sectionIndex)
+                            : prevData.sections.map((s, i) => i === sectionIndex ? updatedSection : s)
+
+                          return {
+                            ...prevData,
+                            sections: newSections
+                          }
+                        })
+                      } else {
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const yPosition = e.clientY - rect.top
+                        createNewNode(sectionIndex, colIndex, yPosition)
+                      }
                     }
                   } : undefined}
                 >
@@ -1017,13 +1071,13 @@ export function ToC({
                       const nodeWidth = node.width || 192
                       const columnWidth = Math.max(...column.nodes.map(node => node.width || 192), 192)
                       const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2)
-                      
+
                       return (
                         <div
                           key={node.id}
                           className="absolute"
                           style={{
-                            top: node.yPosition !== undefined 
+                            top: node.yPosition !== undefined
                               ? `${node.yPosition - (nodeHeights[node.id] || 150) / 2}px` // Convert from center to top position using cached height
                               : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
                             left: `${leftOffset}px`,
@@ -1049,37 +1103,45 @@ export function ToC({
                         </div>
                       )
                     })}
+
+                  {/* Label for empty column in add/remove mode */}
+                  {editMode && layoutMode && column.nodes.length === 0 && (
+                    <div className="text-red-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                      - Delete
+                    </div>
+                  )}
                 </div>
 
-                {/* Drop zone after column - only show when column dragging is enabled */}
-                {editMode && columnDragMode && (
+                {/* Gap after column with double-click to add column */}
+                {editMode && layoutMode && (
                   <div
-                    className={clsx(
-                      "min-h-screen rounded-lg border-2 border-dashed transition-colors flex items-center justify-center",
-                      dragOverLocation?.sectionIndex === sectionIndex &&
-                      dragOverLocation?.columnIndex === colIndex + 1 &&
-                      dragOverLocation?.isNewColumn
-                        ? "border-green-400 bg-green-50"
-                        : "border-transparent",
-                      draggedNode ? "hover:border-green-300" : ""
-                    )}
-                    style={{ width: `${columnPadding / 2}px` }}
+                    className="hover:bg-blue-50 transition-colors flex items-center justify-center cursor-pointer group"
+                    style={{ width: `${columnPadding}px`, height: svgSize.height > 0 ? `${svgSize.height  - 124}px` : '740px' }}
                     onDragOver={(e) => {
                       e.preventDefault()
-                      handleDragOver(sectionIndex, colIndex + 1, true)
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const yPosition = e.clientY - rect.top
+                      handleDragOver(sectionIndex, colIndex + 1, true, yPosition)
                     }}
                     onDrop={(e) => {
                       e.preventDefault()
-                      handleDrop(sectionIndex, colIndex + 1, true)
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const yPosition = e.clientY - rect.top
+                      handleDrop(sectionIndex, colIndex + 1, true, yPosition)
                     }}
+                    onDoubleClick={() => {
+                      // Add new column
+                      setDataAndNotify(prevData => {
+                        const newData = { ...prevData }
+                        newData.sections[sectionIndex].columns.splice(colIndex + 1, 0, { nodes: [] })
+                        return newData
+                      })
+                    }}
+                    title="Double-click to add column"
                   >
-                    {dragOverLocation?.sectionIndex === sectionIndex && 
-                     dragOverLocation?.columnIndex === colIndex + 1 && 
-                     dragOverLocation?.isNewColumn && (
-                      <div className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap">
-                        New Column
-                      </div>
-                    )}
+                    <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                      + Column
+                    </div>
                   </div>
                 )}
               </React.Fragment>
@@ -1087,7 +1149,30 @@ export function ToC({
               </div>
             </div>
           </div>
-        </div>
+          </div>
+          {/* Gap after last section with double-click to add section */}
+          {editMode && layoutMode && sectionIndex === data.sections.length - 1 && (
+            <div
+              className="hover:bg-green-50 transition-colors flex items-center justify-center cursor-pointer group"
+              style={{ width: `${sectionPadding}px`, minHeight: '400px' }}
+              onDoubleClick={() => {
+                setDataAndNotify(prevData => {
+                  const newData = { ...prevData }
+                  newData.sections.splice(sectionIndex + 1, 0, {
+                    title: 'New Section',
+                    columns: [{ nodes: [] }]
+                  })
+                  return newData
+                })
+              }}
+              title="Double-click to add section"
+            >
+              <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                + Section
+              </div>
+            </div>
+          )}
+        </React.Fragment>
       )) : (
         <div className="flex items-center justify-center h-64 bg-red-50 border-2 border-red-200 rounded-lg">
           <div className="text-center">
@@ -1107,7 +1192,7 @@ export function ToC({
         hoveredConnections={hoveredConnections}
         curvature={curvature}
         editMode={editMode}
-        columnDragMode={columnDragMode}
+        layoutMode={layoutMode}
         sectionWidths={sectionWidths}
         columnPadding={columnPadding}
         sectionPadding={sectionPadding}
@@ -1122,8 +1207,8 @@ export function ToC({
         editMode={editMode}
         highlightedNodes={highlightedNodes}
         setHighlightedNodes={setHighlightedNodes}
-        columnDragMode={columnDragMode}
-        setColumnDragMode={setColumnDragMode}
+        layoutMode={layoutMode}
+        setLayoutMode={setLayoutMode}
         curvature={curvature}
         setCurvature={(value) => {
           setCurvature(value)
@@ -1333,7 +1418,7 @@ export function ToC({
         editMode={editMode}
         setEditMode={setEditMode}
         setHighlightedNodes={setHighlightedNodes}
-        setColumnDragMode={setColumnDragMode}
+        setLayoutMode={setLayoutMode}
         setNodeWidth={setNodeWidth}
         setNodeColor={setNodeColor}
         setEditingTitle={setEditingTitle}
