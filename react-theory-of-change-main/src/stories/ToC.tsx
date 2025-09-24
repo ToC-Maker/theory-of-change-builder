@@ -6,7 +6,6 @@ import { ConnectionsComponent } from "../components/ConnectionsComponent"
 import { EditToolbar } from "../components/EditToolbar"
 import { Legend } from "../components/Legend"
 import { NodePopup } from "../components/NodePopup"
-import { EditModeToggle } from "../components/EditModeToggle"
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
 
 
@@ -74,7 +73,7 @@ export function ToC({
     yPosition?: number
     isNewColumn?: boolean
   } | null>(null)
-  const [editMode, setEditMode] = useState(false)
+  const [editMode, setEditMode] = useState(showEditButton)
   const [layoutMode, setLayoutMode] = useState(false)
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5)
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1) // 0.5 to 2.0 scale
@@ -1205,6 +1204,8 @@ export function ToC({
 
       <EditToolbar
         editMode={editMode}
+        setEditMode={setEditMode}
+        showEditButton={showEditButton}
         highlightedNodes={highlightedNodes}
         setHighlightedNodes={setHighlightedNodes}
         layoutMode={layoutMode}
@@ -1412,19 +1413,6 @@ export function ToC({
           setLegendDragOffset={setLegendDragOffset}
         />
       )}
-
-      {/* Edit Mode Toggle Button */}
-      <EditModeToggle
-        editMode={editMode}
-        setEditMode={setEditMode}
-        setHighlightedNodes={setHighlightedNodes}
-        setLayoutMode={setLayoutMode}
-        setNodeWidth={setNodeWidth}
-        setNodeColor={setNodeColor}
-        setEditingTitle={setEditingTitle}
-        setEditingSectionIndex={setEditingSectionIndex}
-        show={showEditButton}
-      />
 
       {nodePopup && (
         <NodePopup

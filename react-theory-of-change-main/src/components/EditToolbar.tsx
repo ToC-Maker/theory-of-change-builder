@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
-import { ShareIcon, AdjustmentsHorizontalIcon } from "@heroicons/react/24/outline"
+import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon } from "@heroicons/react/24/outline"
 
 interface EditToolbarProps {
   editMode: boolean
+  setEditMode: React.Dispatch<React.SetStateAction<boolean>>
+  showEditButton: boolean
   highlightedNodes: Set<string>
   setHighlightedNodes: React.Dispatch<React.SetStateAction<Set<string>>>
   layoutMode: boolean
@@ -40,6 +42,8 @@ interface EditToolbarProps {
 
 export function EditToolbar({
   editMode,
+  setEditMode,
+  showEditButton,
   highlightedNodes,
   setHighlightedNodes,
   layoutMode,
@@ -73,8 +77,12 @@ export function EditToolbar({
   onDeleteNode,
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
+  const [showModeDropdown, setShowModeDropdown] = useState(false)
   const [showAlignmentSuggestion, setShowAlignmentSuggestion] = useState(false)
+  const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 })
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const modeDropdownRef = useRef<HTMLDivElement>(null)
+  const prevHighlightedNodesRef = useRef<Set<string>>(new Set())
 
   // Smart detection for misaligned nodes
   const detectMisalignedNodes = (): boolean => {
@@ -141,15 +149,44 @@ export function EditToolbar({
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowWidthDropdown(false)
       }
+      if (modeDropdownRef.current && !modeDropdownRef.current.contains(event.target as Node)) {
+        setShowModeDropdown(false)
+      }
     }
 
-    if (showWidthDropdown) {
+    if (showWidthDropdown || showModeDropdown) {
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showWidthDropdown])
+  }, [showWidthDropdown, showModeDropdown])
 
-  if (!editMode) return null
+  // Update toolbar position only when selection changes
+  useEffect(() => {
+    if (highlightedNodes.size === 0) return;
+
+    // Check if selection actually changed
+    const currentSelectionString = Array.from(highlightedNodes).sort().join(',');
+    const prevSelectionString = Array.from(prevHighlightedNodesRef.current).sort().join(',');
+
+    if (currentSelectionString !== prevSelectionString) {
+      // Selection changed - calculate new position
+      const nodeElements = Array.from(highlightedNodes).map(nodeId =>
+        document.getElementById(`node-${nodeId}`)
+      ).filter(Boolean);
+
+      if (nodeElements.length > 0) {
+        const rects = nodeElements.map(el => el.getBoundingClientRect());
+        const avgX = rects.reduce((sum, rect) => sum + rect.left + rect.width / 2, 0) / rects.length;
+        const topY = Math.min(...rects.map(rect => rect.top));
+
+        setToolbarPosition({ x: avgX, y: topY - 80 });
+      }
+
+      prevHighlightedNodesRef.current = new Set(highlightedNodes);
+    }
+  }, [highlightedNodes])
+
+  if (!showEditButton) return null
 
   return (
     <>
@@ -188,7 +225,7 @@ export function EditToolbar({
             <div className="h-6 w-px bg-gray-300 mx-1"></div>
 
             {/* Edit Tools */}
-            <div className="flex items-center">
+            <div className="flex items-center gap-1">
               <button
                 onClick={() => setLayoutMode(!layoutMode)}
                 className={`p-2 rounded transition-all duration-200 ${
@@ -202,6 +239,44 @@ export function EditToolbar({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
                 </svg>
               </button>
+
+              {/* Text Size Control - Google Drive Style */}
+              <div className="flex items-center gap-1 px-1 py-1 hover:bg-gray-100 rounded transition-colors">
+                <button
+                  onClick={() => {
+                    const currentPx = Math.round(textSize * 18);
+                    const newPx = Math.max(9, currentPx - 1);
+                    setTextSize(newPx / 18);
+                  }}
+                  className="p-1 hover:bg-gray-200 rounded transition-colors"
+                  title="Decrease text size"
+                >
+                  <MinusIcon className="w-4 h-4 text-gray-600" />
+                </button>
+                <input
+                  type="number"
+                  value={Math.round(textSize * 18)}
+                  onChange={(e) => {
+                    const px = parseInt(e.target.value) || 18;
+                    const clampedPx = Math.max(9, Math.min(36, px));
+                    setTextSize(clampedPx / 18);
+                  }}
+                  className="w-10 text-sm text-gray-700 font-medium text-center border-0 focus:outline-none focus:ring-1 focus:ring-blue-500 rounded [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  min="9"
+                  max="36"
+                />
+                <button
+                  onClick={() => {
+                    const currentPx = Math.round(textSize * 18);
+                    const newPx = Math.min(36, currentPx + 1);
+                    setTextSize(newPx / 18);
+                  }}
+                  className="p-1 hover:bg-gray-200 rounded transition-colors"
+                  title="Increase text size"
+                >
+                  <PlusIcon className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
 
               {/* More Tools Dropdown */}
               <div className="relative" ref={dropdownRef}>
@@ -221,6 +296,23 @@ export function EditToolbar({
                     </div>
 
                     <div className="p-4 space-y-4">
+                      {/* Curve Control */}
+                      <div>
+                        <label className="text-sm text-gray-600">Connection Curve</label>
+                        <div className="flex items-center gap-2 mt-1">
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={curvature}
+                            onChange={(e) => setCurvature(parseFloat(e.target.value))}
+                            className="flex-1 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
+                          />
+                          <span className="text-xs text-gray-500 w-12">{Math.round(curvature * 100)}%</span>
+                        </div>
+                      </div>
+
                       {/* Spacing Controls */}
                       <div>
                         <label className="text-sm text-gray-600">Column Spacing</label>
@@ -274,36 +366,6 @@ export function EditToolbar({
 
           {/* Right side - Visual Controls and Actions */}
           <div className="flex items-center gap-1 flex-1 justify-end">
-            {/* Visual Controls */}
-            <div className="flex items-center gap-1">
-              {/* Curve Control */}
-              <div className="flex items-center gap-2 px-2">
-                <span className="text-sm text-gray-600">Curve</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={curvature}
-                  onChange={(e) => setCurvature(parseFloat(e.target.value))}
-                  className="w-16 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
-                />
-              </div>
-
-              {/* Text Size Control */}
-              <div className="flex items-center gap-2 px-2">
-                <span className="text-sm text-gray-600">Size</span>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2"
-                  step="0.1"
-                  value={textSize}
-                  onChange={(e) => setTextSize(parseFloat(e.target.value))}
-                  className="w-16 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
-                />
-              </div>
-            </div>
 
             {/* Separator */}
             <div className="h-6 w-px bg-gray-300 mx-2"></div>
@@ -342,6 +404,75 @@ export function EditToolbar({
                   {lastSyncTime && (
                     <span className="text-gray-600 text-sm">Last synced: {getTimeAgo(lastSyncTime)}</span>
                   )}
+                </div>
+              )}
+            </div>
+
+            {/* Separator */}
+            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
+            {/* Mode Switcher Dropdown (Google Docs style) */}
+            <div className="relative" ref={modeDropdownRef}>
+              <button
+                onClick={() => setShowModeDropdown(!showModeDropdown)}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded transition-all duration-200"
+              >
+                {editMode ? (
+                  <>
+                    <PencilIcon className="w-4 h-4" />
+                    <span>Editing</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeIcon className="w-4 h-4" />
+                    <span>Viewing</span>
+                  </>
+                )}
+                <ChevronDownIcon className="w-4 h-4 text-gray-500" />
+              </button>
+
+              {showModeDropdown && (
+                <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 z-50">
+                  <button
+                    onClick={() => {
+                      setEditMode(true)
+                      setShowModeDropdown(false)
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
+                      editMode
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <PencilIcon className="w-4 h-4" />
+                    <span>Editing</span>
+                    {editMode && (
+                      <svg className="w-4 h-4 ml-auto text-blue-700" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditMode(false)
+                      setHighlightedNodes(new Set())
+                      setLayoutMode(false)
+                      setShowModeDropdown(false)
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
+                      !editMode
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <EyeIcon className="w-4 h-4" />
+                    <span>Viewing</span>
+                    {!editMode && (
+                      <svg className="w-4 h-4 ml-auto text-blue-700" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
               )}
             </div>
@@ -411,44 +542,15 @@ export function EditToolbar({
       )}
 
       {/* Node Selection Popup - Miro Style Horizontal Bar */}
-      {highlightedNodes.size > 0 && (() => {
-        // Get actual positions of selected nodes from DOM with smooth updates
-        const getNodePosition = () => {
-          const nodeElements = Array.from(highlightedNodes).map(nodeId =>
-            document.getElementById(`node-${nodeId}`)
-          ).filter(Boolean);
-
-          if (nodeElements.length === 0) {
-            // Fallback to center if nodes not found
-            return { x: window.innerWidth / 2, y: 200 };
-          }
-
-          // Calculate centroid of selected nodes (accounting for current transforms)
-          const rects = nodeElements.map(el => {
-            const rect = el.getBoundingClientRect();
-            // Account for any transform scaling on hover
-            const computedStyle = window.getComputedStyle(el);
-            const transform = computedStyle.transform;
-            return rect;
-          });
-
-          const avgX = rects.reduce((sum, rect) => sum + rect.left + rect.width / 2, 0) / rects.length;
-          const topY = Math.min(...rects.map(rect => rect.top));
-
-          return { x: avgX, y: topY - 80 }; // 80px above the topmost node
-        };
-
-        const nodePosition = getNodePosition();
-
-        return (
-          <div
-            className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 px-4 py-3 transition-all duration-300 ease-out"
-            style={{
-              left: nodePosition.x,
-              top: nodePosition.y,
-              transform: 'translateX(-50%)',
-              minWidth: '400px'
-            }}
+      {editMode && highlightedNodes.size > 0 && (
+        <div
+          className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 px-4 py-3"
+          style={{
+            left: toolbarPosition.x,
+            top: toolbarPosition.y,
+            transform: 'translateX(-50%)',
+            minWidth: '400px'
+          }}
           >
             <div className="flex items-center gap-6">
               {/* Node Count */}
@@ -573,16 +675,13 @@ export function EditToolbar({
                     className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-all duration-200"
                     title={`Delete ${highlightedNodes.size === 1 ? 'node' : 'nodes'}`}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1v-1m4 0a1 1 0 011 1v1m-4-1v1m-1 0V4a1 1 0 00-1-1H9a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
+                    <TrashIcon className="w-5 h-5" />
                   </button>
                 </>
               )}
             </div>
           </div>
-        );
-      })()}
+      )}
     </>
   )
 }
