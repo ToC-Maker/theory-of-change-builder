@@ -87,6 +87,7 @@ export function NodeComponent({
     <div className="relative z-10">
       <div
         ref={nodeRef}
+        id={`node-${node.id}`}
         draggable={editMode}
         onDragStart={editMode ? (e) => {
           onDragStart(node, e)
