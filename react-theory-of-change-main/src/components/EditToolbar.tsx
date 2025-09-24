@@ -227,9 +227,12 @@ export function EditToolbar({
             {/* Edit Tools */}
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setLayoutMode(!layoutMode)}
+                onClick={() => editMode && setLayoutMode(!layoutMode)}
+                disabled={!editMode}
                 className={`p-2 rounded transition-all duration-200 ${
-                  layoutMode
+                  !editMode
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : layoutMode
                     ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                     : 'text-gray-600 hover:bg-gray-100 hover:text-gray-800'
                 }`}
@@ -241,14 +244,20 @@ export function EditToolbar({
               </button>
 
               {/* Text Size Control - Google Drive Style */}
-              <div className="flex items-center gap-1 px-1 py-1 hover:bg-gray-100 rounded transition-colors">
+              <div className={`flex items-center gap-1 px-1 py-1 rounded transition-colors ${
+                editMode ? 'hover:bg-gray-100' : 'opacity-50 cursor-not-allowed'
+              }`}>
                 <button
                   onClick={() => {
+                    if (!editMode) return;
                     const currentPx = Math.round(textSize * 18);
                     const newPx = Math.max(9, currentPx - 1);
                     setTextSize(newPx / 18);
                   }}
-                  className="p-1 hover:bg-gray-200 rounded transition-colors"
+                  disabled={!editMode}
+                  className={`p-1 rounded transition-colors ${
+                    editMode ? 'hover:bg-gray-200' : 'cursor-not-allowed'
+                  }`}
                   title="Decrease text size"
                 >
                   <MinusIcon className="w-4 h-4 text-gray-600" />
@@ -257,21 +266,27 @@ export function EditToolbar({
                   type="number"
                   value={Math.round(textSize * 18)}
                   onChange={(e) => {
+                    if (!editMode) return;
                     const px = parseInt(e.target.value) || 18;
                     const clampedPx = Math.max(9, Math.min(36, px));
                     setTextSize(clampedPx / 18);
                   }}
-                  className="w-10 text-sm text-gray-700 font-medium text-center border-0 focus:outline-none focus:ring-1 focus:ring-blue-500 rounded [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  disabled={!editMode}
+                  className="w-10 text-sm text-gray-700 font-medium text-center border-0 focus:outline-none focus:ring-1 focus:ring-blue-500 rounded [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:cursor-not-allowed"
                   min="9"
                   max="36"
                 />
                 <button
                   onClick={() => {
+                    if (!editMode) return;
                     const currentPx = Math.round(textSize * 18);
                     const newPx = Math.min(36, currentPx + 1);
                     setTextSize(newPx / 18);
                   }}
-                  className="p-1 hover:bg-gray-200 rounded transition-colors"
+                  disabled={!editMode}
+                  className={`p-1 rounded transition-colors ${
+                    editMode ? 'hover:bg-gray-200' : 'cursor-not-allowed'
+                  }`}
                   title="Increase text size"
                 >
                   <PlusIcon className="w-4 h-4 text-gray-600" />
@@ -281,8 +296,13 @@ export function EditToolbar({
               {/* More Tools Dropdown */}
               <div className="relative" ref={dropdownRef}>
                 <button
-                  onClick={() => setShowWidthDropdown(!showWidthDropdown)}
-                  className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-all duration-200"
+                  onClick={() => editMode && setShowWidthDropdown(!showWidthDropdown)}
+                  disabled={!editMode}
+                  className={`p-2 rounded transition-all duration-200 ${
+                    editMode
+                      ? 'text-gray-600 hover:bg-gray-100 hover:text-gray-800'
+                      : 'text-gray-400 cursor-not-allowed'
+                  }`}
                   title="More formatting options"
                 >
                   <AdjustmentsHorizontalIcon className="w-5 h-5" />
