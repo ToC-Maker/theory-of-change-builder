@@ -43,6 +43,7 @@ export function ConnectionsComponent({
   onEdgePopupChange,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
+  const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
   const [edgePopup, setEdgePopupState] = useState<{
     sourceId: string
     targetId: string
@@ -489,7 +490,9 @@ export function ConnectionsComponent({
         }
         
         const strokeStyle = getStrokeStyle()
-        
+        const edgeKey = `${connection.sourceId}-${connection.targetId}`
+        const isEdgeHovered = hoveredEdge === edgeKey
+
         return (
           <g key={index}>
             {/* Invisible thicker path for easier clicking */}
@@ -501,9 +504,11 @@ export function ConnectionsComponent({
               className="fill-none cursor-pointer"
               style={{
                 stroke: "transparent",
-                strokeWidth: "15px", // Much thicker for easier clicking
+                strokeWidth: "20px", // Much thicker for easier clicking
                 pointerEvents: hasHighlightedNodes && !isHighlighted ? "none" : "stroke",
               }}
+              onMouseEnter={() => setHoveredEdge(edgeKey)}
+              onMouseLeave={() => setHoveredEdge(null)}
               onClick={(e) => {
                 e.stopPropagation()
 
@@ -526,7 +531,25 @@ export function ConnectionsComponent({
                 })
               }}
             />
-            {/* Visible styled path */}
+            {/* Glow shadow layer */}
+            <path
+              d={isSameColumn
+                ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+              }
+              className="fill-none"
+              markerEnd="url(#arrowhead)"
+              style={{
+                stroke: 'rgba(0, 0, 0, 0.5)',
+                strokeWidth: `${strokeWidth}px`,
+                strokeDasharray: strokeStyle.strokeDasharray === 'none' ? undefined : strokeStyle.strokeDasharray,
+                opacity: isEdgeHovered ? 1 : 0,
+                pointerEvents: "none",
+                filter: 'blur(3px)',
+                transition: 'opacity 0.25s ease-in-out',
+              }}
+            />
+            {/* Main visible path */}
             <path
               d={isSameColumn
                 ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
