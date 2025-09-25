@@ -29,9 +29,15 @@ interface ChatInterfaceProps {
   onGraphUpdate?: (newGraphData: any) => void;
 }
 
+const MODELS = {
+  'claude-sonnet-4-20250514': 'Claude 4 Sonnet',
+  'claude-opus-4-20250514': 'Claude 4 Opus',
+} as const;
+
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate }: ChatInterfaceProps) {
   const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
+  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-20250514');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -232,7 +238,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setIsSearching(false);
           streamingMessageRef.current = null;
         }
-      });
+      },
+      undefined, // signal parameter
+      selectedModel
+      );
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: streamingId,
@@ -502,7 +511,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setStreamingContent('');
           streamingMessageRef.current = null;
         }
-      });
+      },
+      undefined, // signal parameter
+      selectedModel
+      );
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: streamingId,
@@ -530,23 +542,39 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         height: 'calc(100vh - 52px)'
       }}
     >
-      {/* Toggle Button */}
+      {/* Toggle Button and Model Selector */}
       <div className="flex-shrink-0 p-2 border-b border-gray-200">
-        <button
-          onClick={onToggle}
-          className="w-full h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-          title={isCollapsed ? "Expand AI Assistant" : "Collapse AI Assistant"}
-        >
-          {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
-          <svg 
-            className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`}
-            fill="none" 
-            stroke="currentColor" 
-            viewBox="0 0 24 24"
+        <div className="flex items-center gap-2">
+          {/* Model Selector - only show when not collapsed and API key is configured */}
+          {!isCollapsed && isConfigured && (
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value as keyof typeof MODELS)}
+              className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+              title="Select AI Model"
+            >
+              {Object.entries(MODELS).map(([key, name]) => (
+                <option key={key} value={key}>{name}</option>
+              ))}
+            </select>
+          )}
+
+          <button
+            onClick={onToggle}
+            className="flex-1 h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
+            title={isCollapsed ? "Expand AI Assistant" : "Collapse AI Assistant"}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
+            {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
+            <svg
+              className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Chat Content */}
@@ -575,18 +603,19 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               </div>
             </div>
 
-            {/* Mode Switcher */}
-            <div className="flex bg-gray-100 rounded-lg p-1">
-              <button
-                onClick={() => setCurrentMode('chat')}
-                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
-                  currentMode === 'chat'
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-800'
-                }`}
-              >
-                💬 Chat
-              </button>
+            {/* Mode Switcher and Model Selector */}
+            <div className="space-y-2">
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => setCurrentMode('chat')}
+                  className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
+                    currentMode === 'chat'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                  }`}
+                >
+                  💬 Chat
+                </button>
               <button
                 onClick={() => setCurrentMode('generate')}
                 className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
@@ -608,6 +637,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 🔍 Search
               </button>
             </div>
+
+          </div>
           </div>
 
 

@@ -83,7 +83,8 @@ class ChatService {
       onSearchStart?: () => void;
       onSearchComplete?: () => void;
     },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    model: string = "claude-sonnet-4-20250514"
   ): Promise<void> {
     if (!apiKey?.trim()) {
       callbacks.onError?.("Please configure your Anthropic API key.");
@@ -120,7 +121,7 @@ class ChatService {
       // Create the stream
       const client = this.getClient(apiKey);
       const stream = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model,
         max_tokens: 20000,
         system: systemPrompt,
         messages: processedMessages.map(msg => ({
@@ -175,7 +176,7 @@ class ChatService {
     try {
       const client = this.getClient(apiKey);
       await client.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-opus-4-20250514",
         max_tokens: 1,
         messages: [{ role: 'user', content: 'Hi' }]
       });
