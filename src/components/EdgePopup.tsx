@@ -69,34 +69,30 @@ export function EdgePopup({
   }
 
   return (
-    <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center transition-all duration-150 ease-out"
-      style={{
-        pointerEvents: 'auto',
-        animation: 'fadeIn 0.15s ease-out'
-      }}
-    >
-      {/* Backdrop with blur */}
-      <div 
-        className="absolute bg-black bg-opacity-40 backdrop-blur-[2px]"
-        style={{
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%'
-        }}
+    <>
+      {/* Backdrop with blur - covers entire viewport */}
+      <div
+        className="fixed inset-0 z-[200] bg-black bg-opacity-40 backdrop-blur-[2px]"
         onClick={() => setEdgePopup(null)}
       />
-      
-      {/* Modal content */}
+
+      {/* Modal container - centered in graph container */}
       <div
-        className="relative bg-white rounded-xl shadow-2xl flex flex-col transform transition-all duration-150 ease-out"
+        className="absolute inset-0 z-[210] flex items-center justify-center transition-all duration-150 ease-out pointer-events-none"
         style={{
-          width: '800px',
-          height: '600px',
-          animation: 'scaleIn 0.15s ease-out'
+          animation: 'fadeIn 0.15s ease-out'
         }}
       >
+      
+        {/* Modal content */}
+        <div
+          className="relative bg-white rounded-xl shadow-2xl flex flex-col transform transition-all duration-150 ease-out pointer-events-auto"
+          style={{
+            width: '800px',
+            height: '600px',
+            animation: 'scaleIn 0.15s ease-out'
+          }}
+        >
         {/* Fixed Header */}
         <div className="relative flex-shrink-0 p-8 pb-4 border-b border-gray-200">
           {/* Delete button - top left */}
@@ -317,7 +313,8 @@ export function EdgePopup({
           </div>
         </div>
         </div>
+        </div>
       </div>
-    </div>
+    </>
   )
 }

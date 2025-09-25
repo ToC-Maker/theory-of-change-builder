@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react"
 import { Routes, Route, useParams, Link } from "react-router-dom"
 import { ToC } from "./stories/ToC"
 import { ChatInterface } from "./components/ChatInterface"
-import { InfoPanel } from "./components/InfoPanel"
-import { StaticLegend } from "./components/StaticLegend"
 import { JsonDropdown } from "./components/JsonDropdown"
 import { ShareModal } from "./components/ShareModal"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
@@ -277,12 +275,16 @@ function ToCViewer() {
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
-  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
   const [showShareModal, setShowShareModal] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
   const [isManualSyncing, setIsManualSyncing] = useState(false)
+  const [camera, setCamera] = useState({ x: 0, y: 0, z: 1 })
+  const zoomableRef = useRef<HTMLDivElement>(null)
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null)
+  const [panStartCamera, setPanStartCamera] = useState<{ x: number; y: number } | null>(null)
 
   // Helper function to format relative time
   const getTimeAgo = (date: Date) => {
@@ -894,6 +896,166 @@ function ToCViewer() {
     return () => clearInterval(interval);
   }, [lastSyncTime]);
 
+  // Canvas zoom and pan implementation
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      // Check if this is a zoom gesture (Ctrl/Cmd key)
+      const isZoomGesture = e.ctrlKey || e.metaKey;
+
+      if (isZoomGesture) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const container = zoomableRef.current;
+        if (!container) return;
+
+        // Calculate new zoom level - 1% steps
+        const zoomStep = 0.05;
+        const delta = -e.deltaY > 0 ? 1 : -1;
+        const newZoom = Math.max(0.5, Math.min(5, camera.z + delta * zoomStep * camera.z));
+
+        // The transform is: scale(z) translate(x, y) with origin at 0,0
+        // This means: screenPoint = scale * (localPoint + translate)
+        // Or: screenPoint = localPoint * scale + translate * scale
+
+        // Get mouse position in screen space
+        const mouseScreenX = e.clientX;
+        const mouseScreenY = e.clientY;
+
+        // Get the untransformed position of the transform origin
+        // We need the position where the container WOULD be without the transform
+        const parent = container.parentElement;
+        if (!parent) return;
+        const parentRect = parent.getBoundingClientRect();
+
+        // Origin is at top-left of container (accounting for padding)
+        const style = window.getComputedStyle(container);
+        const paddingLeft = parseFloat(style.paddingLeft) || 0;
+        const paddingTop = parseFloat(style.paddingTop) || 0;
+
+        const originX = parentRect.left + paddingLeft;
+        const originY = parentRect.top + paddingTop;
+
+        // Mouse position relative to origin in screen space
+        const mouseX = mouseScreenX - originX;
+        const mouseY = mouseScreenY - originY;
+
+        // The local point under the mouse: localPoint = (screenPoint - translate * scale) / scale
+        const localPointX = (mouseX - camera.x * camera.z) / camera.z;
+        const localPointY = (mouseY - camera.y * camera.z) / camera.z;
+
+        // After zoom: mouseX = localPoint * newZoom + newTranslate * newZoom
+        // Solving: newTranslate = (mouseX / newZoom) - localPoint
+        const newX = mouseX / newZoom - localPointX;
+        const newY = mouseY / newZoom - localPointY;
+
+        setCamera({
+          x: newX,
+          y: newY,
+          z: newZoom
+        });
+      }
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const container = zoomableRef.current;
+      if (!container) return;
+
+      // Check if the target is a draggable node, legend, or interactive element
+      const target = e.target as HTMLElement;
+      const isNode = target.closest('[draggable="true"]');
+      const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing'); // Legend has grab cursor
+      const isChatPanel = target.closest('.fixed.left-0.z-40') !== null; // Check if inside chat panel
+
+      // Check if there's any active text editing happening
+      const activeElement = document.activeElement;
+      const isTextEditing = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        (activeElement as HTMLElement).contentEditable === 'true'
+      );
+
+      // Check if clicking on text content within nodes or detail panels (for text selection in view mode)
+      // Only prevent panning for text inside actual nodes or modal panels, not section/graph titles
+      const isTextContent = target.tagName === 'DIV' || target.tagName === 'SPAN' || target.tagName === 'P' || target.tagName === 'H2' || target.tagName === 'H3' || target.tagName === 'H4';
+      const hasTextContent = target.textContent && target.textContent.trim().length > 0;
+      const isInsideNode = target.closest('[id^="node-"]') !== null; // Check if inside a node element
+      const isInsideModal = target.closest('[class*="z-[2"]') !== null; // Check if inside a modal (NodePopup/EdgePopup have z-[200+])
+      const isSelectableText = isTextContent && hasTextContent && (isInsideNode || isInsideModal);
+
+      const isEditableElement = target.tagName === 'INPUT' ||
+                               target.tagName === 'TEXTAREA' ||
+                               target.tagName === 'SELECT' ||
+                               target.tagName === 'BUTTON' ||
+                               target.closest('button') !== null || // Also check if clicked element is inside a button
+                               target.contentEditable === 'true' ||
+                               isTextEditing || // Prevent panning if any text field is being edited
+                               isSelectableText; // Allow text selection instead of panning
+
+
+      // Only pan with left mouse button, no modifiers, and not on interactive elements or chat panel
+      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !isNode && !isLegend && !isEditableElement && !isChatPanel) {
+        e.preventDefault();
+        setIsPanning(true);
+        setPanStart({ x: e.clientX, y: e.clientY });
+        setPanStartCamera({ x: camera.x, y: camera.y });
+        container.style.cursor = 'grabbing';
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isPanning && panStart && panStartCamera) {
+        const deltaX = e.clientX - panStart.x;
+        const deltaY = e.clientY - panStart.y;
+
+        // Convert pixel movement to camera movement (divide by zoom)
+        setCamera(prev => ({
+          ...prev,
+          x: panStartCamera.x + deltaX / prev.z,
+          y: panStartCamera.y + deltaY / prev.z
+        }));
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (isPanning) {
+        setIsPanning(false);
+        setPanStart(null);
+        setPanStartCamera(null);
+        const container = zoomableRef.current;
+        if (container) {
+          container.style.cursor = '';
+        }
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent Ctrl+Plus, Ctrl+Minus, Ctrl+0 browser zoom
+      if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
+        e.preventDefault();
+
+        if (e.key === '0') {
+          setCamera({ x: 0, y: 0, z: 1 });
+        }
+      }
+    };
+
+    // Attach to document to catch all events before they bubble
+    document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+    document.addEventListener('mousedown', handleMouseDown, { capture: true });
+    document.addEventListener('mousemove', handleMouseMove, { capture: true });
+    document.addEventListener('mouseup', handleMouseUp, { capture: true });
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+
+    return () => {
+      document.removeEventListener('wheel', handleWheel, { capture: true });
+      document.removeEventListener('mousedown', handleMouseDown, { capture: true });
+      document.removeEventListener('mousemove', handleMouseMove, { capture: true });
+      document.removeEventListener('mouseup', handleMouseUp, { capture: true });
+      document.removeEventListener('keydown', handleKeyDown, { capture: true });
+    };
+  }, [camera, isPanning, panStart, panStartCamera]);
+
   if (loading) {
     return (
       <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
@@ -926,24 +1088,32 @@ function ToCViewer() {
     : 'Charity Entrepreneurship'
 
   return (
-    <div className="h-screen w-screen bg-gray-50 overflow-auto fixed inset-0 pt-16">
-      <div className="min-h-full flex flex-col py-4 px-4">
-      
+    <div className="h-screen w-screen bg-gray-50 overflow-auto fixed inset-0">
+      {/* Left Sidebar - AI Assistant */}
+      <ChatInterface
+        isCollapsed={isLeftPanelCollapsed}
+        onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
+        graphData={data}
+        onGraphUpdate={handleGraphUpdate}
+      />
+
+      <div
+        ref={zoomableRef}
+        className="min-h-full flex flex-col py-4"
+        style={{
+          paddingTop: '64px',
+          paddingLeft: isLeftPanelCollapsed ? 'calc(3rem + 1rem)' : 'calc(25% + 1rem)',
+          paddingRight: '1rem',
+          paddingBottom: '80px', // Add space for footer
+          transform: `scale(${camera.z}) translate(${camera.x}px, ${camera.y}px)`,
+          transformOrigin: '0 0',
+          transition: 'padding-left 300ms'
+        }}
+      >
         <div className="flex flex-1 gap-6 justify-center items-start mx-auto">
-          {/* Left Side Panel - AI Assistant */}
-          <div className="flex-shrink-0">
-            <ChatInterface
-              height={containerSize.height > 0 ? containerSize.height + 32 : undefined}
-              isCollapsed={isLeftPanelCollapsed}
-              onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
-              graphData={data}
-              onGraphUpdate={handleGraphUpdate}
-            />
-          </div>
-        
-        {/* Main Graph Container and JSON Dropdown */}
+        {/* Main Graph Container */}
         <div className="flex flex-col flex-shrink-0 items-start">
-          <div 
+          <div
             className="bg-white rounded-xl shadow-lg p-4"
             style={{
               width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
@@ -969,37 +1139,13 @@ function ToCViewer() {
               isManualSyncing={isManualSyncing}
               handleManualSync={handleManualSync}
               getTimeAgo={getTimeAgo}
-            />
-          </div>
-          
-          {/* JSON Dropdown below graph */}
-          <div 
-            style={{
-              width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto'
-            }}
-          >
-            <JsonDropdown 
-              data={data} 
-              title="Current Graph JSON" 
-              copyGraphJSON={copyGraphJSON}
-              resetToOriginal={resetToOriginal}
-              onUploadJSON={handleUploadJSON}
-              loading={loading}
+              zoomScale={camera.z}
             />
           </div>
         </div>
-        
-        {/* Right Side Panel - Info and Legend */}
-        <div className="flex-shrink-0">
-          <InfoPanel 
-            legendComponent={<StaticLegend />} 
-            height={containerSize.height > 0 ? containerSize.height + 32 : undefined}
-            isCollapsed={isRightPanelCollapsed}
-            onToggle={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
-          />
-        </div>
+
       </div>
-      
+
 
         {/* Share Modal */}
         <ShareModal
@@ -1007,6 +1153,25 @@ function ToCViewer() {
           onClose={() => setShowShareModal(false)}
           chartData={data}
           currentEditToken={currentEditToken}
+        />
+      </div>
+
+      {/* JSON Dropdown Footer - Fixed at bottom */}
+      <div
+        className="fixed bottom-0 z-30"
+        style={{
+          left: isLeftPanelCollapsed ? '3rem' : '25%',
+          right: 0,
+          transition: 'left 300ms'
+        }}
+      >
+        <JsonDropdown
+          data={data}
+          title="Current Graph JSON"
+          copyGraphJSON={copyGraphJSON}
+          resetToOriginal={resetToOriginal}
+          onUploadJSON={handleUploadJSON}
+          loading={loading}
         />
       </div>
     </div>
