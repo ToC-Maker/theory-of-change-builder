@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Routes, Route, useParams, Link } from "react-router-dom"
+import { Routes, Route, useParams, useLocation, Link } from "react-router-dom"
 import { ToC } from "./stories/ToC"
 import { ChatInterface } from "./components/ChatInterface"
 import { JsonDropdown } from "./components/JsonDropdown"
@@ -56,6 +56,7 @@ interface ToCData {
 
 function ToCViewerOnly() {
   const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>()
+  const location = useLocation()
   const [data, setData] = useState<ToCData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -242,8 +243,11 @@ function ToCViewerOnly() {
     )
   }
 
+  // Check if we're on a view route
+  const isViewRoute = location.pathname.includes('/view') || location.pathname.includes('/chart/')
+
   return (
-    <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0 pt-16">
+    <div className={`h-screen w-screen bg-gray-50 ${isViewRoute ? 'overflow-auto' : 'overflow-hidden'} fixed inset-0 pt-16`}>
       {/* Remove horizontal centering to allow full left-right scrolling */}
       <div className="min-h-full flex flex-col justify-center py-4 px-4">
         <div className="flex flex-col flex-shrink-0 mx-auto">
