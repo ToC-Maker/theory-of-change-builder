@@ -243,7 +243,7 @@ function ToCViewerOnly() {
   }
 
   return (
-    <div className="h-screen w-screen bg-gray-50 overflow-auto fixed inset-0 pt-16">
+    <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0 pt-16">
       {/* Remove horizontal centering to allow full left-right scrolling */}
       <div className="min-h-full flex flex-col justify-center py-4 px-4">
         <div className="flex flex-col flex-shrink-0 mx-auto">
@@ -1088,7 +1088,7 @@ function ToCViewer() {
     : 'Charity Entrepreneurship'
 
   return (
-    <div className="h-screen w-screen bg-gray-50 overflow-auto fixed inset-0">
+    <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0">
       {/* Left Sidebar - AI Assistant */}
       <ChatInterface
         isCollapsed={isLeftPanelCollapsed}
