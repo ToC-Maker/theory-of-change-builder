@@ -19,6 +19,8 @@ interface ConnectionsComponentProps {
   sectionPadding: number
   onSizeChange: (size: { width: number; height: number }) => void
   onDeleteConnection?: (sourceId: string, targetId: string) => void
+  containerRef: React.RefObject<HTMLDivElement>
+  onEdgePopupChange?: (edgePopup: any) => void
 }
 
 export function ConnectionsComponent({
@@ -37,9 +39,11 @@ export function ConnectionsComponent({
   sectionPadding,
   onSizeChange,
   onDeleteConnection,
+  containerRef,
+  onEdgePopupChange,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
-  const [edgePopup, setEdgePopup] = useState<{
+  const [edgePopup, setEdgePopupState] = useState<{
     sourceId: string
     targetId: string
     x: number
@@ -50,6 +54,11 @@ export function ConnectionsComponent({
     evidence?: string
     assumptions?: string
   } | null>(null)
+
+  const setEdgePopup = (value: any) => {
+    setEdgePopupState(value)
+    onEdgePopupChange?.(value)
+  }
   const [smoothUpdates, setSmoothUpdates] = useState(false)
   const [refreshCounter, setRefreshCounter] = useState(0)
   const animationFrameRef = useRef<number | null>(null)
@@ -384,13 +393,31 @@ export function ConnectionsComponent({
       {connections.map((connection, index) => {
         if (!connection.start || !connection.end) return null
 
-        const startRect = connection.start.getBoundingClientRect()
-        const endRect = connection.end.getBoundingClientRect()
-        const containerRect = connection.start
-          .closest(".flex.relative")
-          ?.getBoundingClientRect()
+        // Get local positions using offsetTop/offsetLeft (immune to transforms)
+        const startNode = connection.start
+        const endNode = connection.end
 
-        if (!containerRect) return null
+        // Get the container element
+        const container = containerRef.current || startNode.closest(".flex.relative")
+        if (!container) return null
+
+        // Calculate local positions relative to container
+        const getLocalPosition = (element: HTMLElement) => {
+          let x = 0, y = 0, width = element.offsetWidth, height = element.offsetHeight
+          let current: HTMLElement | null = element
+
+          // Walk up the offset parent chain until we reach the container
+          while (current && current !== container) {
+            x += current.offsetLeft
+            y += current.offsetTop
+            current = current.offsetParent as HTMLElement | null
+          }
+
+          return { x, y, width, height }
+        }
+
+        const startPos = getLocalPosition(startNode)
+        const endPos = getLocalPosition(endNode)
 
         // Check if nodes are in the same column for vertical connections
         const isSameColumn = connection.sourceSectionIndex === connection.targetSectionIndex &&
@@ -400,28 +427,25 @@ export function ConnectionsComponent({
 
         if (isSameColumn) {
           // Vertical connection logic
-          startX = startRect.left + startRect.width / 2 - containerRect.left
-          endX = endRect.left + endRect.width / 2 - containerRect.left
+          startX = startPos.x + startPos.width / 2
+          endX = endPos.x + endPos.width / 2
 
           // Determine which node is higher (lower y position)
-          const sourceTop = startRect.top - containerRect.top
-          const targetTop = endRect.top - containerRect.top
-
-          if (sourceTop < targetTop) {
+          if (startPos.y < endPos.y) {
             // Source is above target: go from bottom of source to top of target
-            startY = startRect.bottom - containerRect.top
-            endY = endRect.top - containerRect.top - 14 // Offset by arrow height
+            startY = startPos.y + startPos.height
+            endY = endPos.y - 14 // Offset by arrow height
           } else {
             // Source is below target: go from top of source to bottom of target
-            startY = startRect.top - containerRect.top
-            endY = endRect.bottom - containerRect.top + 14 // Offset by arrow height
+            startY = startPos.y
+            endY = endPos.y + endPos.height + 14 // Offset by arrow height
           }
         } else {
-          // Horizontal connection logic (existing)
-          startX = startRect.right - containerRect.left
-          startY = startRect.top + startRect.height / 2 - containerRect.top
-          endX = endRect.left - containerRect.left - 14 // Offset by arrow width
-          endY = endRect.top + endRect.height / 2 - containerRect.top
+          // Horizontal connection logic
+          startX = startPos.x + startPos.width
+          startY = startPos.y + startPos.height / 2
+          endX = endPos.x - 14 // Offset by arrow width
+          endY = endPos.y + endPos.height / 2
         }
 
         // Calculate control points based on connection type
@@ -538,15 +562,32 @@ export function ConnectionsComponent({
         
         const sourceRef = nodeRefs[sourceId];
         const targetRef = nodeRefs[targetId];
-        
+
         if (!sourceRef || !targetRef) return null;
-        
-        const startRect = sourceRef.getBoundingClientRect();
-        const endRect = targetRef.getBoundingClientRect();
-        const containerRect = sourceRef.closest(".flex.relative")?.getBoundingClientRect();
-        
-        if (!containerRect) return null;
-        
+
+        // Get the container element
+        const container = containerRef.current || sourceRef.closest(".flex.relative");
+
+        if (!container) return null;
+
+        // Use the same getLocalPosition function as normal edges
+        const getLocalPosition = (element: HTMLElement) => {
+          let x = 0, y = 0, width = element.offsetWidth, height = element.offsetHeight
+          let current: HTMLElement | null = element
+
+          // Walk up the offset parent chain until we reach the container
+          while (current && current !== container) {
+            x += current.offsetLeft
+            y += current.offsetTop
+            current = current.offsetParent as HTMLElement | null
+          }
+
+          return { x, y, width, height }
+        }
+
+        const startPos = getLocalPosition(sourceRef)
+        const endPos = getLocalPosition(targetRef)
+
         // Check if nodes are in the same column for ghost connection
         const sourceLocation = findNodeLocation(sourceId);
         const targetLocation = findNodeLocation(targetId);
@@ -557,26 +598,23 @@ export function ConnectionsComponent({
         let startX, startY, endX, endY;
 
         if (isGhostSameColumn) {
-          // Vertical ghost connection logic
-          startX = startRect.left + startRect.width / 2 - containerRect.left;
-          endX = endRect.left + endRect.width / 2 - containerRect.left;
+          // Vertical ghost connection logic (using local coordinates)
+          startX = startPos.x + startPos.width / 2;
+          endX = endPos.x + endPos.width / 2;
 
-          const sourceTop = startRect.top - containerRect.top;
-          const targetTop = endRect.top - containerRect.top;
-
-          if (sourceTop < targetTop) {
-            startY = startRect.bottom - containerRect.top;
-            endY = endRect.top - containerRect.top - 14;
+          if (startPos.y < endPos.y) {
+            startY = startPos.y + startPos.height;
+            endY = endPos.y - 14;
           } else {
-            startY = startRect.top - containerRect.top;
-            endY = endRect.bottom - containerRect.top + 14;
+            startY = startPos.y;
+            endY = endPos.y + endPos.height + 14;
           }
         } else {
-          // Horizontal ghost connection logic
-          startX = startRect.right - containerRect.left;
-          startY = startRect.top + startRect.height / 2 - containerRect.top;
-          endX = endRect.left - containerRect.left - 14;
-          endY = endRect.top + endRect.height / 2 - containerRect.top;
+          // Horizontal ghost connection logic (using local coordinates)
+          startX = startPos.x + startPos.width;
+          startY = startPos.y + startPos.height / 2;
+          endX = endPos.x - 14;
+          endY = endPos.y + endPos.height / 2;
         }
 
         // Calculate control points based on connection type
@@ -614,7 +652,7 @@ export function ConnectionsComponent({
         );
       })()}
     </svg>
-    
+
     {/* Large center modal for edge information */}
     {edgePopup && (
       <EdgePopup

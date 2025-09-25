@@ -520,13 +520,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
   };
 
   return (
-    <div 
-      className={`bg-white rounded-lg shadow-lg border border-gray-200 flex flex-col transition-all duration-300 ${
-        isCollapsed ? 'w-12' : 'w-80'
+    <div
+      className={`fixed left-0 z-40 bg-white border-r border-gray-300 shadow-sm flex flex-col transition-all duration-300 ${
+        isCollapsed ? 'w-12' : 'w-1/4'
       }`}
-      style={{ 
-        height: height ? `${height}px` : 'fit-content',
-        minHeight: height ? `${height}px` : 'auto'
+      style={{
+        top: '52px',
+        bottom: 0,
+        height: 'calc(100vh - 52px)'
       }}
     >
       {/* Toggle Button */}

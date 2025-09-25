@@ -1,5 +1,6 @@
 import clsx from "clsx"
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { ToCData, Node } from "../types"
 import { NodeComponent } from "../components/NodeComponent"
 import { ConnectionsComponent } from "../components/ConnectionsComponent"
@@ -7,6 +8,7 @@ import { EditToolbar } from "../components/EditToolbar"
 import { Legend } from "../components/Legend"
 import { NodePopup } from "../components/NodePopup"
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts"
+import { PlusIcon, MinusIcon } from "@heroicons/react/24/outline"
 
 
 
@@ -26,7 +28,9 @@ export function ToC({
   lastSyncTime = null,
   isManualSyncing = false,
   handleManualSync = () => {},
-  getTimeAgo = () => ""
+  getTimeAgo = () => "",
+  renderEditToolbar,
+  zoomScale = 1
 }: {
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void
@@ -43,6 +47,8 @@ export function ToC({
   isManualSyncing?: boolean
   handleManualSync?: () => void
   getTimeAgo?: (date: Date) => string
+  renderEditToolbar?: (props: any) => React.ReactNode
+  zoomScale?: number
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -88,17 +94,19 @@ export function ToC({
     title: string
     text: string
   } | null>(null)
+  const [edgePopup, setEdgePopup] = useState<any>(null)
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
-  const [legendPosition, setLegendPosition] = useState({ x: 20, y: 70 }) // Start 50px lower
+  const [legendPosition, setLegendPosition] = useState({ x: 340, y: 70 })
   const [isDraggingLegend, setIsDraggingLegend] = useState(false)
   const [legendDragOffset, setLegendDragOffset] = useState({ x: 0, y: 0 })
+  const graphContainerRef = useRef<HTMLDivElement>(null)
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
     setNodeRefs((prev) => ({ ...prev, [id]: ref }))
-    
-    // Update height when ref changes
+
+    // Update height when ref changes - use offsetHeight for local (pre-transform) height
     if (ref) {
-      const height = ref.getBoundingClientRect().height
+      const height = ref.offsetHeight
       setNodeHeights((prev) => ({ ...prev, [id]: height }))
     }
   }, [])
@@ -124,7 +132,7 @@ export function ToC({
     setTimeout(() => {
       const nodeRef = nodeRefs[nodeId]
       if (nodeRef) {
-        const height = nodeRef.getBoundingClientRect().height
+        const height = nodeRef.offsetHeight
         setNodeHeights(prev => ({ ...prev, [nodeId]: height }))
       }
     }, 0)
@@ -135,7 +143,7 @@ export function ToC({
     setTimeout(() => {
       Object.entries(nodeRefs).forEach(([nodeId, ref]) => {
         if (ref) {
-          const height = ref.getBoundingClientRect().height
+          const height = ref.offsetHeight
           setNodeHeights(prev => ({ ...prev, [nodeId]: height }))
         }
       })
@@ -197,6 +205,16 @@ export function ToC({
       setSectionPadding(initialData.sectionPadding)
     }
   }, [initialData.textSize, initialData.curvature, initialData.columnPadding, initialData.sectionPadding])
+
+  // Position legend in bottom-right corner when svgSize changes
+  useEffect(() => {
+    if (svgSize.width > 0 && svgSize.height > 0) {
+      setLegendPosition({
+        x: svgSize.width - 170, // 170px from right edge (legend width ~160px + 10px margin)
+        y: svgSize.height - 190  // 190px from bottom (legend height ~150px + 40px margin)
+      })
+    }
+  }, [svgSize.width, svgSize.height])
 
   const copyGraphJSON = useCallback(async () => {
     try {
@@ -438,9 +456,9 @@ export function ToC({
       event.preventDefault()
       return
     }
-    
+
     setDraggedNode(node)
-    
+
     // Calculate the offset from where the user clicked to the top of the node
     const nodeElement = nodeRefs[node.id]
     if (nodeElement) {
@@ -448,6 +466,35 @@ export function ToC({
       const offsetX = event.clientX - rect.left
       const offsetY = event.clientY - rect.top
       setDragOffset({ x: offsetX, y: offsetY })
+
+      // Create a wrapper div to apply scale without affecting the drag image capture
+      const wrapper = document.createElement('div')
+      wrapper.style.position = 'fixed'
+      wrapper.style.top = '-9999px'
+      wrapper.style.left = '-9999px'
+      wrapper.style.width = `${nodeElement.offsetWidth * zoomScale}px`
+      wrapper.style.height = `${nodeElement.offsetHeight * zoomScale}px`
+      wrapper.style.pointerEvents = 'none'
+
+      const dragImage = nodeElement.cloneNode(true) as HTMLElement
+      dragImage.style.width = `${nodeElement.offsetWidth}px`
+      dragImage.style.height = `${nodeElement.offsetHeight}px`
+      dragImage.style.transform = `scale(${zoomScale})`
+      dragImage.style.transformOrigin = '0 0'
+      dragImage.style.opacity = '0.8'
+
+      wrapper.appendChild(dragImage)
+      document.body.appendChild(wrapper)
+
+      // Set the drag image with scaled offset
+      event.dataTransfer.setDragImage(wrapper, offsetX, offsetY)
+
+      // Clean up after drag starts
+      requestAnimationFrame(() => {
+        if (wrapper.parentNode) {
+          document.body.removeChild(wrapper)
+        }
+      })
     }
   }
 
@@ -675,13 +722,24 @@ export function ToC({
 
 
     // Adjust yPosition by the drag offset so the node appears where the user grabbed it
-    // Since yPosition now represents center, we need to get the actual node height
     let adjustedYPosition = 20 // Default fallback
     if (yPosition !== undefined) {
-      // Use cached height or default
+      // yPosition comes from e.clientY - rect.top where rect is from getBoundingClientRect()
+      // getBoundingClientRect() returns viewport coordinates which are already scaled by the zoom transform
+      // So we need to convert back to local space by dividing by zoom
+      const mouseLocalY = yPosition / zoomScale
+
+      // dragOffset.y was captured from the original drag event, also in viewport space
+      const dragOffsetLocalY = dragOffset.y / zoomScale
+
+      // Calculate where the node's top would be in local space
+      const nodeTopLocal = mouseLocalY - dragOffsetLocalY
+
+      // Get node height (stored in local space)
       const actualHeight = nodeHeights[draggedNode.id] || 150
-      // Convert from top position to center position
-      adjustedYPosition = yPosition - dragOffset.y + actualHeight / 2
+
+      // Calculate center in local space
+      adjustedYPosition = nodeTopLocal + actualHeight / 2
     }
 
     console.log("Moving node", draggedNode.id, "from", sourceLocation, "to", {targetSectionIndex, targetColumnIndex, isNewColumn, yPosition: adjustedYPosition})
@@ -870,6 +928,7 @@ export function ToC({
       )}
       
       <div
+        ref={graphContainerRef}
         className="flex relative min-w-fit overflow-visible"
         style={{
           gap: editMode && layoutMode ? '0px' : `${sectionPadding}px`,
@@ -1059,8 +1118,9 @@ export function ToC({
                         })
                       } else {
                         const rect = e.currentTarget.getBoundingClientRect()
-                        const yPosition = e.clientY - rect.top
-                        createNewNode(sectionIndex, colIndex, yPosition)
+                        const viewportY = e.clientY - rect.top
+                        const localY = viewportY / zoomScale
+                        createNewNode(sectionIndex, colIndex, localY)
                       }
                     }
                   } : undefined}
@@ -1200,9 +1260,12 @@ export function ToC({
           onSizeChange?.(size)
         }}
         onDeleteConnection={deleteConnection}
+        containerRef={graphContainerRef}
+        onEdgePopupChange={setEdgePopup}
       />
 
-      <EditToolbar
+      {createPortal(
+        <EditToolbar
         editMode={editMode}
         setEditMode={setEditMode}
         showEditButton={showEditButton}
@@ -1253,7 +1316,11 @@ export function ToC({
         getTimeAgo={getTimeAgo}
         data={data}
         onDeleteNode={deleteNode}
-      />
+        nodePopup={nodePopup}
+        edgePopup={edgePopup}
+      />,
+        document.body
+      )}
 
       {/* Connect Nodes Popup - shows when exactly 2 nodes are selected in edit mode */}
       {editMode && highlightedNodes.size === 2 && (() => {
@@ -1266,100 +1333,86 @@ export function ToC({
           const [smoothUpdates, setSmoothUpdates] = useState(false)
           const animationFrameRef = useRef<number | null>(null)
           const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-          
-          // Update position like ConnectionsComponent does
-          const updatePosition = useCallback(() => {
+          const positionCalculatedRef = useRef(false)
+
+          // Calculate position only once per button instance
+          useEffect(() => {
+            // Only calculate once per button pair
+            if (positionCalculatedRef.current) {
+              return
+            }
+
             const sourceNodeRef = nodeRefs[sourceId]
             const targetNodeRef = nodeRefs[targetId]
-            
-            if (sourceNodeRef && targetNodeRef) {
-              const sourceRect = sourceNodeRef.getBoundingClientRect()
-              const targetRect = targetNodeRef.getBoundingClientRect()
-              const containerRect = sourceNodeRef.closest(".flex.relative")?.getBoundingClientRect()
-              
-              if (containerRect) {
-                // Check if nodes are in the same column for vertical connections
-                const sourceLocation = findNodeLocation(sourceId)
-                const targetLocation = findNodeLocation(targetId)
-                const isSameColumn = sourceLocation && targetLocation &&
-                                   sourceLocation.sectionIndex === targetLocation.sectionIndex &&
-                                   sourceLocation.columnIndex === targetLocation.columnIndex
 
-                let startX, startY, endX, endY
-
-                if (isSameColumn) {
-                  // Vertical connection logic
-                  startX = sourceRect.left + sourceRect.width / 2 - containerRect.left
-                  endX = targetRect.left + targetRect.width / 2 - containerRect.left
-
-                  const sourceTop = sourceRect.top - containerRect.top
-                  const targetTop = targetRect.top - containerRect.top
-
-                  if (sourceTop < targetTop) {
-                    startY = sourceRect.bottom - containerRect.top
-                    endY = targetRect.top - containerRect.top - 14
-                  } else {
-                    startY = sourceRect.top - containerRect.top
-                    endY = targetRect.bottom - containerRect.top + 14
-                  }
-                } else {
-                  // Horizontal connection logic
-                  startX = sourceRect.right - containerRect.left
-                  startY = sourceRect.top + sourceRect.height / 2 - containerRect.top
-                  endX = targetRect.left - containerRect.left - 14
-                  endY = targetRect.top + targetRect.height / 2 - containerRect.top
-                }
-
-                // Position at midpoint
-                const midX = (startX + endX) / 2
-                const midY = (startY + endY) / 2
-                
-                setPosition({ x: midX, y: midY })
-              }
+            if (!sourceNodeRef || !targetNodeRef) {
+              return
             }
-          }, [sourceId, targetId, nodeRefs])
-          
-          // Mimic ConnectionsComponent's smooth update logic
+
+            const container = graphContainerRef.current || sourceNodeRef.closest(".flex.relative")
+            if (!container) {
+              return
+            }
+
+            // Use the same getLocalPosition function as ConnectionsComponent
+            const getLocalPosition = (element: HTMLElement) => {
+              let x = 0, y = 0, width = element.offsetWidth, height = element.offsetHeight
+              let current: HTMLElement | null = element
+
+              // Walk up the offset parent chain until we reach the container
+              while (current && current !== container) {
+                x += current.offsetLeft
+                y += current.offsetTop
+                current = current.offsetParent as HTMLElement | null
+              }
+
+              return { x, y, width, height }
+            }
+
+            const sourcePos = getLocalPosition(sourceNodeRef)
+            const targetPos = getLocalPosition(targetNodeRef)
+
+            // Check if nodes are in the same column for vertical connections
+            const sourceLocation = findNodeLocation(sourceId)
+            const targetLocation = findNodeLocation(targetId)
+            const isSameColumn = sourceLocation && targetLocation &&
+                               sourceLocation.sectionIndex === targetLocation.sectionIndex &&
+                               sourceLocation.columnIndex === targetLocation.columnIndex
+
+            let startX, startY, endX, endY
+
+            if (isSameColumn) {
+              // Vertical connection logic (using local coordinates)
+              startX = sourcePos.x + sourcePos.width / 2
+              endX = targetPos.x + targetPos.width / 2
+
+              if (sourcePos.y < targetPos.y) {
+                startY = sourcePos.y + sourcePos.height
+                endY = targetPos.y - 14
+              } else {
+                startY = sourcePos.y
+                endY = targetPos.y + targetPos.height + 14
+              }
+            } else {
+              // Horizontal connection logic (using local coordinates)
+              startX = sourcePos.x + sourcePos.width
+              startY = sourcePos.y + sourcePos.height / 2
+              endX = targetPos.x - 14
+              endY = targetPos.y + targetPos.height / 2
+            }
+
+            // Position at midpoint
+            const midX = (startX + endX) / 2
+            const midY = (startY + endY) / 2
+
+            setPosition({ x: midX, y: midY })
+            positionCalculatedRef.current = true // Mark as calculated
+          }, [sourceId, targetId]) // Only depends on node IDs
+
+          // Reset calculation flag when nodes change
           useEffect(() => {
-            const updateConnections = () => {
-              if (smoothUpdates) {
-                updatePosition()
-                animationFrameRef.current = requestAnimationFrame(updateConnections)
-              }
-            }
-
-            if (smoothUpdates) {
-              animationFrameRef.current = requestAnimationFrame(updateConnections)
-            } else if (animationFrameRef.current) {
-              cancelAnimationFrame(animationFrameRef.current)
-              animationFrameRef.current = null
-            }
-
-            return () => {
-              if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current)
-              }
-            }
-          }, [smoothUpdates, updatePosition])
-
-          // Enable smooth updates when this button is visible (always true since it only renders when 2 nodes selected)
-          useEffect(() => {
-            // Always enable smooth updates since this component only exists when we need it
-            setSmoothUpdates(true)
-            
-            return () => {
-              // Clean up when component unmounts
-              if (smoothUpdateTimeoutRef.current) {
-                clearTimeout(smoothUpdateTimeoutRef.current)
-                smoothUpdateTimeoutRef.current = null
-              }
-            }
-          }, []) // Empty dependency array - only run on mount/unmount
-          
-          // Initial position update
-          useEffect(() => {
-            updatePosition()
-          }, [updatePosition])
+            positionCalculatedRef.current = false
+          }, [sourceId, targetId])
           
           const isConnected = areNodesConnected(sourceId, targetId)
           
@@ -1375,23 +1428,19 @@ export function ToC({
               <div className="pointer-events-auto">
                 {isConnected ? (
                   <button
-                    onClick={connectSelectedNodes}
-                    className="flex items-center justify-center w-5 h-5 bg-white text-gray-600 hover:text-red-600 rounded-full border border-gray-300 hover:border-red-300 transition-colors shadow-sm"
+                    onClick={disconnectSelectedNodes}
+                    className="flex items-center justify-center w-6 h-6 bg-white text-gray-600 hover:text-red-600 rounded-full border border-gray-300 hover:border-red-300 transition-colors shadow-sm"
                     title="Disconnect nodes"
                   >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                    </svg>
+                    <MinusIcon className="w-4 h-4" />
                   </button>
                 ) : (
                   <button
                     onClick={connectSelectedNodes}
-                    className="flex items-center justify-center w-5 h-5 bg-white text-gray-600 hover:text-gray-800 rounded-full border border-gray-300 hover:border-gray-400 transition-colors shadow-sm"
+                    className="flex items-center justify-center w-6 h-6 bg-white text-gray-600 hover:text-gray-800 rounded-full border border-gray-300 hover:border-gray-400 transition-colors shadow-sm"
                     title="Connect nodes"
                   >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v12m6-6H6" />
-                    </svg>
+                    <PlusIcon className="w-4 h-4" />
                   </button>
                 )}
               </div>
@@ -1402,17 +1451,15 @@ export function ToC({
         return <ConnectButton />
       })()}
 
-      {/* Hide the draggable legend since we now have it in the info panel */}
-      {false && (
-        <Legend
-          legendPosition={legendPosition}
-          setLegendPosition={setLegendPosition}
-          isDraggingLegend={isDraggingLegend}
-          setIsDraggingLegend={setIsDraggingLegend}
-          legendDragOffset={legendDragOffset}
-          setLegendDragOffset={setLegendDragOffset}
-        />
-      )}
+      {/* Draggable Legend */}
+      <Legend
+        legendPosition={legendPosition}
+        setLegendPosition={setLegendPosition}
+        isDraggingLegend={isDraggingLegend}
+        setIsDraggingLegend={setIsDraggingLegend}
+        legendDragOffset={legendDragOffset}
+        setLegendDragOffset={setLegendDragOffset}
+      />
 
       {nodePopup && (
         <NodePopup
