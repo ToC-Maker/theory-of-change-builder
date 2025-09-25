@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
-import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon } from "@heroicons/react/24/outline"
+import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon } from "@heroicons/react/24/outline"
 
 interface EditToolbarProps {
   editMode: boolean
@@ -38,6 +38,8 @@ interface EditToolbarProps {
   getTimeAgo: (date: Date) => string
   data: ToCData
   onDeleteNode?: (nodeId: string) => void
+  nodePopup?: any
+  edgePopup?: any
 }
 
 export function EditToolbar({
@@ -75,10 +77,13 @@ export function EditToolbar({
   getTimeAgo,
   data,
   onDeleteNode,
+  nodePopup,
+  edgePopup,
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
   const [showModeDropdown, setShowModeDropdown] = useState(false)
   const [showAlignmentSuggestion, setShowAlignmentSuggestion] = useState(false)
+  const [showHelpModal, setShowHelpModal] = useState(false)
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 })
   const dropdownRef = useRef<HTMLDivElement>(null)
   const modeDropdownRef = useRef<HTMLDivElement>(null)
@@ -431,6 +436,18 @@ export function EditToolbar({
             {/* Separator */}
             <div className="h-6 w-px bg-gray-300 mx-2"></div>
 
+            {/* Help Button */}
+            <button
+              onClick={() => setShowHelpModal(true)}
+              className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-all duration-200"
+              title="Help & Keyboard Shortcuts"
+            >
+              <QuestionMarkCircleIcon className="w-5 h-5" />
+            </button>
+
+            {/* Separator */}
+            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
             {/* Mode Switcher Dropdown (Google Docs style) */}
             <div className="relative" ref={modeDropdownRef}>
               <button
@@ -502,6 +519,105 @@ export function EditToolbar({
       </div>
       </div>
 
+      {/* Help Modal */}
+      {showHelpModal && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50"
+          onClick={() => setShowHelpModal(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-2xl max-h-[80vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-800">Help & Keyboard Shortcuts</h2>
+              <button
+                onClick={() => setShowHelpModal(false)}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="px-6 py-4">
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-3">Basic Navigation</h3>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    <li>• <strong>Click nodes</strong> to select</li>
+                    <li>• <strong>Hover</strong> to highlight connections</li>
+                    <li>• <strong>Tab</strong> to navigate nodes</li>
+                    <li>• <strong>Escape</strong> to clear selections</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-3">Node Selection</h3>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    <li>• <strong>Click:</strong> Select single node</li>
+                    <li>• <strong>Ctrl+Click:</strong> Multi-select</li>
+                    <li>• <strong>Shift+Click:</strong> Select column</li>
+                    <li>• <strong>Ctrl+A:</strong> Select all (edit mode)</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-3">Edit Mode</h3>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    <li>• <strong>Double-click:</strong> Create node</li>
+                    <li>• <strong>Drag nodes</strong> to reposition</li>
+                    <li>• <strong>Select 2 nodes:</strong> Connect/disconnect</li>
+                    <li>• <strong>Delete:</strong> Remove selected</li>
+                    <li>• <strong>Arrow keys:</strong> Fine-tune position</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-3">Keyboard Shortcuts</h3>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    <li>• <strong>Ctrl+Z:</strong> Undo</li>
+                    <li>• <strong>Ctrl+Y:</strong> Redo</li>
+                    <li>• <strong>↑↓:</strong> Move vertically</li>
+                    <li>• <strong>←→:</strong> Move between columns</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-3">Connections</h3>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    <li>• <strong>Solid:</strong> High confidence (75-100%)</li>
+                    <li>• <strong>Dashed:</strong> Medium (25-75%)</li>
+                    <li>• <strong>Dotted:</strong> Low (0-25%)</li>
+                    <li>• <strong>Click line:</strong> Edit confidence</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-3">AI Assistant</h3>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    <li>• <strong>Chat panel</strong> on the left</li>
+                    <li>• <strong>Ask questions</strong> about ToC</li>
+                    <li>• <strong>Request edits</strong> to nodes</li>
+                    <li>• <strong>Generate content</strong> for sections</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-3">
+              <button
+                onClick={() => setShowHelpModal(false)}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Smart Alignment Suggestion Popup */}
       {showAlignmentSuggestion && (
         <div
@@ -562,7 +678,7 @@ export function EditToolbar({
       )}
 
       {/* Node Selection Popup - Miro Style Horizontal Bar */}
-      {editMode && highlightedNodes.size > 0 && (
+      {editMode && highlightedNodes.size > 0 && !showHelpModal && !nodePopup && !edgePopup && (
         <div
           className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 px-4 py-3"
           style={{

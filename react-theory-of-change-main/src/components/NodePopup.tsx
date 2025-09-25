@@ -57,33 +57,29 @@ export function NodePopup({
   }
 
   return (
-    <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center transition-all duration-150 ease-out"
-      style={{
-        pointerEvents: 'auto',
-        animation: 'fadeIn 0.15s ease-out'
-      }}
-    >
-      {/* Backdrop with blur */}
-      <div 
-        className="absolute bg-black bg-opacity-40 backdrop-blur-[2px]"
-        style={{
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%'
-        }}
+    <>
+      {/* Backdrop with blur - covers entire viewport */}
+      <div
+        className="fixed inset-0 z-[200] bg-black bg-opacity-40 backdrop-blur-[2px]"
         onClick={() => setNodePopup(null)}
       />
-      
-      {/* Modal content */}
-      <div 
-        className="relative bg-white rounded-xl shadow-2xl p-8 overflow-y-auto max-h-[500px] transform transition-all duration-150 ease-out"
+
+      {/* Modal container - centered in graph container */}
+      <div
+        className="absolute inset-0 z-[210] flex items-center justify-center transition-all duration-150 ease-out pointer-events-none"
         style={{
-          width: '600px',
-          animation: 'scaleIn 0.15s ease-out'
+          animation: 'fadeIn 0.15s ease-out'
         }}
       >
+      
+        {/* Modal content */}
+        <div
+          className="relative bg-white rounded-xl shadow-2xl p-8 overflow-y-auto max-h-[500px] transform transition-all duration-150 ease-out pointer-events-auto"
+          style={{
+            width: '600px',
+            animation: 'scaleIn 0.15s ease-out'
+          }}
+        >
 
         {/* Close button - top right */}
         <button
@@ -151,7 +147,8 @@ export function NodePopup({
             )}
           </div>
         </div>
+        </div>
       </div>
-    </div>
+    </>
   )
 }

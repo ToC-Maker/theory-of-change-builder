@@ -44,8 +44,8 @@ export function NodeComponent({
 
   const handleClick = (event: React.MouseEvent) => {
     let selectionMode: 'single' | 'multi' | 'column' = 'single'
-    
-    if (event.ctrlKey) {
+
+    if (event.ctrlKey || event.metaKey) {
       selectionMode = 'multi'
     } else if (event.shiftKey && editMode) {
       selectionMode = 'column'
@@ -73,8 +73,8 @@ export function NodeComponent({
 
   const handleDoubleClick = (event: React.MouseEvent) => {
     let selectionMode: 'single' | 'multi' | 'column' = 'single'
-    
-    if (event.ctrlKey) {
+
+    if (event.ctrlKey || event.metaKey) {
       selectionMode = 'multi'
     } else if (event.shiftKey && editMode) {
       selectionMode = 'column'
