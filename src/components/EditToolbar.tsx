@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
 import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon } from "@heroicons/react/24/outline"
+import { ChartService, CreateChartResponse } from "../services/chartService"
 
 interface EditToolbarProps {
   editMode: boolean
@@ -82,11 +83,20 @@ export function EditToolbar({
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
   const [showModeDropdown, setShowModeDropdown] = useState(false)
+  const [showShareDropdown, setShowShareDropdown] = useState(false)
   const [showAlignmentSuggestion, setShowAlignmentSuggestion] = useState(false)
   const [showHelpModal, setShowHelpModal] = useState(false)
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 })
+
+  // Share functionality state
+  const [shareData, setShareData] = useState<CreateChartResponse | null>(null)
+  const [shareLoading, setShareLoading] = useState(false)
+  const [shareError, setShareError] = useState<string | null>(null)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
+
   const dropdownRef = useRef<HTMLDivElement>(null)
   const modeDropdownRef = useRef<HTMLDivElement>(null)
+  const shareDropdownRef = useRef<HTMLDivElement>(null)
   const prevHighlightedNodesRef = useRef<Set<string>>(new Set())
 
   // Smart detection for misaligned nodes
@@ -138,6 +148,69 @@ export function EditToolbar({
     return misalignedGroups.length > 0
   }
 
+  // Share functionality functions
+  const loadExistingShareData = async () => {
+    if (!currentEditToken) return
+
+    setShareLoading(true)
+    setShareError(null)
+
+    try {
+      const chartId = await ChartService.getChartIdFromEditToken(currentEditToken)
+      setShareData({
+        chartId,
+        editToken: currentEditToken,
+        viewUrl: `${window.location.origin}/chart/${chartId}`,
+        editUrl: `${window.location.origin}/edit/${currentEditToken}`
+      })
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : 'Failed to load share data')
+    } finally {
+      setShareLoading(false)
+    }
+  }
+
+  const handleShare = async () => {
+    setShareLoading(true)
+    setShareError(null)
+
+    try {
+      // If we already have an edit token, just update; otherwise create new
+      if (currentEditToken) {
+        await ChartService.updateChart(currentEditToken, data)
+        // Get the correct chartId from the API
+        const chartId = await ChartService.getChartIdFromEditToken(currentEditToken)
+        setShareData({
+          chartId,
+          editToken: currentEditToken,
+          viewUrl: `${window.location.origin}/chart/${chartId}`,
+          editUrl: `${window.location.origin}/edit/${currentEditToken}`
+        })
+      } else {
+        const response = await ChartService.createChart(data)
+        setShareData(response)
+        // Store the edit token locally
+        ChartService.saveEditToken(response.chartId, response.editToken)
+        // Update the URL to the edit URL
+        window.history.replaceState(null, '', `/edit/${response.editToken}`)
+      }
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : 'Failed to share chart')
+    } finally {
+      setShareLoading(false)
+    }
+  }
+
+  const copyToClipboard = async (text: string, field: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedField(field)
+      setTimeout(() => setCopiedField(null), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
   // Check for misalignment when data changes
   useEffect(() => {
     const hasMisaligned = detectMisalignedNodes()
@@ -148,6 +221,18 @@ export function EditToolbar({
     }
   }, [data, editMode])
 
+  // Load existing share data when dropdown opens and we have an edit token
+  useEffect(() => {
+    if (showShareDropdown && currentEditToken && !shareData && !shareLoading) {
+      loadExistingShareData()
+    } else if (!showShareDropdown) {
+      // Reset state when dropdown closes
+      setShareData(null)
+      setShareError(null)
+      setCopiedField(null)
+    }
+  }, [showShareDropdown, currentEditToken])
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -157,13 +242,16 @@ export function EditToolbar({
       if (modeDropdownRef.current && !modeDropdownRef.current.contains(event.target as Node)) {
         setShowModeDropdown(false)
       }
+      if (shareDropdownRef.current && !shareDropdownRef.current.contains(event.target as Node)) {
+        setShowShareDropdown(false)
+      }
     }
 
-    if (showWidthDropdown || showModeDropdown) {
+    if (showWidthDropdown || showModeDropdown || showShareDropdown) {
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showWidthDropdown, showModeDropdown])
+  }, [showWidthDropdown, showModeDropdown, showShareDropdown])
 
   // Update toolbar position only when selection changes
   useEffect(() => {
@@ -377,16 +465,110 @@ export function EditToolbar({
             </div>
           </div>
 
-          {/* Center - Share Button */}
-          <div className="absolute left-1/2 transform -translate-x-1/2 z-10">
+          {/* Center - Share Dropdown */}
+          <div className="absolute left-1/2 transform -translate-x-1/2 z-10" ref={shareDropdownRef}>
             <button
-              onClick={() => setShowShareModal(true)}
+              onClick={() => setShowShareDropdown(!showShareDropdown)}
               className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-all duration-200 flex items-center gap-2"
               title="Share"
             >
               <ShareIcon className="w-4 h-4" />
               Share
             </button>
+
+            {/* Share Dropdown */}
+            {showShareDropdown && (
+              <div className="absolute top-full mt-1 left-1/2 transform -translate-x-1/2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50 max-h-96 overflow-y-auto">
+                <div className="px-4 py-3 border-b border-gray-100">
+                  <h4 className="text-sm font-medium text-gray-700">Share Your Chart</h4>
+                </div>
+                <div className="p-4">
+                  {!shareData && !shareLoading && (
+                    <div className="text-center">
+                      <p className="text-gray-600 mb-4 text-sm">
+                        Generate shareable links for your chart
+                      </p>
+                      <button
+                        onClick={handleShare}
+                        disabled={shareLoading}
+                        className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                      >
+                        Generate Links
+                      </button>
+                    </div>
+                  )}
+
+                  {shareLoading && (
+                    <div className="text-center py-4">
+                      <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+                      <p className="mt-2 text-gray-600 text-sm">Creating shareable links...</p>
+                    </div>
+                  )}
+
+                  {shareError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+                      <p className="text-red-600 text-sm">{shareError}</p>
+                    </div>
+                  )}
+
+                  {shareData && !shareLoading && (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          View Link (Read-only)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={shareData.viewUrl}
+                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-gray-50"
+                          />
+                          <button
+                            onClick={() => copyToClipboard(shareData.viewUrl, 'view')}
+                            className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
+                          >
+                            {copiedField === 'view' ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Share this link with anyone to view your chart
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Edit Link (Owner only)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={shareData.editUrl}
+                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-yellow-50"
+                          />
+                          <button
+                            onClick={() => copyToClipboard(shareData.editUrl, 'edit')}
+                            className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200 transition-colors"
+                          >
+                            {copiedField === 'edit' ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                        <p className="text-xs text-yellow-700 mt-1">
+                          ⚠️ Keep this link private - anyone with it can edit your chart
+                        </p>
+                      </div>
+
+                      <div className="pt-3 border-t border-gray-200">
+                        <p className="text-xs text-gray-600">
+                          Chart ID: <code className="bg-gray-100 px-1 rounded text-xs">{shareData.chartId}</code>
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right side - Visual Controls and Actions */}
