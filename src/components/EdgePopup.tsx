@@ -72,7 +72,15 @@ export function EdgePopup({
     <>
       {/* Backdrop with blur - covers entire viewport */}
       <div
-        className="fixed inset-0 z-[200] bg-black bg-opacity-40 backdrop-blur-[2px]"
+        className="fixed z-[200] bg-black bg-opacity-40 backdrop-blur-[2px]"
+        style={{
+          left: '-200vw',
+          top: '-200vh',
+          right: '-200vw',
+          bottom: '-200vh',
+          width: '500vw',
+          height: '500vh'
+        }}
         onClick={() => setEdgePopup(null)}
       />
 
