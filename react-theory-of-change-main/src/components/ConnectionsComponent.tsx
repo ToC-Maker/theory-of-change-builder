@@ -74,9 +74,15 @@ export function ConnectionsComponent({
       totalWidth += sectionPadding
     }
 
-    // Use the actual calculated section widths
+    // Use the actual calculated section widths, but account for title width too
     sectionWidths.forEach((sectionWidth, sectionIndex) => {
-      totalWidth += sectionWidth
+      // Calculate section title width requirement
+      const section = data.sections[sectionIndex]
+      const titleWidth = section.title.length * 20 + 24 // Same calculation as in ToC.tsx
+
+      // Use the wider of section width or title width
+      const effectiveSectionWidth = Math.max(sectionWidth, titleWidth)
+      totalWidth += effectiveSectionWidth
 
       // Add extra width for add/remove mode drop zones
       if (editMode && layoutMode) {
@@ -86,7 +92,12 @@ export function ConnectionsComponent({
         // Drop zones: (N+1) zones × columnPadding px each (before first + after each column)
         const dropZonesWidth = (columnCount + 1) * columnPadding
 
-        totalWidth += dropZonesWidth
+        // Only add drop zones width if it's not already accounted for in the effective section width
+        // The effectiveSectionWidth might already be wider due to title
+        const sectionWithDropZones = sectionWidth + dropZonesWidth
+        const additionalWidth = Math.max(0, sectionWithDropZones - effectiveSectionWidth)
+
+        totalWidth += additionalWidth
       }
 
       // Add gap between sections (or section drop zone in add/remove mode)
