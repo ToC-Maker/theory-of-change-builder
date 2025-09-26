@@ -268,9 +268,6 @@ export function EdgePopup({
           
           <div>
             <div className="flex items-center justify-between mb-3 relative">
-              <h3 className="text-2xl font-semibold text-gray-800 text-left">
-                Assumptions & Evidence
-              </h3>
               {editMode && !isEditing && (
                 <button
                   onClick={() => {
@@ -287,7 +284,7 @@ export function EdgePopup({
 
             <div className="space-y-4 text-left">
               <div>
-                <h4 className="font-medium text-gray-800 mb-2 text-left">Key Assumptions:</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left">Assumptions:</h4>
                 {editMode && isEditing ? (
                   <MDXEditorComponent
                     markdown={editAssumptions}
