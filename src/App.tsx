@@ -4,6 +4,7 @@ import { ToC } from "./stories/ToC"
 import { ChatInterface } from "./components/ChatInterface"
 import { JsonDropdown } from "./components/JsonDropdown"
 import { ShareModal } from "./components/ShareModal"
+import { GraphTutorial } from "./components/GraphTutorial"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
 import "./App.css"
@@ -266,6 +267,7 @@ function ToCViewerOnly() {
           </div>
         </div>
       </div>
+      <GraphTutorial />
     </div>
   )
 }
