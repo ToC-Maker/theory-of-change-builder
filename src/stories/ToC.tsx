@@ -982,8 +982,14 @@ export function ToC({
                 className="rounded py-3 mb-2 px-3"
                 style={{
                   backgroundColor: data.color || '#374151', // Default to gray-700
-                  width: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
-                  maxWidth: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`
+                  width: `${Math.max(
+                    sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0),
+                    section.title.length * 20 + 24 // Estimate: ~20px per character + padding
+                  )}px`,
+                  maxWidth: `${Math.max(
+                    sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0),
+                    section.title.length * 20 + 24
+                  )}px`
                 }}
               >
                 {editMode && editingSectionIndex === sectionIndex ? (

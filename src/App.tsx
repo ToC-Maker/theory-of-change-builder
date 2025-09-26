@@ -11,6 +11,7 @@ import "./App.css"
 
 // Default empty template with 4 sections
 const emptyTemplate: ToCData = {
+  title: "Theory of Change",
   sections: [
     {
       title: "Inputs",
