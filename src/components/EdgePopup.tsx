@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react"
-import { TrashIcon } from "@heroicons/react/24/outline"
+import { TrashIcon, PencilIcon } from "@heroicons/react/24/outline"
 import { getContrastTextColor } from "../utils"
+import { MDXEditorComponent } from './MDXEditor'
 
 interface EdgePopupProps {
   edgePopup: {
@@ -45,19 +46,19 @@ export function EdgePopup({
     setIsEditing(editMode)
   }, [edgePopup, editMode])
 
-  const handleEvidenceChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newEvidence = e.target.value
+  const handleEvidenceChange = (newEvidence: string) => {
     setEditEvidence(newEvidence)
-    if (onUpdateConnection) {
-      onUpdateConnection(edgePopup.sourceId, edgePopup.targetId, newEvidence, editAssumptions)
-    }
+    // Don't save immediately - let MDXEditor handle undo/redo internally
   }
 
-  const handleAssumptionsChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newAssumptions = e.target.value
+  const handleAssumptionsChange = (newAssumptions: string) => {
     setEditAssumptions(newAssumptions)
-    if (onUpdateConnection) {
-      onUpdateConnection(edgePopup.sourceId, edgePopup.targetId, editEvidence, newAssumptions)
+    // Don't save immediately - let MDXEditor handle undo/redo internally
+  }
+
+  const saveChanges = () => {
+    if (onUpdateConnection && (editEvidence !== (edgePopup.evidence || '') || editAssumptions !== (edgePopup.assumptions || ''))) {
+      onUpdateConnection(edgePopup.sourceId, edgePopup.targetId, editEvidence, editAssumptions)
     }
   }
 
@@ -81,7 +82,10 @@ export function EdgePopup({
           width: '500vw',
           height: '500vh'
         }}
-        onClick={() => setEdgePopup(null)}
+        onClick={() => {
+          saveChanges()
+          setEdgePopup(null)
+        }}
       />
 
       {/* Modal container - centered in graph container */}
@@ -117,7 +121,10 @@ export function EdgePopup({
           {/* Close button - top right */}
           <button
             className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-2xl leading-none"
-            onClick={() => setEdgePopup(null)}
+            onClick={() => {
+              saveChanges()
+              setEdgePopup(null)
+            }}
           >
             ×
           </button>
@@ -266,13 +273,14 @@ export function EdgePopup({
               </h3>
               {editMode && !isEditing && (
                 <button
-                  onClick={() => setIsEditing(true)}
+                  onClick={() => {
+                    saveChanges()
+                    setIsEditing(true)
+                  }}
                   className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
                   title="Edit connection details"
                 >
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                  </svg>
+                  <PencilIcon className="w-4 h-4" />
                 </button>
               )}
             </div>
@@ -281,32 +289,44 @@ export function EdgePopup({
               <div>
                 <h4 className="font-medium text-gray-800 mb-2 text-left">Key Assumptions:</h4>
                 {editMode && isEditing ? (
-                  <textarea
-                    value={editAssumptions}
+                  <MDXEditorComponent
+                    markdown={editAssumptions}
                     onChange={handleAssumptionsChange}
-                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical text-left"
                     placeholder="What assumptions are being made for this connection to hold true?"
                   />
                 ) : (
-                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap text-left">
-                    {editAssumptions || "No assumptions documented yet."}
-                  </p>
+                  <div className="text-gray-600 leading-relaxed text-left">
+                    {editAssumptions ? (
+                      <MDXEditorComponent
+                        markdown={editAssumptions}
+                        readOnly={true}
+                      />
+                    ) : (
+                      <p className="text-gray-400 italic">No assumptions documented yet.</p>
+                    )}
+                  </div>
                 )}
               </div>
 
               <div>
                 <h4 className="font-medium text-gray-800 mb-2 text-left">Evidence:</h4>
                 {editMode && isEditing ? (
-                  <textarea
-                    value={editEvidence}
+                  <MDXEditorComponent
+                    markdown={editEvidence}
                     onChange={handleEvidenceChange}
-                    className="w-full h-24 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical text-left"
                     placeholder="What evidence supports this connection?"
                   />
                 ) : (
-                  <p className="text-gray-600 leading-relaxed whitespace-pre-wrap text-left">
-                    {editEvidence || "No evidence documented yet."}
-                  </p>
+                  <div className="text-gray-600 leading-relaxed text-left">
+                    {editEvidence ? (
+                      <MDXEditorComponent
+                        markdown={editEvidence}
+                        readOnly={true}
+                      />
+                    ) : (
+                      <p className="text-gray-400 italic">No evidence documented yet.</p>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
