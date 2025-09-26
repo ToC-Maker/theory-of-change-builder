@@ -995,6 +995,7 @@ function ToCViewer() {
                                target.tagName === 'BUTTON' ||
                                target.closest('button') !== null || // Also check if clicked element is inside a button
                                target.contentEditable === 'true' ||
+                               target.closest('.mdx-editor-wrapper') !== null || // MDX editor components
                                isTextEditing || // Prevent panning if any text field is being edited
                                isSelectableText; // Allow text selection instead of panning
 
