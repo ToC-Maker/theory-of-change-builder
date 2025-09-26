@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from "react"
+import { MDXEditorComponent } from './MDXEditor'
+import { PencilIcon } from '@heroicons/react/24/outline'
 
 interface NodePopupProps {
   nodePopup: {
@@ -41,11 +43,14 @@ export function NodePopup({
     }
   }
 
-  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newText = e.target.value
+  const handleTextChange = (newText: string) => {
     setEditText(newText)
-    if (onUpdateNode) {
-      onUpdateNode(nodePopup.id, editTitle, newText)
+    // Don't save immediately - let MDXEditor handle undo/redo internally
+  }
+
+  const saveChanges = () => {
+    if (onUpdateNode && (editTitle !== nodePopup.title || editText !== nodePopup.text)) {
+      onUpdateNode(nodePopup.id, editTitle, editText)
     }
   }
 
@@ -69,7 +74,10 @@ export function NodePopup({
           width: '500vw',
           height: '500vh'
         }}
-        onClick={() => setNodePopup(null)}
+        onClick={() => {
+          saveChanges()
+          setNodePopup(null)
+        }}
       />
 
       {/* Modal container - centered in graph container */}
@@ -92,7 +100,10 @@ export function NodePopup({
         {/* Close button - top right */}
         <button
           className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-          onClick={() => setNodePopup(null)}
+          onClick={() => {
+            saveChanges()
+            setNodePopup(null)
+          }}
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -102,21 +113,17 @@ export function NodePopup({
         {/* Header */}
         <div className="mt-4 mb-6">
           {editMode && isEditing ? (
-            <textarea
-              ref={titleInputRef}
-              value={editTitle}
-              onChange={handleTitleChange}
-              className="text-lg font-bold text-gray-900 mb-2 w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-hidden"
-              autoFocus
-              rows={1}
-              style={{ minHeight: '2.25rem' }}
-              onInput={(e) => {
-                // Auto-resize textarea based on content
-                const target = e.target as HTMLTextAreaElement;
-                target.style.height = 'auto';
-                target.style.height = target.scrollHeight + 'px';
-              }}
-            />
+            <div className="mb-2">
+              <MDXEditorComponent
+                markdown={editTitle}
+                onChange={(newTitle) => {
+                  setEditTitle(newTitle)
+                  // Don't save immediately - let MDXEditor handle undo/redo internally
+                }}
+                placeholder="Enter node title..."
+                simple={true}
+              />
+            </div>
           ) : (
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900 mb-2 whitespace-pre-wrap text-left">
@@ -124,13 +131,14 @@ export function NodePopup({
               </h2>
               {editMode && !isEditing && (
                 <button
-                  onClick={() => setIsEditing(true)}
+                  onClick={() => {
+                    saveChanges()
+                    setIsEditing(true)
+                  }}
                   className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
                   title="Edit node"
                 >
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                  </svg>
+                  <PencilIcon className="w-4 h-4" />
                 </button>
               )}
             </div>
@@ -141,17 +149,22 @@ export function NodePopup({
         <div className="space-y-6">
           <div>
             {editMode && isEditing ? (
-              <textarea
-                ref={textAreaRef}
-                value={editText}
+              <MDXEditorComponent
+                markdown={editText}
                 onChange={handleTextChange}
-                className="w-full h-32 px-3 py-2 text-gray-600 text-sm leading-relaxed border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical"
-                placeholder="Node description..."
+                placeholder="Enter node description... (Markdown supported)"
               />
             ) : (
-              <p className="text-gray-600 leading-relaxed text-sm text-left">
-                {nodePopup.text}
-              </p>
+              <div className="text-gray-600 leading-relaxed text-sm text-left">
+                {nodePopup.text ? (
+                  <MDXEditorComponent
+                    markdown={nodePopup.text}
+                    readOnly={true}
+                  />
+                ) : (
+                  <p className="text-gray-400 italic">No description</p>
+                )}
+              </div>
             )}
           </div>
         </div>
