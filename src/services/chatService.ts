@@ -31,13 +31,11 @@ class ChatService {
     callbacks?: {
       onSearchStart?: () => void;
       onSearchComplete?: (results?: any[]) => void;
-    }
+    },
+    webSearchEnabled: boolean = false
   ): Promise<string> {
-    // Simple search keywords check
-    const needsSearch = ['search', 'look up', 'find', 'research', 'latest', 'current', 'recent']
-      .some(keyword => message.toLowerCase().includes(keyword));
-
-    if (!needsSearch || !tavilyService.isConfigured()) {
+    // Only search if explicitly enabled
+    if (!webSearchEnabled || !tavilyService.isConfigured()) {
       return message;
     }
 
@@ -84,7 +82,8 @@ class ChatService {
       onSearchComplete?: () => void;
     },
     signal?: AbortSignal,
-    model: string = "claude-sonnet-4-20250514"
+    model: string = "claude-sonnet-4-20250514",
+    webSearchEnabled: boolean = false
   ): Promise<void> {
     if (!apiKey?.trim()) {
       callbacks.onError?.("Please configure your Anthropic API key.");
@@ -103,7 +102,7 @@ class ChatService {
           content: await this.enhanceWithSearch(processedMessages[lastIndex].content, {
             onSearchStart: callbacks.onSearchStart,
             onSearchComplete: callbacks.onSearchComplete
-          })
+          }, webSearchEnabled)
         };
 
         // Add graph data
