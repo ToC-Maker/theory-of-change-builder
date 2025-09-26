@@ -531,19 +531,16 @@ export function ToC({
     }
 
     const widths = data.sections.map(section => {
-      // In add/remove mode, include all columns (even empty ones)
-      // Otherwise, filter out empty columns
-      const columnsToCalculate = (editMode && layoutMode)
-        ? section.columns
-        : section.columns.filter(column => column.nodes.length > 0)
+      // Always include all columns (even empty ones)
+      const columnsToCalculate = section.columns
 
       if (columnsToCalculate.length === 0) return 192 // Default width for empty sections
 
       // Calculate width needed for each column (max node width in that column)
       const columnWidths = columnsToCalculate.map(column => {
-        if (column.nodes.length === 0) return 192 // Empty columns get default width
+        if (column.nodes.length === 0) return 128 // Empty columns get default width
         const nodeWidths = column.nodes.map(node => node.width || 192)
-        return Math.max(...nodeWidths, 192) // At least 192px per column
+        return Math.max(...nodeWidths, 128) // At least 128px per column
       })
 
       // Total width = sum of all column widths
@@ -981,11 +978,12 @@ export function ToC({
           <div className="flex">
             {/* Section title positioned to center over actual columns */}
             <div className="flex flex-col">
-              <div 
+              <div
                 className="rounded py-3 mb-2 px-3"
-                style={{ 
+                style={{
                   backgroundColor: data.color || '#374151', // Default to gray-700
-                  minWidth: `${sectionWidths[sectionIndex]}px`
+                  width: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
+                  maxWidth: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`
                 }}
               >
                 {editMode && editingSectionIndex === sectionIndex ? (
@@ -1020,17 +1018,7 @@ export function ToC({
                 )}
               </div>
               <div className="flex" style={{ gap: editMode && layoutMode ? '0px' : `${columnPadding}px` }}>
-            {(() => {
-              // In add/remove mode, show all columns including empty ones
-              // Otherwise, only show non-empty columns (or at least one if all are empty)
-              if (editMode && layoutMode) {
-                return section.columns;
-              } else {
-                const nonEmptyColumns = section.columns.filter(column => column.nodes.length > 0);
-                const columnsToShow = nonEmptyColumns.length > 0 ? nonEmptyColumns : [section.columns[0] || { nodes: [] }];
-                return columnsToShow;
-              }
-            })().map((column, colIndex) => (
+            {section.columns.map((column, colIndex) => (
               <React.Fragment key={`${sectionIndex}-${colIndex}`}>
                 {/* Gap before first column with double-click to add column */}
                 {editMode && layoutMode && colIndex === 0 && (
@@ -1071,8 +1059,7 @@ export function ToC({
                     editMode && layoutMode && column.nodes.length === 0 && "hover:bg-red-50 transition-colors flex items-center justify-center cursor-pointer group"
                   )}
                   style={{
-                    minWidth: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`,
-                    width: `${Math.max(...column.nodes.map(node => node.width || 192), 192)}px`,
+                    width: `${Math.max(...column.nodes.map(node => node.width || 192), 128)}px`,
                     height: editMode ? (svgSize.height > 0 ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px` : '740px') : 'auto'
                   }}
                   onDragOver={editMode ? (e) => {
@@ -1128,7 +1115,7 @@ export function ToC({
                   {column.nodes
                     .map((node, nodeIndex) => {
                       const nodeWidth = node.width || 192
-                      const columnWidth = Math.max(...column.nodes.map(node => node.width || 192), 192)
+                      const columnWidth = Math.max(...column.nodes.map(node => node.width || 192), 128)
                       const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2)
 
                       return (
