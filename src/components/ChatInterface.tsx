@@ -5,6 +5,20 @@ import { applyEdits } from '../utils/graphEdits';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
+import {
+  ChevronLeftIcon,
+  Cog6ToothIcon,
+  MagnifyingGlassIcon,
+  ChevronDownIcon,
+  PaperAirplaneIcon,
+  CloudArrowUpIcon,
+  XMarkIcon,
+  DocumentPlusIcon,
+  ArrowUpTrayIcon,
+  ChatBubbleLeftRightIcon,
+  DocumentTextIcon,
+  MagnifyingGlassCircleIcon
+} from '@heroicons/react/24/outline';
 
 export type AIMode = 'chat' | 'generate' | 'search';
 
@@ -47,6 +61,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [apiKeyError, setApiKeyError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
 
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -65,6 +81,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
 
   const scrollToBottom = () => {
@@ -106,6 +123,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // Initialize API key input with current value
     setApiKeyInput(apiKey);
   }, [apiKey]);
+
+  // Close model dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+
+    if (showModelDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showModelDropdown]);
 
   const handleSaveApiKey = () => {
     const validation = validateApiKey(apiKeyInput);
@@ -240,7 +271,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         }
       },
       undefined, // signal parameter
-      selectedModel
+      selectedModel,
+      webSearchEnabled
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -513,7 +545,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         }
       },
       undefined, // signal parameter
-      selectedModel
+      selectedModel,
+      webSearchEnabled
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -542,39 +575,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         height: 'calc(100vh - 52px)'
       }}
     >
-      {/* Toggle Button and Model Selector */}
+      {/* Toggle Button */}
       <div className="flex-shrink-0 p-2 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          {/* Model Selector - only show when not collapsed and API key is configured */}
-          {!isCollapsed && isConfigured && (
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value as keyof typeof MODELS)}
-              className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-              title="Select AI Model"
-            >
-              {Object.entries(MODELS).map(([key, name]) => (
-                <option key={key} value={key}>{name}</option>
-              ))}
-            </select>
-          )}
-
-          <button
-            onClick={onToggle}
-            className="flex-1 h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-            title={isCollapsed ? "Expand AI Assistant" : "Collapse AI Assistant"}
-          >
-            {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
-            <svg
-              className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-        </div>
+        <button
+          onClick={onToggle}
+          className="w-full h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
+          title={isCollapsed ? "Expand AI Assistant" : "Collapse AI Assistant"}
+        >
+          {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
+          <ChevronLeftIcon className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`} />
+        </button>
       </div>
 
       {/* Chat Content */}
@@ -608,33 +618,36 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               <div className="flex bg-gray-100 rounded-lg p-1">
                 <button
                   onClick={() => setCurrentMode('chat')}
-                  className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
                     currentMode === 'chat'
                       ? 'bg-white text-blue-600 shadow-sm'
                       : 'text-gray-600 hover:text-gray-800'
                   }`}
                 >
-                  💬 Chat
+                  <ChatBubbleLeftRightIcon className="w-4 h-4" />
+                  <span>Chat</span>
                 </button>
               <button
                 onClick={() => setCurrentMode('generate')}
-                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
+                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
                   currentMode === 'generate'
                     ? 'bg-white text-purple-600 shadow-sm'
                     : 'text-gray-600 hover:text-gray-800'
                 }`}
               >
-                📄 Generate
+                <DocumentTextIcon className="w-4 h-4" />
+                <span>Generate</span>
               </button>
               <button
                 onClick={() => setCurrentMode('search')}
-                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors ${
+                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
                   currentMode === 'search'
                     ? 'bg-white text-green-600 shadow-sm'
                     : 'text-gray-600 hover:text-gray-800'
                 }`}
               >
-                🔍 Search
+                <MagnifyingGlassCircleIcon className="w-4 h-4" />
+                <span>Search Results</span>
               </button>
             </div>
 
@@ -703,7 +716,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               <>
                 {messages.length === 0 ? (
                   <div className="text-center text-gray-500 text-sm py-8">
-                    <div className="mb-2">💬</div>
+                    <div className="mb-2"><ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
                     <p>Hi! I'm here to help you build and improve your Theory of Change.</p>
                     <p className="mt-2 text-xs">Ask me about connections, suggest new nodes, or get strategic advice!</p>
                   </div>
@@ -745,7 +758,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             ) : currentMode === 'generate' ? (
               <div className="space-y-4">
                 <div className="text-center text-gray-500 text-sm py-4">
-                  <div className="mb-2">📄</div>
+                  <div className="mb-2"><DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
                   <p>Upload documents to generate a Theory of Change conversation</p>
                 </div>
 
@@ -773,9 +786,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     onClick={() => fileInputRef.current?.click()}
                     className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
+                    <CloudArrowUpIcon className="w-5 h-5" />
                     Click to upload or drag & drop documents
                   </button>
                   <p className="text-xs text-gray-500 text-center mt-2">
@@ -800,9 +811,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           onClick={() => removeFile(file.file)}
                           className="text-gray-400 hover:text-red-500 transition-colors"
                         >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
+                          <XMarkIcon className="w-4 h-4" />
                         </button>
                       </div>
                     ))}
@@ -836,9 +845,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </>
                   ) : (
                     <>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
+                      <DocumentPlusIcon className="w-4 h-4" />
                       Generate Theory of Change
                     </>
                   )}
@@ -846,10 +853,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               </div>
             ) : currentMode === 'search' ? (
               <div className="space-y-4">
-                <div className="text-center text-gray-500 text-sm py-4">
-                  <div className="mb-2">🔍</div>
-                  <p>Search the web for current information and insights</p>
-                </div>
+                {searchResults.length === 0 && !searchAnswer ? (
+                  <div className="text-center text-gray-500 text-sm py-4">
+                    <div className="mb-2"><MagnifyingGlassCircleIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
+                    <p>Web search results will appear here</p>
+                    <p className="mt-2 text-xs">Use the chat to search for current information</p>
+                  </div>
+                ) : null}
 
                 {/* Search Results */}
                 {searchAnswer && (
@@ -903,9 +913,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   <div className="flex justify-start">
                     <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
                       <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 animate-spin text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
+                        <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
                         <span className="text-blue-700">Searching the web for current information...</span>
                       </div>
                     </div>
@@ -953,9 +961,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   onClick={loadGeneratedGraph}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                  </svg>
+                  <ArrowUpTrayIcon className="w-4 h-4" />
                   Load Theory of Change into Workspace
                 </button>
               </div>
@@ -968,14 +974,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           {isConfigured && (
             <div className="p-3 border-t border-gray-200">
               {currentMode === 'chat' ? (
-                <div className="flex gap-2">
+                <div className="space-y-2">
                   <textarea
                     ref={inputRef}
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="Ask about your Theory of Change..."
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
                     disabled={isLoading || isStreaming}
                     rows={1}
                     style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
@@ -987,36 +993,68 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       target.style.height = newHeight + 'px';
                     }}
                   />
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!inputValue.trim() || isLoading || isStreaming}
-                    className="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                    </svg>
-                  </button>
-                </div>
-              ) : currentMode === 'search' ? (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                    placeholder="Search the web for current information..."
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                    disabled={isLoading}
-                  />
-                  <button
-                    onClick={handleSearch}
-                    disabled={!searchQuery.trim() || isLoading}
-                    className="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                  </button>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {/* TODO: Settings handler */}}
+                        className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                        title="Settings"
+                      >
+                        <Cog6ToothIcon className="w-5 h-5" />
+                      </button>
+                      <button
+                        onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                        className={`p-2 rounded-lg transition-colors ${
+                          webSearchEnabled
+                            ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                        }`}
+                        title={webSearchEnabled ? "Web search enabled" : "Enable web search"}
+                      >
+                        <MagnifyingGlassIcon className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="relative" ref={modelDropdownRef}>
+                        <button
+                          onClick={() => setShowModelDropdown(!showModelDropdown)}
+                          className="w-[130px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
+                          title="Select AI Model"
+                        >
+                          <span className="font-medium">{MODELS[selectedModel]}</span>
+                          <ChevronDownIcon className={`w-3 h-3 transition-transform duration-200 ${showModelDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {showModelDropdown && (
+                          <div className="absolute bottom-full mb-1 left-0 w-[130px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
+                            {Object.entries(MODELS).map(([key, name]) => (
+                              <button
+                                key={key}
+                                onClick={() => {
+                                  setSelectedModel(key as keyof typeof MODELS);
+                                  setShowModelDropdown(false);
+                                }}
+                                className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
+                                  selectedModel === key ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+                                }`}
+                              >
+                                {name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={handleSendMessage}
+                        disabled={!inputValue.trim() || isLoading || isStreaming}
+                        className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="Send message"
+                      >
+                        <PaperAirplaneIcon className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : null}
             </div>
