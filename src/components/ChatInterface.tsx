@@ -84,7 +84,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [customSystemPrompt, setCustomSystemPrompt] = useState<string>(
     localStorage.getItem('customSystemPrompt') || ''
   );
-  const [tempSystemPrompt, setTempSystemPrompt] = useState('');
+  const [tempSystemPrompt, setTempSystemPrompt] = useState(
+    localStorage.getItem('customSystemPrompt') || systemPromptContent
+  );
 
   // Initialize temp prompt when modal opens
   useEffect(() => {
