@@ -1149,6 +1149,7 @@ function ToCViewer() {
               handleManualSync={handleManualSync}
               getTimeAgo={getTimeAgo}
               zoomScale={camera.z}
+              camera={camera}
             />
           </div>
         </div>

@@ -41,6 +41,8 @@ interface EditToolbarProps {
   onDeleteNode?: (nodeId: string) => void
   nodePopup?: any
   edgePopup?: any
+  // Camera props for toolbar positioning
+  camera?: { x: number; y: number; z: number }
 }
 
 export function EditToolbar({
@@ -80,6 +82,7 @@ export function EditToolbar({
   onDeleteNode,
   nodePopup,
   edgePopup,
+  camera,
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
   const [showModeDropdown, setShowModeDropdown] = useState(false)
@@ -253,31 +256,25 @@ export function EditToolbar({
     }
   }, [showWidthDropdown, showModeDropdown, showShareDropdown])
 
-  // Update toolbar position only when selection changes
+  // Update toolbar position when selection changes or camera changes
   useEffect(() => {
     if (highlightedNodes.size === 0) return;
 
-    // Check if selection actually changed
-    const currentSelectionString = Array.from(highlightedNodes).sort().join(',');
-    const prevSelectionString = Array.from(prevHighlightedNodesRef.current).sort().join(',');
+    // Calculate new position
+    const nodeElements = Array.from(highlightedNodes).map(nodeId =>
+      document.getElementById(`node-${nodeId}`)
+    ).filter(Boolean);
 
-    if (currentSelectionString !== prevSelectionString) {
-      // Selection changed - calculate new position
-      const nodeElements = Array.from(highlightedNodes).map(nodeId =>
-        document.getElementById(`node-${nodeId}`)
-      ).filter(Boolean);
+    if (nodeElements.length > 0) {
+      const rects = nodeElements.map(el => el.getBoundingClientRect());
+      const avgX = rects.reduce((sum, rect) => sum + rect.left + rect.width / 2, 0) / rects.length;
+      const topY = Math.min(...rects.map(rect => rect.top));
 
-      if (nodeElements.length > 0) {
-        const rects = nodeElements.map(el => el.getBoundingClientRect());
-        const avgX = rects.reduce((sum, rect) => sum + rect.left + rect.width / 2, 0) / rects.length;
-        const topY = Math.min(...rects.map(rect => rect.top));
-
-        setToolbarPosition({ x: avgX, y: topY - 80 });
-      }
-
-      prevHighlightedNodesRef.current = new Set(highlightedNodes);
+      setToolbarPosition({ x: avgX, y: topY - 80 });
     }
-  }, [highlightedNodes])
+
+    prevHighlightedNodesRef.current = new Set(highlightedNodes);
+  }, [highlightedNodes, camera?.x, camera?.y, camera?.z])
 
   if (!showEditButton) return null
 
