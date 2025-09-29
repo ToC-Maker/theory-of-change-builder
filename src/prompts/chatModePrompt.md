@@ -27,7 +27,7 @@ When users ask questions that require current information, research, or external
   "id": "node-id",
   "title": "Node Title Here",
   "text": "Node description",
-  "path": "sections[0].columns[1].nodes[2]",
+  "path": "sections.0.columns.1.nodes.2",
   "connections": [],
   "yPosition": 100,
   "width": 192,
