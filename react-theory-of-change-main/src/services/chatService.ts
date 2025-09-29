@@ -83,7 +83,8 @@ class ChatService {
     },
     signal?: AbortSignal,
     model: string = "claude-sonnet-4-20250514",
-    webSearchEnabled: boolean = false
+    webSearchEnabled: boolean = false,
+    customSystemPrompt?: string
   ): Promise<void> {
     if (!apiKey?.trim()) {
       callbacks.onError?.("Please configure your Anthropic API key.");
@@ -112,10 +113,18 @@ class ChatService {
         }
       }
 
-      // Simple prompt selection
+      // Use custom system prompt if provided, otherwise use default
+      let baseSystemPrompt: string;
+      if (customSystemPrompt?.trim()) {
+        baseSystemPrompt = customSystemPrompt;
+      } else {
+        baseSystemPrompt = systemPromptContent;
+      }
+
+      // Combine with mode-specific prompt
       const systemPrompt = mode === 'generate'
-        ? `${systemPromptContent}\n\n${generateModePromptContent}`
-        : `${systemPromptContent}\n\n${chatModePromptContent}`;
+        ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
+        : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
       // Create the stream
       const client = this.getClient(apiKey);

@@ -4,7 +4,10 @@ import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits } from '../utils/graphEdits';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
+import systemPromptContent from '../prompts/systemPrompt.md?raw';
+import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
+import { MDXEditorComponent } from './MDXEditor';
 import {
   ChevronLeftIcon,
   Cog6ToothIcon,
@@ -76,6 +79,22 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchAnswer, setSearchAnswer] = useState('');
 
+  // Settings modal state
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [customSystemPrompt, setCustomSystemPrompt] = useState<string>(
+    localStorage.getItem('customSystemPrompt') || ''
+  );
+  const [tempSystemPrompt, setTempSystemPrompt] = useState('');
+
+  // Initialize temp prompt when modal opens
+  useEffect(() => {
+    if (showSettingsModal) {
+      const promptToUse = customSystemPrompt.trim() ? customSystemPrompt : systemPromptContent;
+      console.log('Setting temp prompt:', { customSystemPrompt, systemPromptContent: systemPromptContent.substring(0, 100) + '...', promptToUse: promptToUse.substring(0, 100) + '...' });
+      setTempSystemPrompt(promptToUse);
+    }
+  }, [showSettingsModal]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -123,6 +142,15 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // Initialize API key input with current value
     setApiKeyInput(apiKey);
   }, [apiKey]);
+
+  // Save custom system prompt to localStorage when it changes
+  useEffect(() => {
+    if (customSystemPrompt) {
+      localStorage.setItem('customSystemPrompt', customSystemPrompt);
+    } else {
+      localStorage.removeItem('customSystemPrompt');
+    }
+  }, [customSystemPrompt]);
 
   // Close model dropdown when clicking outside
   useEffect(() => {
@@ -272,7 +300,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       },
       undefined, // signal parameter
       selectedModel,
-      webSearchEnabled
+      webSearchEnabled,
+      customSystemPrompt
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -546,7 +575,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       },
       undefined, // signal parameter
       selectedModel,
-      webSearchEnabled
+      webSearchEnabled,
+      customSystemPrompt
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -996,7 +1026,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => {/* TODO: Settings handler */}}
+                        onClick={() => {
+                          setShowSettingsModal(true);
+                        }}
                         className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
                         title="Settings"
                       >
@@ -1061,6 +1093,72 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           )}
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-800">Chat Settings</h2>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <XMarkIcon className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Custom System Prompt
+                  </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Override the default system prompt with your own instructions. Leave empty to use the default.
+                  </p>
+                  <MDXEditorComponent
+                    markdown={tempSystemPrompt}
+                    onChange={(value) => setTempSystemPrompt(value)}
+                    placeholder="Enter your custom system prompt here..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-between">
+              <button
+                onClick={() => {
+                  setTempSystemPrompt(systemPromptContent);
+                }}
+                className="px-4 py-2 text-sm text-red-600 hover:text-red-700 transition-colors"
+              >
+                Reset to Default
+              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setCustomSystemPrompt(tempSystemPrompt);
+                    setShowSettingsModal(false);
+                  }}
+                  className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
