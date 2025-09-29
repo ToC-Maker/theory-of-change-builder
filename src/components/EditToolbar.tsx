@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
 import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon } from "@heroicons/react/24/outline"
 import { ChartService, CreateChartResponse } from "../services/chartService"
+import { shortcuts } from "../utils/keyboardShortcuts"
 
 interface EditToolbarProps {
   editMode: boolean
@@ -292,7 +293,7 @@ export function EditToolbar({
                 onClick={handleUndo}
                 disabled={undoHistory.length === 0}
                 className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
-                title="Undo (Ctrl+Z)"
+                title={`Undo (${shortcuts.undoDisplay()})`}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -302,7 +303,7 @@ export function EditToolbar({
                 onClick={handleRedo}
                 disabled={redoHistory.length === 0}
                 className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
-                title="Redo (Ctrl+Y)"
+                title={`Redo (${shortcuts.redoDisplay()})`}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
@@ -736,9 +737,9 @@ export function EditToolbar({
                   <h3 className="font-semibold text-gray-800 mb-3">Node Selection</h3>
                   <ul className="space-y-2 text-sm text-gray-700">
                     <li>• <strong>Click:</strong> Select single node</li>
-                    <li>• <strong>Ctrl+Click:</strong> Multi-select</li>
+                    <li>• <strong>{shortcuts.multiSelect()}:</strong> Multi-select</li>
                     <li>• <strong>Shift+Click:</strong> Select column</li>
-                    <li>• <strong>Ctrl+A:</strong> Select all (edit mode)</li>
+                    <li>• <strong>{shortcuts.selectAllDisplay()}:</strong> Select all (edit mode)</li>
                   </ul>
                 </div>
 
@@ -756,8 +757,8 @@ export function EditToolbar({
                 <div>
                   <h3 className="font-semibold text-gray-800 mb-3">Keyboard Shortcuts</h3>
                   <ul className="space-y-2 text-sm text-gray-700">
-                    <li>• <strong>Ctrl+Z:</strong> Undo</li>
-                    <li>• <strong>Ctrl+Y:</strong> Redo</li>
+                    <li>• <strong>{shortcuts.undoDisplay()}:</strong> Undo</li>
+                    <li>• <strong>{shortcuts.redoDisplay()}:</strong> Redo</li>
                     <li>• <strong>↑↓:</strong> Move vertically</li>
                     <li>• <strong>←→:</strong> Move between columns</li>
                   </ul>
