@@ -6,6 +6,37 @@
 [build.environment]
   NODE_VERSION = "18"
 
+# Block WordPress bot requests
+[[redirects]]
+  from = "/wp-admin/*"
+  to = "/404"
+  status = 404
+  force = true
+
+[[redirects]]
+  from = "/wordpress/*"
+  to = "/404"
+  status = 404
+  force = true
+
+[[redirects]]
+  from = "/xmlrpc.php"
+  to = "/404"
+  status = 404
+  force = true
+
+[[redirects]]
+  from = "/**/wp-includes/*"
+  to = "/404"
+  status = 404
+  force = true
+
+[[redirects]]
+  from = "/**/wp-content/*"
+  to = "/404"
+  status = 404
+  force = true
+
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
