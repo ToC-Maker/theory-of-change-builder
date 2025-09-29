@@ -30,7 +30,8 @@ export function ToC({
   handleManualSync = () => {},
   getTimeAgo = () => "",
   renderEditToolbar,
-  zoomScale = 1
+  zoomScale = 1,
+  camera
 }: {
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void
@@ -49,6 +50,7 @@ export function ToC({
   getTimeAgo?: (date: Date) => string
   renderEditToolbar?: (props: any) => React.ReactNode
   zoomScale?: number
+  camera?: { x: number; y: number; z: number }
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -1311,6 +1313,7 @@ export function ToC({
         onDeleteNode={deleteNode}
         nodePopup={nodePopup}
         edgePopup={edgePopup}
+        camera={camera}
       />,
         document.body
       )}
