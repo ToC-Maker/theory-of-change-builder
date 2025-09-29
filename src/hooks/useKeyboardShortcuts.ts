@@ -229,8 +229,8 @@ export function useKeyboardShortcuts({
         return
       }
 
-      // Handle Ctrl+A - Select all nodes (only in edit mode)
-      if (event.ctrlKey && event.key === 'a' && editMode) {
+      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && editMode) {
         event.preventDefault()
         selectAllNodes()
         return

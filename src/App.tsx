@@ -1039,7 +1039,7 @@ function ToCViewer() {
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent Ctrl+Plus, Ctrl+Minus, Ctrl+0 browser zoom
+      // Prevent Ctrl+Plus, Ctrl+Minus, Ctrl+0 browser zoom (or Cmd on Mac)
       if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
         e.preventDefault();
 

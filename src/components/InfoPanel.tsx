@@ -1,4 +1,5 @@
 import React from "react"
+import { shortcuts } from '../utils/keyboardShortcuts'
 
 interface InfoPanelProps {
   legendComponent: React.ReactNode
@@ -67,9 +68,9 @@ export function InfoPanel({ legendComponent, height, isCollapsed, onToggle }: In
                 <h4 className="font-medium text-gray-800 mb-2">Node Selection</h4>
                 <ul className="space-y-1 text-xs">
                   <li>• <strong>Single click:</strong> Select single node</li>
-                  <li>• <strong>Ctrl+Click:</strong> Multi-select nodes</li>
+                  <li>• <strong>{shortcuts.multiSelect()}:</strong> Multi-select nodes</li>
                   <li>• <strong>Shift+Click:</strong> Select entire column</li>
-                  <li>• <strong>Ctrl+A:</strong> Select all nodes (edit mode)</li>
+                  <li>• <strong>{shortcuts.selectAllDisplay()}:</strong> Select all nodes (edit mode)</li>
                   <li>• <strong>Click empty space:</strong> Deselect all</li>
                 </ul>
               </div>
@@ -112,8 +113,8 @@ export function InfoPanel({ legendComponent, height, isCollapsed, onToggle }: In
               <div>
                 <h4 className="font-medium text-gray-800 mb-2">Keyboard Shortcuts</h4>
                 <ul className="space-y-1 text-xs">
-                  <li>• <strong>Ctrl+Z:</strong> Undo last change</li>
-                  <li>• <strong>Ctrl+Y:</strong> Redo last change</li>
+                  <li>• <strong>{shortcuts.undoDisplay()}:</strong> Undo last change</li>
+                  <li>• <strong>{shortcuts.redoDisplay()}:</strong> Redo last change</li>
                   <li>• <strong>Tab/Shift+Tab:</strong> Navigate nodes</li>
                 </ul>
               </div>
