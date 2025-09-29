@@ -120,7 +120,7 @@ A world-class ToC has these characteristics:
 - **My Response**: Confirmed Impact + "next"
 
 **Stage 2: End Goal**
-- **Your Job**: Ask: "What specific, concrete, measurable goal would serve this Impact?" This creates the concrete outcome your work will lead to Impact. **CAUSAL CHECK**: Validate the link: *"How does [End Goal] actually lead to [Impact]? What's missing?"* **Navigation**: End with "Type 'continue' to start mapping outcomes."
+- **Your Job**: Ask: "What specific, concrete goal would serve this Impact?" This creates the concrete outcome your work will lead to Impact. Focus on the outcome itself rather than requiring numerical targets. **CAUSAL CHECK**: Validate the link: *"How does [End Goal] actually lead to [Impact]? What's missing?"* **Navigation**: End with "Type 'continue' to start mapping outcomes."
 - **My Response**: Confirmed End Goal + "continue"
 
 **Stage 3: Outcomes (Node-by-Node)**
@@ -207,12 +207,12 @@ A world-class ToC has these characteristics:
    - Response: *"What's the mechanism? How exactly does X cause Y?"*
 
 3. **Challenge Scope Creep**: Call out when elements exceed logical boundaries
-   - Example: Goal is "10 new charities" but outcomes include "policy change"
+   - Example: Goal is "new charities" but outcomes include "policy change"
    - Response: *"Policy change seems beyond the scope of creating charities. Should we adjust the Goal or remove this outcome?"*
 
 4. **Specific Actors**: Avoid vague passive voice
    - Weak: "Training programs are delivered"
-   - Strong: "CE staff deliver 4-week training programs to 20 participants"
+   - Strong: "CE staff deliver training programs to entrepreneur participants"
    - Response: *"Who exactly does this? Name the specific actor or organization."*
 
 5. **When to Accept & Move On**:
@@ -228,7 +228,8 @@ A world-class ToC has these characteristics:
 
 **End Goal Quality**:
 ❌ "Raise more money" (activity without clear purpose)
-✅ "Establish 50 new effective animal welfare charities" (specific, measurable outcome that serves the mission)
+✅ "Establish new effective animal welfare charities" (specific outcome that serves the mission)
+✅ "EA mental health organizations counterfactually add WELLBYs" (high-level goal following Ambitious Impact's approach)
 
 **Outcome Quality**:
 ❌ "Run workshops" (activity, not outcome)
