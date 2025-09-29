@@ -973,6 +973,7 @@ function ToCViewer() {
       const isNode = target.closest('[draggable="true"]');
       const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing'); // Legend has grab cursor
       const isChatPanel = target.closest('.fixed.left-0.z-40') !== null; // Check if inside chat panel
+      const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null; // Check if inside JSON dropdown panel
 
       // Check if there's any active text editing happening
       const activeElement = document.activeElement;
@@ -1001,8 +1002,8 @@ function ToCViewer() {
                                isSelectableText; // Allow text selection instead of panning
 
 
-      // Only pan with left mouse button, no modifiers, and not on interactive elements or chat panel
-      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !isNode && !isLegend && !isEditableElement && !isChatPanel) {
+      // Only pan with left mouse button, no modifiers, and not on interactive elements, chat panel, or JSON panel
+      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !isNode && !isLegend && !isEditableElement && !isChatPanel && !isJsonPanel) {
         e.preventDefault();
         setIsPanning(true);
         setPanStart({ x: e.clientX, y: e.clientY });
