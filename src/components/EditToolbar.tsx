@@ -513,7 +513,7 @@ export function EditToolbar({
                     <div className="space-y-4">
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
-                          View Link (Read-only)
+                          View Link
                         </label>
                         <div className="flex items-center gap-2">
                           <input
@@ -536,7 +536,7 @@ export function EditToolbar({
 
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
-                          Edit Link (Owner only)
+                          Edit Link
                         </label>
                         <div className="flex items-center gap-2">
                           <input
@@ -872,12 +872,14 @@ export function EditToolbar({
               {/* Node Count */}
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-700">
-                  {highlightedNodes.size === 1 ? '1 node' : `${highlightedNodes.size} nodes`}
+                  {highlightedNodes.size === 1 ? '' : `${highlightedNodes.size} nodes selected`}
                 </span>
               </div>
 
-              {/* Separator */}
-              <div className="h-4 w-px bg-gray-300"></div>
+              {/* Separator if more than 1 node */}
+              {highlightedNodes.size > 1 && (
+                <div className="h-4 w-px bg-gray-300"></div>
+              )}
 
               {/* Width Control */}
               <div className="flex items-center gap-2">
@@ -946,31 +948,6 @@ export function EditToolbar({
                   }}
                   className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
                 />
-                <button
-                  onClick={() => {
-                    setNodeColor('#ffffff')
-                    if (highlightedNodes.size > 0) {
-                      setData((prevData) => ({
-                        ...prevData,
-                        sections: prevData.sections.map((section) => ({
-                          ...section,
-                          columns: section.columns.map((column) => ({
-                            ...column,
-                            nodes: column.nodes.map((node) => {
-                              if (highlightedNodes.has(node.id)) {
-                                return { ...node, color: '#ffffff' }
-                              }
-                              return node
-                            })
-                          }))
-                        }))
-                      }))
-                    }
-                  }}
-                  className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
-                >
-                  Reset
-                </button>
               </div>
 
               {/* Delete Button - only in edit mode */}
