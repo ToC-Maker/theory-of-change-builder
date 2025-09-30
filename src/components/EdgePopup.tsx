@@ -284,7 +284,7 @@ export function EdgePopup({
 
             <div className="space-y-4 text-left">
               <div>
-                <h4 className="font-medium text-gray-800 mb-2 text-left">Assumptions:</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left">Assumptions</h4>
                 {editMode && isEditing ? (
                   <MDXEditorComponent
                     markdown={editAssumptions}
@@ -306,7 +306,7 @@ export function EdgePopup({
               </div>
 
               <div>
-                <h4 className="font-medium text-gray-800 mb-2 text-left">Evidence:</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left">Evidence</h4>
                 {editMode && isEditing ? (
                   <MDXEditorComponent
                     markdown={editEvidence}
