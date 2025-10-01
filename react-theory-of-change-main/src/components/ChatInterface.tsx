@@ -360,50 +360,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setMessages([]);
   };
 
-  const handleSearch = async () => {
-    if (!searchQuery.trim() || isLoading) return;
-
-    setIsLoading(true);
-    setIsSearching(true);
-    setSearchResults([]);
-    setSearchAnswer('');
-
-    try {
-      const response = await fetch('/.netlify/functions/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: searchQuery.trim(),
-          maxResults: 5,
-          recent: true,
-          searchDepth: 'advanced',
-          includeAnswer: true,
-          timeRange: 'week'
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Search failed: ${response.status}`);
-      }
-
-      const result = await response.json();
-
-      if (result.success && result.data) {
-        setSearchResults(result.data.results || []);
-        setSearchAnswer(result.data.answer || '');
-      } else {
-        throw new Error('Invalid search response');
-      }
-    } catch (error) {
-      console.error('Search error:', error);
-      setSearchAnswer(`Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsLoading(false);
-      setIsSearching(false);
-    }
-  };
 
   const handleFileUpload = async (selectedFiles: FileList) => {
     const newFiles: UploadedFile[] = [];
