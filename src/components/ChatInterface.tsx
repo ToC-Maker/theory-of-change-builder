@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { chatService, ChatMessage } from '../services/chatService';
-import { applyEdits } from '../utils/graphEdits';
+import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
@@ -45,6 +45,7 @@ interface ChatInterfaceProps {
   onToggle: () => void;
   graphData?: any;
   onGraphUpdate?: (newGraphData: any) => void;
+  highlightedNodes?: Set<string>;
 }
 
 const MODELS = {
@@ -52,7 +53,7 @@ const MODELS = {
   'claude-opus-4-20250514': 'Claude 4 Opus',
 } as const;
 
-export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate }: ChatInterfaceProps) {
+export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
   const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-20250514');
@@ -88,6 +89,31 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [tempSystemPrompt, setTempSystemPrompt] = useState(
     localStorage.getItem('customSystemPrompt') || systemPromptContent
   );
+
+  // Get selected nodes info from graphData and highlightedNodes
+  const selectedNodes = React.useMemo(() => {
+    if (!graphData || !highlightedNodes.size) return []
+
+    const nodes: Array<{id: string, title: string, path: string}> = []
+
+    graphData.sections?.forEach((section: any, sectionIndex: number) => {
+      section.columns?.forEach((column: any, columnIndex: number) => {
+        column.nodes?.forEach((node: any) => {
+          if (highlightedNodes.has(node.id)) {
+            const sectionTitle = section.title || `Section ${sectionIndex + 1}`
+            const path = `${sectionTitle} → Column ${columnIndex + 1}`
+            nodes.push({
+              id: node.id,
+              title: node.title || 'Untitled',
+              path: path
+            })
+          }
+        })
+      })
+    })
+
+    return nodes
+  }, [graphData, highlightedNodes])
 
   // Initialize temp prompt when modal opens
   useEffect(() => {
@@ -329,7 +355,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       abortControllerRef.current?.signal, // signal parameter
       selectedModel,
       webSearchEnabled,
-      customSystemPrompt
+      customSystemPrompt,
+      highlightedNodes
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -563,7 +590,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       abortControllerRef.current?.signal, // signal parameter
       selectedModel,
       webSearchEnabled,
-      customSystemPrompt
+      customSystemPrompt,
+      highlightedNodes
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -753,10 +781,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     >
                       {message.role === 'assistant' ? (
                         <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-                          <ReactMarkdown>{message.content}</ReactMarkdown>
+                          <ReactMarkdown>{cleanResponseContent(message.content)}</ReactMarkdown>
                         </div>
                       ) : (
-                        <div className="whitespace-pre-wrap text-left">{message.content}</div>
+                        <div className="whitespace-pre-wrap text-left">{cleanResponseContent(message.content)}</div>
                       )}
                       <div className={`text-xs mt-1 opacity-70 ${
                         message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
@@ -992,6 +1020,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             <div className="p-3 border-t border-gray-200">
               {currentMode === 'chat' ? (
                 <div className="space-y-2">
+                  {/* Selected Nodes Context */}
+                  {selectedNodes.length > 0 && (
+                    <div className="text-sm text-gray-600 mb-2">
+                      {selectedNodes.length === 1 ? '1 node selected' : `${selectedNodes.length} nodes selected`}
+                    </div>
+                  )}
                   <textarea
                     ref={inputRef}
                     value={inputValue}

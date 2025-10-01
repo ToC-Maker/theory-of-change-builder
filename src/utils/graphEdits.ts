@@ -300,19 +300,42 @@ export function parseEditInstructions(content: string): EditInstruction[] {
   }
 }
 
-// Clean response content by removing edit instructions for display
+// Clean response content by removing edit instructions and internal context for display
 export function cleanResponseContent(content: string): string {
-  const startMarker = '[EDIT_INSTRUCTIONS]';
-  const endMarker = '[/EDIT_INSTRUCTIONS]';
-  
-  const startIndex = content.indexOf(startMarker);
-  const endIndex = content.indexOf(endMarker);
-  
-  if (startIndex === -1 || endIndex === -1) {
-    return content;
+  let cleanContent = content;
+
+  // Remove edit instructions
+  const editStartMarker = '[EDIT_INSTRUCTIONS]';
+  const editEndMarker = '[/EDIT_INSTRUCTIONS]';
+
+  const editStartIndex = cleanContent.indexOf(editStartMarker);
+  const editEndIndex = cleanContent.indexOf(editEndMarker);
+
+  if (editStartIndex !== -1 && editEndIndex !== -1) {
+    cleanContent = cleanContent.substring(0, editStartIndex) + cleanContent.substring(editEndIndex + editEndMarker.length);
   }
-  
-  // Remove the edit instructions section and clean up extra whitespace
-  const cleanContent = content.substring(0, startIndex) + content.substring(endIndex + endMarker.length);
+
+  // Remove current graph data
+  const graphStartMarker = '[CURRENT_GRAPH_DATA]';
+  const graphEndMarker = '[/CURRENT_GRAPH_DATA]';
+
+  const graphStartIndex = cleanContent.indexOf(graphStartMarker);
+  const graphEndIndex = cleanContent.indexOf(graphEndMarker);
+
+  if (graphStartIndex !== -1 && graphEndIndex !== -1) {
+    cleanContent = cleanContent.substring(0, graphStartIndex) + cleanContent.substring(graphEndIndex + graphEndMarker.length);
+  }
+
+  // Remove selected nodes context
+  const nodesStartMarker = '[SELECTED_NODES]';
+  const nodesEndMarker = '[/SELECTED_NODES]';
+
+  const nodesStartIndex = cleanContent.indexOf(nodesStartMarker);
+  const nodesEndIndex = cleanContent.indexOf(nodesEndMarker);
+
+  if (nodesStartIndex !== -1 && nodesEndIndex !== -1) {
+    cleanContent = cleanContent.substring(0, nodesStartIndex) + cleanContent.substring(nodesEndIndex + nodesEndMarker.length);
+  }
+
   return cleanContent.trim();
 }

@@ -15,7 +15,7 @@ export function addNodePaths(data: ToCData): ToCData {
         if (!node) return
         
         // Add the path property to each node
-        node.path = `sections[${sectionIndex}].columns[${columnIndex}].nodes[${nodeIndex}]`
+        node.path = `sections.${sectionIndex}.columns.${columnIndex}.nodes.${nodeIndex}`
       })
     })
   })
