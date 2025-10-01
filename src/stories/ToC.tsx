@@ -31,7 +31,8 @@ export function ToC({
   getTimeAgo = () => "",
   renderEditToolbar,
   zoomScale = 1,
-  camera
+  camera,
+  onHighlightedNodesChange
 }: {
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void
@@ -51,6 +52,7 @@ export function ToC({
   renderEditToolbar?: (props: any) => React.ReactNode
   zoomScale?: number
   camera?: { x: number; y: number; z: number }
+  onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -72,6 +74,11 @@ export function ToC({
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(
     new Set(),
   )
+
+  // Notify parent when highlighted nodes change
+  useEffect(() => {
+    onHighlightedNodesChange?.(highlightedNodes)
+  }, [highlightedNodes, onHighlightedNodesChange])
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
   const [draggedNode, setDraggedNode] = useState<Node | null>(null)
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null)

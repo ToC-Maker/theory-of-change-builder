@@ -40,7 +40,8 @@ class ChatService {
     signal?: AbortSignal,
     model: string = "claude-sonnet-4-20250514",
     webSearchEnabled: boolean = false,
-    customSystemPrompt?: string
+    customSystemPrompt?: string,
+    highlightedNodes?: Set<string>
   ): Promise<void> {
     if (!apiKey?.trim()) {
       callbacks.onError?.("Please configure your Anthropic API key.");
@@ -60,6 +61,34 @@ class ChatService {
             ...processedMessages[lastIndex],
             content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
           };
+        }
+
+        // Add selected nodes data after graph data
+        if (highlightedNodes && highlightedNodes.size > 0 && currentGraphData) {
+          const selectedNodesJson: any[] = []
+
+          currentGraphData.sections?.forEach((section: any, sectionIndex: number) => {
+            section.columns?.forEach((column: any, columnIndex: number) => {
+              column.nodes?.forEach((node: any, nodeIndex: number) => {
+                if (highlightedNodes.has(node.id)) {
+                  // Create a copy with path added
+                  const nodeWithPath = {
+                    ...node,
+                    path: `sections.${sectionIndex}.columns.${columnIndex}.nodes.${nodeIndex}`
+                  }
+                  selectedNodesJson.push(nodeWithPath)
+                }
+              })
+            })
+          })
+
+          if (selectedNodesJson.length > 0) {
+            const selectedNodesContent = `\n\n[SELECTED_NODES]\n${JSON.stringify(selectedNodesJson, null, 2)}\n[/SELECTED_NODES]`;
+            processedMessages[lastIndex] = {
+              ...processedMessages[lastIndex],
+              content: processedMessages[lastIndex].content + selectedNodesContent
+            };
+          }
         }
       }
 
