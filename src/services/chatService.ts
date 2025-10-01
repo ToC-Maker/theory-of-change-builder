@@ -3,7 +3,6 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
-import { tavilyService } from './tavilyService';
 import Anthropic from '@anthropic-ai/sdk';
 
 export interface ChatMessage {
@@ -24,49 +23,6 @@ class ChatService {
       apiKey,
       dangerouslyAllowBrowser: true
     });
-  }
-
-  private async enhanceWithSearch(
-    message: string,
-    callbacks?: {
-      onSearchStart?: () => void;
-      onSearchComplete?: (results?: any[]) => void;
-    },
-    webSearchEnabled: boolean = false
-  ): Promise<string> {
-    // Only search if explicitly enabled
-    if (!webSearchEnabled || !tavilyService.isConfigured()) {
-      return message;
-    }
-
-    console.log('🔍 Fetching web context...');
-    callbacks?.onSearchStart?.();
-
-    try {
-      // Get both context and full search results
-      const searchResult = await tavilyService.search(message, {
-        max_results: 5,
-        search_depth: 'advanced',
-        include_answer: true,
-        time_range: 'week'
-      });
-
-      callbacks?.onSearchComplete?.(searchResult.data?.results);
-
-      if (searchResult.data?.results) {
-        // Format search results for context
-        const context = searchResult.data.results
-          .map(result => `**${result.title}**\n${result.content}\nSource: ${result.url}`)
-          .join('\n\n---\n\n');
-
-        return `${message}\n\n[WEB_SEARCH_CONTEXT]\n${context}\n[/WEB_SEARCH_CONTEXT]`;
-      }
-    } catch (error) {
-      console.error('Search failed:', error);
-      callbacks?.onSearchComplete?.();
-    }
-
-    return message;
   }
 
   async streamMessage(
@@ -97,19 +53,13 @@ class ChatService {
       const lastIndex = messages.length - 1;
 
       if (processedMessages[lastIndex].role === 'user') {
-        // Add search context if needed
-        processedMessages[lastIndex] = {
-          ...processedMessages[lastIndex],
-          content: await this.enhanceWithSearch(processedMessages[lastIndex].content, {
-            onSearchStart: callbacks.onSearchStart,
-            onSearchComplete: callbacks.onSearchComplete
-          }, webSearchEnabled)
-        };
-
-        // Add graph data
+        // Add graph data - create a copy to avoid modifying the original message
         if (currentGraphData) {
           const dataWithPaths = addNodePaths(currentGraphData);
-          processedMessages[lastIndex].content += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
+          processedMessages[lastIndex] = {
+            ...processedMessages[lastIndex],
+            content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
+          };
         }
       }
 
@@ -128,7 +78,7 @@ class ChatService {
 
       // Create the stream
       const client = this.getClient(apiKey);
-      const stream = await client.messages.create({
+      const createOptions: any = {
         model,
         max_tokens: 20000,
         system: systemPrompt,
@@ -137,17 +87,53 @@ class ChatService {
           content: msg.content
         })),
         stream: true
-      });
+      };
+
+      // Add web search tool if enabled
+      if (webSearchEnabled) {
+        createOptions.tools = [{
+          type: "web_search_20250305",
+          name: "web_search",
+          max_uses: 5
+        }];
+      }
+
+      const stream = await client.messages.create(createOptions);
 
       let fullContent = '';
       let usage = null;
+      let hasSearched = false;
 
       for await (const event of stream) {
         if (signal?.aborted) {
           throw new DOMException('Aborted', 'AbortError');
         }
 
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        // Handle web search events
+        if (event.type === 'content_block_start' && event.content_block?.type === 'server_tool_use') {
+          if (event.content_block.name === 'web_search') {
+            if (!hasSearched) {
+              callbacks.onSearchStart?.();
+              hasSearched = true;
+            }
+          }
+        } else if (event.type === 'content_block_start' && event.content_block?.type === 'web_search_tool_result') {
+          // Extract search results and pass to callback
+          const searchResults = (event.content_block as any)?.content;
+          if (searchResults && Array.isArray(searchResults)) {
+            const formattedResults = searchResults
+              .filter(result => result.type === 'web_search_result')
+              .map(result => ({
+                title: result.title || 'No title',
+                content: `Web search result from ${result.page_age || 'recent'} - Content integrated in AI response below.`,
+                url: result.url || '#',
+                score: 0.9 // Default score since Anthropic doesn't provide relevance scores
+              }));
+            callbacks.onSearchComplete?.(formattedResults);
+          } else {
+            callbacks.onSearchComplete?.();
+          }
+        } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           const chunk = event.delta.text;
           fullContent += chunk;
           const cleanContent = cleanResponseContent(fullContent);
