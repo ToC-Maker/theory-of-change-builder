@@ -20,7 +20,8 @@ import {
   ArrowUpTrayIcon,
   ChatBubbleLeftRightIcon,
   DocumentTextIcon,
-  MagnifyingGlassCircleIcon
+  MagnifyingGlassCircleIcon,
+  StopIcon
 } from '@heroicons/react/24/outline';
 
 export type AIMode = 'chat' | 'generate' | 'search';
@@ -99,6 +100,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -187,6 +189,27 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   };
 
+  const handleStopStreaming = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsStreaming(false);
+      setIsLoading(false);
+      setStreamingContent('');
+      setIsSearching(false);
+
+      // If there's a streaming message, finalize it with current content
+      if (streamingMessageRef.current && streamingContent) {
+        const finalMessage: ChatMessage = {
+          ...streamingMessageRef.current,
+          content: streamingContent
+        };
+        setMessages(prev => [...prev, finalMessage]);
+        streamingMessageRef.current = null;
+      }
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isStreaming) return;
 
@@ -213,6 +236,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       content: '',
       timestamp: new Date()
     };
+
+    // Create a new abort controller for this request
+    abortControllerRef.current = new AbortController();
 
     try {
       await chatService.streamMessage(
@@ -300,7 +326,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           streamingMessageRef.current = null;
         }
       },
-      undefined, // signal parameter
+      abortControllerRef.current?.signal, // signal parameter
       selectedModel,
       webSearchEnabled,
       customSystemPrompt
@@ -492,6 +518,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       timestamp: new Date()
     };
 
+    // Create a new abort controller for this request
+    abortControllerRef.current = new AbortController();
+
     try {
       await chatService.streamMessage(
         [generationMessage],
@@ -575,7 +604,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           streamingMessageRef.current = null;
         }
       },
-      undefined, // signal parameter
+      abortControllerRef.current?.signal, // signal parameter
       selectedModel,
       webSearchEnabled,
       customSystemPrompt
@@ -1079,14 +1108,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         )}
                       </div>
 
-                      <button
-                        onClick={handleSendMessage}
-                        disabled={!inputValue.trim() || isLoading || isStreaming}
-                        className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        title="Send message"
-                      >
-                        <PaperAirplaneIcon className="w-5 h-5" />
-                      </button>
+                      {isStreaming ? (
+                        <button
+                          onClick={handleStopStreaming}
+                          className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                          title="Stop generation"
+                        >
+                          <StopIcon className="w-5 h-5" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={handleSendMessage}
+                          disabled={!inputValue.trim() || isLoading}
+                          className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          title="Send message"
+                        >
+                          <PaperAirplaneIcon className="w-5 h-5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
