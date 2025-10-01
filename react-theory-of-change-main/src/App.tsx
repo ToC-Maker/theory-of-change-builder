@@ -287,6 +287,7 @@ function ToCViewer() {
   const [isSaving, setIsSaving] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
   const [isManualSyncing, setIsManualSyncing] = useState(false)
+  const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set())
   const [camera, setCamera] = useState({ x: 0, y: 0, z: 1 })
   const zoomableRef = useRef<HTMLDivElement>(null)
   const [isPanning, setIsPanning] = useState(false)
@@ -1104,6 +1105,7 @@ function ToCViewer() {
         onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
         graphData={data}
         onGraphUpdate={handleGraphUpdate}
+        highlightedNodes={highlightedNodes}
       />
 
       <div
@@ -1150,6 +1152,7 @@ function ToCViewer() {
               getTimeAgo={getTimeAgo}
               zoomScale={camera.z}
               camera={camera}
+              onHighlightedNodesChange={setHighlightedNodes}
             />
           </div>
         </div>
