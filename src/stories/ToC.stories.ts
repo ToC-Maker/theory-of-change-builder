@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react"
-import { ToC } from "./ToC"
+import { ToC } from "../components/TheoryOfChangeGraph"
 
 const meta = {
   title: "ToC",
