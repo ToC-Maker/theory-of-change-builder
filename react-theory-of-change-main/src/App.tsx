@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Routes, Route, useParams, useLocation, Link } from "react-router-dom"
-import { ToC } from "./stories/ToC"
+import { ToC } from "./components/TheoryOfChangeGraph"
 import { ChatInterface } from "./components/ChatInterface"
 import { JsonDropdown } from "./components/JsonDropdown"
 import { ShareModal } from "./components/ShareModal"
