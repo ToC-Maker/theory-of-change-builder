@@ -44,3 +44,9 @@ html, body {
   animation: fadeInUp 0.5s ease-out;
   animation-fill-mode: both;
 }
+
+/* Placeholder for empty contentEditable divs */
+.empty-placeholder:empty::before {
+  content: attr(data-placeholder);
+  color: currentColor;
+}

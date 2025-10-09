@@ -111,9 +111,9 @@ export function NodePopup({
         </button>
         
         {/* Header */}
-        <div className="mt-4 mb-6">
+        <div className="mt-4 mb-6 text-left">
           {editMode && isEditing ? (
-            <div className="mb-2">
+            <div className="mb-2 text-left">
               <MDXEditorComponent
                 markdown={editTitle}
                 onChange={(newTitle) => {
@@ -146,8 +146,8 @@ export function NodePopup({
         </div>
         
         {/* Content */}
-        <div className="space-y-6">
-          <div>
+        <div className="space-y-6 text-left">
+          <div className="text-left">
             {editMode && isEditing ? (
               <MDXEditorComponent
                 markdown={editText}

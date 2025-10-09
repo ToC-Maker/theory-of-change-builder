@@ -98,6 +98,7 @@ export function ToC({
   const [sectionPadding, setSectionPadding] = useState(initialData.sectionPadding ?? 32) // Default section padding in pixels
   const [editingTitle, setEditingTitle] = useState(false)
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null)
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
   const [nodePopup, setNodePopup] = useState<{
     id: string
     title: string
@@ -127,15 +128,15 @@ export function ToC({
         ...section,
         columns: section.columns.map(column => ({
           ...column,
-          nodes: column.nodes.map(node => 
-            node.id === nodeId 
+          nodes: column.nodes.map(node =>
+            node.id === nodeId
               ? { ...node, title, text }
               : node
           )
         }))
       }))
     }))
-    
+
     // Trigger height recalculation for the updated node
     // We need to wait for the DOM to update first
     setTimeout(() => {
@@ -146,6 +147,23 @@ export function ToC({
       }
     }, 0)
   }, [setDataAndNotify, nodeRefs])
+
+  const updateNodeTitle = useCallback((nodeId: string, title: string) => {
+    setDataAndNotify(prevData => ({
+      ...prevData,
+      sections: prevData.sections.map(section => ({
+        ...section,
+        columns: section.columns.map(column => ({
+          ...column,
+          nodes: column.nodes.map(node =>
+            node.id === nodeId
+              ? { ...node, title }
+              : node
+          )
+        }))
+      }))
+    }))
+  }, [setDataAndNotify])
 
   const recalculateAllNodeHeights = useCallback(() => {
     // Force recalculation of all node heights
@@ -256,13 +274,14 @@ export function ToC({
   const createNewNode = useCallback((sectionIndex: number, columnIndex: number, yPosition: number) => {
     if (!editMode) return
 
+    // yPosition is where the user clicked - this becomes the center Y of the node
     const newNode: Node = {
       id: generateNodeId(),
       title: "New Node",
       text: "Details of New Node.",
       connectionIds: [],
       connections: [],
-      yPosition: yPosition,
+      yPosition: yPosition, // Click position = center Y
       width: nodeWidth, // Use current width setting
       color: nodeColor  // Use current color setting
     }
@@ -282,15 +301,11 @@ export function ToC({
       )
     }))
 
-    // Select the new node and open it for editing
+    // Select the new node and enter edit mode
     setHighlightedNodes(new Set([newNode.id]))
     setTimeout(() => {
-      setNodePopup({
-        id: newNode.id,
-        title: newNode.title,
-        text: newNode.text
-      })
-    }, 100)
+      setEditingNodeId(newNode.id)
+    }, 0)
   }, [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId])
 
   const toggleHighlight = (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
@@ -375,7 +390,7 @@ export function ToC({
 
   const moveNodeVertically = useCallback((nodeId: string, direction: 'up' | 'down') => {
     const moveAmount = direction === 'up' ? -20 : 20
-    
+
     setDataAndNotify((prevData) => ({
       ...prevData,
       sections: prevData.sections.map((section) => ({
@@ -385,8 +400,8 @@ export function ToC({
           nodes: column.nodes.map((node, nodeIndex) => {
             if (node.id === nodeId) {
               // Use cached height or default
-              const actualHeight = nodeHeights[node.id] || 150
-              
+              const actualHeight = nodeHeights[node.id] || 76
+
               // Calculate current center Y position
               const defaultCenterY = nodeIndex * 180 + 30 + actualHeight / 2
               const currentCenterY = node.yPosition ?? defaultCenterY
@@ -410,8 +425,8 @@ export function ToC({
         section.columns.forEach((column, columnIndex) => {
           column.nodes.forEach((node, nodeIndex) => {
             // Use cached height or default
-            const actualHeight = nodeHeights[node.id] || 150
-            
+            const actualHeight = nodeHeights[node.id] || 76
+
             // yPosition now represents the center Y
             const centerY = node.yPosition ?? (nodeIndex * 180 + 30 + actualHeight / 2)
             const topY = centerY - actualHeight / 2
@@ -742,7 +757,7 @@ export function ToC({
       const nodeTopLocal = mouseLocalY - dragOffsetLocalY
 
       // Get node height (stored in local space)
-      const actualHeight = nodeHeights[draggedNode.id] || 150
+      const actualHeight = nodeHeights[draggedNode.id] || 76
 
       // Calculate center in local space
       adjustedYPosition = nodeTopLocal + actualHeight / 2
@@ -1139,7 +1154,7 @@ export function ToC({
                           className="absolute"
                           style={{
                             top: node.yPosition !== undefined
-                              ? `${node.yPosition - (nodeHeights[node.id] || 150) / 2}px` // Convert from center to top position using cached height
+                              ? `${node.yPosition - (nodeHeights[node.id] || 76) / 2}px` // Convert from center to top position using cached height (76px is typical height for "New Node")
                               : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
                             left: `${leftOffset}px`,
                             width: `${nodeWidth}px`
@@ -1160,6 +1175,9 @@ export function ToC({
                             editMode={editMode}
                             textSize={textSize}
                             setNodePopup={setNodePopup}
+                            isEditingTitle={editingNodeId === node.id}
+                            setEditingNodeId={setEditingNodeId}
+                            updateNodeTitle={updateNodeTitle}
                           />
                         </div>
                       )
