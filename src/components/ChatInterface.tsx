@@ -762,8 +762,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 {messages.length === 0 ? (
                   <div className="text-center text-gray-500 text-sm py-8">
                     <div className="mb-2"><ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
-                    <p>Hi! I'm here to help you build and improve your Theory of Change.</p>
-                    <p className="mt-2 text-xs">Ask me about connections, suggest new nodes, or get strategic advice!</p>
+                    <p>Type anything to start creating your Theory of Change step-by-step.</p>
+                    <p className="mt-2 text-xs">If you already have a Theory of Change, you can use the flowchart editing features.</p>
+                    <p className="mt-2 text-xs">Or use the "Generate" tab to create a new Theory of Change from existing documents.</p>
                   </div>
                 ) : null}
 
