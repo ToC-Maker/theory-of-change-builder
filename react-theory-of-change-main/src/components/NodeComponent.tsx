@@ -170,6 +170,11 @@ export function NodeComponent({
                 }
               }
             }}
+            onDoubleClick={(e) => {
+              if (editMode && isHighlighted && isEditingTitle) {
+                e.stopPropagation()
+              }
+            }}
             ref={(el) => {
               titleEditRef.current = el
               if (el && editMode && isHighlighted && isEditingTitle && !cursorPositionedRef.current) {
