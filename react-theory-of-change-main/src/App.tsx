@@ -44,6 +44,14 @@ const emptyTemplate: ToCData = {
           nodes: []
         }
       ]
+    },
+    {
+      title: "Impact",
+      columns: [
+        {
+          nodes: []
+        }
+      ]
     }
   ],
   "columnPadding": 48,
