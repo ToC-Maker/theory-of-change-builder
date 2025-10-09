@@ -45,7 +45,9 @@ const emptyTemplate: ToCData = {
         }
       ]
     }
-  ]
+  ],
+  "columnPadding": 48,
+  "sectionPadding": 48
 };
 
 interface ToCData {

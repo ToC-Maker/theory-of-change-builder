@@ -18,6 +18,9 @@ interface NodeComponentProps {
   editMode: boolean
   textSize: number
   setNodePopup: React.Dispatch<React.SetStateAction<{ id: string; title: string; text: string } | null>>
+  isEditingTitle: boolean
+  setEditingNodeId: (id: string | null) => void
+  updateNodeTitle: (nodeId: string, title: string) => void
 }
 
 export function NodeComponent({
@@ -35,6 +38,9 @@ export function NodeComponent({
   editMode,
   textSize,
   setNodePopup,
+  isEditingTitle,
+  setEditingNodeId,
+  updateNodeTitle,
 }: NodeComponentProps) {
   const nodeRef = useRef<HTMLDivElement>(null)
 
@@ -120,19 +126,53 @@ export function NodeComponent({
         onMouseLeave={handleMouseLeave}
       >
         <div className="flex flex-col justify-center relative py-2">
-          <div 
-            className="font-medium text-center leading-tight break-words"
-            style={{ 
-              fontSize: `${textSize * 1.125}rem`, // 1.125rem is text-lg base size
-              color: node.color ? getContrastTextColor(node.color) : '#000000' // Default black text for no custom color
+          <div
+            className={`font-medium text-center leading-tight break-words ${editMode && isHighlighted && isEditingTitle ? 'border-b-2 outline-none' : ''} ${editMode && isHighlighted ? 'cursor-text' : ''} ${!node.title ? 'empty-placeholder' : ''}`}
+            style={{
+              fontSize: `${textSize * 1.125}rem`,
+              color: node.color ? getContrastTextColor(node.color) : '#000000',
+              borderColor: editMode && isHighlighted && isEditingTitle ? (node.color ? getContrastTextColor(node.color) : '#9ca3af') : 'transparent'
+            }}
+            contentEditable={editMode && isHighlighted && isEditingTitle}
+            suppressContentEditableWarning
+            data-placeholder="Untitled"
+            onInput={(e) => {
+              if (editMode && isHighlighted && isEditingTitle) {
+                updateNodeTitle(node.id, e.currentTarget.textContent || '')
+              }
+            }}
+            onBlur={() => setEditingNodeId(null)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                setEditingNodeId(null)
+              }
+            }}
+            onClick={(e) => {
+              if (editMode && isHighlighted && !isEditingTitle) {
+                e.stopPropagation()
+                setEditingNodeId(node.id)
+              }
+            }}
+            ref={(el) => {
+              if (el && editMode && isHighlighted && isEditingTitle) {
+                el.focus()
+                // Move cursor to end of text
+                const range = document.createRange()
+                const selection = window.getSelection()
+                range.selectNodeContents(el)
+                range.collapse(false) // false = collapse to end
+                selection?.removeAllRanges()
+                selection?.addRange(range)
+              }
             }}
           >
             {node.title}
           </div>
         </div>
-        
-        {/* Information/Edit icon for selected nodes with details - positioned relative to outer node */}
-        {node.text && isHighlighted && (
+
+        {/* Information/Edit icon for selected nodes - positioned relative to outer node */}
+        {isHighlighted && (
           <button
             onClick={handleInfoClick}
             className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center hover:bg-gray-100 hover:bg-opacity-20 transition-colors z-10"
