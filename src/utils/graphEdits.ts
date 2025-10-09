@@ -102,72 +102,64 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
     }
   };
 
-  // First, validate all edits before applying any
-  const validationErrors: string[] = [];
-  
+  // Validate and apply each edit sequentially
+  // This allows later edits to reference things created by earlier edits
   edits.forEach((edit, index) => {
     // Validate edit structure
     if (!edit.type || typeof edit.type !== 'string') {
-      validationErrors.push(`Edit ${index}: Missing or invalid type`);
-      return;
+      throw new Error(`Edit ${index}: Missing or invalid type`);
     }
-    
+
     if (!edit.path || typeof edit.path !== 'string') {
-      validationErrors.push(`Edit ${index}: Missing or invalid path`);
-      return;
+      throw new Error(`Edit ${index}: Missing or invalid path`);
     }
-    
+
     // Check for valid edit types
     if (!['update', 'insert', 'delete', 'push'].includes(edit.type)) {
-      validationErrors.push(`Edit ${index}: Unknown edit type "${edit.type}"`);
-      return;
+      throw new Error(`Edit ${index}: Unknown edit type "${edit.type}"`);
     }
-    
+
     // Check for invalid properties - only allow known properties
     const validProperties = ['type', 'path', 'value'];
     const editKeys = Object.keys(edit);
     const invalidProperties = editKeys.filter(key => !validProperties.includes(key));
     if (invalidProperties.length > 0) {
-      validationErrors.push(`Edit ${index}: Invalid properties: ${invalidProperties.join(', ')}. Only 'type', 'path', and 'value' are allowed.`);
-      return;
+      throw new Error(`Edit ${index}: Invalid properties: ${invalidProperties.join(', ')}. Only 'type', 'path', and 'value' are allowed.`);
     }
-    
+
     // For insert operations, the index should be part of the path, not a separate property
     if (edit.type === 'insert' && edit.path && !edit.path.match(/\.\d+$/)) {
-      validationErrors.push(`Edit ${index}: Insert operations must specify the index in the path (e.g., "sections.2.columns.0" not "sections.2.columns")`);
-      return;
+      throw new Error(`Edit ${index}: Insert operations must specify the index in the path (e.g., "sections.2.columns.0" not "sections.2.columns")`);
     }
-    
+
     // Validate path format
     const path = edit.path.split('.');
     if (path.length === 0 || path.some(segment => segment.trim() === '')) {
-      validationErrors.push(`Edit ${index}: Invalid path format "${edit.path}"`);
-      return;
+      throw new Error(`Edit ${index}: Invalid path format "${edit.path}"`);
     }
-    
+
     // Check for invalid array indices
     const hasNegativeIndex = path.some(segment => /^-\d+$/.test(segment));
     if (hasNegativeIndex) {
-      validationErrors.push(`Edit ${index}: Negative array indices not allowed in path "${edit.path}"`);
-      return;
+      throw new Error(`Edit ${index}: Negative array indices not allowed in path "${edit.path}"`);
     }
-    
+
     // Validate that the path exists in the current data structure
     try {
       const pathArray = edit.path.split('.');
       let current = updated;
-      
+
       for (let i = 0; i < pathArray.length - 1; i++) {
         const segment = pathArray[i];
-        
+
         if (current === null || current === undefined) {
           throw new Error(`Path segment "${segment}" leads to null/undefined`);
         }
-        
+
         if (typeof current !== 'object') {
           throw new Error(`Path segment "${segment}" is not an object`);
         }
-        
+
         // For array indices, check if they're within bounds
         if (/^\d+$/.test(segment)) {
           const index = parseInt(segment);
@@ -175,10 +167,10 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
             throw new Error(`Array index ${index} is out of bounds (length: ${current.length})`);
           }
         }
-        
+
         current = current[segment];
       }
-      
+
       // For delete operations, check that the final target exists
       if (edit.type === 'delete') {
         const lastSegment = pathArray[pathArray.length - 1];
@@ -186,21 +178,12 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
           throw new Error(`Cannot delete non-existent property "${lastSegment}"`);
         }
       }
-      
-    } catch (pathError) {
-      validationErrors.push(`Edit ${index}: Invalid path "${edit.path}" - ${pathError instanceof Error ? pathError.message : 'Unknown path error'}`);
-    }
-  });
-  
-  // If there are validation errors, throw without applying any edits
-  if (validationErrors.length > 0) {
-    throw new Error(`Invalid edit instructions (no changes applied):\n${validationErrors.join('\n')}`);
-  }
 
-  // Now apply edits (we know they're all valid)
-  edits.forEach((edit) => {
-    const path = edit.path.split('.');
-    
+    } catch (pathError) {
+      throw new Error(`Edit ${index}: Invalid path "${edit.path}" - ${pathError instanceof Error ? pathError.message : 'Unknown path error'}`);
+    }
+
+    // Apply the edit immediately after validation
     switch (edit.type) {
       case "update":
         setAtPath(updated, path, edit.value);
