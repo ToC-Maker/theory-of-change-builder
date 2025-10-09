@@ -43,10 +43,19 @@ export function NodeComponent({
   updateNodeTitle,
 }: NodeComponentProps) {
   const nodeRef = useRef<HTMLDivElement>(null)
+  const cursorPositionedRef = useRef(false)
+  const titleEditRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     updateNodeRef(node.id, nodeRef.current)
   }, [node.id, updateNodeRef])
+
+  // Reset cursor positioned flag when exiting edit mode
+  useEffect(() => {
+    if (!isEditingTitle) {
+      cursorPositionedRef.current = false
+    }
+  }, [isEditingTitle])
 
   const handleClick = (event: React.MouseEvent) => {
     let selectionMode: 'single' | 'multi' | 'column' = 'single'
@@ -136,34 +145,43 @@ export function NodeComponent({
             contentEditable={editMode && isHighlighted && isEditingTitle}
             suppressContentEditableWarning
             data-placeholder="Untitled"
-            onInput={(e) => {
-              if (editMode && isHighlighted && isEditingTitle) {
+            onBlur={(e) => {
+              // Save changes when done editing
+              if (editMode && isHighlighted) {
                 updateNodeTitle(node.id, e.currentTarget.textContent || '')
               }
+              setEditingNodeId(null)
             }}
-            onBlur={() => setEditingNodeId(null)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
+                // Save changes and exit edit mode
+                if (titleEditRef.current) {
+                  updateNodeTitle(node.id, titleEditRef.current.textContent || '')
+                }
                 setEditingNodeId(null)
               }
             }}
             onClick={(e) => {
-              if (editMode && isHighlighted && !isEditingTitle) {
+              if (editMode && isHighlighted) {
                 e.stopPropagation()
-                setEditingNodeId(node.id)
+                if (!isEditingTitle) {
+                  setEditingNodeId(node.id)
+                }
               }
             }}
             ref={(el) => {
-              if (el && editMode && isHighlighted && isEditingTitle) {
+              titleEditRef.current = el
+              if (el && editMode && isHighlighted && isEditingTitle && !cursorPositionedRef.current) {
                 el.focus()
-                // Move cursor to end of text
+                // Move cursor to end of text - only once when entering edit mode
                 const range = document.createRange()
                 const selection = window.getSelection()
                 range.selectNodeContents(el)
                 range.collapse(false) // false = collapse to end
                 selection?.removeAllRanges()
                 selection?.addRange(range)
+                cursorPositionedRef.current = true
               }
             }}
           >
