@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
-import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon } from "@heroicons/react/24/outline"
+import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon } from "@heroicons/react/24/outline"
 import { ChartService, CreateChartResponse } from "../services/chartService"
 import { shortcuts } from "../utils/keyboardShortcuts"
+import { Tooltip } from 'react-tooltip'
 
 interface EditToolbarProps {
   editMode: boolean
@@ -91,6 +92,9 @@ export function EditToolbar({
   const [showAlignmentSuggestion, setShowAlignmentSuggestion] = useState(false)
   const [showHelpModal, setShowHelpModal] = useState(false)
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 })
+
+  // Tooltip state
+  const [showLayoutTooltip, setShowLayoutTooltip] = useState(true)
 
   // Share functionality state
   const [shareData, setShareData] = useState<CreateChartResponse | null>(null)
@@ -320,6 +324,7 @@ export function EditToolbar({
               <button
                 onClick={() => editMode && setLayoutMode(!layoutMode)}
                 disabled={!editMode}
+                data-tooltip-id="layout-mode-tooltip"
                 className={`p-2 rounded transition-all duration-200 ${
                   !editMode
                     ? 'text-gray-400 cursor-not-allowed'
@@ -974,6 +979,27 @@ export function EditToolbar({
               )}
             </div>
           </div>
+      )}
+
+      {/* Layout Mode Tooltip */}
+      {editMode && (
+        <Tooltip
+          id="layout-mode-tooltip"
+          place="bottom"
+          isOpen={showLayoutTooltip}
+          clickable
+          style={{ zIndex: 9999 }}
+        >
+          <div>
+            <div>Add/remove columns & sections</div>
+            <button
+              onClick={() => setShowLayoutTooltip(false)}
+              className="text-xs underline hover:no-underline mt-1"
+            >
+              Got it
+            </button>
+          </div>
+        </Tooltip>
       )}
     </>
   )
