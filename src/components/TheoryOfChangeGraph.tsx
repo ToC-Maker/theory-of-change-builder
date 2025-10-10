@@ -1239,7 +1239,7 @@ export function ToC({
           {editMode && layoutMode && sectionIndex === data.sections.length - 1 && (
             <div
               className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
-              style={{ width: `${sectionPadding}px`, height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px', marginTop: '62px' }}
+              style={{ width: `${sectionPadding}px`, height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px', marginTop: '68px' }}
               onClick={() => {
                 setDataAndNotify(prevData => {
                   const newData = { ...prevData }
