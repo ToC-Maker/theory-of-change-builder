@@ -968,12 +968,12 @@ export function ToC({
       >
       {Array.isArray(data.sections) ? data.sections.map((section, sectionIndex) => (
         <React.Fragment key={sectionIndex}>
-          {/* Gap before first section or between sections with double-click to add section */}
+          {/* Gap before first section or between sections with click to add section */}
           {editMode && layoutMode && (
             <div
-              className="hover:bg-green-50 transition-colors flex items-center justify-center cursor-pointer group"
-              style={{ width: `${sectionPadding}px`, minHeight: '400px' }}
-              onDoubleClick={() => {
+              className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
+              style={{ width: `${sectionPadding}px`, height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px', marginTop: '68px' }}
+              onClick={() => {
                 setDataAndNotify(prevData => {
                   const newData = { ...prevData }
                   newData.sections.splice(sectionIndex, 0, {
@@ -983,9 +983,9 @@ export function ToC({
                   return newData
                 })
               }}
-              title="Double-click to add section"
+              title="Click to add section"
             >
-              <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
                 + Section
               </div>
             </div>
@@ -1050,10 +1050,10 @@ export function ToC({
               <div className="flex" style={{ gap: editMode && layoutMode ? '0px' : `${columnPadding}px` }}>
             {section.columns.map((column, colIndex) => (
               <React.Fragment key={`${sectionIndex}-${colIndex}`}>
-                {/* Gap before first column with double-click to add column */}
+                {/* Gap before first column with click to add column */}
                 {editMode && layoutMode && colIndex === 0 && (
                   <div
-                    className="hover:bg-blue-50 transition-colors flex items-center justify-center cursor-pointer group"
+                    className="bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
                     style={{ width: `${columnPadding}px`, height: svgSize.height > 0 ? `${svgSize.height  - 124}px` : '740px' }}
                     onDragOver={(e) => {
                       e.preventDefault()
@@ -1067,16 +1067,16 @@ export function ToC({
                       const yPosition = e.clientY - rect.top
                       handleDrop(sectionIndex, 0, true, yPosition)
                     }}
-                    onDoubleClick={() => {
+                    onClick={() => {
                       setDataAndNotify(prevData => {
                         const newData = { ...prevData }
                         newData.sections[sectionIndex].columns.splice(0, 0, { nodes: [] })
                         return newData
                       })
                     }}
-                    title="Double-click to add column"
+                    title="Click to add column"
                   >
-                    <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
                       + Column
                     </div>
                   </div>
@@ -1086,12 +1086,17 @@ export function ToC({
                 <div
                   className={clsx(
                     "relative",
-                    editMode && layoutMode && column.nodes.length === 0 && "hover:bg-red-50 transition-colors flex items-center justify-center cursor-pointer group"
+                    editMode && layoutMode && column.nodes.length === 0 && "bg-red-50 hover:bg-red-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
                   )}
                   style={{
                     width: `${Math.max(...column.nodes.map(node => node.width || 192), 128)}px`,
-                    height: editMode ? (svgSize.height > 0 ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px` : '740px') : 'auto'
+                    height: editMode && layoutMode && column.nodes.length === 0
+                      ? (svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px')
+                      : editMode
+                      ? (svgSize.height > 0 ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px` : '740px')
+                      : 'auto'
                   }}
+                  title={editMode && layoutMode && column.nodes.length === 0 ? "Click to delete column" : undefined}
                   onDragOver={editMode ? (e) => {
                     e.preventDefault()
                     const rect = e.currentTarget.getBoundingClientRect()
@@ -1105,17 +1110,9 @@ export function ToC({
                     handleDrop(sectionIndex, colIndex, false, yPosition)
                   } : undefined}
                   onClick={(e) => {
-                    // Allow deselection by clicking column area in both view and edit mode
+                    // Only handle clicks on the column area itself
                     if (e.target === e.currentTarget) {
-                      setHighlightedNodes(new Set())
-                      setNodeWidth(192)
-                      setNodeColor('#ffffff')
-                    }
-                  }}
-                  onDoubleClick={editMode ? (e) => {
-                    // Only create new node if double-clicking in blank column area
-                    if (e.target === e.currentTarget) {
-                      if (layoutMode && column.nodes.length === 0) {
+                      if (editMode && layoutMode && column.nodes.length === 0) {
                         // Delete the empty column
                         setDataAndNotify(prevData => {
                           const updatedSection = {
@@ -1134,11 +1131,20 @@ export function ToC({
                           }
                         })
                       } else {
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        const viewportY = e.clientY - rect.top
-                        const localY = viewportY / zoomScale
-                        createNewNode(sectionIndex, colIndex, localY)
+                        // Deselect nodes when clicking column area
+                        setHighlightedNodes(new Set())
+                        setNodeWidth(192)
+                        setNodeColor('#ffffff')
                       }
+                    }
+                  }}
+                  onDoubleClick={editMode && !layoutMode ? (e) => {
+                    // Only create new node if double-clicking in blank column area (not in layout mode)
+                    if (e.target === e.currentTarget) {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const viewportY = e.clientY - rect.top
+                      const localY = viewportY / zoomScale
+                      createNewNode(sectionIndex, colIndex, localY)
                     }
                   } : undefined}
                 >
@@ -1185,16 +1191,16 @@ export function ToC({
 
                   {/* Label for empty column in add/remove mode */}
                   {editMode && layoutMode && column.nodes.length === 0 && (
-                    <div className="text-red-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="text-red-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
                       - Delete
                     </div>
                   )}
                 </div>
 
-                {/* Gap after column with double-click to add column */}
+                {/* Gap after column with click to add column */}
                 {editMode && layoutMode && (
                   <div
-                    className="hover:bg-blue-50 transition-colors flex items-center justify-center cursor-pointer group"
+                    className="bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
                     style={{ width: `${columnPadding}px`, height: svgSize.height > 0 ? `${svgSize.height  - 124}px` : '740px' }}
                     onDragOver={(e) => {
                       e.preventDefault()
@@ -1208,7 +1214,7 @@ export function ToC({
                       const yPosition = e.clientY - rect.top
                       handleDrop(sectionIndex, colIndex + 1, true, yPosition)
                     }}
-                    onDoubleClick={() => {
+                    onClick={() => {
                       // Add new column
                       setDataAndNotify(prevData => {
                         const newData = { ...prevData }
@@ -1216,9 +1222,9 @@ export function ToC({
                         return newData
                       })
                     }}
-                    title="Double-click to add column"
+                    title="Click to add column"
                   >
-                    <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
                       + Column
                     </div>
                   </div>
@@ -1229,12 +1235,12 @@ export function ToC({
             </div>
           </div>
           </div>
-          {/* Gap after last section with double-click to add section */}
+          {/* Gap after last section with click to add section */}
           {editMode && layoutMode && sectionIndex === data.sections.length - 1 && (
             <div
-              className="hover:bg-green-50 transition-colors flex items-center justify-center cursor-pointer group"
-              style={{ width: `${sectionPadding}px`, minHeight: '400px' }}
-              onDoubleClick={() => {
+              className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
+              style={{ width: `${sectionPadding}px`, height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px', marginTop: '62px' }}
+              onClick={() => {
                 setDataAndNotify(prevData => {
                   const newData = { ...prevData }
                   newData.sections.splice(sectionIndex + 1, 0, {
@@ -1244,9 +1250,9 @@ export function ToC({
                   return newData
                 })
               }}
-              title="Double-click to add section"
+              title="Click to add section"
             >
-              <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
                 + Section
               </div>
             </div>
