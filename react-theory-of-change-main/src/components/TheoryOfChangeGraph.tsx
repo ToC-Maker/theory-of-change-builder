@@ -274,6 +274,18 @@ export function ToC({
   const createNewNode = useCallback((sectionIndex: number, columnIndex: number, yPosition: number) => {
     if (!editMode) return
 
+    // Get the column to determine width
+    const column = data.sections[sectionIndex]?.columns[columnIndex]
+    if (!column) return
+
+    // Calculate width to match the column
+    let newNodeWidth = nodeWidth // Default to current width setting
+    if (column.nodes.length > 0) {
+      // If column has nodes, match their width (use max width in column)
+      const columnNodeWidths = column.nodes.map(node => node.width || 192)
+      newNodeWidth = Math.max(...columnNodeWidths)
+    }
+
     // yPosition is where the user clicked - this becomes the center Y of the node
     const newNode: Node = {
       id: generateNodeId(),
@@ -282,7 +294,7 @@ export function ToC({
       connectionIds: [],
       connections: [],
       yPosition: yPosition, // Click position = center Y
-      width: nodeWidth, // Use current width setting
+      width: newNodeWidth, // Match column width
       color: nodeColor  // Use current color setting
     }
 
@@ -306,7 +318,7 @@ export function ToC({
     setTimeout(() => {
       setEditingNodeId(newNode.id)
     }, 0)
-  }, [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId])
+  }, [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId, data.sections])
 
   const toggleHighlight = (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
     setHighlightedNodes((prev) => {

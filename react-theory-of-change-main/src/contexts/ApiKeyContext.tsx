@@ -42,7 +42,8 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
     localStorage.removeItem(API_KEY_STORAGE_KEY);
   };
 
-  const isConfigured = apiKey.length > 0 && apiKey.startsWith('sk-');
+  // API key is now managed on the backend via edge function, always return true
+  const isConfigured = true;
 
   const value: ApiKeyContextType = {
     apiKey,
