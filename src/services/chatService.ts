@@ -3,7 +3,6 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
-import Anthropic from '@anthropic-ai/sdk';
 
 export interface ChatMessage {
   id: string;
@@ -18,36 +17,140 @@ export interface ChatMessage {
 }
 
 class ChatService {
-  private getClient(apiKey: string): Anthropic {
-    return new Anthropic({
-      apiKey,
-      dangerouslyAllowBrowser: true
+  private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
+
+  private async streamFromEdgeFunction(
+    requestBody: any,
+    callbacks: {
+      onContent?: (chunk: string, fullContent: string) => void;
+      onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
+      onError?: (error: string) => void;
+      onSearchStart?: () => void;
+      onSearchComplete?: (results?: any[]) => void;
+    },
+    signal?: AbortSignal
+  ): Promise<void> {
+    const response = await fetch(this.EDGE_FUNCTION_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal,
     });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error('No response body');
+    }
+
+    // Parse SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullContent = '';
+    let usage: any = null;
+    let hasSearched = false;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+        if (signal?.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim() || line.startsWith(':')) continue;
+
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+
+            if (data === '[DONE]') {
+              const editInstructions = parseEditInstructions(fullContent);
+              const cleanContent = cleanResponseContent(fullContent);
+              callbacks.onComplete?.(cleanContent, editInstructions, usage);
+              return;
+            }
+
+            try {
+              const event = JSON.parse(data);
+
+              // Handle web search events
+              if (event.type === 'content_block_start' && event.content_block?.type === 'server_tool_use') {
+                if (event.content_block.name === 'web_search' && !hasSearched) {
+                  callbacks.onSearchStart?.();
+                  hasSearched = true;
+                }
+              } else if (event.type === 'content_block_start' && event.content_block?.type === 'web_search_tool_result') {
+                const searchResults = event.content_block?.content;
+                if (searchResults && Array.isArray(searchResults)) {
+                  const formattedResults = searchResults
+                    .filter(result => result.type === 'web_search_result')
+                    .map(result => ({
+                      title: result.title || 'No title',
+                      content: `Web search result from ${result.page_age || 'recent'} - Content integrated in AI response below.`,
+                      url: result.url || '#',
+                      score: 0.9
+                    }));
+                  callbacks.onSearchComplete?.(formattedResults);
+                } else {
+                  callbacks.onSearchComplete?.();
+                }
+              } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                const chunk = event.delta.text;
+                fullContent += chunk;
+                const cleanContent = cleanResponseContent(fullContent);
+                callbacks.onContent?.(chunk, cleanContent);
+              } else if (event.type === 'message_start' && event.message?.usage) {
+                usage = event.message.usage;
+              } else if (event.type === 'message_delta' && event.delta?.usage) {
+                usage = { ...usage, ...event.delta.usage };
+              } else if (event.type === 'message_stop') {
+                const editInstructions = parseEditInstructions(fullContent);
+                const cleanContent = cleanResponseContent(fullContent);
+                callbacks.onComplete?.(cleanContent, editInstructions, usage);
+                return;
+              }
+            } catch (e) {
+              // Ignore JSON parse errors for partial data
+              console.warn('Failed to parse SSE data:', e);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async streamMessage(
     messages: ChatMessage[],
     currentGraphData: any,
     mode: 'chat' | 'generate',
-    apiKey: string,
+    apiKey: string = '', // API key parameter kept for backward compatibility but not used
     callbacks: {
       onContent?: (chunk: string, fullContent: string) => void;
       onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
       onError?: (error: string) => void;
       onSearchStart?: () => void;
-      onSearchComplete?: () => void;
-    },
+      onSearchComplete?: (results?: any[]) => void;
+    } = {},
     signal?: AbortSignal,
     model: string = "claude-sonnet-4-20250514",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>
   ): Promise<void> {
-    if (!apiKey?.trim()) {
-      callbacks.onError?.("Please configure your Anthropic API key.");
-      return;
-    }
-
     try {
       // Process the last user message
       const processedMessages = [...messages];
@@ -105,9 +208,8 @@ class ChatService {
         ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
         : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
-      // Create the stream
-      const client = this.getClient(apiKey);
-      const createOptions: any = {
+      // Create request body for edge function
+      const requestBody: any = {
         model,
         max_tokens: 20000,
         system: systemPrompt,
@@ -120,64 +222,15 @@ class ChatService {
 
       // Add web search tool if enabled
       if (webSearchEnabled) {
-        createOptions.tools = [{
+        requestBody.tools = [{
           type: "web_search_20250305",
           name: "web_search",
           max_uses: 5
         }];
       }
 
-      const stream = await client.messages.create(createOptions);
-
-      let fullContent = '';
-      let usage = null;
-      let hasSearched = false;
-
-      for await (const event of stream) {
-        if (signal?.aborted) {
-          throw new DOMException('Aborted', 'AbortError');
-        }
-
-        // Handle web search events
-        if (event.type === 'content_block_start' && event.content_block?.type === 'server_tool_use') {
-          if (event.content_block.name === 'web_search') {
-            if (!hasSearched) {
-              callbacks.onSearchStart?.();
-              hasSearched = true;
-            }
-          }
-        } else if (event.type === 'content_block_start' && event.content_block?.type === 'web_search_tool_result') {
-          // Extract search results and pass to callback
-          const searchResults = (event.content_block as any)?.content;
-          if (searchResults && Array.isArray(searchResults)) {
-            const formattedResults = searchResults
-              .filter(result => result.type === 'web_search_result')
-              .map(result => ({
-                title: result.title || 'No title',
-                content: `Web search result from ${result.page_age || 'recent'} - Content integrated in AI response below.`,
-                url: result.url || '#',
-                score: 0.9 // Default score since Anthropic doesn't provide relevance scores
-              }));
-            callbacks.onSearchComplete?.(formattedResults);
-          } else {
-            callbacks.onSearchComplete?.();
-          }
-        } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          const chunk = event.delta.text;
-          fullContent += chunk;
-          const cleanContent = cleanResponseContent(fullContent);
-          callbacks.onContent?.(chunk, cleanContent);
-        } else if (event.type === 'message_start' && event.message.usage) {
-          usage = event.message.usage;
-        } else if (event.type === 'message_delta' && event.delta.usage) {
-          usage = { ...usage, ...event.delta.usage };
-        } else if (event.type === 'message_stop') {
-          const editInstructions = parseEditInstructions(fullContent);
-          const cleanContent = cleanResponseContent(fullContent);
-          callbacks.onComplete?.(cleanContent, editInstructions, usage);
-          return;
-        }
-      }
+      // Stream from edge function
+      await this.streamFromEdgeFunction(requestBody, callbacks, signal);
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
@@ -193,20 +246,11 @@ class ChatService {
     }
   }
 
-  async checkApiKey(apiKey: string): Promise<boolean> {
-    if (!apiKey?.trim()) return false;
-
-    try {
-      const client = this.getClient(apiKey);
-      await client.messages.create({
-        model: "claude-opus-4-20250514",
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'Hi' }]
-      });
-      return true;
-    } catch {
-      return false;
-    }
+  async checkApiKey(apiKey: string = ''): Promise<boolean> {
+    // API key is now managed on the backend via edge function
+    // This method is kept for backward compatibility but always returns true
+    // The actual API key validation will happen on the server side
+    return true;
   }
 }
 
