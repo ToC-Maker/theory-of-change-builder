@@ -37,18 +37,19 @@
   status = 404
   force = true
 
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+# SPA fallback - temporarily disabled for debugging
+# [[redirects]]
+#   from = "/*"
+#   to = "/index.html"
+#   status = 200
+#   force = false
 
 [functions]
   node_bundler = "esbuild"
+
+[[edge_functions]]
+  path = "/api/anthropic-stream"
+  function = "anthropic-stream"
 
 [dev]
   command = "npm run dev"

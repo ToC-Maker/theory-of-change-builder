@@ -163,10 +163,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [isStreaming, streamingContent, isNearBottom]);
 
   useEffect(() => {
-    if (!isCollapsed && inputRef.current && isConfigured) {
+    if (!isCollapsed && inputRef.current) {
       inputRef.current.focus();
     }
-  }, [isCollapsed, isConfigured]);
+  }, [isCollapsed]);
 
   useEffect(() => {
     // Initialize API key input with current value
@@ -453,11 +453,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       return;
     }
 
-    if (!isConfigured) {
-      alert('Please configure your Anthropic API key first.');
-      return;
-    }
-
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
@@ -639,7 +634,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           <div className="p-3 border-b border-gray-200">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                {((currentMode === 'chat' && messages.length > 0) || (currentMode === 'search' && searchResults.length > 0)) && isConfigured && (
+                {((currentMode === 'chat' && messages.length > 0) || (currentMode === 'search' && searchResults.length > 0)) && (
                   <button
                     onClick={() => {
                       if (currentMode === 'chat') clearChat();
@@ -706,58 +701,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             className="flex-1 overflow-y-auto p-3 space-y-3"
             onScroll={handleScroll}
           >
-            {!isConfigured ? (
-              <div className="p-4">
-                <div className="mb-4">
-                  <h3 className="text-lg font-medium text-gray-900 mb-2">Setup Required</h3>
-                  <p className="text-sm text-gray-600 mb-4">
-                    To use the AI assistant, please enter your Anthropic API key below.
-                  </p>
-                </div>
-
-                <div className="space-y-3">
-                  <div>
-                    <label htmlFor="apiKey" className="block text-sm font-medium text-gray-700 mb-1">
-                      Anthropic API Key
-                    </label>
-                    <input
-                      id="apiKey"
-                      type="password"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      onKeyPress={handleApiKeyKeyPress}
-                      placeholder="sk-ant-api03-..."
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                    />
-                    {apiKeyError && (
-                      <p className="text-red-600 text-xs mt-1">{apiKeyError}</p>
-                    )}
-                  </div>
-
-                  <button
-                    onClick={handleSaveApiKey}
-                    disabled={!apiKeyInput.trim()}
-                    className="w-full px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    Save API Key
-                  </button>
-                </div>
-
-                <div className="mt-4 p-3 bg-blue-50 rounded-md">
-                  <p className="text-xs text-blue-800">
-                    <strong>How to get your API key:</strong><br/>
-                    1. Visit <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-900">console.anthropic.com</a><br/>
-                    2. Sign up or log in to your Anthropic account<br/>
-                    3. Go to "API Keys" in the left sidebar<br/>
-                    4. Click "Create Key" and give it a name<br/>
-                    5. Copy the key (starts with "sk-ant-api03-...")
-                  </p>
-                  <p className="text-xs text-blue-700 mt-2">
-                    <strong>Security:</strong> Your API key is stored locally in your browser and never sent to our servers.
-                  </p>
-                </div>
-              </div>
-            ) : currentMode === 'chat' ? (
+            {currentMode === 'chat' ? (
               <>
                 {messages.length === 0 ? (
                   <div className="text-center text-gray-500 text-sm py-8">
@@ -952,7 +896,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             ) : null}
 
             {/* Chat mode streaming indicators */}
-            {isConfigured && currentMode === 'chat' && (
+            {currentMode === 'chat' && (
               <>
                 {/* Search indicator */}
                 {isSearching && (
@@ -1017,8 +961,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           </div>
 
           {/* Input Area */}
-          {isConfigured && (
-            <div className="p-3 border-t border-gray-200">
+          <div className="p-3 border-t border-gray-200">
               {currentMode === 'chat' ? (
                 <div className="space-y-2">
                   {/* Selected Nodes Context */}
@@ -1122,7 +1065,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 </div>
               ) : null}
             </div>
-          )}
         </div>
       </div>
 
