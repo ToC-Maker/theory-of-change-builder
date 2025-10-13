@@ -8,6 +8,7 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
+import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import {
   ChevronLeftIcon,
   Cog6ToothIcon,
@@ -30,6 +31,7 @@ interface UploadedFile {
   file: File;
   content: string;
   status: 'reading' | 'ready' | 'error';
+  errorMessage?: string;
 }
 
 interface SearchResult {
@@ -403,19 +405,21 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
     setFiles(prev => [...prev, ...newFiles]);
 
-    // Read file contents
+    // Parse file contents using our new parser
     for (let i = 0; i < newFiles.length; i++) {
       const uploadedFile = newFiles[i];
       try {
-        const content = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = () => reject(reader.error);
-          reader.readAsText(uploadedFile.file);
-        });
+        const result = await parseFile(uploadedFile.file);
 
-        uploadedFile.content = content;
-        uploadedFile.status = 'ready';
+        if (result.success) {
+          uploadedFile.content = result.content;
+          uploadedFile.status = 'ready';
+        } else {
+          console.error('Error parsing file:', result.error);
+          uploadedFile.content = '';
+          uploadedFile.status = 'error';
+          uploadedFile.errorMessage = result.error;
+        }
       } catch (error) {
         console.error('Error reading file:', error);
         uploadedFile.status = 'error';
@@ -768,7 +772,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept=".txt,.md,.pdf,.doc,.docx"
+                    accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
                     onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
                     className="hidden"
                   />
@@ -780,7 +784,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     Click to upload or drag & drop documents
                   </button>
                   <p className="text-xs text-gray-500 text-center mt-2">
-                    Supports .txt, .md, .pdf, .doc, .docx files
+                    Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
                   </p>
                 </div>
 
@@ -789,20 +793,41 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   <div className="space-y-2">
                     <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
                     {files.map((file, index) => (
-                      <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${
-                            file.status === 'ready' ? 'bg-green-400' :
-                            file.status === 'reading' ? 'bg-yellow-400' : 'bg-red-400'
-                          }`}></div>
-                          <span className="text-sm text-gray-700">{file.file.name}</span>
+                      <div key={index} className="p-2 bg-gray-50 rounded">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 flex-1">
+                            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              file.status === 'ready' ? 'bg-green-400' :
+                              file.status === 'reading' ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'
+                            }`}></div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-gray-700 truncate">{file.file.name}</span>
+                                <span className="text-xs text-gray-500">({getFileTypeDescription(file.file.name)})</span>
+                              </div>
+                              {file.status === 'reading' && (
+                                <span className="text-xs text-gray-500">Reading file...</span>
+                              )}
+                              {file.status === 'ready' && file.content && (
+                                <span className="text-xs text-green-600">
+                                  {Math.round(file.content.length / 1000)}KB of text extracted
+                                </span>
+                              )}
+                              {file.status === 'error' && (
+                                <span className="text-xs text-red-600">
+                                  {file.errorMessage || 'Failed to read file'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => removeFile(file.file)}
+                            className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
+                            title="Remove file"
+                          >
+                            <XMarkIcon className="w-4 h-4" />
+                          </button>
                         </div>
-                        <button
-                          onClick={() => removeFile(file.file)}
-                          className="text-gray-400 hover:text-red-500 transition-colors"
-                        >
-                          <XMarkIcon className="w-4 h-4" />
-                        </button>
                       </div>
                     ))}
                   </div>
