@@ -17,6 +17,7 @@
     "@neondatabase/serverless": "^1.0.1",
     "@netlify/functions": "^4.2.5",
     "clsx": "^2.1.1",
+    "pdfjs-dist": "^5.4.296",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
