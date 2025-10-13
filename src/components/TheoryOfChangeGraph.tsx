@@ -32,7 +32,8 @@ export function ToC({
   renderEditToolbar,
   zoomScale = 1,
   camera,
-  onHighlightedNodesChange
+  onHighlightedNodesChange,
+  onEditTokenChange
 }: {
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void
@@ -53,6 +54,7 @@ export function ToC({
   zoomScale?: number
   camera?: { x: number; y: number; z: number }
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void
+  onEditTokenChange?: (token: string) => void
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -1357,6 +1359,7 @@ export function ToC({
         nodePopup={nodePopup}
         edgePopup={edgePopup}
         camera={camera}
+        onEditTokenChange={onEditTokenChange}
       />,
         document.body
       )}
