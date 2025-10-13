@@ -59,7 +59,25 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-20250514');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // Load chat history from localStorage on mount
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const savedMessages = localStorage.getItem('chatHistory');
+      if (savedMessages) {
+        const parsed = JSON.parse(savedMessages);
+        // Convert timestamp strings back to Date objects
+        return parsed.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp)
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+    }
+    return [];
+  });
+
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
@@ -152,6 +170,18 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const handleScroll = () => {
     setIsNearBottom(checkIfNearBottom());
   };
+
+  // Save messages to localStorage whenever they change
+  useEffect(() => {
+    try {
+      // Only save non-empty message arrays to avoid clearing on mount
+      if (messages.length > 0) {
+        localStorage.setItem('chatHistory', JSON.stringify(messages));
+      }
+    } catch (error) {
+      console.error('Failed to save chat history:', error);
+    }
+  }, [messages]);
 
   useEffect(() => {
     scrollToBottom();
@@ -387,6 +417,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
   const clearChat = () => {
     setMessages([]);
+    // Clear chat history from localStorage
+    try {
+      localStorage.removeItem('chatHistory');
+    } catch (error) {
+      console.error('Failed to clear chat history from localStorage:', error);
+    }
   };
 
 
