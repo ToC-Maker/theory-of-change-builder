@@ -435,6 +435,13 @@ export function ConnectionsComponent({
         const isSameColumn = connection.sourceSectionIndex === connection.targetSectionIndex &&
                             connection.sourceColumnIndex === connection.targetColumnIndex
 
+        // Check if this is a backward connection (right to left)
+        const isBackwardConnection = !isSameColumn && (
+          connection.targetSectionIndex < connection.sourceSectionIndex ||
+          (connection.targetSectionIndex === connection.sourceSectionIndex &&
+           connection.targetColumnIndex < connection.sourceColumnIndex)
+        )
+
         let startX, startY, endX, endY
 
         if (isSameColumn) {
@@ -452,8 +459,14 @@ export function ConnectionsComponent({
             startY = startPos.y
             endY = endPos.y + endPos.height + 14 // Offset by arrow height
           }
+        } else if (isBackwardConnection) {
+          // Backward connection logic (right to left)
+          startX = startPos.x // Start from left side of source node
+          startY = startPos.y + startPos.height / 2
+          endX = endPos.x + endPos.width + 14 // End at right side of target node with arrow offset
+          endY = endPos.y + endPos.height / 2
         } else {
-          // Horizontal connection logic
+          // Forward connection logic (left to right)
           startX = startPos.x + startPos.width
           startY = startPos.y + startPos.height / 2
           endX = endPos.x - 14 // Offset by arrow width
@@ -510,7 +523,9 @@ export function ConnectionsComponent({
             <path
               d={isSameColumn
                 ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+                : isBackwardConnection
+                  ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                  : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
               }
               className="fill-none cursor-pointer"
               style={{
@@ -546,7 +561,9 @@ export function ConnectionsComponent({
             <path
               d={isSameColumn
                 ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+                : isBackwardConnection
+                  ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                  : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
               }
               className="fill-none"
               markerEnd="url(#arrowhead)"
@@ -564,7 +581,9 @@ export function ConnectionsComponent({
             <path
               d={isSameColumn
                 ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+                : isBackwardConnection
+                  ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                  : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
               }
               className="fill-none"
               markerEnd="url(#arrowhead)"
@@ -629,6 +648,13 @@ export function ConnectionsComponent({
                                  sourceLocation.sectionIndex === targetLocation.sectionIndex &&
                                  sourceLocation.columnIndex === targetLocation.columnIndex;
 
+        // Check if this is a backward ghost connection (right to left)
+        const isGhostBackwardConnection = !isGhostSameColumn && sourceLocation && targetLocation && (
+          targetLocation.sectionIndex < sourceLocation.sectionIndex ||
+          (targetLocation.sectionIndex === sourceLocation.sectionIndex &&
+           targetLocation.columnIndex < sourceLocation.columnIndex)
+        );
+
         let startX, startY, endX, endY;
 
         if (isGhostSameColumn) {
@@ -643,8 +669,14 @@ export function ConnectionsComponent({
             startY = startPos.y;
             endY = endPos.y + endPos.height + 14;
           }
+        } else if (isGhostBackwardConnection) {
+          // Backward ghost connection logic (right to left)
+          startX = startPos.x; // Start from left side of source node
+          startY = startPos.y + startPos.height / 2;
+          endX = endPos.x + endPos.width + 14; // End at right side of target node with arrow offset
+          endY = endPos.y + endPos.height / 2;
         } else {
-          // Horizontal ghost connection logic (using local coordinates)
+          // Forward ghost connection logic (left to right)
           startX = startPos.x + startPos.width;
           startY = startPos.y + startPos.height / 2;
           endX = endPos.x - 14;
@@ -670,7 +702,9 @@ export function ConnectionsComponent({
             <path
               d={isGhostSameColumn
                 ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
+                : isGhostBackwardConnection
+                  ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
+                  : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
               }
               className="fill-none"
               markerEnd="url(#arrowhead)"

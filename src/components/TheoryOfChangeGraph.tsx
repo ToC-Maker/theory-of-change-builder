@@ -1418,6 +1418,13 @@ export function ToC({
                                sourceLocation.sectionIndex === targetLocation.sectionIndex &&
                                sourceLocation.columnIndex === targetLocation.columnIndex
 
+            // Check if this is a backward connection (right to left)
+            const isBackwardConnection = !isSameColumn && sourceLocation && targetLocation && (
+              targetLocation.sectionIndex < sourceLocation.sectionIndex ||
+              (targetLocation.sectionIndex === sourceLocation.sectionIndex &&
+               targetLocation.columnIndex < sourceLocation.columnIndex)
+            )
+
             let startX, startY, endX, endY
 
             if (isSameColumn) {
@@ -1432,8 +1439,14 @@ export function ToC({
                 startY = sourcePos.y
                 endY = targetPos.y + targetPos.height + 14
               }
+            } else if (isBackwardConnection) {
+              // Backward connection logic (right to left)
+              startX = sourcePos.x // Start from left side of source node
+              startY = sourcePos.y + sourcePos.height / 2
+              endX = targetPos.x + targetPos.width + 14 // End at right side of target node with arrow offset
+              endY = targetPos.y + targetPos.height / 2
             } else {
-              // Horizontal connection logic (using local coordinates)
+              // Forward connection logic (left to right)
               startX = sourcePos.x + sourcePos.width
               startY = sourcePos.y + sourcePos.height / 2
               endX = targetPos.x - 14
