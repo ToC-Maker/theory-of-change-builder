@@ -37,12 +37,12 @@
   status = 404
   force = true
 
-# SPA fallback - temporarily disabled for debugging
-# [[redirects]]
-#   from = "/*"
-#   to = "/index.html"
-#   status = 200
-#   force = false
+# SPA fallback - REQUIRED for production routes to work
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = false
 
 [functions]
   node_bundler = "esbuild"
