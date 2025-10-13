@@ -185,7 +185,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+    // Keep focus on input if we're in chat mode and not loading
+    if (currentMode === 'chat' && !isCollapsed && inputRef.current && !isLoading) {
+      // Use setTimeout to ensure this happens after all DOM updates
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
+    }
+  }, [messages, currentMode, isCollapsed, isLoading]);
 
   // Smart auto-scroll during streaming - only if user is near bottom
   useEffect(() => {
