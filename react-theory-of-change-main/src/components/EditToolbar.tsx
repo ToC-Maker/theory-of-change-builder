@@ -45,6 +45,8 @@ interface EditToolbarProps {
   edgePopup?: any
   // Camera props for toolbar positioning
   camera?: { x: number; y: number; z: number }
+  // Callback to update the edit token when links are generated
+  onEditTokenChange?: (token: string) => void
 }
 
 export function EditToolbar({
@@ -85,6 +87,7 @@ export function EditToolbar({
   nodePopup,
   edgePopup,
   camera,
+  onEditTokenChange,
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
   const [showModeDropdown, setShowModeDropdown] = useState(false)
@@ -201,6 +204,10 @@ export function EditToolbar({
         ChartService.saveEditToken(response.chartId, response.editToken)
         // Update the URL to the edit URL
         window.history.replaceState(null, '', `/edit/${response.editToken}`)
+        // Notify parent component about the new edit token
+        if (onEditTokenChange) {
+          onEditTokenChange(response.editToken)
+        }
       }
     } catch (err) {
       setShareError(err instanceof Error ? err.message : 'Failed to share chart')
