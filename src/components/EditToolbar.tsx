@@ -236,17 +236,23 @@ export function EditToolbar({
     }
   }, [data, editMode])
 
-  // Load existing share data when dropdown opens and we have an edit token
+  // Auto-generate or load share data when dropdown opens
   useEffect(() => {
-    if (showShareDropdown && currentEditToken && !shareData && !shareLoading) {
-      loadExistingShareData()
+    if (showShareDropdown && !shareData && !shareLoading) {
+      if (currentEditToken) {
+        // If we have an edit token, load existing share data
+        loadExistingShareData()
+      } else {
+        // Otherwise, create new share links
+        handleShare()
+      }
     } else if (!showShareDropdown) {
       // Reset state when dropdown closes
       setShareData(null)
       setShareError(null)
       setCopiedField(null)
     }
-  }, [showShareDropdown, currentEditToken])
+  }, [showShareDropdown])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -488,36 +494,33 @@ export function EditToolbar({
 
             {/* Share Dropdown */}
             {showShareDropdown && (
-              <div className="absolute top-full mt-1 left-1/2 transform -translate-x-1/2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50 max-h-96 overflow-y-auto">
-                <div className="px-4 py-3 border-b border-gray-100">
-                  <h4 className="text-sm font-medium text-gray-700">Share Your Chart</h4>
-                </div>
-                <div className="p-4">
-                  {!shareData && !shareLoading && (
-                    <div className="text-center">
-                      <p className="text-gray-600 mb-4 text-sm">
-                        Generate shareable links for your chart
-                      </p>
-                      <button
-                        onClick={handleShare}
-                        disabled={shareLoading}
-                        className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                      >
-                        Generate Links
-                      </button>
-                    </div>
-                  )}
-
+              <div className="absolute top-full mt-1 left-1/2 transform -translate-x-1/2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 max-h-96 overflow-y-auto">
+                <div>
                   {shareLoading && (
                     <div className="text-center py-4">
                       <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
-                      <p className="mt-2 text-gray-600 text-sm">Creating shareable links...</p>
+                      <p className="mt-2 text-gray-600 text-sm">
+                        {currentEditToken ? 'Loading share links...' : 'Creating shareable links...'}
+                      </p>
                     </div>
                   )}
 
                   {shareError && (
                     <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
                       <p className="text-red-600 text-sm">{shareError}</p>
+                      <button
+                        onClick={() => {
+                          setShareError(null)
+                          if (currentEditToken) {
+                            loadExistingShareData()
+                          } else {
+                            handleShare()
+                          }
+                        }}
+                        className="mt-2 text-sm text-red-700 underline hover:no-underline"
+                      >
+                        Try again
+                      </button>
                     </div>
                   )}
 
