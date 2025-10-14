@@ -22,7 +22,8 @@ import {
   ChatBubbleLeftRightIcon,
   DocumentTextIcon,
   MagnifyingGlassCircleIcon,
-  StopIcon
+  StopIcon,
+  SparklesIcon
 } from '@heroicons/react/24/outline';
 
 export type AIMode = 'chat' | 'generate' | 'search';
@@ -83,11 +84,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [apiKeyError, setApiKeyError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [extendedThinkingEnabled, setExtendedThinkingEnabled] = useState(false);
 
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -262,6 +265,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       setIsLoading(false);
       setStreamingContent('');
       setIsSearching(false);
+      setIsThinking(false);
 
       // If there's a streaming message, finalize it with current content
       if (streamingMessageRef.current && streamingContent) {
@@ -292,6 +296,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setStreamingContent('');
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
+
+    // Set thinking state if extended thinking is enabled
+    if (extendedThinkingEnabled) {
+      setIsThinking(true);
+    }
 
     // Create a placeholder streaming message
     const streamingId = (Date.now() + 1).toString();
@@ -328,6 +337,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }
           },
           onContent: (chunk: string, fullContent: string) => {
+            // Clear thinking state when content starts streaming
+            if (isThinking) {
+              setIsThinking(false);
+            }
             setStreamingContent(fullContent);
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
@@ -350,6 +363,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setMessages(prev => [...prev, assistantMessage]);
           setIsStreaming(false);
           setStreamingContent('');
+          setIsThinking(false);
           streamingMessageRef.current = null;
           
           // Handle edit instructions if present
@@ -388,6 +402,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setIsStreaming(false);
           setStreamingContent('');
           setIsSearching(false);
+          setIsThinking(false);
           streamingMessageRef.current = null;
         }
       },
@@ -395,7 +410,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       selectedModel,
       webSearchEnabled,
       customSystemPrompt,
-      highlightedNodes
+      highlightedNodes,
+      extendedThinkingEnabled
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -408,6 +424,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       setIsStreaming(false);
       setStreamingContent('');
       setIsSearching(false);
+      setIsThinking(false);
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
@@ -505,6 +522,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setStreamingContent('');
     setConversationStarted(true);
 
+    // Set thinking state if extended thinking is enabled
+    if (extendedThinkingEnabled) {
+      setIsThinking(true);
+    }
+
     // Combine all file contents
     const documentContent = files
       .filter(f => f.status === 'ready')
@@ -554,6 +576,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         apiKey,
         {
           onContent: (chunk: string, fullContent: string) => {
+            // Clear thinking state when content starts streaming
+            if (isThinking) {
+              setIsThinking(false);
+            }
             setStreamingContent(fullContent);
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
@@ -572,6 +598,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setMessages(prev => [...prev, assistantMessage]);
           setIsStreaming(false);
           setStreamingContent('');
+          setIsThinking(false);
           setFullConversation(finalMessage);
           streamingMessageRef.current = null;
 
@@ -633,7 +660,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       selectedModel,
       webSearchEnabled,
       customSystemPrompt,
-      highlightedNodes
+      highlightedNodes,
+      extendedThinkingEnabled
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -645,6 +673,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       setMessages(prev => [...prev, errorMessage]);
       setIsStreaming(false);
       setStreamingContent('');
+      setIsThinking(false);
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
@@ -978,6 +1007,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </div>
                 )}
 
+                {/* Thinking indicator */}
+                {isThinking && !isSearching && (
+                  <div className="flex justify-start">
+                    <div className="bg-purple-50 text-purple-800 rounded-lg rounded-bl-sm p-2 text-sm border border-purple-200">
+                      <div className="flex items-center gap-2">
+                        <SparklesIcon className="w-4 h-4 animate-pulse text-purple-600" />
+                        <span className="text-purple-700">Thinking about your request...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Streaming message */}
                 {isStreaming && streamingContent && (
                   <div className="flex justify-start">
@@ -1077,6 +1118,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         title={webSearchEnabled ? "Web search enabled" : "Enable web search"}
                       >
                         <MagnifyingGlassIcon className="w-5 h-5" />
+                      </button>
+                      <button
+                        onClick={() => setExtendedThinkingEnabled(!extendedThinkingEnabled)}
+                        className={`p-2 rounded-lg transition-colors ${
+                          extendedThinkingEnabled
+                            ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                        }`}
+                        title={extendedThinkingEnabled ? "Extended thinking enabled" : "Enable extended thinking for complex tasks"}
+                      >
+                        <SparklesIcon className="w-5 h-5" />
                       </button>
                     </div>
                     <div className="flex items-center gap-2">

@@ -149,7 +149,8 @@ class ChatService {
     model: string = "claude-sonnet-4-20250514",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
-    highlightedNodes?: Set<string>
+    highlightedNodes?: Set<string>,
+    extendedThinkingEnabled: boolean = false
   ): Promise<void> {
     try {
       // Process the last user message
@@ -227,6 +228,14 @@ class ChatService {
           name: "web_search",
           max_uses: 5
         }];
+      }
+
+      // Add extended thinking if enabled
+      if (extendedThinkingEnabled) {
+        requestBody.thinking = {
+          type: "enabled",
+          budget_tokens: 10000  // You can adjust this value as needed
+        };
       }
 
       // Stream from edge function
