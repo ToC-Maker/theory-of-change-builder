@@ -1211,7 +1211,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     Custom System Prompt
                   </label>
                   <p className="text-xs text-gray-500 mb-2">
-                    Override the default system prompt with your own instructions. Leave empty to use the default.
+                    Override the default system prompt with your own instructions.
                   </p>
                   <MDXEditorComponent
                     markdown={tempSystemPrompt}
