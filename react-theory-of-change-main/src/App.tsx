@@ -7,6 +7,7 @@ import { ShareModal } from "./components/ShareModal"
 import { GraphTutorial } from "./components/GraphTutorial"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
+import { PlusIcon, MinusIcon, ArrowsPointingOutIcon } from "@heroicons/react/24/outline"
 import "./App.css"
 
 // Default empty template with 4 sections
@@ -55,7 +56,11 @@ const emptyTemplate: ToCData = {
     }
   ],
   "columnPadding": 48,
-  "sectionPadding": 48
+  "sectionPadding": 48,
+  "color": "#2F2D2E",
+  "textSize": 1,
+  "curvature": 0.5
+
 };
 
 interface ToCData {
@@ -303,6 +308,7 @@ function ToCViewer() {
   const [isPanning, setIsPanning] = useState(false)
   const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null)
   const [panStartCamera, setPanStartCamera] = useState<{ x: number; y: number } | null>(null)
+  const hasInitializedZoom = useRef(false)
 
   // Helper function to format relative time
   const getTimeAgo = (date: Date) => {
@@ -801,6 +807,92 @@ function ToCViewer() {
     loadData()
   }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage])
 
+  // Helper function to calculate zoom-to-fit
+  const calculateZoomToFit = useCallback(() => {
+    if (!containerSize.width || !containerSize.height) {
+      return { x: 0, y: 0, z: 1 };
+    }
+
+    // Calculate viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Account for sidebars and padding
+    const sidebarWidth = isLeftPanelCollapsed ? 48 : viewportWidth * 0.25; // 3rem or 25%
+    const availableWidth = viewportWidth - sidebarWidth - 32; // 32px for padding (left + right)
+    const availableHeight = viewportHeight - 64 - 80; // 64px top, 80px bottom padding
+
+    // Calculate graph dimensions (including the white container padding)
+    const graphWidth = containerSize.width + 32;
+    const graphHeight = containerSize.height + 32;
+
+    // Calculate zoom to fit with some padding (90% of available space)
+    const zoomToFitWidth = (availableWidth / graphWidth);
+    const zoomToFitHeight = (availableHeight / graphHeight);
+    const zoomToFit = Math.min(zoomToFitWidth, zoomToFitHeight);
+
+    // Calculate centering translation
+    // Strategy: Position the graph so its center appears at the center of available viewport space
+    // The graph container (white box) has dimensions: graphWidth x graphHeight
+    // Available viewport space for the graph: availableWidth x availableHeight
+    // After zoom, graph appears as: (graphWidth * z) x (graphHeight * z)
+
+    const paddingLeft = sidebarWidth + 16; // sidebarWidth + 1rem
+    const paddingTop = 64;
+
+    // Where we want the graph to appear in screen space
+    // Center of available space: (paddingLeft + availableWidth/2, paddingTop + availableHeight/2)
+
+    // After transform scale(z) translate(tx, ty), the graph container's top-left corner
+    // (which flexbox positions) appears in screen at: z * (topLeft + translate)
+    // We want the CENTER to appear at the center of available space
+
+    // Flexbox centers horizontally: topLeft.x = paddingLeft + (availableWidth - graphWidth)/2
+    // Flexbox top-aligns: topLeft.y = paddingTop
+
+    // Graph center = topLeft + (graphWidth/2, graphHeight/2)
+    // = (paddingLeft + (availableWidth - graphWidth)/2 + graphWidth/2, paddingTop + graphHeight/2)
+    // = (paddingLeft + availableWidth/2, paddingTop + graphHeight/2)
+
+    // After transform: z * (topLeft + translate) = where topLeft appears
+    // Graph center appears at: z * (topLeft + translate + (graphWidth/2, graphHeight/2))
+    // We want this to equal: (paddingLeft + availableWidth/2, paddingTop + availableHeight/2)
+
+    // So: z * (topLeft + translate + graphCenter_relative) = targetCenter
+    // translate = targetCenter/z - topLeft - graphCenter_relative
+
+    // Important: Flexbox centers when content fits, but left-aligns when it overflows
+    const topLeftX = graphWidth <= availableWidth
+      ? paddingLeft + (availableWidth - graphWidth) / 2  // Centered by flexbox
+      : paddingLeft;  // Left-aligned when overflowing
+
+    const topLeftY = paddingTop;  // Always top-aligned
+
+    const targetCenterX = paddingLeft + availableWidth / 2;
+    const targetCenterY = paddingTop + availableHeight / 2;
+
+    const centerX = targetCenterX / zoomToFit - topLeftX - graphWidth / 2;
+    const centerY = targetCenterY / zoomToFit - topLeftY - graphHeight / 2;
+
+    return {
+      x: centerX,
+      y: centerY,
+      z: zoomToFit
+    };
+  }, [containerSize.width, containerSize.height, isLeftPanelCollapsed]);
+
+  // Zoom to fit on initial load
+  useEffect(() => {
+    if (hasInitializedZoom.current || !containerSize.width || !containerSize.height) {
+      return;
+    }
+
+    const zoomToFit = calculateZoomToFit();
+    setCamera(zoomToFit);
+    hasInitializedZoom.current = true;
+    console.log('Zoom to fit applied:', zoomToFit);
+  }, [containerSize.width, containerSize.height, calculateZoomToFit]);
+
   // Smart periodic sync with idle detection for edit mode
   useEffect(() => {
     if (!editToken) return;
@@ -1055,7 +1147,10 @@ function ToCViewer() {
         e.preventDefault();
 
         if (e.key === '0') {
-          setCamera({ x: 0, y: 0, z: 1 });
+          // Reset to zoom-to-fit
+          const zoomToFit = calculateZoomToFit();
+          setCamera(zoomToFit);
+          console.log('Reset to zoom-to-fit:', zoomToFit);
         }
       }
     };
@@ -1074,7 +1169,7 @@ function ToCViewer() {
       document.removeEventListener('mouseup', handleMouseUp, { capture: true });
       document.removeEventListener('keydown', handleKeyDown, { capture: true });
     };
-  }, [camera, isPanning, panStart, panStartCamera]);
+  }, [camera, isPanning, panStart, panStartCamera, calculateZoomToFit]);
 
   if (loading) {
     return (
@@ -1163,6 +1258,7 @@ function ToCViewer() {
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
+              onEditTokenChange={setCurrentEditToken}
             />
           </div>
         </div>
@@ -1177,6 +1273,97 @@ function ToCViewer() {
           chartData={data}
           currentEditToken={currentEditToken}
         />
+      </div>
+
+      {/* Zoom Controls - Google Maps Style */}
+      <div
+        className="fixed z-40 bg-white rounded-lg shadow-lg border border-gray-200"
+        style={{
+          bottom: '5rem',
+          right: '1rem'
+        }}
+      >
+        <div className="flex flex-col">
+          {/* Zoom In */}
+          <button
+            onClick={() => {
+              const viewportWidth = window.innerWidth;
+              const viewportHeight = window.innerHeight;
+              const sidebarWidth = isLeftPanelCollapsed ? 48 : viewportWidth * 0.25;
+              const toolbarHeight = 64;
+              const jsonDropdownHeight = 64;
+
+              // Calculate center of available viewport
+              const centerX = sidebarWidth + (viewportWidth - sidebarWidth) / 2;
+              const centerY = toolbarHeight + (viewportHeight - toolbarHeight - jsonDropdownHeight) / 2;
+
+              // Calculate new zoom (20% increase)
+              const newZoom = Math.min(5, camera.z * 1.2);
+
+              // Find the local point at viewport center
+              // localPoint = (screenPoint - translate * scale) / scale
+              const localX = (centerX - camera.x * camera.z) / camera.z;
+              const localY = (centerY - camera.y * camera.z) / camera.z;
+
+              // After zoom, we want the same local point to remain at center
+              // screenPoint = localPoint * newScale + translate * newScale
+              // centerX = localX * newZoom + newX * newZoom
+              // Solving: newX = centerX / newZoom - localX
+              const newX = centerX / newZoom - localX;
+              const newY = centerY / newZoom - localY;
+
+              setCamera({ x: newX, y: newY, z: newZoom });
+            }}
+            className="p-2 hover:bg-gray-100 transition-colors rounded-t-lg border-b border-gray-200"
+            title="Zoom in"
+          >
+            <PlusIcon className="w-5 h-5 text-gray-700" />
+          </button>
+
+          {/* Zoom Out */}
+          <button
+            onClick={() => {
+              const viewportWidth = window.innerWidth;
+              const viewportHeight = window.innerHeight;
+              const sidebarWidth = isLeftPanelCollapsed ? 48 : viewportWidth * 0.25;
+              const toolbarHeight = 64;
+              const jsonDropdownHeight = 64;
+
+              // Calculate center of available viewport
+              const centerX = sidebarWidth + (viewportWidth - sidebarWidth) / 2;
+              const centerY = toolbarHeight + (viewportHeight - toolbarHeight - jsonDropdownHeight) / 2;
+
+              // Calculate new zoom (20% decrease)
+              const newZoom = Math.max(0.1, camera.z / 1.2);
+
+              // Find the local point at viewport center
+              const localX = (centerX - camera.x * camera.z) / camera.z;
+              const localY = (centerY - camera.y * camera.z) / camera.z;
+
+              // Keep the same local point at center after zoom
+              const newX = centerX / newZoom - localX;
+              const newY = centerY / newZoom - localY;
+
+              setCamera({ x: newX, y: newY, z: newZoom });
+            }}
+            className="p-2 hover:bg-gray-100 transition-colors border-b border-gray-200"
+            title="Zoom out"
+          >
+            <MinusIcon className="w-5 h-5 text-gray-700" />
+          </button>
+
+          {/* Zoom to Fit */}
+          <button
+            onClick={() => {
+              const zoomToFit = calculateZoomToFit();
+              setCamera(zoomToFit);
+            }}
+            className="p-2 hover:bg-gray-100 transition-colors rounded-b-lg"
+            title="Fit to page (Ctrl+0)"
+          >
+            <ArrowsPointingOutIcon className="w-5 h-5 text-gray-700" />
+          </button>
+        </div>
       </div>
 
       {/* JSON Dropdown Footer - Fixed at bottom */}
