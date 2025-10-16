@@ -686,28 +686,7 @@ export function EditToolbar({
 
                   {shareData && !shareLoading && (
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">
-                          View Link
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            readOnly
-                            value={shareData.viewUrl}
-                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-gray-50"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(shareData.viewUrl, 'view')}
-                            className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
-                          >
-                            {copiedField === 'view' ? 'Copied!' : 'Copy'}
-                          </button>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-2">
-                          Share this link with anyone to view your chart
-                        </p>
-                      </div>
+                      
 
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -728,7 +707,30 @@ export function EditToolbar({
                           </button>
                         </div>
                         <p className="text-xs text-yellow-700 mt-2">
-                          ⚠️ Keep this link private - anyone with it can edit your chart
+                          Keep this link private - anyone with it can edit your chart
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          View Link
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={shareData.viewUrl}
+                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-gray-50"
+                          />
+                          <button
+                            onClick={() => copyToClipboard(shareData.viewUrl, 'view')}
+                            className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
+                          >
+                            {copiedField === 'view' ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">
+                          Share this link with anyone to view your chart
                         </p>
                       </div>
 
