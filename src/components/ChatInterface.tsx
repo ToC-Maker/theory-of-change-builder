@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { useParams, useLocation } from 'react-router-dom';
 import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
@@ -61,10 +62,31 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-20250514');
 
+  // Get route parameters to create unique storage key
+  const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
+  const location = useLocation();
+
+  // Create a unique storage key based on the current route
+  const getStorageKey = () => {
+    if (params.chartId) {
+      return `chatHistory_chart_${params.chartId}`;
+    } else if (params.editToken) {
+      return `chatHistory_edit_${params.editToken}`;
+    } else if (params.filename) {
+      return `chatHistory_file_${params.filename}`;
+    } else if (location.pathname === '/') {
+      return 'chatHistory_root';
+    } else {
+      // Fallback for any other routes
+      return `chatHistory_${location.pathname.replace(/\//g, '_')}`;
+    }
+  };
+
   // Load chat history from localStorage on mount
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
-      const savedMessages = localStorage.getItem('chatHistory');
+      const storageKey = getStorageKey();
+      const savedMessages = localStorage.getItem(storageKey);
       if (savedMessages) {
         const parsed = JSON.parse(savedMessages);
         // Convert timestamp strings back to Date objects
@@ -174,12 +196,36 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setIsNearBottom(checkIfNearBottom());
   };
 
+  // Reload chat history when route changes
+  useEffect(() => {
+    try {
+      const storageKey = getStorageKey();
+      const savedMessages = localStorage.getItem(storageKey);
+      if (savedMessages) {
+        const parsed = JSON.parse(savedMessages);
+        // Convert timestamp strings back to Date objects
+        const loadedMessages = parsed.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp)
+        }));
+        setMessages(loadedMessages);
+      } else {
+        // Clear messages if no saved history for this route
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Failed to load chat history on route change:', error);
+      setMessages([]);
+    }
+  }, [params.chartId, params.editToken, params.filename, location.pathname]);
+
   // Save messages to localStorage whenever they change
   useEffect(() => {
     try {
+      const storageKey = getStorageKey();
       // Only save non-empty message arrays to avoid clearing on mount
       if (messages.length > 0) {
-        localStorage.setItem('chatHistory', JSON.stringify(messages));
+        localStorage.setItem(storageKey, JSON.stringify(messages));
       }
     } catch (error) {
       console.error('Failed to save chat history:', error);
@@ -443,7 +489,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setMessages([]);
     // Clear chat history from localStorage
     try {
-      localStorage.removeItem('chatHistory');
+      const storageKey = getStorageKey();
+      localStorage.removeItem(storageKey);
     } catch (error) {
       console.error('Failed to clear chat history from localStorage:', error);
     }
