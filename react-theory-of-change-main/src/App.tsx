@@ -5,6 +5,7 @@ import { ChatInterface } from "./components/ChatInterface"
 import { JsonDropdown } from "./components/JsonDropdown"
 import { ShareModal } from "./components/ShareModal"
 import { GraphTutorial } from "./components/GraphTutorial"
+import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon } from "@heroicons/react/24/outline"
@@ -1391,6 +1392,7 @@ function ToCViewer() {
 function App() {
   return (
     <ApiKeyProvider>
+      <PrivacyPolicyPopup />
       <Routes>
         {/* New URL-based routes */}
         <Route path="/" element={<ToCViewer />} />
