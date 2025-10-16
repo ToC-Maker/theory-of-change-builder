@@ -1,10 +1,21 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { XMarkIcon, ShieldCheckIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
 
 export function PrivacyPolicyPopup() {
   const [isVisible, setIsVisible] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
+    // Only show privacy policy on edit routes (not on view-only chart routes)
+    const isChartRoute = location.pathname.includes('/chart/');
+    const isViewRoute = location.pathname.includes('/view');
+
+    // Don't show on view-only routes
+    if (isChartRoute || isViewRoute) {
+      return;
+    }
+
     // Check if user has already accepted the privacy policy
     const hasAccepted = localStorage.getItem('privacyPolicyAccepted');
     if (!hasAccepted) {
@@ -13,7 +24,7 @@ export function PrivacyPolicyPopup() {
         setIsVisible(true);
       }, 1000);
     }
-  }, []);
+  }, [location]);
 
   const handleAccept = () => {
     // Store acceptance in localStorage
