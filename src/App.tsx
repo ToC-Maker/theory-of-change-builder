@@ -453,7 +453,7 @@ function ToCViewer() {
           setIsSaving(false);
         }
         saveTimeoutRef.current = null;
-      }, 1000);
+      }, 300);
     }
 
     console.log('JSON data uploaded successfully');
@@ -501,7 +501,7 @@ function ToCViewer() {
     // Show saving indicator
     setIsSaving(true);
 
-    // Save to database after 1 second of no changes
+    // Save to database after 300ms of no changes
     saveTimeoutRef.current = setTimeout(() => {
       if (pendingChangesRef.current && currentEditToken) {
         console.log('Saving to database after debounce period');
@@ -523,7 +523,7 @@ function ToCViewer() {
         setIsSaving(false);
       }
       saveTimeoutRef.current = null;
-    }, 1000); // 1 second debounce
+    }, 300); // 300ms debounce
   };
 
   const handleUndo = useCallback(() => {
@@ -575,7 +575,7 @@ function ToCViewer() {
             setIsSaving(false);
           }
           saveTimeoutRef.current = null;
-        }, 1000);
+        }, 300);
       }
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
@@ -630,7 +630,7 @@ function ToCViewer() {
             setIsSaving(false);
           }
           saveTimeoutRef.current = null;
-        }, 1000);
+        }, 300);
       }
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
