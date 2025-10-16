@@ -4,7 +4,7 @@ import { XMarkIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/2
 interface TutorialStep {
   title: string
   description: string
-  videoSrc: string
+  gifSrc: string
 }
 
 export function GraphTutorial() {
@@ -15,17 +15,17 @@ export function GraphTutorial() {
     {
       title: "Click on a node",
       description: "Click any node to highlight it and see its connections",
-      videoSrc: "/tutorial/node-click.mp4" // You'll need to add these MP4 files
+      gifSrc: "/tutorial/node-click.gif"
     },
     {
       title: "Click the info button",
       description: "Click on the info button to see detailed node information",
-      videoSrc: "/tutorial/info-button.mp4"
+      gifSrc: "/tutorial/info-button.gif"
     },
     {
       title: "Click on an edge",
       description: "Click on connection lines to see edge details",
-      videoSrc: "/tutorial/edge-click.mp4"
+      gifSrc: "/tutorial/edge-click.gif"
     }
   ]
 
@@ -79,24 +79,22 @@ export function GraphTutorial() {
         </div>
 
         <div className="mb-8">
-          {/* Video container */}
+          {/* GIF container */}
           <div className="bg-gray-100 rounded-lg h-96 flex items-center justify-center mb-6 overflow-hidden">
-            <video
-              src={step.videoSrc}
-              autoPlay
-              loop
-              muted
-              playsInline
-              className="max-w-full max-h-full rounded-lg"
+            <img
+              src={step.gifSrc}
+              alt={step.title}
+              className="max-w-full max-h-full rounded-lg object-contain"
               onError={(e) => {
-                // Fallback if video doesn't exist
+                // Fallback if GIF doesn't exist
                 e.currentTarget.style.display = 'none'
-                e.currentTarget.nextElementSibling.style.display = 'flex'
+                const fallback = e.currentTarget.nextElementSibling as HTMLElement
+                if (fallback) fallback.style.display = 'flex'
               }}
             />
-            <div className="text-gray-500 text-center hidden">
+            <div className="text-gray-500 text-center hidden flex-col">
               <div className="text-4xl mb-2">🎬</div>
-              <div>Video: {step.title}</div>
+              <div>Tutorial: {step.title}</div>
             </div>
           </div>
 
