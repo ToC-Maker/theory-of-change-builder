@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
-import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon } from "@heroicons/react/24/outline"
+import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon, ClockIcon } from "@heroicons/react/24/outline"
 import { ChartService, CreateChartResponse } from "../services/chartService"
 import { shortcuts } from "../utils/keyboardShortcuts"
 import { Tooltip } from 'react-tooltip'
@@ -92,9 +92,12 @@ export function EditToolbar({
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
   const [showModeDropdown, setShowModeDropdown] = useState(false)
   const [showShareDropdown, setShowShareDropdown] = useState(false)
+  const [showRecentDropdown, setShowRecentDropdown] = useState(false)
   const [showAlignmentSuggestion, setShowAlignmentSuggestion] = useState(false)
   const [showHelpModal, setShowHelpModal] = useState(false)
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 })
+  const [recentCharts, setRecentCharts] = useState<Array<{ title: string; editUrl: string; timestamp: number }>>([])
+
 
   // Tooltip state
   const [showLayoutTooltip, setShowLayoutTooltip] = useState(true)
@@ -108,7 +111,82 @@ export function EditToolbar({
   const dropdownRef = useRef<HTMLDivElement>(null)
   const modeDropdownRef = useRef<HTMLDivElement>(null)
   const shareDropdownRef = useRef<HTMLDivElement>(null)
+  const recentDropdownRef = useRef<HTMLDivElement>(null)
   const prevHighlightedNodesRef = useRef<Set<string>>(new Set())
+
+  // Load recent charts from localStorage
+  const loadRecentCharts = () => {
+    try {
+      const stored = localStorage.getItem('recentEditCharts')
+      if (stored) {
+        const charts = JSON.parse(stored)
+        // Sort by timestamp, most recent first
+        charts.sort((a: any, b: any) => b.timestamp - a.timestamp)
+        // Keep only the 10 most recent
+        setRecentCharts(charts.slice(0, 10))
+      }
+    } catch (error) {
+      console.error('Failed to load recent charts:', error)
+    }
+  }
+
+  // Save current chart to recent list
+  const saveToRecent = (title: string, editUrl: string) => {
+    try {
+      const stored = localStorage.getItem('recentEditCharts')
+      let charts = stored ? JSON.parse(stored) : []
+
+      // Remove if already exists (to avoid duplicates)
+      charts = charts.filter((c: any) => c.editUrl !== editUrl)
+
+      // Add to beginning
+      charts.unshift({
+        title: title || 'Untitled Theory of Change',
+        editUrl,
+        timestamp: Date.now()
+      })
+
+      // Keep only 10 most recent
+      charts = charts.slice(0, 10)
+
+      localStorage.setItem('recentEditCharts', JSON.stringify(charts))
+      setRecentCharts(charts)
+    } catch (error) {
+      console.error('Failed to save to recent charts:', error)
+    }
+  }
+
+  // Remove a chart from recent list
+  const removeFromRecent = (editUrl: string) => {
+    try {
+      const stored = localStorage.getItem('recentEditCharts')
+      let charts = stored ? JSON.parse(stored) : []
+
+      // Filter out the chart to remove
+      charts = charts.filter((c: any) => c.editUrl !== editUrl)
+
+      localStorage.setItem('recentEditCharts', JSON.stringify(charts))
+      setRecentCharts(charts)
+    } catch (error) {
+      console.error('Failed to remove from recent charts:', error)
+    }
+  }
+
+  // Load recent charts when component mounts or dropdown opens
+  useEffect(() => {
+    if (showRecentDropdown) {
+      loadRecentCharts()
+    }
+  }, [showRecentDropdown])
+
+  // Save current chart when we have an edit token
+  useEffect(() => {
+    if (currentEditToken && data) {
+      const editUrl = `${window.location.origin}/edit/${currentEditToken}`
+      const title = data.title || 'Theory of Change'
+      saveToRecent(title, editUrl)
+    }
+  }, [currentEditToken, data?.title])
 
   // Smart detection for misaligned nodes
   const detectMisalignedNodes = (): boolean => {
@@ -266,13 +344,16 @@ export function EditToolbar({
       if (shareDropdownRef.current && !shareDropdownRef.current.contains(event.target as Node)) {
         setShowShareDropdown(false)
       }
+      if (recentDropdownRef.current && !recentDropdownRef.current.contains(event.target as Node)) {
+        setShowRecentDropdown(false)
+      }
     }
 
-    if (showWidthDropdown || showModeDropdown || showShareDropdown) {
+    if (showWidthDropdown || showModeDropdown || showShareDropdown || showRecentDropdown) {
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showWidthDropdown, showModeDropdown, showShareDropdown])
+  }, [showWidthDropdown, showModeDropdown, showShareDropdown, showRecentDropdown])
 
   // Update toolbar position when selection changes or camera changes
   useEffect(() => {
@@ -299,10 +380,89 @@ export function EditToolbar({
   return (
     <>
       <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
-        <div className="max-w-none mx-auto px-6 py-2" style={{ maxWidth: '120rem' }}>
+        <div className="max-w-none mx-auto py-2" style={{ maxWidth: '100%' }}>
         <div className="flex items-center justify-between relative">
           {/* Left side - Header controls and main tools */}
-          <div className="flex items-center gap-6 flex-1">
+          <div className="flex items-center gap-4 flex-1 pl-2">
+            {/* Open Recent Dropdown - Far Left */}
+            <div className="relative" ref={recentDropdownRef}>
+              <button
+                onClick={() => setShowRecentDropdown(!showRecentDropdown)}
+                className="px-3 py-2 text-gray-600 hover:bg-gray-100 text-sm font-medium rounded transition-all duration-200 flex items-center gap-2"
+                title="Open recent charts"
+              >
+                <ClockIcon className="w-4 h-4" />
+                Open Recent
+                <ChevronDownIcon className="w-3 h-3" />
+              </button>
+
+              {/* Recent Charts Dropdown */}
+              {showRecentDropdown && (
+                <div className="absolute top-full mt-2 left-0 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-y-auto">
+                  <div className="p-2">
+                    {recentCharts.length === 0 ? (
+                      <div className="px-3 py-4 text-sm text-gray-500 text-center">
+                        No recent charts yet
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        {recentCharts.map((chart, index) => {
+                          const isCurrentChart = chart.editUrl === `${window.location.origin}/edit/${currentEditToken}`
+                          return (
+                            <div
+                              key={index}
+                              className={`group flex items-start gap-2 px-3 py-2 rounded text-sm transition-colors ${
+                                isCurrentChart
+                                  ? 'bg-blue-50'
+                                  : 'hover:bg-gray-100'
+                              }`}
+                            >
+                              <a
+                                href={chart.editUrl}
+                                onClick={(e) => {
+                                  if (isCurrentChart) {
+                                    e.preventDefault()
+                                    setShowRecentDropdown(false)
+                                  }
+                                }}
+                                className={`flex-1 min-w-0 ${
+                                  isCurrentChart
+                                    ? 'text-blue-700 cursor-default'
+                                    : 'text-gray-700'
+                                }`}
+                              >
+                                <div className="font-medium truncate">
+                                  {chart.title}
+                                </div>
+                                <div className="text-xs text-gray-500 mt-0.5">
+                                  {new Date(chart.timestamp).toLocaleDateString()} at {new Date(chart.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  {isCurrentChart && <span className="ml-2 text-blue-600">(Current)</span>}
+                                </div>
+                              </a>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  removeFromRecent(chart.editUrl)
+                                }}
+                                className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded transition-all duration-200"
+                                title="Remove from recent"
+                              >
+                                <XMarkIcon className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Separator */}
+            <div className="h-6 w-px bg-gray-300"></div>
+
             {/* Undo/Redo Group */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500">({undoHistory.length})</span>
@@ -419,7 +579,7 @@ export function EditToolbar({
 
                 {/* Dropdown Menu */}
                 {showWidthDropdown && (
-                  <div className="absolute top-full mt-1 left-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                  <div className="absolute top-full mt-2 left-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
                     <div className="px-4 py-3 border-b border-gray-100">
                       <h4 className="text-sm font-medium text-gray-700">Formatting Options</h4>
                     </div>
@@ -428,7 +588,7 @@ export function EditToolbar({
                       {/* Curve Control */}
                       <div>
                         <label className="text-sm text-gray-600">Connection Curve</label>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex items-center gap-2 mt-2">
                           <input
                             type="range"
                             min="0"
@@ -445,7 +605,7 @@ export function EditToolbar({
                       {/* Spacing Controls */}
                       <div>
                         <label className="text-sm text-gray-600">Column Spacing</label>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex items-center gap-2 mt-2">
                           <input
                             type="range"
                             min="0"
@@ -461,7 +621,7 @@ export function EditToolbar({
 
                       <div>
                         <label className="text-sm text-gray-600">Section Spacing</label>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex items-center gap-2 mt-2">
                           <input
                             type="range"
                             min="0"
@@ -494,7 +654,7 @@ export function EditToolbar({
 
             {/* Share Dropdown */}
             {showShareDropdown && (
-              <div className="absolute top-full mt-1 left-1/2 transform -translate-x-1/2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 max-h-96 overflow-y-auto">
+              <div className="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 max-h-96 overflow-y-auto">
                 <div>
                   {shareLoading && (
                     <div className="text-center py-4">
@@ -544,7 +704,7 @@ export function EditToolbar({
                             {copiedField === 'view' ? 'Copied!' : 'Copy'}
                           </button>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">
+                        <p className="text-xs text-gray-500 mt-2">
                           Share this link with anyone to view your chart
                         </p>
                       </div>
@@ -567,7 +727,7 @@ export function EditToolbar({
                             {copiedField === 'edit' ? 'Copied!' : 'Copy'}
                           </button>
                         </div>
-                        <p className="text-xs text-yellow-700 mt-1">
+                        <p className="text-xs text-yellow-700 mt-2">
                           ⚠️ Keep this link private - anyone with it can edit your chart
                         </p>
                       </div>
@@ -585,10 +745,7 @@ export function EditToolbar({
           </div>
 
           {/* Right side - Visual Controls and Actions */}
-          <div className="flex items-center gap-1 flex-1 justify-end">
-
-            {/* Separator */}
-            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+          <div className="flex items-center gap-1 flex-1 justify-end pr-2">
 
             {/* Save Status */}
             <div className="flex items-center gap-2">
@@ -664,7 +821,7 @@ export function EditToolbar({
               </button>
 
               {showModeDropdown && (
-                <div className="absolute top-full right-0 mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 z-50">
+                <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 z-50">
                   <button
                     onClick={() => {
                       setEditMode(true)
@@ -1004,7 +1161,7 @@ export function EditToolbar({
             <div>Add/remove columns & sections</div>
             <button
               onClick={() => setShowLayoutTooltip(false)}
-              className="text-xs underline hover:no-underline mt-1"
+              className="text-xs underline hover:no-underline mt-2"
             >
               Got it
             </button>
