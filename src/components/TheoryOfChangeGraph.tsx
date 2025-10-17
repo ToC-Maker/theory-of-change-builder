@@ -1360,6 +1360,7 @@ export function ToC({
         edgePopup={edgePopup}
         camera={camera}
         onEditTokenChange={onEditTokenChange}
+        containerSize={svgSize}
       />,
         document.body
       )}
