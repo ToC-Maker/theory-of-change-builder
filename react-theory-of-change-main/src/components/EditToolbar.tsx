@@ -47,6 +47,8 @@ interface EditToolbarProps {
   camera?: { x: number; y: number; z: number }
   // Callback to update the edit token when links are generated
   onEditTokenChange?: (token: string) => void
+  // Container size for embed code generation
+  containerSize?: { width: number; height: number }
 }
 
 export function EditToolbar({
@@ -88,6 +90,7 @@ export function EditToolbar({
   edgePopup,
   camera,
   onEditTokenChange,
+  containerSize,
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false)
   const [showModeDropdown, setShowModeDropdown] = useState(false)
@@ -107,6 +110,7 @@ export function EditToolbar({
   const [shareLoading, setShareLoading] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [embedScale, setEmbedScale] = useState(1.0)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const modeDropdownRef = useRef<HTMLDivElement>(null)
@@ -329,6 +333,7 @@ export function EditToolbar({
       setShareData(null)
       setShareError(null)
       setCopiedField(null)
+      setEmbedScale(1.0) // Reset scale to 100%
     }
   }, [showShareDropdown])
 
@@ -731,6 +736,36 @@ export function EditToolbar({
                         </div>
                         <p className="text-xs text-gray-500 mt-2">
                           Share this link with anyone to view your chart
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Embed Code
+                        </label>
+
+                        <div className="flex items-start gap-2">
+                          <textarea
+                            readOnly
+                            value={`<iframe src="${shareData.viewUrl}?embed=true" width="100%" height="600" frameborder="0" style="border: none;" allowfullscreen></iframe>`}
+                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-blue-50 font-mono resize-none overflow-hidden"
+                            rows={6}
+                            style={{ lineHeight: '1.5' }}
+                          />
+                          <button
+                            onClick={() => {
+                              copyToClipboard(
+                                `<iframe src="${shareData.viewUrl}?embed=true" width="100%" height="600" frameborder="0" style="border: none;" allowfullscreen></iframe>`,
+                                'embed'
+                              );
+                            }}
+                            className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded hover:bg-blue-200 transition-colors whitespace-nowrap"
+                          >
+                            {copiedField === 'embed' ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-600 mt-2">
+                          Embed instructions: <a href="https://wordpress.org/documentation/article/wordpress-block-editor/#custom-html" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-700">WordPress</a>, <a href="https://support.wix.com/en/article/studio-editor-adding-an-html-iframe-element" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-700">Wix</a>, <a href="https://support.squarespace.com/hc/en-us/articles/206543617-Code-Blocks" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-700">Squarespace</a>, <a href="https://university.webflow.com/lesson/custom-code-embed" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-700">Webflow</a>
                         </p>
                       </div>
 
