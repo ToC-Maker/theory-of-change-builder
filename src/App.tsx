@@ -72,6 +72,11 @@ interface ToCData {
   sectionPadding?: number
 }
 
+// Constants
+const EMBED_PADDING = 32; // 16px on each side
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 5;
+
 function ToCViewerOnly() {
   const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>()
   const location = useLocation()
@@ -79,6 +84,57 @@ function ToCViewerOnly() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+
+  // Check if embed mode is enabled via query parameter
+  const isEmbedMode = new URLSearchParams(location.search).get('embed') === 'true'
+
+  // Auto-scale state for embed mode
+  const [embedScale, setEmbedScale] = useState(1.0)
+
+  // Set body/html to fill iframe viewport in embed mode
+  useEffect(() => {
+    if (!isEmbedMode) return;
+
+    // Make body/html fill the iframe viewport (100%)
+    document.documentElement.style.margin = '0'
+    document.documentElement.style.padding = '0'
+    document.documentElement.style.height = '100%'
+    document.documentElement.style.width = '100%'
+    document.body.style.margin = '0'
+    document.body.style.padding = '0'
+    document.body.style.height = '100%'
+    document.body.style.width = '100%'
+    document.body.style.overflow = 'hidden'
+
+    const root = document.getElementById('root')
+    if (root) {
+      root.style.margin = '0'
+      root.style.padding = '0'
+      root.style.height = '100%'
+      root.style.width = '100%'
+    }
+
+    return () => {
+      // Restore defaults when component unmounts
+      document.documentElement.style.margin = ''
+      document.documentElement.style.padding = ''
+      document.documentElement.style.height = ''
+      document.documentElement.style.width = ''
+      document.body.style.margin = ''
+      document.body.style.padding = ''
+      document.body.style.overflow = ''
+      document.body.style.height = ''
+      document.body.style.width = ''
+
+      const root = document.getElementById('root')
+      if (root) {
+        root.style.margin = ''
+        root.style.padding = ''
+        root.style.height = ''
+        root.style.width = ''
+      }
+    }
+  }, [isEmbedMode])
 
   const loadFromLocalStorage = useCallback((currentFilename?: string): ToCData | null => {
     try {
@@ -134,6 +190,38 @@ function ToCViewerOnly() {
 
     loadData()
   }, [filename, chartId, loadFromLocalStorage])
+
+  // Auto-calculate scale based on iframe dimensions to fit content perfectly
+  useEffect(() => {
+    if (!isEmbedMode || !containerSize.width || !containerSize.height) return;
+
+    const calculateScale = () => {
+      const contentWidth = containerSize.width + EMBED_PADDING;
+      const contentHeight = containerSize.height + EMBED_PADDING;
+
+      const scaleX = window.innerWidth / contentWidth;
+      const scaleY = window.innerHeight / contentHeight;
+      const calculatedScale = Math.max(MIN_SCALE, Math.min(scaleX, scaleY));
+
+      setEmbedScale(calculatedScale);
+    };
+
+    calculateScale();
+
+    // Debounced resize handler
+    let resizeTimeout: NodeJS.Timeout;
+    const handleResize = () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(calculateScale, 100);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(resizeTimeout);
+    };
+  }, [isEmbedMode, containerSize.width, containerSize.height]);
+
 
   // Smart periodic sync with idle detection
   useEffect(() => {
@@ -264,6 +352,47 @@ function ToCViewerOnly() {
   // Check if we're on a view route
   const isViewRoute = location.pathname.includes('/view') || location.pathname.includes('/chart/')
 
+  // Seamless embed mode - minimal chrome, pixel-perfect fit
+  if (isEmbedMode) {
+    const contentWidth = containerSize.width + EMBED_PADDING;
+    const contentHeight = containerSize.height + EMBED_PADDING;
+    const scaledWidth = contentWidth * embedScale;
+    const scaledHeight = contentHeight * embedScale;
+    const offsetX = (window.innerWidth - scaledWidth) / 2;
+    const offsetY = (window.innerHeight - scaledHeight) / 2;
+
+    return (
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          margin: 0,
+          padding: 0,
+          background: 'transparent',
+          overflow: 'visible',
+          position: 'relative'
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            left: `${offsetX}px`,
+            top: `${offsetY}px`,
+            transformOrigin: 'top left',
+            transform: embedScale !== 1 ? `scale(${embedScale})` : undefined,
+            width: `${contentWidth}px`,
+            height: `${contentHeight}px`
+          }}
+        >
+          <div style={{ background: 'transparent', padding: '16px' }}>
+            <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Normal view mode with full UI
   return (
     <div className={`h-screen w-screen bg-gray-50 ${isViewRoute ? 'overflow-auto' : 'overflow-hidden'} fixed inset-0 pt-16`}>
       {/* Remove horizontal centering to allow full left-right scrolling */}
