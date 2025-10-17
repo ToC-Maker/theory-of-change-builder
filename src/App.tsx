@@ -85,17 +85,12 @@ function ToCViewerOnly() {
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
 
-  // Check if embed mode is enabled via query parameter
-  const isEmbedMode = new URLSearchParams(location.search).get('embed') === 'true'
+  // Auto-scale state for view mode
+  const [viewScale, setViewScale] = useState(1.0)
 
-  // Auto-scale state for embed mode
-  const [embedScale, setEmbedScale] = useState(1.0)
-
-  // Set body/html to fill iframe viewport in embed mode
+  // Set body/html to fill viewport for clean view
   useEffect(() => {
-    if (!isEmbedMode) return;
-
-    // Make body/html fill the iframe viewport (100%)
+    // Make body/html fill the viewport (100%)
     document.documentElement.style.margin = '0'
     document.documentElement.style.padding = '0'
     document.documentElement.style.height = '100%'
@@ -134,7 +129,7 @@ function ToCViewerOnly() {
         root.style.width = ''
       }
     }
-  }, [isEmbedMode])
+  }, [])
 
   const loadFromLocalStorage = useCallback((currentFilename?: string): ToCData | null => {
     try {
@@ -191,9 +186,9 @@ function ToCViewerOnly() {
     loadData()
   }, [filename, chartId, loadFromLocalStorage])
 
-  // Auto-calculate scale based on iframe dimensions to fit content perfectly
+  // Auto-calculate scale based on viewport dimensions to fit content perfectly
   useEffect(() => {
-    if (!isEmbedMode || !containerSize.width || !containerSize.height) return;
+    if (!containerSize.width || !containerSize.height) return;
 
     const calculateScale = () => {
       const contentWidth = containerSize.width + EMBED_PADDING;
@@ -203,7 +198,7 @@ function ToCViewerOnly() {
       const scaleY = window.innerHeight / contentHeight;
       const calculatedScale = Math.max(MIN_SCALE, Math.min(scaleX, scaleY));
 
-      setEmbedScale(calculatedScale);
+      setViewScale(calculatedScale);
     };
 
     calculateScale();
@@ -220,7 +215,7 @@ function ToCViewerOnly() {
       window.removeEventListener('resize', handleResize);
       clearTimeout(resizeTimeout);
     };
-  }, [isEmbedMode, containerSize.width, containerSize.height]);
+  }, [containerSize.width, containerSize.height]);
 
 
   // Smart periodic sync with idle detection
@@ -349,68 +344,39 @@ function ToCViewerOnly() {
     )
   }
 
-  // Check if we're on a view route
-  const isViewRoute = location.pathname.includes('/view') || location.pathname.includes('/chart/')
+  // Clean view mode - minimal chrome, pixel-perfect fit
+  const contentWidth = containerSize.width + EMBED_PADDING;
+  const contentHeight = containerSize.height + EMBED_PADDING;
+  const scaledWidth = contentWidth * viewScale;
+  const scaledHeight = contentHeight * viewScale;
+  const offsetX = (window.innerWidth - scaledWidth) / 2;
+  const offsetY = (window.innerHeight - scaledHeight) / 2;
 
-  // Seamless embed mode - minimal chrome, pixel-perfect fit
-  if (isEmbedMode) {
-    const contentWidth = containerSize.width + EMBED_PADDING;
-    const contentHeight = containerSize.height + EMBED_PADDING;
-    const scaledWidth = contentWidth * embedScale;
-    const scaledHeight = contentHeight * embedScale;
-    const offsetX = (window.innerWidth - scaledWidth) / 2;
-    const offsetY = (window.innerHeight - scaledHeight) / 2;
-
-    return (
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        margin: 0,
+        padding: 0,
+        background: 'transparent',
+        overflow: 'visible',
+        position: 'relative'
+      }}
+    >
       <div
         style={{
-          width: '100%',
-          height: '100%',
-          margin: 0,
-          padding: 0,
-          background: 'transparent',
-          overflow: 'visible',
-          position: 'relative'
+          position: 'absolute',
+          left: `${offsetX}px`,
+          top: `${offsetY}px`,
+          transformOrigin: 'top left',
+          transform: viewScale !== 1 ? `scale(${viewScale})` : undefined,
+          width: `${contentWidth}px`,
+          height: `${contentHeight}px`
         }}
       >
-        <div
-          style={{
-            position: 'absolute',
-            left: `${offsetX}px`,
-            top: `${offsetY}px`,
-            transformOrigin: 'top left',
-            transform: embedScale !== 1 ? `scale(${embedScale})` : undefined,
-            width: `${contentWidth}px`,
-            height: `${contentHeight}px`
-          }}
-        >
-          <div style={{ background: 'transparent', padding: '16px' }}>
-            <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Normal view mode with full UI
-  return (
-    <div className={`h-screen w-screen bg-gray-50 ${isViewRoute ? 'overflow-auto' : 'overflow-hidden'} fixed inset-0 pt-16`}>
-      {/* Remove horizontal centering to allow full left-right scrolling */}
-      <div className="min-h-full flex flex-col justify-center py-4 px-4">
-        <div className="flex flex-col flex-shrink-0 mx-auto">
-          <div
-            className="bg-white rounded-xl shadow-lg p-4"
-            style={{
-              width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-              height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-              minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-              minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-              maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
-              maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
-            }}
-          >
-            <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
-          </div>
+        <div style={{ background: 'transparent', padding: '16px' }}>
+          <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
         </div>
       </div>
       <GraphTutorial />
