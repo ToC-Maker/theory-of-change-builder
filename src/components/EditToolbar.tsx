@@ -757,7 +757,7 @@ export function EditToolbar({
                         <div className="flex items-start gap-2">
                           <textarea
                             readOnly
-                            value={`<iframe src="${shareData.viewUrl}?embed=true" width="100%" height="600" frameborder="0" style="border: none;" allowfullscreen></iframe>`}
+                            value={`<iframe src="${shareData.viewUrl}" width="100%" height="unset" frameborder="0" style="border: none; aspect-ratio: ${containerSize?.width || 16} / ${containerSize?.height || 9};" allowfullscreen></iframe>`}
                             className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-blue-50 font-mono resize-none overflow-hidden"
                             rows={6}
                             style={{ lineHeight: '1.5' }}
@@ -765,7 +765,7 @@ export function EditToolbar({
                           <button
                             onClick={() => {
                               copyToClipboard(
-                                `<iframe src="${shareData.viewUrl}?embed=true" width="100%" height="600" frameborder="0" style="border: none;" allowfullscreen></iframe>`,
+                                `<iframe src="${shareData.viewUrl}" width="100%" height="unset" frameborder="0" style="border: none; aspect-ratio: ${containerSize?.width || 16} / ${containerSize?.height || 9};" allowfullscreen></iframe>`,
                                 'embed'
                               );
                             }}
