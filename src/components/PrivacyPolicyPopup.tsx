@@ -77,26 +77,6 @@ export function PrivacyPolicyPopup() {
             We value your privacy and are committed to protecting your data.
           </p>
 
-          <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-sm text-gray-700">
-              This application:
-            </p>
-            <ul className="mt-2 space-y-1 text-sm text-gray-600">
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Stores your work locally in your browser</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Only shares data when you explicitly use the share feature</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Does not track personal information</span>
-              </li>
-            </ul>
-          </div>
-
           <p className="text-xs text-gray-500 text-center">
             By using this application, you agree to our privacy practices.
           </p>
