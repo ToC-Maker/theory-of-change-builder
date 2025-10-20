@@ -407,7 +407,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setStreamingContent('');
           setIsThinking(false);
           streamingMessageRef.current = null;
-          
+
+          // Track token usage in database
+          if (usage?.total_tokens && params.editToken) {
+            fetch('/.netlify/functions/updateTokenUsage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editToken: params.editToken, tokensUsed: usage.total_tokens })
+            }).catch(err => console.error('Failed to update token usage:', err));
+          }
+
           // Handle edit instructions if present
           if (editInstructions && onGraphUpdate && graphData) {
             console.log('Edit instructions detected in ChatInterface:', editInstructions);
@@ -644,6 +653,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setIsThinking(false);
           setFullConversation(finalMessage);
           streamingMessageRef.current = null;
+
+          // Track token usage in database
+          if (usage?.total_tokens && params.editToken) {
+            fetch('/.netlify/functions/updateTokenUsage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editToken: params.editToken, tokensUsed: usage.total_tokens })
+            }).catch(err => console.error('Failed to update token usage:', err));
+          }
 
           // Check for generated graph JSON and store it
           if (hasGeneratedGraph(finalMessage)) {
