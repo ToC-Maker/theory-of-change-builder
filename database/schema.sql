@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS charts (
   chart_data JSONB NOT NULL,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW(),
-  view_count INTEGER DEFAULT 0
+  view_count INTEGER DEFAULT 0,
+  total_tokens_used INTEGER DEFAULT 0
 );
 
 -- Create indexes for performance
