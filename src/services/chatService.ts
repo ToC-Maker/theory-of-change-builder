@@ -76,10 +76,8 @@ class ChatService {
             const data = line.slice(6);
 
             if (data === '[DONE]') {
-              const editInstructions = parseEditInstructions(fullContent);
-              const cleanContent = cleanResponseContent(fullContent);
-              callbacks.onComplete?.(cleanContent, editInstructions, usage);
-              return;
+              // Don't call onComplete here - wait for message_stop event which has complete usage data
+              continue;
             }
 
             try {
@@ -113,8 +111,8 @@ class ChatService {
                 callbacks.onContent?.(chunk, cleanContent);
               } else if (event.type === 'message_start' && event.message?.usage) {
                 usage = event.message.usage;
-              } else if (event.type === 'message_delta' && event.delta?.usage) {
-                usage = { ...usage, ...event.delta.usage };
+              } else if (event.type === 'message_delta' && event.usage) {
+                usage = { ...usage, ...event.usage };
               } else if (event.type === 'message_stop') {
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
