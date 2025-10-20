@@ -390,10 +390,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             setStreamingContent(fullContent);
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
-          console.log('=== CHAT INTERFACE ONCOMPLETE ===');
-          console.log('Usage parameter:', usage);
-          console.log('=== END CHAT INTERFACE ===');
-          
           const assistantMessage: ChatMessage = {
             id: streamingId,
             role: 'assistant',
