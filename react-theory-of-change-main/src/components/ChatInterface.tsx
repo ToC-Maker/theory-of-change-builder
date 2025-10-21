@@ -409,11 +409,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           streamingMessageRef.current = null;
 
           // Track token usage in database
-          if (usage?.total_tokens && params.editToken) {
+          if (usage?.input_tokens && params.editToken) {
+            const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
             fetch('/.netlify/functions/updateTokenUsage', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editToken: params.editToken, tokensUsed: usage.total_tokens })
+              body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
             }).catch(err => console.error('Failed to update token usage:', err));
           }
 
@@ -655,11 +656,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           streamingMessageRef.current = null;
 
           // Track token usage in database
-          if (usage?.total_tokens && params.editToken) {
+          if (usage?.input_tokens && params.editToken) {
+            const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
             fetch('/.netlify/functions/updateTokenUsage', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editToken: params.editToken, tokensUsed: usage.total_tokens })
+              body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
             }).catch(err => console.error('Failed to update token usage:', err));
           }
 
