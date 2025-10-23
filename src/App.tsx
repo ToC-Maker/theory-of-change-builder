@@ -8,7 +8,7 @@ import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
-import { PlusIcon, MinusIcon, ArrowsPointingOutIcon } from "@heroicons/react/24/outline"
+import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import "./App.css"
 
 // Default empty template with 4 sections
@@ -84,9 +84,16 @@ function ToCViewerOnly() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+  const [isCopying, setIsCopying] = useState(false)
+  const [isInIframe, setIsInIframe] = useState(false)
 
   // Auto-scale state for view mode
   const [viewScale, setViewScale] = useState(1.0)
+
+  // Detect if running in iframe
+  useEffect(() => {
+    setIsInIframe(window.self !== window.top)
+  }, [])
 
   // Set body/html to fill viewport for clean view
   useEffect(() => {
@@ -144,6 +151,29 @@ function ToCViewerOnly() {
     }
     return null;
   }, [filename]);
+
+  const handleMakeCopy = async () => {
+    if (!data || isCopying) return;
+
+    setIsCopying(true);
+    try {
+      // Create a copy of the data with modified title
+      const copiedData = {
+        ...data,
+        title: data.title ? `Copy of ${data.title}` : 'Copy of Theory of Change'
+      };
+
+      const response = await ChartService.createChart(copiedData);
+      // Save the edit token to localStorage
+      ChartService.saveEditToken(response.chartId, response.editToken);
+      // Redirect to the new edit URL
+      window.location.href = response.editUrl;
+    } catch (err) {
+      console.error('Failed to create copy:', err);
+      alert('Failed to create a copy. Please try again.');
+      setIsCopying(false);
+    }
+  };
 
   useEffect(() => {
     const loadData = async () => {
@@ -364,6 +394,19 @@ function ToCViewerOnly() {
         position: 'relative'
       }}
     >
+      {/* Make a Copy button - top right (hidden in iframes) */}
+      {!isInIframe && (
+        <button
+          onClick={handleMakeCopy}
+          disabled={isCopying}
+          className="fixed top-4 right-4 z-50 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg shadow-lg border border-gray-200 transition-all hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          title="Create an editable copy of this graph"
+        >
+          <DocumentDuplicateIcon className={`w-4 h-4 ${isCopying ? 'animate-pulse' : ''}`} />
+          {isCopying ? 'Copying...' : 'Make a Copy'}
+        </button>
+      )}
+
       <div
         style={{
           position: 'absolute',
