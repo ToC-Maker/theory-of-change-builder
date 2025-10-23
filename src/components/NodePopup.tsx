@@ -67,12 +67,12 @@ export function NodePopup({
       <div
         className="fixed z-[200] bg-black bg-opacity-40 backdrop-blur-[2px]"
         style={{
-          left: '-200vw',
-          top: '-200vh',
-          right: '-200vw',
-          bottom: '-200vh',
-          width: '500vw',
-          height: '500vh'
+          left: '-1000vw',
+          top: '-1000vh',
+          right: '-1000vw',
+          bottom: '-1000vh',
+          width: '2000vw',
+          height: '2000vh'
         }}
         onClick={() => {
           saveChanges()
