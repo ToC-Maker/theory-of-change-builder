@@ -194,8 +194,8 @@ export function NodeComponent({
           </div>
         </div>
 
-        {/* Information/Edit icon for selected nodes - positioned relative to outer node */}
-        {isHighlighted && (
+        {/* Information/Edit icon for selected or hovered nodes - positioned relative to outer node */}
+        {(isHighlighted || isHovered) && (
           <button
             onClick={handleInfoClick}
             className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center hover:bg-gray-100 hover:bg-opacity-20 transition-colors z-10"
