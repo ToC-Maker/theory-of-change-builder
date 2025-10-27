@@ -76,11 +76,16 @@ export function ConnectionsComponent({
 
     // Use the actual calculated section widths, but account for title width too
     sectionWidths.forEach((sectionWidth, sectionIndex) => {
-      // Calculate section title width requirement
-      const section = data.sections[sectionIndex]
-      const titleWidth = section.title.length * 20 + 24 // Same calculation as in ToC.tsx
+      // Measure actual rendered section title width from DOM
+      const sectionTitleElement = containerRef.current?.querySelector(
+        `[data-section-index="${sectionIndex}"] > div:first-child`
+      ) as HTMLElement
 
-      // Use the wider of section width or title width
+      // Use measured width if available, otherwise fall back to sectionWidth
+      // The title uses minWidth of sectionWidth and width: max-content, so it will always be at least sectionWidth
+      const titleWidth = sectionTitleElement?.offsetWidth || sectionWidth
+
+      // Use the wider of section width or measured title width
       const effectiveSectionWidth = Math.max(sectionWidth, titleWidth)
       totalWidth += effectiveSectionWidth
 
@@ -138,7 +143,7 @@ export function ConnectionsComponent({
     const newSize = { width: totalWidth, height: dynamicHeight }
     setSvgSize(newSize)
     onSizeChange(newSize)
-  }, [sectionWidths, data.sections, layoutMode, nodeHeights, columnPadding, sectionPadding])
+  }, [sectionWidths, data.sections, editMode, layoutMode, nodeHeights, columnPadding, sectionPadding, containerRef])
 
   useEffect(() => {
     // Immediate size calculation

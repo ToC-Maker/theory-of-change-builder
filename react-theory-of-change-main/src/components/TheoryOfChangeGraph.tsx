@@ -1122,19 +1122,13 @@ export function ToC({
              }}>
           <div className="flex">
             {/* Section title positioned to center over actual columns */}
-            <div className="flex flex-col">
+            <div className="flex flex-col" data-section-index={sectionIndex}>
               <div
                 className="rounded py-3 mb-2 px-3"
                 style={{
                   backgroundColor: data.color || '#374151', // Default to gray-700
-                  width: `${Math.max(
-                    sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0),
-                    section.title.length * 20 + 24 // Estimate: ~20px per character + padding
-                  )}px`,
-                  maxWidth: `${Math.max(
-                    sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0),
-                    section.title.length * 20 + 24
-                  )}px`
+                  minWidth: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
+                  width: 'max-content'
                 }}
               >
                 {editMode && editingSectionIndex === sectionIndex ? (
@@ -1155,7 +1149,8 @@ export function ToC({
                         setEditingSectionIndex(null)
                       }
                     }}
-                    className="text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white w-full"
+                    className="text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
+                    size={section.title.length || 1}
                     autoFocus
                   />
                 ) : (
@@ -1168,7 +1163,7 @@ export function ToC({
                   </h2>
                 )}
               </div>
-              <div className="flex" style={{ gap: editMode && layoutMode ? '0px' : `${columnPadding}px` }}>
+              <div className="flex" style={{ gap: editMode && layoutMode ? '0px' : `${columnPadding}px`, justifyContent: 'center' }}>
             {section.columns.map((column, colIndex) => (
               <React.Fragment key={`${sectionIndex}-${colIndex}`}>
                 {/* Gap before first column with click to add column */}
