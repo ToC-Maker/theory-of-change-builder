@@ -239,8 +239,8 @@ export function ToC({
   useEffect(() => {
     if (svgSize.width > 0 && svgSize.height > 0) {
       setLegendPosition({
-        x: svgSize.width - 170, // 170px from right edge (legend width ~160px + 10px margin)
-        y: svgSize.height - 190  // 190px from bottom (legend height ~150px + 40px margin)
+        x: svgSize.width - 153, // 153px from right edge
+        y: svgSize.height - 178  // 178px from bottom edge
       })
     }
   }, [svgSize.width, svgSize.height])
@@ -1515,6 +1515,7 @@ export function ToC({
         setIsDraggingLegend={setIsDraggingLegend}
         legendDragOffset={legendDragOffset}
         setLegendDragOffset={setLegendDragOffset}
+        editMode={editMode}
       />
 
       {nodePopup && (
