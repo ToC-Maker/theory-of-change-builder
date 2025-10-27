@@ -253,11 +253,11 @@ export function EdgePopup({
                 )}
                 <div className="text-xs text-gray-700 text-center">
                   {edgePopup.confidence >= 80
-                    ? `Very strong confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
+                    ? `Very high confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
                     : edgePopup.confidence >= 60
-                    ? `Good confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
+                    ? `High confidence (${Math.round(edgePopup.confidence)}%). This connection has solid evidence with some certainty.`
                     : edgePopup.confidence >= 40
-                    ? `Moderate confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
+                    ? `Medium confidence (${Math.round(edgePopup.confidence)}%). This connection has reasonable evidence but uncertainty remains.`
                     : edgePopup.confidence >= 20
                     ? `Low confidence (${Math.round(edgePopup.confidence)}%). This connection has limited evidence and significant uncertainty.`
                     : `Very low confidence (${Math.round(edgePopup.confidence)}%). This connection is speculative with minimal supporting evidence.`}
