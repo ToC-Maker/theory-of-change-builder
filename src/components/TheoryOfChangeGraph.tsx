@@ -596,6 +596,88 @@ export function ToC({
     return widths
   }, [data.sections, columnPadding, editMode, layoutMode, data.sections.map(s => s.columns.length).join(',')])
 
+  // Global drag tracking to handle dragging outside container bounds
+  useEffect(() => {
+    if (!draggedNode || !editMode) return
+
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault() // Necessary to allow drop
+
+      const container = graphContainerRef.current
+      if (!container) return
+
+      // Instead of calculating positions, query all column elements and check which one the mouse is over
+      const allColumnElements = container.querySelectorAll('[data-column]')
+      let foundColumn = false
+
+      // Check each column element to see if the mouse is over it
+      for (const element of allColumnElements) {
+        const columnElement = element as HTMLElement
+        const columnRect = columnElement.getBoundingClientRect()
+
+        // Check if mouse X is within this column's bounds (allow vertical overflow)
+        if (e.clientX >= columnRect.left && e.clientX <= columnRect.right) {
+          // Extract section and column index from data-column attribute
+          const dataColumn = columnElement.getAttribute('data-column')
+          if (dataColumn) {
+            const [sectionIndex, columnIndex] = dataColumn.split('-').map(Number)
+
+            // Calculate Y position relative to this column
+            const yPositionRelativeToColumn = e.clientY - columnRect.top
+
+            setDragOverLocation({
+              sectionIndex,
+              columnIndex,
+              isNewColumn: false,
+              yPosition: yPositionRelativeToColumn
+            })
+            foundColumn = true
+            break
+          }
+        }
+      }
+
+      // If no column found under mouse, find the closest one by X position
+      if (!foundColumn && allColumnElements.length > 0) {
+        let closestElement: HTMLElement | null = null
+        let closestDistance = Infinity
+
+        for (const element of allColumnElements) {
+          const columnElement = element as HTMLElement
+          const columnRect = columnElement.getBoundingClientRect()
+          const columnCenterX = columnRect.left + columnRect.width / 2
+          const distance = Math.abs(e.clientX - columnCenterX)
+
+          if (distance < closestDistance) {
+            closestDistance = distance
+            closestElement = columnElement
+          }
+        }
+
+        if (closestElement) {
+          const dataColumn = closestElement.getAttribute('data-column')
+          if (dataColumn) {
+            const [sectionIndex, columnIndex] = dataColumn.split('-').map(Number)
+            const columnRect = closestElement.getBoundingClientRect()
+            const yPositionRelativeToColumn = e.clientY - columnRect.top
+
+            setDragOverLocation({
+              sectionIndex,
+              columnIndex,
+              isNewColumn: false,
+              yPosition: yPositionRelativeToColumn
+            })
+          }
+        }
+      }
+    }
+
+    document.addEventListener('dragover', handleGlobalDragOver)
+
+    return () => {
+      document.removeEventListener('dragover', handleGlobalDragOver)
+    }
+  }, [draggedNode, editMode, layoutMode, data.sections, sectionWidths, columnPadding, sectionPadding])
 
   const areNodesConnected = useCallback((sourceId: string, targetId: string) => {
     const sourceLocation = findNodeLocation(sourceId)
@@ -836,6 +918,31 @@ export function ToC({
     setDragOffset(null)
     setDragOverLocation(null)
   }
+
+  // Global drop handler to complete drops even when mouse is outside column boundaries
+  useEffect(() => {
+    if (!draggedNode || !editMode) return
+
+    const handleGlobalDrop = (e: DragEvent) => {
+      e.preventDefault()
+
+      // Use the current drag over location if available
+      if (dragOverLocation) {
+        handleDrop(
+          dragOverLocation.sectionIndex,
+          dragOverLocation.columnIndex,
+          dragOverLocation.isNewColumn,
+          dragOverLocation.yPosition
+        )
+      }
+    }
+
+    document.addEventListener('drop', handleGlobalDrop)
+
+    return () => {
+      document.removeEventListener('drop', handleGlobalDrop)
+    }
+  }, [draggedNode, editMode, dragOverLocation])
 
   const connectedNodes = useMemo(() => {
     if (highlightedNodes.size === 0) {
@@ -1098,6 +1205,7 @@ export function ToC({
 
                 {/* Column with drag and keyboard positioning */}
                 <div
+                  data-column={`${sectionIndex}-${colIndex}`}
                   className={clsx(
                     "relative",
                     editMode && layoutMode && column.nodes.length === 0 && "bg-red-50 hover:bg-red-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
