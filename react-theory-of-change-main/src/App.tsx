@@ -248,6 +248,15 @@ function ToCViewerOnly() {
   }, [containerSize.width, containerSize.height]);
 
 
+  // Update document title when data changes
+  useEffect(() => {
+    if (data?.title) {
+      document.title = data.title;
+    } else {
+      document.title = 'Theory of Change Builder';
+    }
+  }, [data?.title]);
+
   // Smart periodic sync with idle detection
   useEffect(() => {
     if (!chartId) return;
@@ -1031,6 +1040,15 @@ function ToCViewer() {
     hasInitializedZoom.current = true;
     console.log('Zoom to fit applied:', zoomToFit);
   }, [containerSize.width, containerSize.height, calculateZoomToFit]);
+
+  // Update document title when data changes
+  useEffect(() => {
+    if (data?.title) {
+      document.title = data.title;
+    } else {
+      document.title = 'Theory of Change Builder';
+    }
+  }, [data?.title]);
 
   // Smart periodic sync with idle detection for edit mode
   useEffect(() => {
