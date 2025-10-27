@@ -7,6 +7,7 @@ interface LegendProps {
   setIsDraggingLegend: React.Dispatch<React.SetStateAction<boolean>>
   legendDragOffset: { x: number; y: number }
   setLegendDragOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
+  editMode?: boolean
 }
 
 export function Legend({
@@ -16,14 +17,16 @@ export function Legend({
   setIsDraggingLegend,
   legendDragOffset,
   setLegendDragOffset,
+  editMode = true,
 }: LegendProps) {
   const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!editMode) return // Don't allow dragging in view mode
     setIsDraggingLegend(true)
     setLegendDragOffset({
       x: e.clientX - legendPosition.x,
       y: e.clientY - legendPosition.y
     })
-  }, [legendPosition, setIsDraggingLegend, setLegendDragOffset])
+  }, [legendPosition, setIsDraggingLegend, setLegendDragOffset, editMode])
 
   const handleLegendMouseMove = useCallback((e: MouseEvent) => {
     if (isDraggingLegend) {
@@ -50,9 +53,9 @@ export function Legend({
   }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp])
 
   return (
-    <div 
+    <div
       className={`absolute z-40 bg-white rounded-lg shadow-lg border border-gray-200 p-3 select-none ${
-        isDraggingLegend ? 'cursor-grabbing' : 'cursor-grab'
+        editMode ? (isDraggingLegend ? 'cursor-grabbing' : 'cursor-grab') : ''
       }`}
       style={{
         left: `${legendPosition.x}px`,
