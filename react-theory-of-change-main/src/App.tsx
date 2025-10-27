@@ -251,7 +251,7 @@ function ToCViewerOnly() {
   // Update document title when data changes
   useEffect(() => {
     if (data?.title) {
-      document.title = data.title;
+      document.title = `${data.title} - Theory of Change Builder`;
     } else {
       document.title = 'Theory of Change Builder';
     }
@@ -1047,7 +1047,7 @@ function ToCViewer() {
   // Update document title when data changes
   useEffect(() => {
     if (data?.title) {
-      document.title = data.title;
+      document.title = `${data.title} - Theory of Change Builder`;
     } else {
       document.title = 'Theory of Change Builder';
     }
