@@ -403,19 +403,6 @@ function ToCViewerOnly() {
         position: 'relative'
       }}
     >
-      {/* Make a Copy button - top right (hidden in iframes) */}
-      {!isInIframe && (
-        <button
-          onClick={handleMakeCopy}
-          disabled={isCopying}
-          className="fixed top-4 right-4 z-50 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg shadow-lg border border-gray-200 transition-all hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          title="Create an editable copy of this graph"
-        >
-          <DocumentDuplicateIcon className={`w-4 h-4 ${isCopying ? 'animate-pulse' : ''}`} />
-          {isCopying ? 'Copying...' : 'Make a Copy'}
-        </button>
-      )}
-
       <div
         style={{
           position: 'absolute',
@@ -427,6 +414,22 @@ function ToCViewerOnly() {
           height: `${contentHeight}px`
         }}
       >
+        {/* Make a Copy button - top right (hidden in iframes) - positioned inside transform context */}
+        {!isInIframe && (
+          <button
+            onClick={handleMakeCopy}
+            disabled={isCopying}
+            className="absolute z-50 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg shadow-lg border border-gray-200 transition-all hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            style={{
+              top: `${(16 - offsetY) / viewScale}px`,
+              right: `${(16 - offsetX) / viewScale}px`
+            }}
+            title="Create an editable copy of this graph"
+          >
+            <DocumentDuplicateIcon className={`w-4 h-4 ${isCopying ? 'animate-pulse' : ''}`} />
+            {isCopying ? 'Copying...' : 'Make a Copy'}
+          </button>
+        )}
         <div style={{ background: 'transparent', padding: '16px' }}>
           <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
         </div>
