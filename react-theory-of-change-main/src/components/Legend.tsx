@@ -8,6 +8,7 @@ interface LegendProps {
   legendDragOffset: { x: number; y: number }
   setLegendDragOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
   editMode?: boolean
+  fontFamily?: string
 }
 
 export function Legend({
@@ -18,6 +19,7 @@ export function Legend({
   legendDragOffset,
   setLegendDragOffset,
   editMode = true,
+  fontFamily,
 }: LegendProps) {
   const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
     if (!editMode) return // Don't allow dragging in view mode
@@ -63,25 +65,25 @@ export function Legend({
       }}
       onMouseDown={handleLegendMouseDown}
     >
-      <div className="text-xs font-medium text-gray-700 mb-2">Connection Confidence</div>
+      <div className="text-xs font-medium text-gray-700 mb-2" style={{ fontFamily }}>Connection Confidence</div>
       <div className="space-y-2">
         <div className="flex items-center gap-3">
           <svg width="24" height="2" className="flex-shrink-0">
             <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" />
           </svg>
-          <span className="text-xs text-gray-600">High</span>
+          <span className="text-xs text-gray-600" style={{ fontFamily }}>High</span>
         </div>
         <div className="flex items-center gap-3">
           <svg width="24" height="2" className="flex-shrink-0">
             <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" strokeDasharray="8 4" />
           </svg>
-          <span className="text-xs text-gray-600">Medium</span>
+          <span className="text-xs text-gray-600" style={{ fontFamily }}>Medium</span>
         </div>
         <div className="flex items-center gap-3">
           <svg width="24" height="2" className="flex-shrink-0">
             <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" strokeDasharray="2 4" />
           </svg>
-          <span className="text-xs text-gray-600">Low</span>
+          <span className="text-xs text-gray-600" style={{ fontFamily }}>Low</span>
         </div>
       </div>
     </div>

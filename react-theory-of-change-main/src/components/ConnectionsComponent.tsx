@@ -21,6 +21,7 @@ interface ConnectionsComponentProps {
   onDeleteConnection?: (sourceId: string, targetId: string) => void
   containerRef: React.RefObject<HTMLDivElement>
   onEdgePopupChange?: (edgePopup: any) => void
+  fontFamily?: string
 }
 
 export function ConnectionsComponent({
@@ -41,6 +42,7 @@ export function ConnectionsComponent({
   onDeleteConnection,
   containerRef,
   onEdgePopupChange,
+  fontFamily,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
@@ -738,6 +740,7 @@ export function ConnectionsComponent({
         editMode={editMode}
         onUpdateConnection={updateConnection}
         onDeleteConnection={onDeleteConnection}
+        fontFamily={fontFamily}
       />
     )}
   </>

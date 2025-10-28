@@ -243,7 +243,7 @@ export function ToC({
   useEffect(() => {
     if (svgSize.width > 0 && svgSize.height > 0) {
       setLegendPosition({
-        x: svgSize.width - 153, // 153px from right edge
+        x: svgSize.width - 158, // 153px from right edge
         y: svgSize.height - 178  // 178px from bottom edge
       })
     }
@@ -599,7 +599,7 @@ export function ToC({
       return totalColumnWidth + gaps
     })
     return widths
-  }, [data.sections, columnPadding, editMode, layoutMode, data.sections.map(s => s.columns.length).join(',')])
+  }, [data.sections, columnPadding, editMode, layoutMode, data.sections.map(s => s.columns.length).join(','), editingSectionIndex, fontFamily])
 
   // Global drag tracking to handle dragging outside container bounds
   useEffect(() => {
@@ -1415,6 +1415,7 @@ export function ToC({
         onDeleteConnection={deleteConnection}
         containerRef={graphContainerRef}
         onEdgePopupChange={setEdgePopup}
+        fontFamily={fontFamily}
       />
 
       {createPortal(
@@ -1635,6 +1636,7 @@ export function ToC({
         legendDragOffset={legendDragOffset}
         setLegendDragOffset={setLegendDragOffset}
         editMode={editMode}
+        fontFamily={fontFamily}
       />
 
       {nodePopup && (
@@ -1645,6 +1647,7 @@ export function ToC({
           editMode={editMode}
           onUpdateNode={updateNode}
           onDeleteNode={deleteNode}
+          fontFamily={fontFamily}
         />
       )}
 
