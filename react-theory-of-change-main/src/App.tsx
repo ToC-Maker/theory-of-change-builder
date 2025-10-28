@@ -1071,6 +1071,12 @@ function ToCViewer() {
         return;
       }
 
+      // Don't sync if currently saving to prevent conflicts
+      if (isSaving) {
+        console.log('Skipping sync - save in progress');
+        return;
+      }
+
       try {
         console.log(`Syncing chart in edit mode (interval: ${syncInterval}ms)`);
         const result = await ChartService.getChartByEditToken(editToken);
@@ -1151,7 +1157,7 @@ function ToCViewer() {
       document.removeEventListener('click', handleActivity);
       document.removeEventListener('scroll', handleActivity);
     };
-  }, [editToken])
+  }, [editToken, isSaving])
 
   // Update the "time ago" display every second
   const [, forceUpdate] = useState({});
