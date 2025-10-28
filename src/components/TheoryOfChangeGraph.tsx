@@ -94,6 +94,7 @@ export function ToC({
   const [layoutMode, setLayoutMode] = useState(false)
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5)
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1) // 0.5 to 2.0 scale
+  const [fontFamily, setFontFamily] = useState(initialData.fontFamily ?? "'Ubuntu', sans-serif") // Default font family
   const [nodeWidth, setNodeWidth] = useState(192) // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff') // Default white background
   const [columnPadding, setColumnPadding] = useState(initialData.columnPadding ?? 24) // Default column padding in pixels
@@ -233,7 +234,10 @@ export function ToC({
     if (initialData.sectionPadding !== undefined) {
       setSectionPadding(initialData.sectionPadding)
     }
-  }, [initialData.textSize, initialData.curvature, initialData.columnPadding, initialData.sectionPadding])
+    if (initialData.fontFamily !== undefined) {
+      setFontFamily(initialData.fontFamily)
+    }
+  }, [initialData.textSize, initialData.curvature, initialData.columnPadding, initialData.sectionPadding, initialData.fontFamily])
 
   // Position legend in bottom-right corner when svgSize changes
   useEffect(() => {
@@ -254,6 +258,7 @@ export function ToC({
         curvature,
         columnPadding,
         sectionPadding,
+        fontFamily,
         // Include additional UI state in metadata
         _metadata: {
           exportedAt: new Date().toISOString(),
@@ -265,7 +270,7 @@ export function ToC({
     } catch (err) {
       console.error('Failed to copy JSON:', err)
     }
-  }, [data, curvature, textSize, columnPadding, sectionPadding, legendPosition])
+  }, [data, curvature, textSize, columnPadding, sectionPadding, fontFamily, legendPosition])
 
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
@@ -1055,11 +1060,13 @@ export function ToC({
                 }
               }}
               className="text-4xl font-bold text-center text-gray-800 tracking-wider w-full bg-transparent border-b-2 border-gray-400 outline-none focus:border-indigo-500"
+              style={{ fontFamily: fontFamily }}
               autoFocus
             />
           ) : (
             <h1
               className={`text-4xl font-bold text-center text-gray-800 tracking-wider ${editMode ? 'cursor-pointer hover:text-indigo-600 transition-colors' : ''}`}
+              style={{ fontFamily: fontFamily }}
               onClick={() => editMode && setEditingTitle(true)}
               title={editMode ? 'Click to edit title' : ''}
             >
@@ -1150,12 +1157,14 @@ export function ToC({
                       }
                     }}
                     className="text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
+                    style={{ fontFamily: fontFamily }}
                     size={section.title.length || 1}
                     autoFocus
                   />
                 ) : (
                   <h2
                     className={`text-3xl font-bold text-center text-white uppercase ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                    style={{ fontFamily: fontFamily }}
                     onClick={() => editMode && setEditingSectionIndex(sectionIndex)}
                     title={editMode ? 'Click to edit section label' : ''}
                   >
@@ -1297,6 +1306,7 @@ export function ToC({
                             onDragEnd={handleDragEnd}
                             editMode={editMode}
                             textSize={textSize}
+                            fontFamily={fontFamily}
                             setNodePopup={setNodePopup}
                             isEditingTitle={editingNodeId === node.id}
                             setEditingNodeId={setEditingNodeId}
@@ -1427,6 +1437,12 @@ export function ToC({
           setTextSize(value)
           // Update data with new text size
           setDataAndNotify(prev => ({ ...prev, textSize: value }))
+        }}
+        fontFamily={fontFamily}
+        setFontFamily={(value) => {
+          setFontFamily(value)
+          // Update data with new font family
+          setDataAndNotify(prev => ({ ...prev, fontFamily: value }))
         }}
         nodeWidth={nodeWidth}
         setNodeWidth={setNodeWidth}

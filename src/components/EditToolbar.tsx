@@ -17,6 +17,8 @@ interface EditToolbarProps {
   setCurvature: React.Dispatch<React.SetStateAction<number>>
   textSize: number
   setTextSize: React.Dispatch<React.SetStateAction<number>>
+  fontFamily: string
+  setFontFamily: React.Dispatch<React.SetStateAction<string>>
   nodeWidth: number
   setNodeWidth: React.Dispatch<React.SetStateAction<number>>
   nodeColor: string
@@ -63,6 +65,8 @@ export function EditToolbar({
   setCurvature,
   textSize,
   setTextSize,
+  fontFamily,
+  setFontFamily,
   nodeWidth,
   setNodeWidth,
   nodeColor,
@@ -575,6 +579,54 @@ export function EditToolbar({
                 >
                   <PlusIcon className="w-4 h-4 text-gray-600" />
                 </button>
+              </div>
+
+              {/* Font Family Dropdown */}
+              <div className={`flex items-center gap-1 px-2 rounded transition-colors ${
+                editMode ? 'hover:bg-gray-100' : 'opacity-50 cursor-not-allowed'
+              }`}>
+                <select
+                  value={fontFamily}
+                  onChange={(e) => {
+                    if (!editMode) return;
+                    setFontFamily(e.target.value);
+                  }}
+                  disabled={!editMode}
+                  className="text-sm text-gray-700 border-0 focus:outline-none focus:ring-1 focus:ring-blue-500 rounded px-1 disabled:cursor-not-allowed bg-transparent max-w-[110px]"
+                  style={{ fontFamily: fontFamily }}
+                  title="Font family"
+                >
+                  <option value="'Roboto', sans-serif" style={{ fontFamily: "'Roboto', sans-serif" }}>Roboto</option>
+                  <option value="'Open Sans', sans-serif" style={{ fontFamily: "'Open Sans', sans-serif" }}>Open Sans</option>
+                  <option value="'Lato', sans-serif" style={{ fontFamily: "'Lato', sans-serif" }}>Lato</option>
+                  <option value="'Montserrat', sans-serif" style={{ fontFamily: "'Montserrat', sans-serif" }}>Montserrat</option>
+                  <option value="'Oswald', sans-serif" style={{ fontFamily: "'Oswald', sans-serif" }}>Oswald</option>
+                  <option value="'Source Sans Pro', sans-serif" style={{ fontFamily: "'Source Sans Pro', sans-serif" }}>Source Sans Pro</option>
+                  <option value="'Raleway', sans-serif" style={{ fontFamily: "'Raleway', sans-serif" }}>Raleway</option>
+                  <option value="'Poppins', sans-serif" style={{ fontFamily: "'Poppins', sans-serif" }}>Poppins</option>
+                  <option value="'Merriweather', serif" style={{ fontFamily: "'Merriweather', serif" }}>Merriweather</option>
+                  <option value="'PT Sans', sans-serif" style={{ fontFamily: "'PT Sans', sans-serif" }}>PT Sans</option>
+                  <option value="'Ubuntu', sans-serif" style={{ fontFamily: "'Ubuntu', sans-serif" }}>Ubuntu</option>
+                  <option value="'Playfair Display', serif" style={{ fontFamily: "'Playfair Display', serif" }}>Playfair Display</option>
+                  <option value="'Noto Sans', sans-serif" style={{ fontFamily: "'Noto Sans', sans-serif" }}>Noto Sans</option>
+                  <option value="'Nunito', sans-serif" style={{ fontFamily: "'Nunito', sans-serif" }}>Nunito</option>
+                  <option value="'Mukta', sans-serif" style={{ fontFamily: "'Mukta', sans-serif" }}>Mukta</option>
+                  <option value="'Rubik', sans-serif" style={{ fontFamily: "'Rubik', sans-serif" }}>Rubik</option>
+                  <option value="'Work Sans', sans-serif" style={{ fontFamily: "'Work Sans', sans-serif" }}>Work Sans</option>
+                  <option value="'Lora', serif" style={{ fontFamily: "'Lora', serif" }}>Lora</option>
+                  <option value="'Noto Serif', serif" style={{ fontFamily: "'Noto Serif', serif" }}>Noto Serif</option>
+                  <option value="'Roboto Condensed', sans-serif" style={{ fontFamily: "'Roboto Condensed', sans-serif" }}>Roboto Condensed</option>
+                  <option value="'PT Serif', serif" style={{ fontFamily: "'PT Serif', serif" }}>PT Serif</option>
+                  <option value="'Quicksand', sans-serif" style={{ fontFamily: "'Quicksand', sans-serif" }}>Quicksand</option>
+                  <option value="'Roboto Slab', serif" style={{ fontFamily: "'Roboto Slab', serif" }}>Roboto Slab</option>
+                  <option value="'Oxygen', sans-serif" style={{ fontFamily: "'Oxygen', sans-serif" }}>Oxygen</option>
+                  <option value="'Slabo 27px', serif" style={{ fontFamily: "'Slabo 27px', serif" }}>Slabo 27px</option>
+                  <option value="'Fira Sans', sans-serif" style={{ fontFamily: "'Fira Sans', sans-serif" }}>Fira Sans</option>
+                  <option value="'Karla', sans-serif" style={{ fontFamily: "'Karla', sans-serif" }}>Karla</option>
+                  <option value="'Titillium Web', sans-serif" style={{ fontFamily: "'Titillium Web', sans-serif" }}>Titillium Web</option>
+                  <option value="'Arimo', sans-serif" style={{ fontFamily: "'Arimo', sans-serif" }}>Arimo</option>
+                  <option value="'Cabin', sans-serif" style={{ fontFamily: "'Cabin', sans-serif" }}>Cabin</option>
+                </select>
               </div>
 
               {/* More Tools Dropdown */}
