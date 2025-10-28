@@ -17,6 +17,7 @@ interface NodeComponentProps {
   onDragEnd: () => void
   editMode: boolean
   textSize: number
+  fontFamily: string
   setNodePopup: React.Dispatch<React.SetStateAction<{ id: string; title: string; text: string } | null>>
   isEditingTitle: boolean
   setEditingNodeId: (id: string | null) => void
@@ -37,6 +38,7 @@ export function NodeComponent({
   onDragEnd,
   editMode,
   textSize,
+  fontFamily,
   setNodePopup,
   isEditingTitle,
   setEditingNodeId,
@@ -139,6 +141,7 @@ export function NodeComponent({
             className={`font-medium text-center leading-tight break-words ${editMode && isHighlighted && isEditingTitle ? 'border-b-2 outline-none' : ''} ${editMode && isHighlighted ? 'cursor-text' : ''} ${!node.title ? 'empty-placeholder' : ''}`}
             style={{
               fontSize: `${textSize * 1.125}rem`,
+              fontFamily: fontFamily,
               color: node.color ? getContrastTextColor(node.color) : '#000000',
               borderColor: editMode && isHighlighted && isEditingTitle ? (node.color ? getContrastTextColor(node.color) : '#9ca3af') : 'transparent'
             }}
