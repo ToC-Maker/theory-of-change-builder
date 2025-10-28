@@ -29,4 +29,5 @@ export interface ToCData {
   curvature?: number // Optional curve shape setting (0.0 to 1.0)
   columnPadding?: number // Optional column spacing in pixels (default 24px)
   sectionPadding?: number // Optional section spacing in pixels (default 32px)
+  fontFamily?: string // Optional font family (default system font)
 }
