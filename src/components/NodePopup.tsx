@@ -13,6 +13,7 @@ interface NodePopupProps {
   editMode?: boolean
   onUpdateNode?: (nodeId: string, title: string, text: string) => void
   onDeleteNode?: (nodeId: string) => void
+  fontFamily?: string
 }
 
 export function NodePopup({
@@ -22,6 +23,7 @@ export function NodePopup({
   editMode = false,
   onUpdateNode,
   onDeleteNode,
+  fontFamily,
 }: NodePopupProps) {
   const [editTitle, setEditTitle] = useState(nodePopup.title)
   const [editText, setEditText] = useState(nodePopup.text)
@@ -122,11 +124,12 @@ export function NodePopup({
                 }}
                 placeholder="Enter node title..."
                 simple={true}
+                fontFamily={fontFamily}
               />
             </div>
           ) : (
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900 mb-2 whitespace-pre-wrap text-left">
+              <h2 className="text-lg font-bold text-gray-900 mb-2 whitespace-pre-wrap text-left" style={{ fontFamily }}>
                 {nodePopup.title}
               </h2>
               {editMode && !isEditing && (
@@ -153,6 +156,7 @@ export function NodePopup({
                 markdown={editText}
                 onChange={handleTextChange}
                 placeholder="Enter node description... (Markdown supported)"
+                fontFamily={fontFamily}
               />
             ) : (
               <div className="text-gray-600 leading-relaxed text-sm text-left">
@@ -160,9 +164,10 @@ export function NodePopup({
                   <MDXEditorComponent
                     markdown={nodePopup.text}
                     readOnly={true}
+                    fontFamily={fontFamily}
                   />
                 ) : (
-                  <p className="text-gray-400 italic">No description</p>
+                  <p className="text-gray-400 italic" style={{ fontFamily }}>No description</p>
                 )}
               </div>
             )}

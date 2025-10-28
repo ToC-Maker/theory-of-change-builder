@@ -22,6 +22,7 @@ interface MDXEditorComponentProps {
   placeholder?: string;
   readOnly?: boolean;
   simple?: boolean; // For title fields - no toolbar, minimal plugins
+  fontFamily?: string;
 }
 
 export function MDXEditorComponent({
@@ -29,12 +30,14 @@ export function MDXEditorComponent({
   onChange,
   placeholder = "Enter text...",
   readOnly = false,
-  simple = false
+  simple = false,
+  fontFamily
 }: MDXEditorComponentProps) {
   return (
     <div
       className={`mdx-editor-wrapper ${simple ? 'simple' : ''}`}
       data-readonly={readOnly}
+      style={{ fontFamily }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -91,6 +94,7 @@ export function MDXEditorComponent({
           padding: 12px;
           min-height: 120px;
           text-align: left !important;
+          font-family: inherit !important;
         }
 
         .mdx-editor-wrapper.simple .mdx-editor-content {
@@ -155,6 +159,16 @@ export function MDXEditorComponent({
 
         .mdx-editor-content * {
           text-align: left !important;
+          font-family: inherit !important;
+        }
+
+        /* MDX Editor library overrides */
+        .mdx-editor-wrapper [class*="mdxeditor"] {
+          font-family: inherit !important;
+        }
+
+        .mdx-editor-wrapper [class*="_contentEditable"] {
+          font-family: inherit !important;
         }
       `}</style>
     </div>
