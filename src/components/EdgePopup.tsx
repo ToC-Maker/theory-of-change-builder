@@ -23,6 +23,7 @@ interface EdgePopupProps {
   editMode?: boolean
   onUpdateConnection?: (sourceId: string, targetId: string, evidence: string, assumptions: string) => void
   onDeleteConnection?: (sourceId: string, targetId: string) => void
+  fontFamily?: string
 }
 
 export function EdgePopup({
@@ -35,6 +36,7 @@ export function EdgePopup({
   editMode = false,
   onUpdateConnection,
   onDeleteConnection,
+  fontFamily,
 }: EdgePopupProps) {
   const [editEvidence, setEditEvidence] = useState(edgePopup.evidence || '')
   const [editAssumptions, setEditAssumptions] = useState(edgePopup.assumptions || '')
@@ -129,7 +131,7 @@ export function EdgePopup({
             ×
           </button>
 
-          <h2 className="text-4xl font-bold text-gray-900 mb-2">
+          <h2 className="text-4xl font-bold text-gray-900 mb-2" style={{ fontFamily }}>
             Connection Details
           </h2>
           <div
@@ -139,7 +141,7 @@ export function EdgePopup({
               borderRightColor: '#000000'
             }}
           >
-            <div className="text-sm text-gray-600 uppercase tracking-wide font-semibold mb-2">
+            <div className="text-sm text-gray-600 uppercase tracking-wide font-semibold mb-2" style={{ fontFamily }}>
               Connection
             </div>
             <div className="flex items-center gap-4">
@@ -149,13 +151,13 @@ export function EdgePopup({
               >
                 <div
                   className="text-sm mb-1 opacity-75"
-                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.sourceId)) }}
+                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.sourceId)), fontFamily }}
                 >
                   From
                 </div>
                 <div
                   className="text-lg font-medium"
-                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.sourceId)) }}
+                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.sourceId)), fontFamily }}
                 >
                   {findNodeTitle(edgePopup.sourceId)}
                 </div>
@@ -169,7 +171,7 @@ export function EdgePopup({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5-5 5M6 12h12" />
                   </svg>
                 </div>
-                <div className="text-xs text-gray-500 mt-1">leads to</div>
+                <div className="text-xs text-gray-500 mt-1" style={{ fontFamily }}>leads to</div>
               </div>
               <div
                 className="flex-1 rounded-xl p-3 border-0 shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] text-center"
@@ -177,13 +179,13 @@ export function EdgePopup({
               >
                 <div
                   className="text-sm mb-1 opacity-75"
-                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.targetId)) }}
+                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.targetId)), fontFamily }}
                 >
                   To
                 </div>
                 <div
                   className="text-lg font-medium"
-                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.targetId)) }}
+                  style={{ color: getContrastTextColor(findNodeColor(edgePopup.targetId)), fontFamily }}
                 >
                   {findNodeTitle(edgePopup.targetId)}
                 </div>
@@ -196,12 +198,12 @@ export function EdgePopup({
         <div className="flex-1 overflow-y-auto p-8">
           <div className="space-y-6">
           <div>
-            <h3 className="text-2xl font-semibold text-gray-800 mb-3">
+            <h3 className="text-2xl font-semibold text-gray-800 mb-3" style={{ fontFamily }}>
               Confidence Level
             </h3>
             <div className="space-y-4">
               <div className="text-center">
-                <span className="text-2xl font-bold text-gray-800">
+                <span className="text-2xl font-bold text-gray-800" style={{ fontFamily }}>
                   {Math.round(edgePopup.confidence)}%
                 </span>
               </div>
@@ -209,7 +211,7 @@ export function EdgePopup({
               <div className="space-y-3">
                 {editMode && (
                   <div className="flex items-center space-x-4">
-                    <span className="text-xs text-gray-600 font-medium">0%</span>
+                    <span className="text-xs text-gray-600 font-medium" style={{ fontFamily }}>0%</span>
                     <div className="flex-1 relative">
                       <style>
                         {`
@@ -248,10 +250,10 @@ export function EdgePopup({
                         className="black-slider w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-200"
                       />
                     </div>
-                    <span className="text-xs text-gray-600 font-medium">100%</span>
+                    <span className="text-xs text-gray-600 font-medium" style={{ fontFamily }}>100%</span>
                   </div>
                 )}
-                <div className="text-xs text-gray-700 text-center">
+                <div className="text-xs text-gray-700 text-center" style={{ fontFamily }}>
                   {edgePopup.confidence >= 80
                     ? `Very high confidence (${Math.round(edgePopup.confidence)}%). This connection has robust evidence and high certainty.`
                     : edgePopup.confidence >= 60
@@ -284,12 +286,13 @@ export function EdgePopup({
 
             <div className="space-y-4 text-left">
               <div>
-                <h4 className="font-medium text-gray-800 mb-2 text-left">Assumptions</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left" style={{ fontFamily }}>Assumptions</h4>
                 {editMode && isEditing ? (
                   <MDXEditorComponent
                     markdown={editAssumptions}
                     onChange={handleAssumptionsChange}
                     placeholder="What assumptions are being made for this connection to hold true?"
+                    fontFamily={fontFamily}
                   />
                 ) : (
                   <div className="text-gray-600 leading-relaxed text-left">
@@ -297,21 +300,23 @@ export function EdgePopup({
                       <MDXEditorComponent
                         markdown={editAssumptions}
                         readOnly={true}
+                        fontFamily={fontFamily}
                       />
                     ) : (
-                      <p className="text-gray-400 italic">No assumptions documented yet.</p>
+                      <p className="text-gray-400 italic" style={{ fontFamily }}>No assumptions documented yet.</p>
                     )}
                   </div>
                 )}
               </div>
 
               <div>
-                <h4 className="font-medium text-gray-800 mb-2 text-left">Evidence</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left" style={{ fontFamily }}>Evidence</h4>
                 {editMode && isEditing ? (
                   <MDXEditorComponent
                     markdown={editEvidence}
                     onChange={handleEvidenceChange}
                     placeholder="What evidence supports this connection?"
+                    fontFamily={fontFamily}
                   />
                 ) : (
                   <div className="text-gray-600 leading-relaxed text-left">
@@ -319,9 +324,10 @@ export function EdgePopup({
                       <MDXEditorComponent
                         markdown={editEvidence}
                         readOnly={true}
+                        fontFamily={fontFamily}
                       />
                     ) : (
-                      <p className="text-gray-400 italic">No evidence documented yet.</p>
+                      <p className="text-gray-400 italic" style={{ fontFamily }}>No evidence documented yet.</p>
                     )}
                   </div>
                 )}
@@ -331,7 +337,7 @@ export function EdgePopup({
 
           {/* Footnote */}
           <div className="mt-6 pt-4 border-t border-gray-200">
-            <p className="text-xs text-gray-500 text-left">
+            <p className="text-xs text-gray-500 text-left" style={{ fontFamily }}>
               * This connection represents the causal relationship between these two elements in the theory of change.
               The source element directly contributes to or enables the target element.
             </p>
