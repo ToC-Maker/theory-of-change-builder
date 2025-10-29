@@ -1,137 +1,296 @@
-import { useState, useEffect } from 'react'
-import { XMarkIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
-
-interface TutorialStep {
-  title: string
-  description: string
-  gifSrc: string
-}
+import { useState, useEffect, useCallback } from 'react'
+import { Tooltip } from 'react-tooltip'
 
 export function GraphTutorial() {
   const [isVisible, setIsVisible] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null)
+  const [targetNode, setTargetNode] = useState<HTMLElement | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
 
-  const tutorialSteps: TutorialStep[] = [
-    {
-      title: "Click on a node",
-      description: "Click any node to highlight it and see its connections",
-      gifSrc: "/tutorial/node-click.gif"
-    },
-    {
-      title: "Click the info button",
-      description: "Click on the info button to see detailed node information",
-      gifSrc: "/tutorial/info-button.gif"
-    },
-    {
-      title: "Click on an edge",
-      description: "Click on connection lines to see edge details",
-      gifSrc: "/tutorial/edge-click.gif"
-    }
+  const tutorialSteps = [
+    { text: "Click to see connections" },
+    { text: "Click the details button" },
+    { text: "Click to see connection details" }
   ]
+
+  const handleClose = useCallback(() => {
+    setIsVisible(false)
+    localStorage.setItem('graph-tutorial-seen', 'true')
+
+    // Clean up hover state
+    if (targetNode) {
+      const mouseLeaveEvent = new MouseEvent('mouseleave', { bubbles: true })
+      targetNode.dispatchEvent(mouseLeaveEvent)
+    }
+  }, [targetNode])
+
+  const handleGlobalClick = useCallback((e: MouseEvent) => {
+    const target = e.target as HTMLElement
+
+    if (currentStep === 0) {
+      // Check if clicked on the target node
+      if (targetNode && (target === targetNode || targetNode.contains(target))) {
+        // Don't prevent default - let the node selection happen
+        setCurrentStep(1)
+      }
+    } else if (currentStep === 1) {
+      // Check if clicked on the info button
+      if (targetNode) {
+        const infoButton = targetNode.querySelector('button')
+        if (infoButton && (target === infoButton || infoButton.contains(target))) {
+          // Don't prevent default - let the info popup show
+          // Wait a moment for the modal to open
+          setTimeout(() => {
+            setIsModalOpen(true)
+          }, 100)
+
+          // Wait for the popup to close before moving to step 2
+          let modalWasOpen = false
+          const checkForPopupClose = setInterval(() => {
+            // Check if NodePopup backdrop is visible
+            // The backdrop has z-index 200 and bg-opacity-40
+            const backdrop = document.querySelector('[class*="backdrop-blur"]')
+            const hasBackdrop = backdrop && window.getComputedStyle(backdrop).display !== 'none'
+
+            console.log('Checking for popup close, backdrop found:', !!hasBackdrop, 'modalWasOpen:', modalWasOpen)
+
+            if (hasBackdrop) {
+              modalWasOpen = true
+            }
+
+            // Only advance when modal was open and is now closed
+            if (modalWasOpen && !hasBackdrop) {
+              clearInterval(checkForPopupClose)
+              setIsModalOpen(false)
+              setCurrentStep(2)
+            }
+          }, 300)
+
+          // Timeout after 30 seconds to prevent infinite waiting
+          setTimeout(() => {
+            clearInterval(checkForPopupClose)
+            if (currentStep === 1) {
+              setIsModalOpen(false)
+              setCurrentStep(2)
+            }
+          }, 30000)
+        }
+      }
+    } else if (currentStep === 2) {
+      // Check if clicked on an SVG path (edge)
+      const svg = document.querySelector('svg')
+      if (svg) {
+        // Check if the click was on a path element
+        let element: HTMLElement | null = target
+        while (element && element !== svg) {
+          if (element.tagName === 'path') {
+            // Don't prevent default - let the edge popup show
+            handleClose()
+            return
+          }
+          element = element.parentElement
+        }
+      }
+    }
+  }, [currentStep, targetNode, handleClose])
 
   useEffect(() => {
     // Check if user has seen the tutorial before
     const hasSeenTutorial = localStorage.getItem('graph-tutorial-seen')
     if (!hasSeenTutorial) {
-      // Show tutorial after a brief delay
+      // Show tutorial after a delay to let the graph render
       const timer = setTimeout(() => {
         setIsVisible(true)
-      }, 1000)
+      }, 1500)
       return () => clearTimeout(timer)
     }
   }, [])
 
-  const handleClose = () => {
-    setIsVisible(false)
-    localStorage.setItem('graph-tutorial-seen', 'true')
-  }
+  useEffect(() => {
+    if (isVisible) {
+      updateTooltipPosition()
+      // Add global click listener
+      document.addEventListener('click', handleGlobalClick, true)
 
-  const nextStep = () => {
-    if (currentStep < tutorialSteps.length - 1) {
-      setCurrentStep(currentStep + 1)
-    } else {
-      setIsVisible(false)
-      localStorage.setItem('graph-tutorial-seen', 'true')
+      // Add position tracking for step 1 (when tooltip is on the info button)
+      let positionUpdateInterval: NodeJS.Timeout | null = null
+      if (currentStep === 1) {
+        positionUpdateInterval = setInterval(() => {
+          updateTooltipPosition()
+        }, 100) // Update position every 100ms
+      }
+
+      // Also update on scroll/resize
+      window.addEventListener('scroll', updateTooltipPosition, true)
+      window.addEventListener('resize', updateTooltipPosition)
+
+      return () => {
+        document.removeEventListener('click', handleGlobalClick, true)
+        window.removeEventListener('scroll', updateTooltipPosition, true)
+        window.removeEventListener('resize', updateTooltipPosition)
+        if (positionUpdateInterval) {
+          clearInterval(positionUpdateInterval)
+        }
+      }
+    }
+  }, [currentStep, isVisible, targetNode, handleGlobalClick])
+
+  const updateTooltipPosition = () => {
+    if (currentStep === 0) {
+      // Step 1: Find a random node
+      const nodes = document.querySelectorAll('[id^="node-"]')
+      if (nodes.length === 0) return
+
+      const targetIndex = Math.floor(Math.random() * nodes.length)
+      const node = nodes[targetIndex] as HTMLElement
+      const rect = node.getBoundingClientRect()
+
+      setTargetNode(node)
+      setTooltipPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top
+      })
+    } else if (currentStep === 1) {
+      // Step 2: Point to the info button
+      if (!targetNode) return
+
+      // Simulate hover to show the info button
+      const mouseEnterEvent = new MouseEvent('mouseenter', { bubbles: true })
+      targetNode.dispatchEvent(mouseEnterEvent)
+
+      // Find and position directly on the info button
+      const infoButton = targetNode.querySelector('button')
+      if (infoButton) {
+        const rect = infoButton.getBoundingClientRect()
+        setTooltipPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2
+        })
+      } else {
+        // Fallback to top-right of node
+        const rect = targetNode.getBoundingClientRect()
+        setTooltipPosition({
+          x: rect.right - 20,
+          y: rect.top + 20
+        })
+      }
+    } else if (currentStep === 2) {
+      // Step 3: Find an edge/connection
+      // Find all SVG elements and look for the one with connection paths
+      const allSvgs = document.querySelectorAll('svg')
+      console.log('Total SVGs found:', allSvgs.length)
+
+      let svg: SVGSVGElement | null = null
+      let maxPaths = 0
+
+      // Find the SVG with the most paths (that's the connections SVG)
+      allSvgs.forEach((svgElement, index) => {
+        const pathCount = svgElement.querySelectorAll('path[d]').length
+        console.log(`SVG ${index}: ${pathCount} paths`)
+        if (pathCount > maxPaths) {
+          maxPaths = pathCount
+          svg = svgElement
+        }
+      })
+
+      if (!svg) {
+        console.log('No SVG with paths found')
+        return
+      }
+
+      const paths = svg.querySelectorAll('path[d]')
+      console.log('Selected SVG has', paths.length, 'paths')
+
+      if (paths.length === 0) return
+
+      // Find a visible connection path
+      // Based on the HTML structure, we want paths with stroke-width around 3px
+      let targetPath: SVGPathElement | null = null
+      const visiblePaths: SVGPathElement[] = []
+
+      for (let i = 0; i < paths.length; i++) {
+        const path = paths[i] as SVGPathElement
+
+        // Skip marker paths
+        if (path.closest('marker')) continue
+
+        const style = window.getComputedStyle(path)
+        const stroke = style.stroke
+        const strokeWidth = parseFloat(style.strokeWidth)
+
+        console.log(`Path ${i}: stroke=${stroke}, strokeWidth=${strokeWidth}`)
+
+        // Look for visible connection lines (stroke-width around 3px, not transparent)
+        if (stroke && stroke !== 'transparent' && strokeWidth >= 2 && strokeWidth <= 4) {
+          visiblePaths.push(path)
+          console.log(`Found visible path ${visiblePaths.length}`)
+        }
+      }
+
+      // Pick a random visible path
+      if (visiblePaths.length > 0) {
+        const randomIndex = Math.floor(Math.random() * visiblePaths.length)
+        targetPath = visiblePaths[randomIndex]
+        console.log(`Selected random path ${randomIndex + 1} of ${visiblePaths.length}`)
+      }
+
+      if (!targetPath) {
+        console.log('No target path found')
+        return
+      }
+
+      // Get the actual midpoint of the path curve
+      const pathLength = targetPath.getTotalLength()
+      const midPoint = targetPath.getPointAtLength(pathLength / 2)
+
+      console.log('Path midpoint (SVG coords):', midPoint.x, midPoint.y)
+
+      // Convert SVG coordinates to screen coordinates using getScreenCTM
+      const svgPoint = svg.createSVGPoint()
+      svgPoint.x = midPoint.x
+      svgPoint.y = midPoint.y
+      const screenCTM = svg.getScreenCTM()
+
+      if (screenCTM) {
+        const screenPoint = svgPoint.matrixTransform(screenCTM)
+        console.log('Screen point:', screenPoint.x, screenPoint.y)
+        setTooltipPosition({
+          x: screenPoint.x,
+          y: screenPoint.y
+        })
+      }
     }
   }
 
-  const prevStep = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1)
-    }
-  }
+  if (!isVisible || !tooltipPosition) return null
 
-  if (!isVisible) return null
-
-  const step = tutorialSteps[currentStep]
+  // Hide tooltip while modal is open during step 1
+  const shouldShowTooltip = !(currentStep === 1 && isModalOpen)
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-4xl mx-4 p-12">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-3xl font-bold text-gray-900">How to Use This Graph</h2>
-          <button
-            onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <XMarkIcon className="h-6 w-6" />
-          </button>
-        </div>
+    <>
+      {/* Invisible anchor element for the tooltip */}
+      <div
+        data-tooltip-id="graph-tutorial-tooltip"
+        className="fixed w-1 h-1 pointer-events-none"
+        style={{
+          left: `${tooltipPosition.x}px`,
+          top: `${tooltipPosition.y}px`,
+          zIndex: 61,
+        }}
+      />
 
-        <div className="mb-8">
-          {/* GIF container */}
-          <div className="bg-gray-100 rounded-lg h-96 flex items-center justify-center mb-6 overflow-hidden">
-            <img
-              src={step.gifSrc}
-              alt={step.title}
-              className="max-w-full max-h-full rounded-lg object-contain"
-              onError={(e) => {
-                // Fallback if GIF doesn't exist
-                e.currentTarget.style.display = 'none'
-                const fallback = e.currentTarget.nextElementSibling as HTMLElement
-                if (fallback) fallback.style.display = 'flex'
-              }}
-            />
-            <div className="text-gray-500 text-center hidden flex-col">
-              <div className="text-4xl mb-2">🎬</div>
-              <div>Tutorial: {step.title}</div>
-            </div>
-          </div>
-
-          <h3 className="text-2xl font-semibold text-gray-900 mb-4">{step.title}</h3>
-          <p className="text-lg text-gray-600">{step.description}</p>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <button
-            onClick={prevStep}
-            disabled={currentStep === 0}
-            className="flex items-center space-x-1 px-4 py-2 text-gray-600 hover:text-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronLeftIcon className="h-4 w-4" />
-            <span>Previous</span>
-          </button>
-
-          <div className="flex space-x-2">
-            {tutorialSteps.map((_, index) => (
-              <div
-                key={index}
-                className={`w-2 h-2 rounded-full transition-colors ${
-                  index === currentStep ? 'bg-blue-600' : 'bg-gray-300'
-                }`}
-              />
-            ))}
-          </div>
-
-          <button
-            onClick={nextStep}
-            className="flex items-center space-x-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <span>{currentStep === tutorialSteps.length - 1 ? 'Got it!' : 'Next'}</span>
-            {currentStep < tutorialSteps.length - 1 && <ChevronRightIcon className="h-4 w-4" />}
-          </button>
-        </div>
-      </div>
-    </div>
+      {/* Tooltip */}
+      <Tooltip
+        id="graph-tutorial-tooltip"
+        place="top"
+        isOpen={isVisible && shouldShowTooltip}
+        clickable
+        style={{ zIndex: 9999 }}
+      >
+        <div>{tutorialSteps[currentStep].text}</div>
+      </Tooltip>
+    </>
   )
 }
