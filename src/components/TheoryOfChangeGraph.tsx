@@ -1094,6 +1094,16 @@ export function ToC({
           }
         }}
       >
+      {/* Empty state message - show when there are no nodes */}
+      {Array.isArray(data.sections) &&
+        data.sections.every(s => s.columns && s.columns.every(c => !c.nodes || c.nodes.length === 0)) && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="text-gray-300 text-5xl font-light" style={{ fontFamily: fontFamily }}>
+            Double Click Anywhere to Add a Node
+          </div>
+        </div>
+      )}
+
       {Array.isArray(data.sections) ? data.sections.map((section, sectionIndex) => (
         <React.Fragment key={sectionIndex}>
           {/* Gap before first section or between sections with click to add section */}
