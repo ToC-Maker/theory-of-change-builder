@@ -14,6 +14,7 @@ interface NodePopupProps {
   onUpdateNode?: (nodeId: string, title: string, text: string) => void
   onDeleteNode?: (nodeId: string) => void
   fontFamily?: string
+  onClearSelection?: () => void
 }
 
 export function NodePopup({
@@ -24,6 +25,7 @@ export function NodePopup({
   onUpdateNode,
   onDeleteNode,
   fontFamily,
+  onClearSelection,
 }: NodePopupProps) {
   const [editTitle, setEditTitle] = useState(nodePopup.title)
   const [editText, setEditText] = useState(nodePopup.text)
@@ -79,6 +81,7 @@ export function NodePopup({
         onClick={() => {
           saveChanges()
           setNodePopup(null)
+          onClearSelection?.()
         }}
       />
 
@@ -105,6 +108,7 @@ export function NodePopup({
           onClick={() => {
             saveChanges()
             setNodePopup(null)
+            onClearSelection?.()
           }}
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
