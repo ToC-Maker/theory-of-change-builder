@@ -112,7 +112,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [showApiKey, setShowApiKey] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-  const [extendedThinkingEnabled, setExtendedThinkingEnabled] = useState(false);
+  const [extendedThinkingEnabled, setExtendedThinkingEnabled] = useState(true);
 
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -1198,7 +1198,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       <div className="relative" ref={modelDropdownRef}>
                         <button
                           onClick={() => setShowModelDropdown(!showModelDropdown)}
-                          className="w-[130px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
+                          className="w-[140px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
                           title="Select AI Model"
                         >
                           <span className="font-medium">{MODELS[selectedModel]}</span>
@@ -1206,7 +1206,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </button>
 
                         {showModelDropdown && (
-                          <div className="absolute bottom-full mb-1 left-0 w-[130px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
+                          <div className="absolute bottom-full mb-1 left-0 w-[200px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
                             {Object.entries(MODELS).map(([key, name]) => (
                               <button
                                 key={key}
@@ -1218,7 +1218,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                                   selectedModel === key ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
                                 }`}
                               >
-                                {name}
+                                {key}
                               </button>
                             ))}
                           </div>
