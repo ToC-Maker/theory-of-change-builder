@@ -1648,6 +1648,7 @@ export function ToC({
           onUpdateNode={updateNode}
           onDeleteNode={deleteNode}
           fontFamily={fontFamily}
+          onClearSelection={() => setHighlightedNodes(new Set())}
         />
       )}
 
