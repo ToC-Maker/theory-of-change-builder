@@ -13,8 +13,8 @@ Auth0 has been successfully integrated into your Theory of Change Builder applic
 
 ### Auth0 Configuration
 
-- **Domain**: `dev-zy7obc7gqpztqadk.auth0.com`
-- **Client ID**: `eGHWLKnz44EPGWfmCdcVvYY5SBSMX01B`
+- **Domain**: Check your `.env` file or Auth0 Dashboard
+- **Client ID**: Check your `.env` file or Auth0 Dashboard
 - **Application**: Theory of Change Builder
 
 ### Important: Auth0 Dashboard Configuration
@@ -207,8 +207,8 @@ For Netlify deployment, the Auth0 extension you enabled should automatically set
 
 1. Go to: Site Settings → Environment Variables
 2. Add:
-   - `VITE_AUTH0_DOMAIN` = `dev-zy7obc7gqpztqadk.auth0.com`
-   - `VITE_AUTH0_CLIENT_ID` = `eGHWLKnz44EPGWfmCdcVvYY5SBSMX01B`
+   - `VITE_AUTH0_DOMAIN` = `your-auth0-domain.auth0.com` (from your .env file)
+   - `VITE_AUTH0_CLIENT_ID` = `your-client-id` (from your .env file)
 
 ### Testing
 
