@@ -7,7 +7,7 @@
   NODE_VERSION = "18"
   # Auth0 Client ID and Domain are safe to expose in client-side code
   # This is standard for Single Page Applications using Auth0
-  SECRETS_SCAN_OMIT_KEYS = "VITE_AUTH0_CLIENT_ID,VITE_AUTH0_DOMAIN"
+  SECRETS_SCAN_OMIT_KEYS = "VITE_AUTH0_CLIENT_ID,VITE_AUTH0_DOMAIN,AUTH0_CLIENT_ID,AUTH0_DOMAIN"
 
 # Block WordPress bot requests
 [[redirects]]
