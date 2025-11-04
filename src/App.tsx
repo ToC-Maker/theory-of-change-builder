@@ -9,6 +9,7 @@ import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
+import AuthButton from "./components/AuthButton"
 import "./App.css"
 
 // Default empty template with 4 sections
@@ -1439,6 +1440,18 @@ function ToCViewer() {
           chartData={data}
           currentEditToken={currentEditToken}
         />
+      </div>
+
+      {/* Auth Button - Top Right */}
+      <div
+        className="fixed"
+        style={{
+          top: '4rem',
+          right: '1rem',
+          zIndex: 9999
+        }}
+      >
+        <AuthButton />
       </div>
 
       {/* Zoom Controls - Google Maps Style */}
