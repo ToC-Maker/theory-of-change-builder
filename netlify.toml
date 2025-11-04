@@ -41,11 +41,11 @@
   force = true
 
 # SPA fallback - REQUIRED for production routes to work
-# [[redirects]]
-#  from = "/*"
-#  to = "/index.html"
-#  status = 200
-#  force = false
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = false
 
 [functions]
   node_bundler = "esbuild"
