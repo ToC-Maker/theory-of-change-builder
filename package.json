@@ -12,6 +12,7 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
+    "@auth0/auth0-react": "^2.8.0",
     "@heroicons/react": "^2.1.5",
     "@mdxeditor/editor": "^3.46.1",
     "@neondatabase/serverless": "^1.0.1",
