@@ -3,7 +3,6 @@ import { Routes, Route, useParams, useLocation, Link } from "react-router-dom"
 import { ToC } from "./components/TheoryOfChangeGraph"
 import { ChatInterface } from "./components/ChatInterface"
 import { JsonDropdown } from "./components/JsonDropdown"
-import { ShareModal } from "./components/ShareModal"
 import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
@@ -449,7 +448,6 @@ function ToCViewer() {
   const [error, setError] = useState<string | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
-  const [showShareModal, setShowShareModal] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
@@ -1415,7 +1413,6 @@ function ToCViewer() {
               redoHistory={redoHistory}
               handleUndo={handleUndo}
               handleRedo={handleRedo}
-              setShowShareModal={setShowShareModal}
               isSaving={isSaving}
               currentEditToken={currentEditToken}
               lastSyncTime={lastSyncTime}
@@ -1431,15 +1428,6 @@ function ToCViewer() {
         </div>
 
       </div>
-
-
-        {/* Share Modal */}
-        <ShareModal
-          isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
-          chartData={data}
-          currentEditToken={currentEditToken}
-        />
       </div>
 
       {/* Auth Button - Top Right */}

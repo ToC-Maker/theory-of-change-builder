@@ -34,7 +34,6 @@ interface EditToolbarProps {
   redoHistory: ToCData[]
   handleUndo: () => void
   handleRedo: () => void
-  setShowShareModal: React.Dispatch<React.SetStateAction<boolean>>
   isSaving: boolean
   currentEditToken: string | null
   lastSyncTime: Date | null
@@ -81,7 +80,6 @@ export function EditToolbar({
   redoHistory,
   handleUndo,
   handleRedo,
-  setShowShareModal,
   isSaving,
   currentEditToken,
   lastSyncTime,
