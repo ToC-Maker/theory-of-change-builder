@@ -22,7 +22,6 @@ export function ToC({
   redoHistory = [],
   handleUndo = () => {},
   handleRedo = () => {},
-  setShowShareModal = () => {},
   isSaving = false,
   currentEditToken = null,
   lastSyncTime = null,
@@ -43,7 +42,6 @@ export function ToC({
   redoHistory?: ToCData[]
   handleUndo?: () => void
   handleRedo?: () => void
-  setShowShareModal?: React.Dispatch<React.SetStateAction<boolean>>
   isSaving?: boolean
   currentEditToken?: string | null
   lastSyncTime?: Date | null
@@ -1477,7 +1475,6 @@ export function ToC({
         redoHistory={redoHistory}
         handleUndo={handleUndo}
         handleRedo={handleRedo}
-        setShowShareModal={setShowShareModal}
         isSaving={isSaving}
         currentEditToken={currentEditToken}
         lastSyncTime={lastSyncTime}
