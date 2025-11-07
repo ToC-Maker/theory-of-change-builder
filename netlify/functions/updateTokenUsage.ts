@@ -39,11 +39,33 @@ export const handler: Handler = async (event) => {
 
     const sql = neon(DATABASE_URL);
 
+    // Update chart token usage
     await sql`
       UPDATE charts
       SET total_tokens_used = total_tokens_used + ${tokensUsed}
       WHERE edit_token = ${editToken}
     `;
+
+    // Get the user_id for this chart
+    const chartResult = await sql`
+      SELECT user_id FROM charts
+      WHERE edit_token = ${editToken}
+    `;
+
+    // If chart has an owner (user_id), update user token usage
+    if (chartResult.length > 0 && chartResult[0].user_id) {
+      const userId = chartResult[0].user_id;
+
+      // Insert or update user token usage using ON CONFLICT
+      await sql`
+        INSERT INTO user_token_usage (user_id, total_tokens_used, last_updated_at)
+        VALUES (${userId}, ${tokensUsed}, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          total_tokens_used = user_token_usage.total_tokens_used + ${tokensUsed},
+          last_updated_at = CURRENT_TIMESTAMP
+      `;
+    }
 
     return {
       statusCode: 200,
