@@ -1039,30 +1039,30 @@ export function EditToolbar({
 
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
-                          Edit Link
+                          Share Link for Collaboration
                         </label>
                         <div className="flex items-center gap-2">
                           <input
                             type="text"
                             readOnly
                             value={shareData.editUrl}
-                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-yellow-50"
+                            className="flex-1 px-2 py-1 border border-gray-300 rounded text-xs bg-blue-50"
                           />
                           <button
                             onClick={() => copyToClipboard(shareData.editUrl, 'edit')}
-                            className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200 transition-colors"
+                            className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
                           >
                             {copiedField === 'edit' ? 'Copied!' : 'Copy'}
                           </button>
                         </div>
-                        <p className="text-xs text-yellow-700 mt-2">
-                          Keep this link private - anyone with it can edit your chart
+                        <p className="text-xs text-blue-700 mt-2">
+                          Share this link with collaborators to work together on your chart
                         </p>
                       </div>
 
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
-                          View Link
+                          View-Only Link
                         </label>
                         <div className="flex items-center gap-2">
                           <input
@@ -1079,7 +1079,7 @@ export function EditToolbar({
                           </button>
                         </div>
                         <p className="text-xs text-gray-500 mt-2">
-                          Share this link with anyone to view your chart
+                          Share this link to let others view your chart without editing
                         </p>
                       </div>
 
