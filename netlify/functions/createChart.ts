@@ -1,10 +1,11 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
 import crypto from 'crypto';
+import { verifyToken, extractToken } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json'
 };
@@ -56,11 +57,45 @@ export const handler: Handler = async (event) => {
     // Connect to database
     const sql = neon(DATABASE_URL);
 
-    // Insert the chart into database
+    // Extract chart title from chart data
+    const chartTitle = chartData.title || 'Theory of Change';
+
+    // Check if user is authenticated
+    let userId = null;
+    let userEmail = null;
+    const token = extractToken(event.headers.authorization);
+
+    console.log('[createChart] Authorization header present:', !!event.headers.authorization);
+    console.log('[createChart] Token extracted:', !!token);
+
+    if (token) {
+      try {
+        const decodedToken = await verifyToken(token);
+        userId = decodedToken.sub;
+        userEmail = decodedToken.email || decodedToken.name;
+        console.log('[createChart] Token verified successfully. User ID:', userId);
+      } catch (err) {
+        // If token is invalid, treat as anonymous user
+        console.error('[createChart] Token verification failed:', err);
+        console.log('[createChart] Creating anonymous chart due to invalid token');
+      }
+    } else {
+      console.log('[createChart] No token provided, creating anonymous chart');
+    }
+
+    // Insert the chart into database with user_id and chart_title
     await sql`
-      INSERT INTO charts (id, edit_token, chart_data)
-      VALUES (${chartId}, ${editToken}, ${JSON.stringify(chartData)})
+      INSERT INTO charts (id, edit_token, chart_data, user_id, chart_title)
+      VALUES (${chartId}, ${editToken}, ${JSON.stringify(chartData)}, ${userId || null}, ${chartTitle})
     `;
+
+    // If user is authenticated, create owner permission with email
+    if (userId && userEmail) {
+      await sql`
+        INSERT INTO chart_permissions (chart_id, user_id, user_email, permission_level, granted_by)
+        VALUES (${chartId}, ${userId}, ${userEmail}, 'owner', ${userId})
+      `;
+    }
 
     return {
       statusCode: 200,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Routes, Route, useParams, useLocation, Link } from "react-router-dom"
+import { Routes, Route, useParams, useLocation, Link, useNavigate } from "react-router-dom"
+import { useAuth0 } from "@auth0/auth0-react"
 import { ToC } from "./components/TheoryOfChangeGraph"
 import { ChatInterface } from "./components/ChatInterface"
 import { JsonDropdown } from "./components/JsonDropdown"
@@ -80,6 +81,7 @@ const MAX_SCALE = 5;
 function ToCViewerOnly() {
   const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>()
   const location = useLocation()
+  const { loginWithRedirect } = useAuth0()
   const [data, setData] = useState<ToCData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -358,26 +360,89 @@ function ToCViewerOnly() {
 
   if (loading) {
     return (
-      <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen w-screen bg-white flex items-center justify-center">
         <div className="text-xl text-gray-600">Loading Theory of Change...</div>
       </div>
     )
   }
 
   if (error) {
+    const isPendingError = error.includes('pending') || error.includes('approve');
+    const isAuthError = error.includes('Authentication required') || error.includes('log in');
+    const isNotFoundError = error.includes('not found') || error.includes('deleted');
+
     return (
-      <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-center">
-        <div className="text-xl text-red-600 mb-4">Error: {error}</div>
-        <Link to="/" className="text-blue-600 hover:underline">
-          Return to Home
-        </Link>
+      <div className="min-h-screen w-full bg-white flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+          {/* Icon */}
+          <div className={`mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 ${isPendingError ? 'bg-yellow-100' : 'bg-red-100'}`}>
+            {isPendingError ? (
+              <svg className="h-8 w-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : isAuthError ? (
+              <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            ) : isNotFoundError ? (
+              <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
+          </div>
+
+          {/* Title */}
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            {isPendingError ? 'Access Request Pending' : isAuthError ? 'Authentication Required' : isNotFoundError ? 'Chart Not Found' : 'Unable to Load Chart'}
+          </h2>
+
+          {/* Error Message */}
+          <p className="text-gray-600 mb-6">
+            {error}
+          </p>
+
+          {/* Actions */}
+          <div className="flex flex-col gap-3">
+            {isAuthError && (
+              <button
+                onClick={() => {
+                  // Save the current path to localStorage before redirecting
+                  localStorage.setItem('auth0_returnTo', window.location.pathname);
+                  loginWithRedirect({
+                    appState: { returnTo: window.location.pathname }
+                  });
+                }}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+              >
+                Log In to Continue
+              </button>
+            )}
+            <Link
+              to="/"
+              className="w-full px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
+            >
+              Go Home
+            </Link>
+          </div>
+
+          {/* Additional Help */}
+          {isAuthError && (
+            <p className="mt-6 text-sm text-gray-500">
+              This chart requires you to be logged in to access it.
+            </p>
+          )}
+        </div>
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen w-screen bg-white flex items-center justify-center">
         <div className="text-xl text-gray-600">No data available</div>
       </div>
     )
@@ -441,6 +506,7 @@ function ToCViewerOnly() {
 
 function ToCViewer() {
   const { filename, editToken } = useParams<{ filename?: string; editToken?: string }>()
+  const { getIdTokenClaims, isAuthenticated, isLoading: authLoading, loginWithRedirect } = useAuth0()
   const [data, setData] = useState<ToCData | null>(null)
   const [undoHistory, setUndoHistory] = useState<ToCData[]>([])
   const [redoHistory, setRedoHistory] = useState<ToCData[]>([])
@@ -459,6 +525,43 @@ function ToCViewer() {
   const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null)
   const [panStartCamera, setPanStartCamera] = useState<{ x: number; y: number } | null>(null)
   const hasInitializedZoom = useRef(false)
+  const [authTokenReady, setAuthTokenReady] = useState(false)
+
+  // Set Auth0 token on ChartService when user is authenticated
+  useEffect(() => {
+    const setToken = async () => {
+      if (isAuthenticated && !authLoading) {
+        try {
+          console.log('[App] Fetching Auth0 ID token...');
+          const idTokenClaims = await getIdTokenClaims();
+          const idToken = idTokenClaims?.__raw;
+          if (idToken) {
+            ChartService.setAuthToken(idToken);
+            console.log('[App] Auth token set on ChartService (length:', idToken.length, ')');
+            setAuthTokenReady(true);
+          } else {
+            console.error('[App] ID token not available');
+            ChartService.setAuthToken(null);
+            setAuthTokenReady(true); // Ready even if no token (anonymous mode)
+          }
+        } catch (err) {
+          console.error('[App] Failed to get ID token:', err);
+          ChartService.setAuthToken(null);
+          setAuthTokenReady(true); // Ready even if error (anonymous mode)
+        }
+      } else if (!authLoading) {
+        // Auth finished loading but user is not authenticated
+        console.log('[App] User not authenticated, clearing token');
+        ChartService.setAuthToken(null);
+        setAuthTokenReady(true); // Ready for anonymous mode
+      } else {
+        // Auth still loading
+        console.log('[App] Auth still loading, token not ready');
+        setAuthTokenReady(false);
+      }
+    };
+    setToken();
+  }, [isAuthenticated, authLoading, getIdTokenClaims]);
 
   // Helper function to format relative time
   const getTimeAgo = (date: Date) => {
@@ -913,6 +1016,12 @@ function ToCViewer() {
 
   useEffect(() => {
     const loadData = async () => {
+      // Wait for auth token to be ready (either set or confirmed not needed)
+      if (!authTokenReady) {
+        console.log('Waiting for auth token to be ready before loading chart...');
+        return;
+      }
+
       setLoading(true)
       setError(null)
 
@@ -920,6 +1029,7 @@ function ToCViewer() {
         if (editToken) {
           // Load from database using editToken
           console.log('Loading chart from database with edit token:', editToken);
+          console.log('Auth state - Authenticated:', isAuthenticated, 'Token ready:', authTokenReady, 'Has token:', ChartService.hasAuthToken());
           const result = await ChartService.getChartByEditToken(editToken);
           setData(result.chartData);
           setCurrentEditToken(editToken);
@@ -955,7 +1065,7 @@ function ToCViewer() {
     }
 
     loadData()
-  }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage])
+  }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage, authTokenReady, isAuthenticated])
 
   // Helper function to calculate zoom-to-fit
   const calculateZoomToFit = useCallback(() => {
@@ -1054,7 +1164,7 @@ function ToCViewer() {
 
   // Smart periodic sync with idle detection for edit mode
   useEffect(() => {
-    if (!editToken) return;
+    if (!editToken || !authTokenReady) return;
 
     let interval: NodeJS.Timeout;
     let lastSyncedData: string | null = null;
@@ -1156,7 +1266,7 @@ function ToCViewer() {
       document.removeEventListener('click', handleActivity);
       document.removeEventListener('scroll', handleActivity);
     };
-  }, [editToken, isSaving])
+  }, [editToken, isSaving, authTokenReady])
 
   // Update the "time ago" display every second
   const [, forceUpdate] = useState({});
@@ -1338,26 +1448,89 @@ function ToCViewer() {
 
   if (loading) {
     return (
-      <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen w-screen bg-white flex items-center justify-center">
         <div className="text-xl text-gray-600">Loading Theory of Change...</div>
       </div>
     )
   }
 
   if (error) {
+    const isPendingError = error.includes('pending') || error.includes('approve');
+    const isAuthError = error.includes('Authentication required') || error.includes('log in');
+    const isNotFoundError = error.includes('not found') || error.includes('deleted');
+
     return (
-      <div className="h-screen w-screen bg-gray-50 flex flex-col items-center justify-center">
-        <div className="text-xl text-red-600 mb-4">Error: {error}</div>
-        <Link to="/" className="text-blue-600 hover:underline">
-          Return to Home
-        </Link>
+      <div className="min-h-screen w-full bg-white flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+          {/* Icon */}
+          <div className={`mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 ${isPendingError ? 'bg-yellow-100' : 'bg-red-100'}`}>
+            {isPendingError ? (
+              <svg className="h-8 w-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : isAuthError ? (
+              <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            ) : isNotFoundError ? (
+              <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg className="h-8 w-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
+          </div>
+
+          {/* Title */}
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            {isPendingError ? 'Access Request Pending' : isAuthError ? 'Authentication Required' : isNotFoundError ? 'Chart Not Found' : 'Unable to Load Chart'}
+          </h2>
+
+          {/* Error Message */}
+          <p className="text-gray-600 mb-6">
+            {error}
+          </p>
+
+          {/* Actions */}
+          <div className="flex flex-col gap-3">
+            {isAuthError && (
+              <button
+                onClick={() => {
+                  // Save the current path to localStorage before redirecting
+                  localStorage.setItem('auth0_returnTo', window.location.pathname);
+                  loginWithRedirect({
+                    appState: { returnTo: window.location.pathname }
+                  });
+                }}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+              >
+                Log In to Continue
+              </button>
+            )}
+            <Link
+              to="/"
+              className="w-full px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
+            >
+              Go Home
+            </Link>
+          </div>
+
+          {/* Additional Help */}
+          {isAuthError && (
+            <p className="mt-6 text-sm text-gray-500">
+              This chart requires you to be logged in to access it.
+            </p>
+          )}
+        </div>
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="h-screen w-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-screen w-screen bg-white flex items-center justify-center">
         <div className="text-xl text-gray-600">No data available</div>
       </div>
     )
@@ -1555,9 +1728,38 @@ function ToCViewer() {
   )
 }
 
+function Auth0RedirectHandler() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { isAuthenticated, isLoading } = useAuth0();
+
+  useEffect(() => {
+    // Check if we just returned from Auth0 (has code and state params)
+    const searchParams = new URLSearchParams(location.search);
+    const hasAuthParams = searchParams.has('code') && searchParams.has('state');
+
+    if (hasAuthParams && !isLoading && isAuthenticated) {
+      // Get the intended destination from localStorage (set before login)
+      const returnTo = localStorage.getItem('auth0_returnTo');
+      localStorage.removeItem('auth0_returnTo');
+
+      // Navigate to the intended page
+      if (returnTo && returnTo !== '/') {
+        navigate(returnTo, { replace: true });
+      } else {
+        // Clean up the URL by removing auth params
+        navigate(location.pathname, { replace: true });
+      }
+    }
+  }, [isAuthenticated, isLoading, location, navigate]);
+
+  return null;
+}
+
 function App() {
   return (
     <ApiKeyProvider>
+      <Auth0RedirectHandler />
       <PrivacyPolicyPopup />
       <Routes>
         {/* New URL-based routes */}

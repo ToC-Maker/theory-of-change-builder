@@ -41,10 +41,14 @@ export const handler: Handler = async (event) => {
     // Connect to database
     const sql = neon(DATABASE_URL);
 
+    // Extract chart title from chart data
+    const chartTitle = chartData.title || 'Theory of Change';
+
     // Update the chart
     const result = await sql`
       UPDATE charts
       SET chart_data = ${JSON.stringify(chartData)},
+          chart_title = ${chartTitle},
           updated_at = NOW()
       WHERE edit_token = ${editToken}
       RETURNING id
