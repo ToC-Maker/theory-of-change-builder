@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "Bash(wmic process:*)"
+      "Bash(wmic process:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []
