@@ -287,9 +287,10 @@ export function GraphTutorial() {
         place="top"
         isOpen={isVisible && shouldShowTooltip}
         clickable
+        className="!max-w-[100px] !text-[8px] !px-1.5 !py-0.5 sm:!max-w-[140px] sm:!text-xs sm:!px-3 sm:!py-1.5 md:!max-w-[160px] md:!text-sm md:!px-3 md:!py-2"
         style={{ zIndex: 9999 }}
       >
-        <div>{tutorialSteps[currentStep].text}</div>
+        <div className="text-center">{tutorialSteps[currentStep].text}</div>
       </Tooltip>
     </>
   )
