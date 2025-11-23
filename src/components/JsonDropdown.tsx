@@ -79,7 +79,7 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
       >
         <span className="font-medium">{title}</span>
         <svg
-          className={`w-5 h-10 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-5 h-10 transition-transform duration-200 ${isOpen ? '' : 'rotate-180'}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
