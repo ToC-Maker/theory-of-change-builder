@@ -310,7 +310,7 @@ export function EdgePopup({
               </div>
 
               <div>
-                <h4 className="font-medium text-gray-800 mb-2 text-left" style={{ fontFamily }}>Evidence</h4>
+                <h4 className="font-medium text-gray-800 mb-2 text-left" style={{ fontFamily }}>Evidence/Reasoning</h4>
                 {editMode && isEditing ? (
                   <MDXEditorComponent
                     markdown={editEvidence}

@@ -762,7 +762,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           title={isCollapsed ? "Expand AI Assistant" : "Collapse AI Assistant"}
         >
           {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
-          <ChevronLeftIcon className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? '' : 'rotate-180'}`} />
+          <ChevronLeftIcon className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`} />
         </button>
       </div>
 

@@ -1617,7 +1617,7 @@ function ToCViewer() {
 
       {/* Zoom Controls - Google Maps Style */}
       <div
-        className="fixed z-40 bg-white rounded-lg shadow-lg border border-gray-200"
+        className="fixed z-20 bg-white rounded-lg shadow-lg border border-gray-200"
         style={{
           bottom: '5rem',
           right: '1rem'
