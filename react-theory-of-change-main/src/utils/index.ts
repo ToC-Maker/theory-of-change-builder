@@ -30,47 +30,33 @@ export function getContrastTextColor(backgroundColor: string): string {
   return isColorDark(backgroundColor) ? '#ffffff' : '#000000'
 }
 
-export function getConfidenceStrokeStyle(confidence: number): { 
+export function getConfidenceStrokeStyle(confidence: number): {
   strokeDasharray: string;
   stroke: string;
   opacity: number;
 } {
   // Clamp confidence to 0-100 range
   const clampedConfidence = Math.max(0, Math.min(100, confidence))
-  
+
   // Use black color for all connections
   const stroke = '#000000' // black
-  
-  if (clampedConfidence >= 80) {
-    // Very high confidence: solid line
+
+  if (clampedConfidence >= 66) {
+    // High confidence (66-100%): solid line
     return {
       strokeDasharray: 'none',
       stroke,
       opacity: 1.0
     }
-  } else if (clampedConfidence >= 60) {
-    // High confidence: short dashes with small gaps
-    return {
-      strokeDasharray: '12 3', // 12px dash, 3px gap
-      stroke,
-      opacity: 0.95
-    }
-  } else if (clampedConfidence >= 40) {
-    // Medium confidence: medium dashes with medium gaps
+  } else if (clampedConfidence >= 33) {
+    // Medium confidence (33-66%): dashed line
     return {
       strokeDasharray: '8 6', // 8px dash, 6px gap
       stroke,
       opacity: 0.9
     }
-  } else if (clampedConfidence >= 20) {
-    // Low confidence: short dashes with medium gaps
-    return {
-      strokeDasharray: '6 8', // 6px dash, 8px gap
-      stroke,
-      opacity: 0.85
-    }
   } else {
-    // Very low confidence: dots with small gaps
+    // Low confidence (0-33%): dotted line
     return {
       strokeDasharray: '2 6', // 2px dot, 6px gap
       stroke,
