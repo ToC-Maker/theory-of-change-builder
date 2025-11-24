@@ -81,7 +81,7 @@ const MAX_SCALE = 5;
 function ToCViewerOnly() {
   const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>()
   const location = useLocation()
-  const { loginWithRedirect } = useAuth0()
+  const { loginWithRedirect, isAuthenticated, isLoading: authLoading, getIdTokenClaims } = useAuth0()
   const [data, setData] = useState<ToCData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -159,6 +159,29 @@ function ToCViewerOnly() {
 
     setIsCopying(true);
     try {
+      // Wait for auth to finish loading if it hasn't yet
+      if (authLoading) {
+        // Auth is still loading, wait a bit and retry
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      // Get and set the auth token if user is authenticated
+      if (isAuthenticated) {
+        try {
+          const idTokenClaims = await getIdTokenClaims();
+          const idToken = idTokenClaims?.__raw;
+          if (idToken) {
+            ChartService.setAuthToken(idToken);
+            console.log('[ToCViewerOnly] Auth token set for copy operation');
+          }
+        } catch (err) {
+          console.error('[ToCViewerOnly] Failed to get ID token:', err);
+          // Continue without token - will create anonymous chart
+        }
+      } else {
+        ChartService.setAuthToken(null);
+      }
+
       // Create a copy of the data with modified title
       const copiedData = {
         ...data,
