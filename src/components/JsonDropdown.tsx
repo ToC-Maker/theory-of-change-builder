@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface JsonDropdownProps {
   data: any;
@@ -12,8 +12,54 @@ interface JsonDropdownProps {
 export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON, resetToOriginal, onUploadJSON, loading }: JsonDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedJson, setEditedJson] = useState('');
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Update editedJson when data changes (and not currently editing)
+  useEffect(() => {
+    if (!isEditing) {
+      setEditedJson(JSON.stringify(data, null, 2));
+    }
+  }, [data, isEditing]);
+
+  const handleStartEditing = () => {
+    setEditedJson(JSON.stringify(data, null, 2));
+    setIsEditing(true);
+    setJsonError(null);
+    // Focus textarea after state update
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  };
+
+  const handleCancelEditing = () => {
+    setIsEditing(false);
+    setEditedJson(JSON.stringify(data, null, 2));
+    setJsonError(null);
+  };
+
+  const handleApplyEdit = () => {
+    try {
+      const parsedJson = JSON.parse(editedJson);
+      if (onUploadJSON) {
+        onUploadJSON(parsedJson);
+      }
+      setIsEditing(false);
+      setJsonError(null);
+    } catch (error) {
+      setJsonError(error instanceof Error ? error.message : 'Invalid JSON');
+    }
+  };
+
+  const handleJsonChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setEditedJson(e.target.value);
+    // Clear error when user starts typing
+    if (jsonError) {
+      setJsonError(null);
+    }
+  };
 
   const handleCopyClick = async () => {
     if (copyGraphJSON) {
@@ -142,13 +188,13 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                 </button>
               )}
 
-              {/* Copy JSON button on the right */}
+              {/* Copy JSON button */}
               {copyGraphJSON && (
                 <button
                   onClick={handleCopyClick}
                   className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border border-gray-200 ${
-                    showCopiedMessage 
-                      ? 'bg-green-50 text-green-600 border-green-200' 
+                    showCopiedMessage
+                      ? 'bg-green-50 text-green-600 border-green-200'
                       : 'text-gray-700 hover:bg-green-50 hover:text-green-600'
                   }`}
                 >
@@ -169,19 +215,72 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                   )}
                 </button>
               )}
+
+              {/* Edit JSON button */}
+              {onUploadJSON && !isEditing && (
+                <button
+                  onClick={handleStartEditing}
+                  className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-yellow-50 hover:text-yellow-600 hover:border-yellow-200"
+                  title="Edit JSON directly"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  <span>Edit JSON</span>
+                </button>
+              )}
             </div>
           )}
-          <div 
+
+          {/* Edit mode controls */}
+          {isEditing && (
+            <div className="mb-3 flex gap-2 items-center">
+              <button
+                onClick={handleApplyEdit}
+                className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors bg-green-500 text-white hover:bg-green-600"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>Apply Changes</span>
+              </button>
+              <button
+                onClick={handleCancelEditing}
+                className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-gray-100"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span>Cancel</span>
+              </button>
+              {jsonError && (
+                <span className="text-sm text-red-500 ml-2">
+                  Error: {jsonError}
+                </span>
+              )}
+            </div>
+          )}
+          <div
             ref={scrollContainerRef}
-            className="relative bg-gray-50 rounded border border-gray-200"
+            className={`relative bg-gray-50 rounded border ${isEditing ? 'border-yellow-300' : 'border-gray-200'}`}
             // 1/3 viewport height with max height of 24rem (96)
             style={{ height: '33vh', maxHeight: '24rem' }}
           >
-            <div className="h-full overflow-y-scroll p-3 text-left">
-              <pre className="text-xs font-mono text-gray-800 whitespace-pre leading-relaxed text-left">
-                {JSON.stringify(data, null, 2)}
-              </pre>
-            </div>
+            {isEditing ? (
+              <textarea
+                ref={textareaRef}
+                value={editedJson}
+                onChange={handleJsonChange}
+                className="w-full h-full p-3 text-xs font-mono text-gray-800 bg-transparent resize-none focus:outline-none focus:ring-2 focus:ring-yellow-300 rounded"
+                spellCheck={false}
+              />
+            ) : (
+              <div className="h-full overflow-y-scroll p-3 text-left">
+                <pre className="text-xs font-mono text-gray-800 whitespace-pre leading-relaxed text-left">
+                  {JSON.stringify(data, null, 2)}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       )}
