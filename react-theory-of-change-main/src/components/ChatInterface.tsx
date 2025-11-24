@@ -199,6 +199,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Reload chat history when route changes
   useEffect(() => {
     try {
+      // Clear chat when navigating to root path (new ToC)
+      if (location.pathname === '/') {
+        setMessages([]);
+        const storageKey = getStorageKey();
+        localStorage.removeItem(storageKey);
+        return;
+      }
+
       const storageKey = getStorageKey();
       const savedMessages = localStorage.getItem(storageKey);
       if (savedMessages) {
