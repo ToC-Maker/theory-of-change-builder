@@ -17,9 +17,19 @@ export interface ChatMessage {
 }
 
 class ChatService {
-  private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
+  private readonly GEMINI_EDGE_FUNCTION_URL = '/api/gemini-stream';
+  private readonly ANTHROPIC_EDGE_FUNCTION_URL = '/api/anthropic-stream';
+
+  private getEdgeFunctionUrl(model: string): string {
+    // Route to Anthropic for Claude models, Gemini for everything else
+    if (model.startsWith('claude-')) {
+      return this.ANTHROPIC_EDGE_FUNCTION_URL;
+    }
+    return this.GEMINI_EDGE_FUNCTION_URL;
+  }
 
   private async streamFromEdgeFunction(
+    url: string,
     requestBody: any,
     callbacks: {
       onContent?: (chunk: string, fullContent: string) => void;
@@ -30,7 +40,7 @@ class ChatService {
     },
     signal?: AbortSignal
   ): Promise<void> {
-    const response = await fetch(this.EDGE_FUNCTION_URL, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -41,7 +51,12 @@ class ChatService {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      console.error('[ChatService] API Error Response:', {
+        status: response.status,
+        statusText: response.statusText,
+        errorData
+      });
+      throw new Error(errorData.error || errorData.details || `HTTP error! status: ${response.status}`);
     }
 
     if (!response.body) {
@@ -144,7 +159,7 @@ class ChatService {
       onSearchComplete?: (results?: any[]) => void;
     } = {},
     signal?: AbortSignal,
-    model: string = "claude-sonnet-4-20250514",
+    model: string = "gemini-2.0-flash",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
@@ -236,15 +251,16 @@ class ChatService {
         };
       }
 
-      // Stream from edge function
-      await this.streamFromEdgeFunction(requestBody, callbacks, signal);
+      // Stream from edge function (route based on model)
+      const edgeFunctionUrl = this.getEdgeFunctionUrl(model);
+      await this.streamFromEdgeFunction(edgeFunctionUrl, requestBody, callbacks, signal);
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
-        const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
-                           error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
-                           error.message.includes('insufficient_quota') ? "Insufficient API quota." :
+        const errorMessage = error.message.includes('rate_limit') || error.message.includes('RESOURCE_EXHAUSTED') ? "Rate limit exceeded. Please wait and try again." :
+                           error.message.includes('invalid_api_key') || error.message.includes('API_KEY_INVALID') ? "Invalid API key. Please check your settings." :
+                           error.message.includes('insufficient_quota') || error.message.includes('QUOTA_EXCEEDED') ? "Insufficient API quota." :
                            error.message.includes('network') ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
