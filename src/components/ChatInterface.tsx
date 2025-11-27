@@ -53,14 +53,16 @@ interface ChatInterfaceProps {
 }
 
 const MODELS = {
-  'claude-sonnet-4-20250514': 'Claude 4 Sonnet',
-  'claude-opus-4-20250514': 'Claude 4 Opus',
+  'gemini-2.0-flash': 'Gemini 2.0 Flash',
+  'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
+  'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
 } as const;
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
   const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
-  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-20250514');
+  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('gemini-2.5-pro');
 
   // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
