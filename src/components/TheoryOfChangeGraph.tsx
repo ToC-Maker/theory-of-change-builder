@@ -32,7 +32,8 @@ export function ToC({
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
-  onEditTokenChange
+  onEditTokenChange,
+  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 }
 }: {
   data: ToCData
   onSizeChange?: (size: { width: number; height: number }) => void
@@ -53,6 +54,7 @@ export function ToC({
   camera?: { x: number; y: number; z: number }
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void
   onEditTokenChange?: (token: string) => void
+  viewportOffset?: { left: number; top: number; right: number; bottom: number }
 }) {
   const [data, setData] = useState<ToCData>(initialData)
   
@@ -1424,6 +1426,8 @@ export function ToC({
         containerRef={graphContainerRef}
         onEdgePopupChange={setEdgePopup}
         fontFamily={fontFamily}
+        viewportOffset={viewportOffset}
+        zoomScale={zoomScale}
       />
 
       {createPortal(
@@ -1646,7 +1650,7 @@ export function ToC({
         fontFamily={fontFamily}
       />
 
-      {nodePopup && (
+      {nodePopup && createPortal(
         <NodePopup
           nodePopup={nodePopup}
           setNodePopup={setNodePopup}
@@ -1656,7 +1660,10 @@ export function ToC({
           onDeleteNode={deleteNode}
           fontFamily={fontFamily}
           onClearSelection={() => setHighlightedNodes(new Set())}
-        />
+          viewportOffset={viewportOffset}
+          zoomScale={zoomScale}
+        />,
+        document.body
       )}
 
     </div>
