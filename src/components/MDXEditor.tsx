@@ -75,7 +75,7 @@ export function MDXEditorComponent({
         contentEditableClassName="mdx-editor-content"
       />
 
-      <style jsx global>{`
+      <style>{`
         .mdx-editor-wrapper {
           border: 1px solid #d1d5db;
           border-radius: 0.5rem;
