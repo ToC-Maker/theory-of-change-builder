@@ -121,14 +121,13 @@ export function NodePopup({
 
         {/* Modal content - fixed size, scaled to fit viewport (full screen on mobile) */}
         <div
-          className="relative bg-white shadow-2xl p-8 overflow-y-auto transition-all duration-150 ease-out pointer-events-auto"
+          className="relative bg-white shadow-2xl p-8 overflow-y-auto pointer-events-auto"
           style={{
             width: isMobile ? '100vw' : '600px',
             height: isMobile ? '100vh' : 'auto',
             maxHeight: isMobile ? '100vh' : '500px',
             borderRadius: isMobile ? 0 : '0.75rem',
-            transform: isMobile ? 'none' : `scale(${popupScale})`,
-            animation: 'scaleIn 0.15s ease-out'
+            transform: isMobile ? 'none' : `scale(${popupScale})`
           }}
           onWheel={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
