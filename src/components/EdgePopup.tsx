@@ -126,13 +126,12 @@ export function EdgePopup({
 
         {/* Modal content - fixed size, scaled to fit viewport (full screen on mobile) */}
         <div
-          className={`relative bg-white shadow-2xl transition-all duration-150 ease-out pointer-events-auto ${isMobile ? 'overflow-y-auto' : 'flex flex-col'}`}
+          className={`relative bg-white shadow-2xl pointer-events-auto ${isMobile ? 'overflow-y-auto' : 'flex flex-col'}`}
           style={{
             width: isMobile ? '100vw' : '800px',
             height: isMobile ? '100vh' : '600px',
             borderRadius: isMobile ? 0 : '0.75rem',
-            transform: isMobile ? 'none' : `scale(${popupScale})`,
-            animation: 'scaleIn 0.15s ease-out'
+            transform: isMobile ? 'none' : `scale(${popupScale})`
           }}
           onWheel={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
