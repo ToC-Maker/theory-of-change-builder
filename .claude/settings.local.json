@@ -3,7 +3,8 @@
     "allow": [
       "WebSearch",
       "Bash(wmic process:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []

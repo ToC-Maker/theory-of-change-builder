@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { useZoomPan } from "./hooks/useZoomPan"
 import { Routes, Route, useParams, useLocation, Link, useNavigate } from "react-router-dom"
 import { useAuth0 } from "@auth0/auth0-react"
 import { ToC } from "./components/TheoryOfChangeGraph"
@@ -88,9 +89,23 @@ function ToCViewerOnly() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isCopying, setIsCopying] = useState(false)
   const [isInIframe, setIsInIframe] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scale state for view mode
-  const [viewScale, setViewScale] = useState(1.0)
+  // Use shared zoom/pan hook
+  const {
+    camera,
+    isPanning,
+    isZoomedIn,
+    getTransformPosition,
+    zoomIn,
+    zoomOut,
+    zoomToFit,
+    contentWidth,
+    contentHeight,
+  } = useZoomPan({
+    containerSize,
+    containerRef,
+  })
 
   // Detect if running in iframe
   useEffect(() => {
@@ -240,38 +255,6 @@ function ToCViewerOnly() {
 
     loadData()
   }, [filename, chartId, loadFromLocalStorage])
-
-  // Auto-calculate scale based on viewport dimensions to fit content perfectly
-  useEffect(() => {
-    if (!containerSize.width || !containerSize.height) return;
-
-    const calculateScale = () => {
-      const contentWidth = containerSize.width + EMBED_PADDING;
-      const contentHeight = containerSize.height + EMBED_PADDING;
-
-      const scaleX = window.innerWidth / contentWidth;
-      const scaleY = window.innerHeight / contentHeight;
-      const calculatedScale = Math.max(MIN_SCALE, Math.min(scaleX, scaleY));
-
-      setViewScale(calculatedScale);
-    };
-
-    calculateScale();
-
-    // Debounced resize handler
-    let resizeTimeout: NodeJS.Timeout;
-    const handleResize = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(calculateScale, 100);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      clearTimeout(resizeTimeout);
-    };
-  }, [containerSize.width, containerSize.height]);
-
 
   // Update document title when data changes
   useEffect(() => {
@@ -471,24 +454,23 @@ function ToCViewerOnly() {
     )
   }
 
-  // Clean view mode - minimal chrome, pixel-perfect fit
-  const contentWidth = containerSize.width + EMBED_PADDING;
-  const contentHeight = containerSize.height + EMBED_PADDING;
-  const scaledWidth = contentWidth * viewScale;
-  const scaledHeight = contentHeight * viewScale;
-  const offsetX = (window.innerWidth - scaledWidth) / 2;
-  const offsetY = (window.innerHeight - scaledHeight) / 2;
+  // Get transform position from the hook
+  const { x: offsetX, y: offsetY, scale } = getTransformPosition();
 
   return (
     <div
+      ref={containerRef}
       style={{
-        width: '100%',
-        height: '100%',
+        width: '100vw',
+        height: '100vh',
         margin: 0,
         padding: 0,
         background: 'transparent',
-        overflow: 'visible',
-        position: 'relative'
+        overflow: 'hidden',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        cursor: isZoomedIn ? (isPanning ? 'grabbing' : 'grab') : 'default'
       }}
     >
       <div
@@ -497,31 +479,61 @@ function ToCViewerOnly() {
           left: `${offsetX}px`,
           top: `${offsetY}px`,
           transformOrigin: 'top left',
-          transform: viewScale !== 1 ? `scale(${viewScale})` : undefined,
+          transform: `scale(${scale})`,
           width: `${contentWidth}px`,
-          height: `${contentHeight}px`
+          height: `${contentHeight}px`,
+          pointerEvents: 'auto'
         }}
       >
-        {/* Make a Copy button - top right (hidden in iframes) - positioned inside transform context */}
-        {!isInIframe && (
-          <button
-            onClick={handleMakeCopy}
-            disabled={isCopying}
-            className="absolute z-50 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg shadow-lg border border-gray-200 transition-all hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            style={{
-              top: `${(16 - offsetY) / viewScale}px`,
-              right: `${(16 - offsetX) / viewScale}px`
-            }}
-            title="Create an editable copy of this graph"
-          >
-            <DocumentDuplicateIcon className={`w-4 h-4 ${isCopying ? 'animate-pulse' : ''}`} />
-            {isCopying ? 'Copying...' : 'Make a Copy'}
-          </button>
-        )}
         <div style={{ background: 'transparent', padding: '16px' }}>
           <ToC data={data} onSizeChange={setContainerSize} onDataChange={() => {}} showEditButton={false} />
         </div>
       </div>
+
+      {/* Make a Copy button - fixed position outside transform context (hidden in iframes) */}
+      {!isInIframe && (
+        <button
+          onClick={handleMakeCopy}
+          disabled={isCopying}
+          className="fixed z-50 bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg shadow-lg border border-gray-200 transition-all hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          style={{
+            top: '16px',
+            right: '16px'
+          }}
+          title="Create an editable copy of this graph"
+        >
+          <DocumentDuplicateIcon className={`w-4 h-4 ${isCopying ? 'animate-pulse' : ''}`} />
+          {isCopying ? 'Copying...' : 'Make a Copy'}
+        </button>
+      )}
+
+      {/* Zoom controls - bottom right (hidden on mobile) */}
+      {!isInIframe && (
+        <div className="fixed bottom-4 right-4 z-50 flex-col bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden hidden md:flex">
+          <button
+            onClick={zoomIn}
+            className="p-2 hover:bg-gray-100 transition-colors border-b border-gray-200"
+            title="Zoom in"
+          >
+            <PlusIcon className="w-5 h-5 text-gray-700" />
+          </button>
+          <button
+            onClick={zoomOut}
+            className="p-2 hover:bg-gray-100 transition-colors border-b border-gray-200"
+            title="Zoom out"
+          >
+            <MinusIcon className="w-5 h-5 text-gray-700" />
+          </button>
+          <button
+            onClick={zoomToFit}
+            className="p-2 hover:bg-gray-100 transition-colors"
+            title="Fit to screen"
+          >
+            <ArrowsPointingOutIcon className="w-5 h-5 text-gray-700" />
+          </button>
+        </div>
+      )}
+
       <GraphTutorial />
     </div>
   )
@@ -542,13 +554,64 @@ function ToCViewer() {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
   const [isManualSyncing, setIsManualSyncing] = useState(false)
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set())
-  const [camera, setCamera] = useState({ x: 0, y: 0, z: 1 })
-  const zoomableRef = useRef<HTMLDivElement>(null)
-  const [isPanning, setIsPanning] = useState(false)
-  const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null)
-  const [panStartCamera, setPanStartCamera] = useState<{ x: number; y: number } | null>(null)
-  const hasInitializedZoom = useRef(false)
+  const containerRef = useRef<HTMLDivElement>(null)
   const [authTokenReady, setAuthTokenReady] = useState(false)
+
+  // Calculate viewport offset based on sidebar state
+  const viewportOffset = useMemo(() => ({
+    left: isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25),
+    top: 64,    // Toolbar height
+    right: 0,
+    bottom: 80  // JSON dropdown height
+  }), [isLeftPanelCollapsed]);
+
+  // Exclude interactive elements from panning in edit mode
+  const excludeFromPan = useCallback((target: HTMLElement) => {
+    const isNode = target.closest('[draggable="true"]');
+    const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing');
+    const isChatPanel = target.closest('.fixed.left-0.z-40') !== null;
+    const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null;
+    const activeElement = document.activeElement;
+    const isTextEditing = activeElement && (
+      activeElement.tagName === 'INPUT' ||
+      activeElement.tagName === 'TEXTAREA' ||
+      (activeElement as HTMLElement).contentEditable === 'true'
+    );
+    const isTextContent = target.tagName === 'DIV' || target.tagName === 'SPAN' || target.tagName === 'P' || target.tagName === 'H2' || target.tagName === 'H3' || target.tagName === 'H4';
+    const hasTextContent = target.textContent && target.textContent.trim().length > 0;
+    const isInsideNode = target.closest('[id^="node-"]') !== null;
+    const isInsideModal = target.closest('[class*="z-[2"]') !== null;
+    const isSelectableText = isTextContent && hasTextContent && (isInsideNode || isInsideModal);
+    const isEditableElement = target.tagName === 'INPUT' ||
+                             target.tagName === 'TEXTAREA' ||
+                             target.tagName === 'SELECT' ||
+                             target.tagName === 'BUTTON' ||
+                             target.closest('button') !== null ||
+                             target.contentEditable === 'true' ||
+                             target.closest('.mdx-editor-wrapper') !== null ||
+                             isTextEditing ||
+                             isSelectableText;
+
+    return !!(isNode || isLegend || isEditableElement || isChatPanel || isJsonPanel);
+  }, []);
+
+  // Use shared zoom/pan hook
+  const {
+    camera,
+    isPanning,
+    isZoomedIn,
+    getTransformPosition,
+    zoomIn,
+    zoomOut,
+    zoomToFit,
+    contentWidth,
+    contentHeight,
+  } = useZoomPan({
+    containerSize,
+    containerRef,
+    viewportOffset,
+    excludeFromPan,
+  })
 
   // Set Auth0 token on ChartService when user is authenticated
   useEffect(() => {
@@ -1090,92 +1153,6 @@ function ToCViewer() {
     loadData()
   }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage, authTokenReady, isAuthenticated])
 
-  // Helper function to calculate zoom-to-fit
-  const calculateZoomToFit = useCallback(() => {
-    if (!containerSize.width || !containerSize.height) {
-      return { x: 0, y: 0, z: 1 };
-    }
-
-    // Calculate viewport dimensions
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-
-    // Account for sidebars and padding
-    const sidebarWidth = isLeftPanelCollapsed ? 48 : viewportWidth * 0.25; // 3rem or 25%
-    const availableWidth = viewportWidth - sidebarWidth - 32; // 32px for padding (left + right)
-    const availableHeight = viewportHeight - 64 - 80; // 64px top, 80px bottom padding
-
-    // Calculate graph dimensions (including the white container padding)
-    const graphWidth = containerSize.width + 32;
-    const graphHeight = containerSize.height + 32;
-
-    // Calculate zoom to fit with some padding (90% of available space)
-    const zoomToFitWidth = (availableWidth / graphWidth);
-    const zoomToFitHeight = (availableHeight / graphHeight);
-    const zoomToFit = Math.min(zoomToFitWidth, zoomToFitHeight);
-
-    // Calculate centering translation
-    // Strategy: Position the graph so its center appears at the center of available viewport space
-    // The graph container (white box) has dimensions: graphWidth x graphHeight
-    // Available viewport space for the graph: availableWidth x availableHeight
-    // After zoom, graph appears as: (graphWidth * z) x (graphHeight * z)
-
-    const paddingLeft = sidebarWidth + 16; // sidebarWidth + 1rem
-    const paddingTop = 64;
-
-    // Where we want the graph to appear in screen space
-    // Center of available space: (paddingLeft + availableWidth/2, paddingTop + availableHeight/2)
-
-    // After transform scale(z) translate(tx, ty), the graph container's top-left corner
-    // (which flexbox positions) appears in screen at: z * (topLeft + translate)
-    // We want the CENTER to appear at the center of available space
-
-    // Flexbox centers horizontally: topLeft.x = paddingLeft + (availableWidth - graphWidth)/2
-    // Flexbox top-aligns: topLeft.y = paddingTop
-
-    // Graph center = topLeft + (graphWidth/2, graphHeight/2)
-    // = (paddingLeft + (availableWidth - graphWidth)/2 + graphWidth/2, paddingTop + graphHeight/2)
-    // = (paddingLeft + availableWidth/2, paddingTop + graphHeight/2)
-
-    // After transform: z * (topLeft + translate) = where topLeft appears
-    // Graph center appears at: z * (topLeft + translate + (graphWidth/2, graphHeight/2))
-    // We want this to equal: (paddingLeft + availableWidth/2, paddingTop + availableHeight/2)
-
-    // So: z * (topLeft + translate + graphCenter_relative) = targetCenter
-    // translate = targetCenter/z - topLeft - graphCenter_relative
-
-    // Important: Flexbox centers when content fits, but left-aligns when it overflows
-    const topLeftX = graphWidth <= availableWidth
-      ? paddingLeft + (availableWidth - graphWidth) / 2  // Centered by flexbox
-      : paddingLeft;  // Left-aligned when overflowing
-
-    const topLeftY = paddingTop;  // Always top-aligned
-
-    const targetCenterX = paddingLeft + availableWidth / 2;
-    const targetCenterY = paddingTop + availableHeight / 2;
-
-    const centerX = targetCenterX / zoomToFit - topLeftX - graphWidth / 2;
-    const centerY = targetCenterY / zoomToFit - topLeftY - graphHeight / 2;
-
-    return {
-      x: centerX,
-      y: centerY,
-      z: zoomToFit
-    };
-  }, [containerSize.width, containerSize.height, isLeftPanelCollapsed]);
-
-  // Zoom to fit on initial load
-  useEffect(() => {
-    if (hasInitializedZoom.current || !containerSize.width || !containerSize.height) {
-      return;
-    }
-
-    const zoomToFit = calculateZoomToFit();
-    setCamera(zoomToFit);
-    hasInitializedZoom.current = true;
-    console.log('Zoom to fit applied:', zoomToFit);
-  }, [containerSize.width, containerSize.height, calculateZoomToFit]);
-
   // Update document title when data changes
   useEffect(() => {
     if (data?.title) {
@@ -1304,171 +1281,6 @@ function ToCViewer() {
     return () => clearInterval(interval);
   }, [lastSyncTime]);
 
-  // Canvas zoom and pan implementation
-  useEffect(() => {
-    const handleWheel = (e: WheelEvent) => {
-      // Check if this is a zoom gesture (Ctrl/Cmd key)
-      const isZoomGesture = e.ctrlKey || e.metaKey;
-
-      if (isZoomGesture) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const container = zoomableRef.current;
-        if (!container) return;
-
-        // Calculate new zoom level - 1% steps
-        const zoomStep = 0.05;
-        const delta = -e.deltaY > 0 ? 1 : -1;
-        const newZoom = Math.max(0.5, Math.min(5, camera.z + delta * zoomStep * camera.z));
-
-        // The transform is: scale(z) translate(x, y) with origin at 0,0
-        // This means: screenPoint = scale * (localPoint + translate)
-        // Or: screenPoint = localPoint * scale + translate * scale
-
-        // Get mouse position in screen space
-        const mouseScreenX = e.clientX;
-        const mouseScreenY = e.clientY;
-
-        // Get the untransformed position of the transform origin
-        // We need the position where the container WOULD be without the transform
-        const parent = container.parentElement;
-        if (!parent) return;
-        const parentRect = parent.getBoundingClientRect();
-
-        // Origin is at top-left of container (accounting for padding)
-        const style = window.getComputedStyle(container);
-        const paddingLeft = parseFloat(style.paddingLeft) || 0;
-        const paddingTop = parseFloat(style.paddingTop) || 0;
-
-        const originX = parentRect.left + paddingLeft;
-        const originY = parentRect.top + paddingTop;
-
-        // Mouse position relative to origin in screen space
-        const mouseX = mouseScreenX - originX;
-        const mouseY = mouseScreenY - originY;
-
-        // The local point under the mouse: localPoint = (screenPoint - translate * scale) / scale
-        const localPointX = (mouseX - camera.x * camera.z) / camera.z;
-        const localPointY = (mouseY - camera.y * camera.z) / camera.z;
-
-        // After zoom: mouseX = localPoint * newZoom + newTranslate * newZoom
-        // Solving: newTranslate = (mouseX / newZoom) - localPoint
-        const newX = mouseX / newZoom - localPointX;
-        const newY = mouseY / newZoom - localPointY;
-
-        setCamera({
-          x: newX,
-          y: newY,
-          z: newZoom
-        });
-      }
-    };
-
-    const handleMouseDown = (e: MouseEvent) => {
-      const container = zoomableRef.current;
-      if (!container) return;
-
-      // Check if the target is a draggable node, legend, or interactive element
-      const target = e.target as HTMLElement;
-      const isNode = target.closest('[draggable="true"]');
-      const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing'); // Legend has grab cursor
-      const isChatPanel = target.closest('.fixed.left-0.z-40') !== null; // Check if inside chat panel
-      const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null; // Check if inside JSON dropdown panel
-
-      // Check if there's any active text editing happening
-      const activeElement = document.activeElement;
-      const isTextEditing = activeElement && (
-        activeElement.tagName === 'INPUT' ||
-        activeElement.tagName === 'TEXTAREA' ||
-        (activeElement as HTMLElement).contentEditable === 'true'
-      );
-
-      // Check if clicking on text content within nodes or detail panels (for text selection in view mode)
-      // Only prevent panning for text inside actual nodes or modal panels, not section/graph titles
-      const isTextContent = target.tagName === 'DIV' || target.tagName === 'SPAN' || target.tagName === 'P' || target.tagName === 'H2' || target.tagName === 'H3' || target.tagName === 'H4';
-      const hasTextContent = target.textContent && target.textContent.trim().length > 0;
-      const isInsideNode = target.closest('[id^="node-"]') !== null; // Check if inside a node element
-      const isInsideModal = target.closest('[class*="z-[2"]') !== null; // Check if inside a modal (NodePopup/EdgePopup have z-[200+])
-      const isSelectableText = isTextContent && hasTextContent && (isInsideNode || isInsideModal);
-
-      const isEditableElement = target.tagName === 'INPUT' ||
-                               target.tagName === 'TEXTAREA' ||
-                               target.tagName === 'SELECT' ||
-                               target.tagName === 'BUTTON' ||
-                               target.closest('button') !== null || // Also check if clicked element is inside a button
-                               target.contentEditable === 'true' ||
-                               target.closest('.mdx-editor-wrapper') !== null || // MDX editor components
-                               isTextEditing || // Prevent panning if any text field is being edited
-                               isSelectableText; // Allow text selection instead of panning
-
-
-      // Only pan with left mouse button, no modifiers, and not on interactive elements, chat panel, or JSON panel
-      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !isNode && !isLegend && !isEditableElement && !isChatPanel && !isJsonPanel) {
-        e.preventDefault();
-        setIsPanning(true);
-        setPanStart({ x: e.clientX, y: e.clientY });
-        setPanStartCamera({ x: camera.x, y: camera.y });
-        container.style.cursor = 'grabbing';
-      }
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isPanning && panStart && panStartCamera) {
-        const deltaX = e.clientX - panStart.x;
-        const deltaY = e.clientY - panStart.y;
-
-        // Convert pixel movement to camera movement (divide by zoom)
-        setCamera(prev => ({
-          ...prev,
-          x: panStartCamera.x + deltaX / prev.z,
-          y: panStartCamera.y + deltaY / prev.z
-        }));
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (isPanning) {
-        setIsPanning(false);
-        setPanStart(null);
-        setPanStartCamera(null);
-        const container = zoomableRef.current;
-        if (container) {
-          container.style.cursor = '';
-        }
-      }
-    };
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent Ctrl+Plus, Ctrl+Minus, Ctrl+0 browser zoom (or Cmd on Mac)
-      if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
-        e.preventDefault();
-
-        if (e.key === '0') {
-          // Reset to zoom-to-fit
-          const zoomToFit = calculateZoomToFit();
-          setCamera(zoomToFit);
-          console.log('Reset to zoom-to-fit:', zoomToFit);
-        }
-      }
-    };
-
-    // Attach to document to catch all events before they bubble
-    document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
-    document.addEventListener('mousedown', handleMouseDown, { capture: true });
-    document.addEventListener('mousemove', handleMouseMove, { capture: true });
-    document.addEventListener('mouseup', handleMouseUp, { capture: true });
-    document.addEventListener('keydown', handleKeyDown, { capture: true });
-
-    return () => {
-      document.removeEventListener('wheel', handleWheel, { capture: true });
-      document.removeEventListener('mousedown', handleMouseDown, { capture: true });
-      document.removeEventListener('mousemove', handleMouseMove, { capture: true });
-      document.removeEventListener('mouseup', handleMouseUp, { capture: true });
-      document.removeEventListener('keydown', handleKeyDown, { capture: true });
-    };
-  }, [camera, isPanning, panStart, panStartCamera, calculateZoomToFit]);
-
   if (loading) {
     return (
       <div className="h-screen w-screen bg-white flex items-center justify-center">
@@ -1563,6 +1375,9 @@ function ToCViewer() {
     ? filename.replace('.json', '').replace(/([A-Z])/g, ' $1').trim()
     : 'Charity Entrepreneurship'
 
+  // Get transform position from the hook
+  const { x: offsetX, y: offsetY, scale } = getTransformPosition();
+
   return (
     <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0">
       {/* Left Sidebar - AI Assistant */}
@@ -1574,31 +1389,37 @@ function ToCViewer() {
         highlightedNodes={highlightedNodes}
       />
 
+      {/* Zoomable/Pannable Graph Area */}
       <div
-        ref={zoomableRef}
-        className="min-h-full flex flex-col py-4"
+        ref={containerRef}
         style={{
-          paddingTop: '64px',
-          paddingLeft: isLeftPanelCollapsed ? 'calc(3rem + 1rem)' : 'calc(25% + 1rem)',
-          paddingRight: '1rem',
-          paddingBottom: '80px', // Add space for footer
-          transform: `scale(${camera.z}) translate(${camera.x}px, ${camera.y}px)`,
-          transformOrigin: '0 0',
-          transition: 'padding-left 300ms'
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: '100vh',
+          overflow: 'hidden',
+          cursor: isZoomedIn ? (isPanning ? 'grabbing' : 'grab') : 'default',
+          pointerEvents: 'none' // Let events pass through to sidebar/controls
         }}
       >
-        <div className="flex flex-1 gap-6 justify-center items-start mx-auto">
-        {/* Main Graph Container */}
-        <div className="flex flex-col flex-shrink-0 items-start">
+        <div
+          style={{
+            position: 'absolute',
+            left: `${offsetX}px`,
+            top: `${offsetY}px`,
+            transformOrigin: 'top left',
+            transform: `scale(${scale})`,
+            width: `${contentWidth}px`,
+            height: `${contentHeight}px`,
+            pointerEvents: 'auto' // Enable events on the graph itself
+          }}
+        >
           <div
             className="bg-white rounded-xl shadow-lg p-4"
             style={{
               width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
               height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-              minWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
-              minHeight: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
-              maxWidth: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'none',
-              maxHeight: containerSize.height > 0 ? `${containerSize.height}px` : 'none'
             }}
           >
             <ToC
@@ -1619,11 +1440,10 @@ function ToCViewer() {
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
               onEditTokenChange={setCurrentEditToken}
+              viewportOffset={viewportOffset}
             />
           </div>
         </div>
-
-      </div>
       </div>
 
       {/* Auth Button - Top Right */}
@@ -1638,89 +1458,31 @@ function ToCViewer() {
         <AuthButton />
       </div>
 
-      {/* Zoom Controls - Google Maps Style */}
+      {/* Zoom Controls - Google Maps Style (hidden on mobile) */}
       <div
-        className="fixed z-20 bg-white rounded-lg shadow-lg border border-gray-200"
+        className="fixed z-20 bg-white rounded-lg shadow-lg border border-gray-200 hidden md:block"
         style={{
           bottom: '5rem',
           right: '1rem'
         }}
       >
         <div className="flex flex-col">
-          {/* Zoom In */}
           <button
-            onClick={() => {
-              const viewportWidth = window.innerWidth;
-              const viewportHeight = window.innerHeight;
-              const sidebarWidth = isLeftPanelCollapsed ? 48 : viewportWidth * 0.25;
-              const toolbarHeight = 64;
-              const jsonDropdownHeight = 64;
-
-              // Calculate center of available viewport
-              const centerX = sidebarWidth + (viewportWidth - sidebarWidth) / 2;
-              const centerY = toolbarHeight + (viewportHeight - toolbarHeight - jsonDropdownHeight) / 2;
-
-              // Calculate new zoom (20% increase)
-              const newZoom = Math.min(5, camera.z * 1.2);
-
-              // Find the local point at viewport center
-              // localPoint = (screenPoint - translate * scale) / scale
-              const localX = (centerX - camera.x * camera.z) / camera.z;
-              const localY = (centerY - camera.y * camera.z) / camera.z;
-
-              // After zoom, we want the same local point to remain at center
-              // screenPoint = localPoint * newScale + translate * newScale
-              // centerX = localX * newZoom + newX * newZoom
-              // Solving: newX = centerX / newZoom - localX
-              const newX = centerX / newZoom - localX;
-              const newY = centerY / newZoom - localY;
-
-              setCamera({ x: newX, y: newY, z: newZoom });
-            }}
+            onClick={zoomIn}
             className="p-2 hover:bg-gray-100 transition-colors rounded-t-lg border-b border-gray-200"
             title="Zoom in"
           >
             <PlusIcon className="w-5 h-5 text-gray-700" />
           </button>
-
-          {/* Zoom Out */}
           <button
-            onClick={() => {
-              const viewportWidth = window.innerWidth;
-              const viewportHeight = window.innerHeight;
-              const sidebarWidth = isLeftPanelCollapsed ? 48 : viewportWidth * 0.25;
-              const toolbarHeight = 64;
-              const jsonDropdownHeight = 64;
-
-              // Calculate center of available viewport
-              const centerX = sidebarWidth + (viewportWidth - sidebarWidth) / 2;
-              const centerY = toolbarHeight + (viewportHeight - toolbarHeight - jsonDropdownHeight) / 2;
-
-              // Calculate new zoom (20% decrease)
-              const newZoom = Math.max(0.1, camera.z / 1.2);
-
-              // Find the local point at viewport center
-              const localX = (centerX - camera.x * camera.z) / camera.z;
-              const localY = (centerY - camera.y * camera.z) / camera.z;
-
-              // Keep the same local point at center after zoom
-              const newX = centerX / newZoom - localX;
-              const newY = centerY / newZoom - localY;
-
-              setCamera({ x: newX, y: newY, z: newZoom });
-            }}
+            onClick={zoomOut}
             className="p-2 hover:bg-gray-100 transition-colors border-b border-gray-200"
             title="Zoom out"
           >
             <MinusIcon className="w-5 h-5 text-gray-700" />
           </button>
-
-          {/* Zoom to Fit */}
           <button
-            onClick={() => {
-              const zoomToFit = calculateZoomToFit();
-              setCamera(zoomToFit);
-            }}
+            onClick={zoomToFit}
             className="p-2 hover:bg-gray-100 transition-colors rounded-b-lg"
             title="Fit to page (Ctrl+0)"
           >

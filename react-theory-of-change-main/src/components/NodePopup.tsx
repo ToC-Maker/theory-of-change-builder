@@ -15,6 +15,8 @@ interface NodePopupProps {
   onDeleteNode?: (nodeId: string) => void
   fontFamily?: string
   onClearSelection?: () => void
+  viewportOffset?: { left: number; top: number; right: number; bottom: number }
+  zoomScale?: number
 }
 
 export function NodePopup({
@@ -26,12 +28,32 @@ export function NodePopup({
   onDeleteNode,
   fontFamily,
   onClearSelection,
+  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
+  zoomScale = 1,
 }: NodePopupProps) {
   const [editTitle, setEditTitle] = useState(nodePopup.title)
   const [editText, setEditText] = useState(nodePopup.text)
   const [isEditing, setIsEditing] = useState(editMode)
   const titleInputRef = useRef<HTMLTextAreaElement>(null)
   const textAreaRef = useRef<HTMLTextAreaElement>(null)
+  const [windowSize, setWindowSize] = useState({ width: typeof window !== 'undefined' ? window.innerWidth : 1000, height: typeof window !== 'undefined' ? window.innerHeight : 800 })
+
+  // Update window size on resize
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight })
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Calculate scale based on available viewport size
+  const availableWidth = windowSize.width - viewportOffset.left - viewportOffset.right
+  const availableHeight = windowSize.height - viewportOffset.top - viewportOffset.bottom
+  const isMobile = windowSize.width < 768
+  const scaleX = Math.min(1, (availableWidth - 40) / 600) // 600px width + 40px margin
+  const scaleY = Math.min(1, (availableHeight - 40) / 500) // 500px height + 40px margin
+  const popupScale = Math.min(scaleX, scaleY)
 
   useEffect(() => {
     setEditTitle(nodePopup.title)
@@ -85,21 +107,32 @@ export function NodePopup({
         }}
       />
 
-      {/* Modal container - centered in graph container */}
+      {/* Modal container - centered in available viewport area (accounting for sidebar) */}
       <div
-        className="absolute inset-0 z-[210] flex items-center justify-center transition-all duration-150 ease-out pointer-events-none"
+        className="fixed z-[210] flex items-center justify-center transition-all duration-150 ease-out pointer-events-none"
         style={{
+          top: isMobile ? 0 : viewportOffset.top,
+          left: isMobile ? 0 : viewportOffset.left,
+          right: isMobile ? 0 : viewportOffset.right,
+          bottom: isMobile ? 0 : viewportOffset.bottom,
           animation: 'fadeIn 0.15s ease-out'
         }}
       >
-      
-        {/* Modal content */}
+
+        {/* Modal content - fixed size, scaled to fit viewport (full screen on mobile) */}
         <div
-          className="relative bg-white rounded-xl shadow-2xl p-8 overflow-y-auto max-h-[500px] transform transition-all duration-150 ease-out pointer-events-auto"
+          className="relative bg-white shadow-2xl p-8 overflow-y-auto transition-all duration-150 ease-out pointer-events-auto"
           style={{
-            width: '600px',
+            width: isMobile ? '100vw' : '600px',
+            height: isMobile ? '100vh' : 'auto',
+            maxHeight: isMobile ? '100vh' : '500px',
+            borderRadius: isMobile ? 0 : '0.75rem',
+            transform: isMobile ? 'none' : `scale(${popupScale})`,
             animation: 'scaleIn 0.15s ease-out'
           }}
+          onWheel={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
         >
 
         {/* Close button - top right */}

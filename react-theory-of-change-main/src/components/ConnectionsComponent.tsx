@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react"
+import { createPortal } from "react-dom"
 import { ToCData } from "../types"
 import { getConfidenceStrokeStyle } from "../utils"
 import { EdgePopup } from "./EdgePopup"
@@ -22,6 +23,8 @@ interface ConnectionsComponentProps {
   containerRef: React.RefObject<HTMLDivElement>
   onEdgePopupChange?: (edgePopup: any) => void
   fontFamily?: string
+  viewportOffset?: { left: number; top: number; right: number; bottom: number }
+  zoomScale?: number
 }
 
 export function ConnectionsComponent({
@@ -43,6 +46,8 @@ export function ConnectionsComponent({
   containerRef,
   onEdgePopupChange,
   fontFamily,
+  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
+  zoomScale = 1,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
@@ -728,8 +733,8 @@ export function ConnectionsComponent({
       })()}
     </svg>
 
-    {/* Large center modal for edge information */}
-    {edgePopup && (
+    {/* Large center modal for edge information - rendered to body to avoid zoom transforms */}
+    {edgePopup && createPortal(
       <EdgePopup
         edgePopup={edgePopup}
         setEdgePopup={setEdgePopup}
@@ -741,7 +746,10 @@ export function ConnectionsComponent({
         onUpdateConnection={updateConnection}
         onDeleteConnection={onDeleteConnection}
         fontFamily={fontFamily}
-      />
+        viewportOffset={viewportOffset}
+        zoomScale={zoomScale}
+      />,
+      document.body
     )}
   </>
   )
