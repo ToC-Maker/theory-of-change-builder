@@ -1493,12 +1493,11 @@ function ToCViewer() {
 
       {/* JSON Dropdown Footer - Fixed at bottom */}
       <div
-        className="fixed bottom-0 z-30"
-        style={{
-          left: isLeftPanelCollapsed ? '3rem' : '25%',
-          right: 0,
-          transition: 'left 300ms'
-        }}
+        className={`fixed bottom-0 z-30 transition-all duration-300 ${
+          isLeftPanelCollapsed
+            ? 'left-0 md:left-12'
+            : 'left-0 md:left-[280px] lg:left-[25%]'
+        } right-0`}
       >
         <JsonDropdown
           data={data}

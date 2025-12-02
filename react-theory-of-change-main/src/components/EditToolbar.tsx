@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
-import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon, ClockIcon } from "@heroicons/react/24/outline"
+import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon, ClockIcon, Bars3Icon } from "@heroicons/react/24/outline"
 import { ChartService, CreateChartResponse, UserChart } from "../services/chartService"
 import { shortcuts } from "../utils/keyboardShortcuts"
 import { Tooltip } from 'react-tooltip'
@@ -111,6 +111,10 @@ export function EditToolbar({
 
   // Tooltip state
   const [showLayoutTooltip, setShowLayoutTooltip] = useState(true)
+
+  // Mobile menu state
+  const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const mobileMenuRef = useRef<HTMLDivElement>(null)
 
   // Share functionality state
   const [shareData, setShareData] = useState<CreateChartResponse | null>(null)
@@ -593,13 +597,16 @@ export function EditToolbar({
       if (generalAccessDropdownRef.current && !generalAccessDropdownRef.current.contains(event.target as Node)) {
         setShowGeneralAccessDropdown(false)
       }
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
+        setShowMobileMenu(false)
+      }
     }
 
-    if (showWidthDropdown || showModeDropdown || showShareDropdown || showRecentDropdown || showGeneralAccessDropdown) {
+    if (showWidthDropdown || showModeDropdown || showShareDropdown || showRecentDropdown || showGeneralAccessDropdown || showMobileMenu) {
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showWidthDropdown, showModeDropdown, showShareDropdown, showRecentDropdown, showGeneralAccessDropdown])
+  }, [showWidthDropdown, showModeDropdown, showShareDropdown, showRecentDropdown, showGeneralAccessDropdown, showMobileMenu])
 
   // Update toolbar position when selection changes or camera changes
   useEffect(() => {
@@ -626,25 +633,25 @@ export function EditToolbar({
   return (
     <>
       <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
-        <div className="max-w-none mx-auto py-2" style={{ maxWidth: '100%' }}>
-        <div className="flex items-center justify-between relative">
+        <div className="max-w-none mx-auto py-2 px-2 sm:px-4" style={{ maxWidth: '100%' }}>
+        <div className="flex items-center justify-between gap-2">
           {/* Left side - Header controls and main tools */}
-          <div className="flex items-center gap-4 flex-1 pl-2">
+          <div className="flex items-center gap-1 sm:gap-4 flex-shrink-0">
             {/* Open Dropdown - Far Left */}
             <div className="relative" ref={recentDropdownRef}>
               <button
                 onClick={() => setShowRecentDropdown(!showRecentDropdown)}
-                className="px-3 py-2 text-gray-600 hover:bg-gray-100 text-sm font-medium rounded transition-all duration-200 flex items-center gap-2"
+                className="px-2 sm:px-3 py-2 text-gray-600 hover:bg-gray-100 text-sm font-medium rounded transition-all duration-200 flex items-center gap-1 sm:gap-2"
                 title="Open charts"
               >
                 <ClockIcon className="w-4 h-4" />
-                Open
+                <span className="hidden sm:inline">Open</span>
                 <ChevronDownIcon className="w-3 h-3" />
               </button>
 
               {/* Charts Dropdown */}
               {showRecentDropdown && (
-                <div className="absolute top-full mt-2 left-0 w-96 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-y-auto">
+                <div className="absolute top-full mt-2 left-0 w-[calc(100vw-1rem)] sm:w-96 max-w-96 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-[80vh] overflow-y-auto">
                   <div className="p-2">
                     {/* New Chart Card - Always visible at top */}
                     <a
@@ -738,40 +745,40 @@ export function EditToolbar({
               )}
             </div>
 
-            {/* Separator */}
-            <div className="h-6 w-px bg-gray-300"></div>
+            {/* Separator - hidden on mobile */}
+            <div className="h-6 w-px bg-gray-300 hidden sm:block"></div>
 
             {/* Undo/Redo Group */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">({undoHistory.length})</span>
+            <div className="flex items-center gap-1 sm:gap-2">
+              <span className="text-xs text-gray-500 hidden md:inline">({undoHistory.length})</span>
               <button
                 onClick={handleUndo}
                 disabled={undoHistory.length === 0}
-                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+                className="p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
                 title={`Undo (${shortcuts.undoDisplay()})`}
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
               </button>
               <button
                 onClick={handleRedo}
                 disabled={redoHistory.length === 0}
-                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+                className="p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
                 title={`Redo (${shortcuts.redoDisplay()})`}
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
                 </svg>
               </button>
-              <span className="text-xs text-gray-500">({redoHistory.length})</span>
+              <span className="text-xs text-gray-500 hidden md:inline">({redoHistory.length})</span>
             </div>
 
-            {/* Separator */}
-            <div className="h-6 w-px bg-gray-300 mx-1"></div>
+            {/* Separator - hidden on mobile */}
+            <div className="h-6 w-px bg-gray-300 mx-1 hidden md:block"></div>
 
-            {/* Edit Tools */}
-            <div className="flex items-center gap-1">
+            {/* Edit Tools - Hidden on mobile, shown on md+ */}
+            <div className="hidden md:flex items-center gap-1">
               <button
                 onClick={() => editMode && setLayoutMode(!layoutMode)}
                 disabled={!editMode}
@@ -790,8 +797,8 @@ export function EditToolbar({
                 </svg>
               </button>
 
-              {/* Text Size Control - Google Drive Style */}
-              <div className={`flex items-center gap-1 px-1 py-1 rounded transition-colors ${
+              {/* Text Size Control - Google Drive Style - Hidden on smaller screens */}
+              <div className={`hidden lg:flex items-center gap-1 px-1 py-1 rounded transition-colors ${
                 editMode ? 'hover:bg-gray-100' : 'opacity-50 cursor-not-allowed'
               }`}>
                 <button
@@ -840,8 +847,8 @@ export function EditToolbar({
                 </button>
               </div>
 
-              {/* Font Family Dropdown */}
-              <div className={`flex items-center gap-1 px-2 rounded transition-colors ${
+              {/* Font Family Dropdown - Hidden on smaller screens */}
+              <div className={`hidden xl:flex items-center gap-1 px-2 rounded transition-colors ${
                 editMode ? 'hover:bg-gray-100' : 'opacity-50 cursor-not-allowed'
               }`}>
                 <select
@@ -968,10 +975,10 @@ export function EditToolbar({
           </div>
 
           {/* Center - Share Dropdown */}
-          <div className="absolute left-1/2 transform -translate-x-1/2 z-10" ref={shareDropdownRef}>
+          <div className="flex-shrink-0" ref={shareDropdownRef}>
             <button
               onClick={() => setShowShareDropdown(!showShareDropdown)}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-all duration-200 flex items-center gap-2 relative"
+              className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-all duration-200 flex items-center gap-1 sm:gap-2 relative"
               title="Share"
             >
               <ShareIcon className="w-4 h-4" />
@@ -986,7 +993,7 @@ export function EditToolbar({
 
             {/* Share Dropdown */}
             {showShareDropdown && (
-              <div className="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 w-96 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 max-h-96 overflow-y-auto">
+              <div className="absolute top-full mt-2 right-0 sm:right-auto sm:left-1/2 sm:transform sm:-translate-x-1/2 w-[calc(100vw-1rem)] sm:w-96 max-w-96 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 max-h-[80vh] overflow-y-auto">
                 <div>
                   {shareLoading && (
                     <div className="text-center py-4">
@@ -1365,29 +1372,29 @@ export function EditToolbar({
           </div>
 
           {/* Right side - Visual Controls and Actions */}
-          <div className="flex items-center gap-1 flex-1 justify-end pr-2">
+          <div className="flex items-center gap-1 flex-shrink-0">
 
-            {/* Save Status */}
-            <div className="flex items-center gap-2">
+            {/* Save Status - Hidden on very small screens */}
+            <div className="hidden sm:flex items-center gap-1 sm:gap-2">
               {isSaving && (
-                <div className="flex items-center gap-1 px-2 py-1 text-gray-600 text-sm">
+                <div className="flex items-center gap-1 px-1 sm:px-2 py-1 text-gray-600 text-sm">
                   <svg className="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  <span>Saving...</span>
+                  <span className="hidden md:inline">Saving...</span>
                 </div>
               )}
               {!isSaving && currentEditToken && (
-                <div className="flex items-center gap-1 px-2 py-1 text-gray-600 text-sm">
+                <div className="flex items-center gap-1 px-1 sm:px-2 py-1 text-gray-600 text-sm">
                   <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                   </svg>
-                  <span>Saved</span>
+                  <span className="hidden md:inline">Saved</span>
                 </div>
               )}
               {currentEditToken && (
-                <div className="flex items-center gap-2">
+                <div className="hidden lg:flex items-center gap-2">
                   <button
                     onClick={handleManualSync}
                     disabled={isManualSyncing}
@@ -1399,42 +1406,42 @@ export function EditToolbar({
                     </svg>
                   </button>
                   {lastSyncTime && (
-                    <span className="text-gray-600 text-sm">Last synced: {getTimeAgo(lastSyncTime)}</span>
+                    <span className="hidden xl:inline text-gray-600 text-sm">Last synced: {getTimeAgo(lastSyncTime)}</span>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Separator */}
-            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+            {/* Separator - hidden on mobile */}
+            <div className="h-6 w-px bg-gray-300 mx-1 sm:mx-2 hidden sm:block"></div>
 
-            {/* Help Button */}
+            {/* Help Button - hidden on mobile */}
             <button
               onClick={() => setShowHelpModal(true)}
-              className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-all duration-200"
+              className="hidden sm:block p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-all duration-200"
               title="Help & Keyboard Shortcuts"
             >
-              <QuestionMarkCircleIcon className="w-5 h-5" />
+              <QuestionMarkCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
-            {/* Separator */}
-            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+            {/* Separator - hidden on mobile */}
+            <div className="h-6 w-px bg-gray-300 mx-1 sm:mx-2 hidden sm:block"></div>
 
-            {/* Mode Switcher Dropdown (Google Docs style) */}
-            <div className="relative" ref={modeDropdownRef}>
+            {/* Mode Switcher Dropdown (Google Docs style) - Compact on mobile */}
+            <div className="relative hidden sm:block" ref={modeDropdownRef}>
               <button
                 onClick={() => setShowModeDropdown(!showModeDropdown)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded transition-all duration-200"
+                className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded transition-all duration-200"
               >
                 {editMode ? (
                   <>
                     <PencilIcon className="w-4 h-4" />
-                    <span>Editing</span>
+                    <span className="hidden md:inline">Editing</span>
                   </>
                 ) : (
                   <>
                     <EyeIcon className="w-4 h-4" />
-                    <span>Viewing</span>
+                    <span className="hidden md:inline">Viewing</span>
                   </>
                 )}
                 <ChevronDownIcon className="w-4 h-4 text-gray-500" />
@@ -1486,6 +1493,165 @@ export function EditToolbar({
               )}
             </div>
 
+            {/* Mobile Menu Button - Shown when edit tools are hidden (below md breakpoint) */}
+            <div className="relative md:hidden" ref={mobileMenuRef}>
+              <button
+                onClick={() => setShowMobileMenu(!showMobileMenu)}
+                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-all duration-200"
+                title="Menu"
+              >
+                <Bars3Icon className="w-5 h-5" />
+              </button>
+
+              {/* Mobile Menu Dropdown */}
+              {showMobileMenu && (
+                <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                  {/* Mode Switcher */}
+                  <div className="px-4 py-2 border-b border-gray-100">
+                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Mode</div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setEditMode(true)
+                          setShowMobileMenu(false)
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded text-sm ${
+                          editMode
+                            ? 'bg-blue-100 text-blue-700'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                      >
+                        <PencilIcon className="w-4 h-4" />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditMode(false)
+                          setHighlightedNodes(new Set())
+                          setLayoutMode(false)
+                          setShowMobileMenu(false)
+                        }}
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded text-sm ${
+                          !editMode
+                            ? 'bg-blue-100 text-blue-700'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                      >
+                        <EyeIcon className="w-4 h-4" />
+                        View
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Edit Tools */}
+                  {editMode && (
+                    <div className="px-4 py-2 border-b border-gray-100">
+                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Edit Tools</div>
+                      <button
+                        onClick={() => {
+                          setLayoutMode(!layoutMode)
+                          setShowMobileMenu(false)
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded text-sm ${
+                          layoutMode
+                            ? 'bg-blue-100 text-blue-700'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                        </svg>
+                        Layout Mode {layoutMode ? '(On)' : '(Off)'}
+                      </button>
+
+                      {/* Text Size */}
+                      <div className="mt-2">
+                        <div className="text-xs text-gray-600 mb-1">Text Size</div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              const currentPx = Math.round(textSize * 18);
+                              const newPx = Math.max(9, currentPx - 2);
+                              setTextSize(newPx / 18);
+                            }}
+                            className="p-2 rounded hover:bg-gray-200"
+                          >
+                            <MinusIcon className="w-4 h-4 text-gray-600" />
+                          </button>
+                          <span className="flex-1 text-center text-sm text-gray-700">{Math.round(textSize * 18)}px</span>
+                          <button
+                            onClick={() => {
+                              const currentPx = Math.round(textSize * 18);
+                              const newPx = Math.min(36, currentPx + 2);
+                              setTextSize(newPx / 18);
+                            }}
+                            className="p-2 rounded hover:bg-gray-200"
+                          >
+                            <PlusIcon className="w-4 h-4 text-gray-600" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Font Family */}
+                      <div className="mt-2">
+                        <div className="text-xs text-gray-600 mb-1">Font</div>
+                        <select
+                          value={fontFamily}
+                          onChange={(e) => setFontFamily(e.target.value)}
+                          className="w-full text-sm text-gray-700 border border-gray-300 rounded px-2 py-1.5"
+                          style={{ fontFamily: fontFamily }}
+                        >
+                          <option value="'Roboto', sans-serif">Roboto</option>
+                          <option value="'Open Sans', sans-serif">Open Sans</option>
+                          <option value="'Lato', sans-serif">Lato</option>
+                          <option value="'Montserrat', sans-serif">Montserrat</option>
+                          <option value="'Poppins', sans-serif">Poppins</option>
+                          <option value="'Merriweather', serif">Merriweather</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Sync Controls */}
+                  {currentEditToken && (
+                    <div className="px-4 py-2 border-b border-gray-100">
+                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Sync</div>
+                      <button
+                        onClick={() => {
+                          handleManualSync()
+                          setShowMobileMenu(false)
+                        }}
+                        disabled={isManualSyncing}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        <svg className={`w-4 h-4 ${isManualSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Sync Now
+                      </button>
+                      {lastSyncTime && (
+                        <div className="text-xs text-gray-500 mt-1 px-3">
+                          Last synced: {getTimeAgo(lastSyncTime)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Help */}
+                  <button
+                    onClick={() => {
+                      setShowHelpModal(true)
+                      setShowMobileMenu(false)
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  >
+                    <QuestionMarkCircleIcon className="w-4 h-4" />
+                    Help & Shortcuts
+                  </button>
+                </div>
+              )}
+            </div>
+
           </div>
         </div>
       </div>
@@ -1494,15 +1660,15 @@ export function EditToolbar({
       {/* Help Modal */}
       {showHelpModal && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50 p-4"
           onClick={() => setShowHelpModal(false)}
         >
           <div
-            className="bg-white rounded-lg shadow-xl max-w-2xl max-h-[80vh] overflow-y-auto"
+            className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-800">Help & Keyboard Shortcuts</h2>
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+              <h2 className="text-lg sm:text-xl font-semibold text-gray-800">Help & Keyboard Shortcuts</h2>
               <button
                 onClick={() => setShowHelpModal(false)}
                 className="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors"
@@ -1513,8 +1679,8 @@ export function EditToolbar({
               </button>
             </div>
 
-            <div className="px-6 py-4">
-              <div className="grid grid-cols-2 gap-6">
+            <div className="px-4 sm:px-6 py-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <h3 className="font-semibold text-gray-800 mb-3">Basic Navigation</h3>
                   <ul className="space-y-2 text-sm text-gray-700">
@@ -1652,30 +1818,31 @@ export function EditToolbar({
       {/* Node Selection Popup - Miro Style Horizontal Bar */}
       {editMode && highlightedNodes.size > 0 && !showHelpModal && !nodePopup && !edgePopup && (
         <div
-          className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 px-4 py-3"
+          className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 px-2 sm:px-4 py-2 sm:py-3"
           style={{
-            left: toolbarPosition.x,
-            top: toolbarPosition.y,
+            left: Math.min(Math.max(toolbarPosition.x, 150), window.innerWidth - 150),
+            top: Math.max(toolbarPosition.y, 60),
             transform: 'translateX(-50%)',
-            minWidth: '400px'
+            minWidth: 'auto',
+            maxWidth: 'calc(100vw - 1rem)'
           }}
           >
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 sm:gap-6 flex-wrap">
               {/* Node Count */}
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-700">
-                  {highlightedNodes.size === 1 ? '' : `${highlightedNodes.size} nodes selected`}
+                <span className="text-xs sm:text-sm font-medium text-gray-700">
+                  {highlightedNodes.size === 1 ? '' : `${highlightedNodes.size} nodes`}
                 </span>
               </div>
 
-              {/* Separator if more than 1 node */}
+              {/* Separator if more than 1 node - hidden on mobile */}
               {highlightedNodes.size > 1 && (
-                <div className="h-4 w-px bg-gray-300"></div>
+                <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
               )}
 
               {/* Width Control */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">Width</span>
+              <div className="flex items-center gap-1 sm:gap-2">
+                <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">Width</span>
                 <input
                   type="range"
                   min="128"
@@ -1703,17 +1870,17 @@ export function EditToolbar({
                       }))
                     }
                   }}
-                  className="w-20 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
+                  className="w-16 sm:w-20 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
                 />
-                <span className="text-xs text-gray-500 w-10 text-right">{nodeWidth}px</span>
+                <span className="text-xs text-gray-500 w-8 sm:w-10 text-right">{nodeWidth}</span>
               </div>
 
               {/* Separator */}
-              <div className="h-4 w-px bg-gray-300"></div>
+              <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
 
               {/* Color Control */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">Color</span>
+              <div className="flex items-center gap-1 sm:gap-2">
+                <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">Color</span>
                 <input
                   type="color"
                   value={nodeColor}
@@ -1738,15 +1905,15 @@ export function EditToolbar({
                       }))
                     }
                   }}
-                  className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                  className="w-6 h-6 sm:w-8 sm:h-8 rounded border border-gray-300 cursor-pointer"
                 />
               </div>
 
               {/* Delete Button - only in edit mode */}
               {editMode && onDeleteNode && (
                 <>
-                  {/* Separator */}
-                  <div className="h-4 w-px bg-gray-300"></div>
+                  {/* Separator - hidden on mobile */}
+                  <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
 
                   <button
                     onClick={() => {
@@ -1757,10 +1924,10 @@ export function EditToolbar({
                       // Clear selection after deleting
                       setHighlightedNodes(new Set())
                     }}
-                    className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-all duration-200"
+                    className="p-1.5 sm:p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-all duration-200"
                     title={`Delete ${highlightedNodes.size === 1 ? 'node' : 'nodes'}`}
                   >
-                    <TrashIcon className="w-5 h-5" />
+                    <TrashIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                   </button>
                 </>
               )}
