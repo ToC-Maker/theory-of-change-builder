@@ -754,16 +754,38 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
   };
 
   return (
-    <div
-      className={`fixed left-0 z-40 bg-white border-r border-gray-300 shadow-sm flex flex-col transition-all duration-300 ${
-        isCollapsed ? 'w-12' : 'w-1/4'
-      }`}
-      style={{
-        top: '52px',
-        bottom: 0,
-        height: 'calc(100vh - 52px)'
-      }}
-    >
+    <>
+      {/* Mobile overlay backdrop */}
+      {!isCollapsed && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
+          onClick={onToggle}
+        />
+      )}
+
+      {/* Mobile floating toggle button - only shown when collapsed on mobile, positioned above JSON dropdown */}
+      {isCollapsed && (
+        <button
+          onClick={onToggle}
+          className="fixed left-4 bottom-10 z-40 md:hidden w-12 h-12 bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-blue-700 transition-colors"
+          title="Open AI Assistant"
+        >
+          <ChatBubbleLeftRightIcon className="w-6 h-6" />
+        </button>
+      )}
+
+      <div
+        className={`fixed left-0 z-40 bg-white border-r border-gray-300 shadow-sm flex flex-col transition-all duration-300 ${
+          isCollapsed
+            ? 'w-12 -translate-x-full md:translate-x-0'
+            : 'w-full sm:w-80 md:w-1/4 md:min-w-[280px] md:max-w-[400px]'
+        }`}
+        style={{
+          top: '52px',
+          bottom: 0,
+          height: 'calc(100vh - 52px)'
+        }}
+      >
       {/* Toggle Button */}
       <div className="flex-shrink-0 p-2 border-b border-gray-200">
         <button
@@ -1326,6 +1348,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
