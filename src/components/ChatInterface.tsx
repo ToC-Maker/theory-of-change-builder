@@ -2,7 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { chatService, ChatMessage } from '../services/chatService';
-import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
+import { applyEdits, cleanResponseContent, parseEditInstructions } from '../utils/graphEdits';
+import { loggingService } from '../services/loggingService';
+import { saveSnapshot } from '../services/snapshotService';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
@@ -338,8 +340,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isStreaming) return;
 
+    // Generate UUIDs for message logging
+    const userMessageId = crypto.randomUUID();
+    const assistantMessageId = crypto.randomUUID();
+
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: userMessageId,
       role: 'user',
       content: inputValue.trim(),
       timestamp: new Date()
@@ -358,10 +364,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       setIsThinking(true);
     }
 
+    // Log user message (fire and forget)
+    const chartId = loggingService.getCurrentChartId();
+    if (chartId) {
+      loggingService.saveMessage({
+        message_id: userMessageId,
+        chart_id: chartId,
+        role: 'user',
+        content: userMessage.content,
+      });
+    }
+
     // Create a placeholder streaming message
-    const streamingId = (Date.now() + 1).toString();
     streamingMessageRef.current = {
-      id: streamingId,
+      id: assistantMessageId,
       role: 'assistant',
       content: '',
       timestamp: new Date()
@@ -401,7 +417,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
           const assistantMessage: ChatMessage = {
-            id: streamingId,
+            id: assistantMessageId,
             role: 'assistant',
             content: finalMessage,
             timestamp: new Date(),
@@ -411,12 +427,25 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
             } : undefined
           };
-          
+
           setMessages(prev => [...prev, assistantMessage]);
           setIsStreaming(false);
           setStreamingContent('');
           setIsThinking(false);
           streamingMessageRef.current = null;
+
+          // Log assistant message (fire and forget)
+          if (chartId) {
+            loggingService.saveMessage({
+              message_id: assistantMessageId,
+              chart_id: chartId,
+              role: 'assistant',
+              content: finalMessage,
+              usage_input_tokens: usage?.input_tokens,
+              usage_output_tokens: usage?.output_tokens,
+              usage_total_tokens: usage ? (usage.input_tokens || 0) + (usage.output_tokens || 0) : undefined,
+            });
+          }
 
           // Track token usage in database
           if (usage?.input_tokens && params.editToken) {
@@ -434,11 +463,41 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             try {
               const updatedGraph = applyEdits(graphData, editInstructions);
               onGraphUpdate(updatedGraph);
+
+              // Save AI edit snapshot with message link
+              const sessionId = loggingService.getCurrentSessionId();
+              if (sessionId && chartId) {
+                saveSnapshot({
+                  session_id: sessionId,
+                  chart_id: chartId,
+                  graph_data: updatedGraph,
+                  edit_type: 'ai_edit',
+                  triggered_by_message_id: assistantMessageId,
+                  edit_instructions: editInstructions,
+                  edit_success: true,
+                });
+              }
             } catch (error) {
               console.error('Error applying graph edits:', error);
+
+              // Save failed AI edit snapshot
+              const sessionId = loggingService.getCurrentSessionId();
+              if (sessionId && chartId) {
+                saveSnapshot({
+                  session_id: sessionId,
+                  chart_id: chartId,
+                  graph_data: graphData, // Original unchanged graph
+                  edit_type: 'ai_edit',
+                  triggered_by_message_id: assistantMessageId,
+                  edit_instructions: editInstructions,
+                  edit_success: false,
+                  error_message: error instanceof Error ? error.message : 'Unknown error',
+                });
+              }
+
               // Add an error message to the chat
               const errorMessage: ChatMessage = {
-                id: (Date.now() + 1).toString(),
+                id: crypto.randomUUID(),
                 role: 'assistant',
                 content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
                 timestamp: new Date()
@@ -455,7 +514,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         },
         onError: (error: string) => {
           const errorMessage: ChatMessage = {
-            id: streamingId,
+            id: assistantMessageId,
             role: 'assistant',
             content: `Error: ${error}`,
             timestamp: new Date()
@@ -477,7 +536,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
-        id: streamingId,
+        id: assistantMessageId,
         role: 'assistant',
         content: 'Sorry, there was an error processing your request.',
         timestamp: new Date()
@@ -609,8 +668,12 @@ ${additionalInstructions.trim()}
 
 IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot and Organization Representative, with back-and-forth exchanges that show the thinking process.`;
 
+    // Generate UUIDs for message consistency
+    const userMessageId = crypto.randomUUID();
+    const generationAssistantId = crypto.randomUUID();
+
     const generationMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: userMessageId,
       role: 'user',
       content: conversationPrompt,
       timestamp: new Date()
@@ -620,9 +683,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     setCurrentMode('chat');
     setMessages([generationMessage]);
 
-    const streamingId = (Date.now() + 1).toString();
     streamingMessageRef.current = {
-      id: streamingId,
+      id: generationAssistantId,
       role: 'assistant',
       content: '',
       timestamp: new Date()
@@ -647,7 +709,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
           const assistantMessage: ChatMessage = {
-            id: streamingId,
+            id: generationAssistantId,
             role: 'assistant',
             content: finalMessage,
             timestamp: new Date(),
@@ -688,7 +750,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
 
               // Add a success message with load button
               const successMessage: ChatMessage = {
-                id: (Date.now() + 2).toString(),
+                id: crypto.randomUUID(),
                 role: 'assistant',
                 content: '✅ **Graph Generated Successfully!** A complete Theory of Change has been created. Click the button below to load it into your workspace.',
                 timestamp: new Date()
@@ -697,7 +759,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             } else {
               // Add an error message if parsing failed
               const errorMessage: ChatMessage = {
-                id: (Date.now() + 2).toString(),
+                id: crypto.randomUUID(),
                 role: 'assistant',
                 content: '⚠️ **Graph Parse Error**: The AI generated a complete Theory of Change conversation, but there was an issue parsing the JSON structure. Please check the generated JSON manually.',
                 timestamp: new Date()
@@ -718,7 +780,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         },
         onError: (error: string) => {
           const errorMessage: ChatMessage = {
-            id: streamingId,
+            id: generationAssistantId,
             role: 'assistant',
             content: `Error: ${error}`,
             timestamp: new Date()
@@ -738,7 +800,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
-        id: streamingId,
+        id: generationAssistantId,
         role: 'assistant',
         content: 'Sorry, there was an error processing your request.',
         timestamp: new Date()
