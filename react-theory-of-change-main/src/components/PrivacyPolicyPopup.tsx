@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { XMarkIcon, ShieldCheckIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
+import { loggingService } from '../services/loggingService';
 
 export function PrivacyPolicyPopup() {
   const [isVisible, setIsVisible] = useState(false);
+  const [allowLogging, setAllowLogging] = useState(true); // Default to opted-in
   const location = useLocation();
 
   useEffect(() => {
@@ -30,6 +32,10 @@ export function PrivacyPolicyPopup() {
     // Store acceptance in localStorage
     localStorage.setItem('privacyPolicyAccepted', 'true');
     localStorage.setItem('privacyPolicyAcceptedDate', new Date().toISOString());
+
+    // Store usage logging preference (opt-out if unchecked)
+    loggingService.setOptOut(!allowLogging);
+
     setIsVisible(false);
   };
 
@@ -72,7 +78,7 @@ export function PrivacyPolicyPopup() {
         </h2>
 
         {/* Content */}
-        <div className="space-y-3 mb-6">
+        <div className="space-y-3 mb-4">
           <p className="text-sm text-gray-600 text-center">
             We value your privacy and are committed to protecting your data.
           </p>
@@ -80,6 +86,26 @@ export function PrivacyPolicyPopup() {
           <p className="text-xs text-gray-500 text-center">
             By using this application, you agree to our privacy practices.
           </p>
+        </div>
+
+        {/* Usage Logging Checkbox */}
+        <div className="mb-6 p-3 bg-gray-50 rounded-lg">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allowLogging}
+              onChange={(e) => setAllowLogging(e.target.checked)}
+              className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-800">
+                Help improve AI features
+              </span>
+              <p className="text-xs text-gray-500 mt-1">
+                Share anonymized usage data (chat messages and graph edits) to help us improve the AI assistant.
+              </p>
+            </div>
+          </label>
         </div>
 
         {/* Actions */}
