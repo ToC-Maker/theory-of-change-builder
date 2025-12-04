@@ -9,6 +9,8 @@ import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
+import { loggingService, LoggingServiceClass } from "./services/loggingService"
+import { saveSnapshot, saveSnapshotDebounced, flushPendingSnapshot } from "./services/snapshotService"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import AuthButton from "./components/AuthButton"
 import "./App.css"
@@ -550,6 +552,7 @@ function ToCViewer() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
+  const [currentChartId, setCurrentChartId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
   const [isManualSyncing, setIsManualSyncing] = useState(false)
@@ -613,7 +616,7 @@ function ToCViewer() {
     excludeFromPan,
   })
 
-  // Set Auth0 token on ChartService when user is authenticated
+  // Set Auth0 token on ChartService and LoggingService when user is authenticated
   useEffect(() => {
     const setToken = async () => {
       if (isAuthenticated && !authLoading) {
@@ -623,22 +626,26 @@ function ToCViewer() {
           const idToken = idTokenClaims?.__raw;
           if (idToken) {
             ChartService.setAuthToken(idToken);
-            console.log('[App] Auth token set on ChartService (length:', idToken.length, ')');
+            LoggingServiceClass.setAuthToken(idToken);
+            console.log('[App] Auth token set on ChartService and LoggingService (length:', idToken.length, ')');
             setAuthTokenReady(true);
           } else {
             console.error('[App] ID token not available');
             ChartService.setAuthToken(null);
+            LoggingServiceClass.setAuthToken(null);
             setAuthTokenReady(true); // Ready even if no token (anonymous mode)
           }
         } catch (err) {
           console.error('[App] Failed to get ID token:', err);
           ChartService.setAuthToken(null);
+          LoggingServiceClass.setAuthToken(null);
           setAuthTokenReady(true); // Ready even if error (anonymous mode)
         }
       } else if (!authLoading) {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
         ChartService.setAuthToken(null);
+        LoggingServiceClass.setAuthToken(null);
         setAuthTokenReady(true); // Ready for anonymous mode
       } else {
         // Auth still loading
@@ -825,6 +832,17 @@ function ToCViewer() {
     setData(newData);
     pendingChangesRef.current = newData;
 
+    // Save debounced snapshot for logging (manual edits)
+    const sessionId = loggingService.getCurrentSessionId();
+    if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
+      saveSnapshotDebounced({
+        session_id: sessionId,
+        chart_id: currentChartId,
+        graph_data: newData,
+        edit_type: 'manual_edit',
+      });
+    }
+
     // Always save to localStorage immediately (local backup)
     if (!currentEditToken) {
       saveToLocalStorage(newData);
@@ -892,6 +910,17 @@ function ToCViewer() {
       pendingChangesRef.current = previousState;
       saveToLocalStorage(previousState);
 
+      // Save undo snapshot for logging
+      const sessionId = loggingService.getCurrentSessionId();
+      if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
+        saveSnapshotDebounced({
+          session_id: sessionId,
+          chart_id: currentChartId,
+          graph_data: previousState,
+          edit_type: 'undo',
+        });
+      }
+
       // Trigger debounced database save for undo
       if (currentEditToken) {
         if (saveTimeoutRef.current) {
@@ -919,7 +948,7 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken]);
+  }, [undoHistory, data, saveToLocalStorage, currentEditToken, currentChartId]);
 
   const handleRedo = useCallback(() => {
     // Clear any pending saves first
@@ -946,6 +975,17 @@ function ToCViewer() {
       setData(nextState);
       pendingChangesRef.current = nextState;
       saveToLocalStorage(nextState);
+
+      // Save redo snapshot for logging
+      const sessionId = loggingService.getCurrentSessionId();
+      if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
+        saveSnapshotDebounced({
+          session_id: sessionId,
+          chart_id: currentChartId,
+          graph_data: nextState,
+          edit_type: 'redo',
+        });
+      }
 
       // Trigger debounced database save for redo
       if (currentEditToken) {
@@ -974,7 +1014,7 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken]);
+  }, [redoHistory, data, saveToLocalStorage, currentEditToken, currentChartId]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -1097,8 +1137,35 @@ function ToCViewer() {
           ChartService.updateChart(currentEditToken, pendingChangesRef.current).catch(console.error);
         }
       }
+      // Flush any pending snapshots and end logging session
+      flushPendingSnapshot();
+      loggingService.endSession();
     };
   }, [currentEditToken]);
+
+  // Throttled activity listener for logging session timeout (30 second throttle)
+  useEffect(() => {
+    if (!currentChartId) return;
+
+    const lastActivityRef = { current: 0 };
+    const ACTIVITY_THROTTLE_MS = 30000; // 30 seconds
+
+    const handleActivity = () => {
+      const now = Date.now();
+      if (now - lastActivityRef.current > ACTIVITY_THROTTLE_MS) {
+        lastActivityRef.current = now;
+        loggingService.resetSessionTimeout();
+      }
+    };
+
+    window.addEventListener('mousemove', handleActivity);
+    window.addEventListener('keypress', handleActivity);
+
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('keypress', handleActivity);
+    };
+  }, [currentChartId]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -1119,6 +1186,21 @@ function ToCViewer() {
           const result = await ChartService.getChartByEditToken(editToken);
           setData(result.chartData);
           setCurrentEditToken(editToken);
+          setCurrentChartId(result.chartId);
+
+          // Initialize logging session after chart is loaded
+          if (!loggingService.isOptedOut() && result.chartId) {
+            const sessionId = await loggingService.initializeSession(result.chartId);
+            if (sessionId) {
+              // Save initial snapshot
+              saveSnapshot({
+                session_id: sessionId,
+                chart_id: result.chartId,
+                graph_data: result.chartData,
+                edit_type: 'initial',
+              });
+            }
+          }
         } else if (filename) {
           // Fallback to file-based loading for backwards compatibility
           const savedData = loadFromLocalStorage(filename);
