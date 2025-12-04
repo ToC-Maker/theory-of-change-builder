@@ -2,7 +2,7 @@
 
 **Purpose**: Collect comprehensive user interaction data (chat conversations, graph edits, sessions) for future AI evaluation and prompt engineering improvements.
 
-**Last Updated**: 2025-11-14
+**Last Updated**: 2025-12-04
 
 ---
 
@@ -37,11 +37,13 @@
 ### Key Design Decisions
 
 1. **Full snapshots vs diffs**: Store complete graph state after each edit (simpler queries, guaranteed reconstruction)
-2. **Opt-out by default**: All users tracked unless they explicitly opt-out
-3. **Track everything equally**: No distinction between AI and manual edit granularity
+2. **Opt-in with consent**: Users consent via checkbox in existing PrivacyPolicyPopup. Opted-out users' data is NOT stored at all.
+3. **Debounced manual edits**: 2-second trailing debounce for manual edit snapshots to prevent flood
 4. **Message-to-edit linking**: Direct foreign key relationship via `message_id`
 5. **Sequence numbers**: Guarantee correct ordering even with concurrent edits or clock skew
 6. **Server-side storage**: Move chat history from localStorage to database for persistence
+7. **Circuit breaker**: Skip logging after 3 consecutive failures, retry after 1 minute
+8. **Preserve data on chart deletion**: Use `ON DELETE SET NULL` to keep logs when charts are deleted
 
 ### What This Is
 
@@ -100,12 +102,12 @@ This is a **logging system** that collects data for **future evaluation**. We're
 ```sql
 CREATE TABLE logging_sessions (
   session_id UUID PRIMARY KEY,
-  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE CASCADE,
+  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
   user_id TEXT,  -- NULL for anonymous users
   user_email TEXT,  -- For debugging/analysis
   started_at TIMESTAMP DEFAULT NOW(),
   ended_at TIMESTAMP,  -- Updated when session expires or user closes tab
-  opted_out BOOLEAN DEFAULT FALSE,
+  -- Note: No opted_out column - opted-out users' data is not stored at all
 
   -- Metadata
   user_agent TEXT,  -- Browser/device info
@@ -137,7 +139,7 @@ CREATE TABLE logging_messages (
   id SERIAL PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES logging_sessions(session_id) ON DELETE CASCADE,
   message_id UUID NOT NULL UNIQUE,  -- Client-generated stable ID
-  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE CASCADE,
+  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
 
   -- Message content
   role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
@@ -152,7 +154,7 @@ CREATE TABLE logging_messages (
   -- User context
   user_id TEXT,  -- NULL for anonymous
   user_email TEXT,  -- For debugging
-  opted_out BOOLEAN DEFAULT FALSE,
+  -- Note: No opted_out column - opted-out users' data is not stored at all
 
   created_at TIMESTAMP DEFAULT NOW()
 );
@@ -181,7 +183,7 @@ CREATE TABLE logging_snapshots (
   id SERIAL PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES logging_sessions(session_id) ON DELETE CASCADE,
   sequence_number INTEGER NOT NULL,  -- Order within session (1, 2, 3...)
-  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE CASCADE,
+  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
 
   -- Graph state
   graph_data JSONB NOT NULL,  -- Complete ToCData structure
@@ -200,7 +202,7 @@ CREATE TABLE logging_snapshots (
   user_id TEXT,
   user_email TEXT,  -- For debugging
   is_authenticated BOOLEAN DEFAULT FALSE,
-  opted_out BOOLEAN DEFAULT FALSE,
+  -- Note: No opted_out column - opted-out users' data is not stored at all
 
   created_at TIMESTAMP DEFAULT NOW(),
 
@@ -214,7 +216,6 @@ CREATE INDEX idx_logging_snapshots_chart ON logging_snapshots(chart_id);
 CREATE INDEX idx_logging_snapshots_message ON logging_snapshots(triggered_by_message_id) WHERE triggered_by_message_id IS NOT NULL;
 CREATE INDEX idx_logging_snapshots_timestamp ON logging_snapshots(timestamp);
 CREATE INDEX idx_logging_snapshots_edit_type ON logging_snapshots(edit_type);
-CREATE INDEX idx_logging_snapshots_opted_out ON logging_snapshots(opted_out, timestamp) WHERE opted_out = false;
 
 -- Comment
 COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for replay and evaluation';
@@ -329,8 +330,6 @@ COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for
 
 ### Phase 1: Database Setup
 
-**Duration**: 1 day
-
 1. **Create migration file**: `database/migrations/add-usage-logging.sql`
 
 2. **Run migration** on development database:
@@ -382,13 +381,11 @@ COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for
 
 ### Phase 2: Backend API Endpoints
 
-**Duration**: 2-3 days
-
-Create new Netlify functions in `netlify/functions/logging/`:
+Create new Netlify functions in `netlify/functions/` (flat structure, prefixed with `logging-`):
 
 #### 2.1 Session Management
 
-**File**: `netlify/functions/logging/createSession.ts`
+**File**: `netlify/functions/logging-createSession.ts`
 
 ```typescript
 import { Handler } from '@netlify/functions';
@@ -476,7 +473,7 @@ export const handler: Handler = async (event) => {
 };
 ```
 
-**File**: `netlify/functions/logging/endSession.ts`
+**File**: `netlify/functions/logging-endSession.ts`
 
 ```typescript
 import { Handler } from '@netlify/functions';
@@ -539,7 +536,7 @@ export const handler: Handler = async (event) => {
 
 #### 2.2 Message Logging
 
-**File**: `netlify/functions/logging/saveMessage.ts`
+**File**: `netlify/functions/logging-saveMessage.ts`
 
 ```typescript
 import { Handler } from '@netlify/functions';
@@ -548,7 +545,7 @@ import { verifyToken, extractToken } from '../utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Logging-Opt-Out',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json'
 };
@@ -585,8 +582,7 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Check opt-out status from header
-    const optedOut = event.headers['x-logging-opt-out'] === 'true';
+    // Note: Opt-out is checked on frontend - if user opted out, this endpoint is never called
 
     // Extract user info from auth token
     const token = extractToken(event.headers.authorization);
@@ -614,14 +610,14 @@ export const handler: Handler = async (event) => {
       INSERT INTO logging_messages (
         session_id, message_id, chart_id, role, content,
         usage_input_tokens, usage_output_tokens, usage_total_tokens,
-        user_id, user_email, opted_out
+        user_id, user_email
       )
       VALUES (
         ${data.session_id}, ${data.message_id}, ${data.chart_id},
         ${data.role}, ${data.content},
         ${data.usage_input_tokens || null}, ${data.usage_output_tokens || null},
         ${data.usage_total_tokens || null},
-        ${user_id || null}, ${user_email || null}, ${optedOut}
+        ${user_id || null}, ${user_email || null}
       )
       ON CONFLICT (message_id) DO NOTHING
       RETURNING *
@@ -645,7 +641,7 @@ export const handler: Handler = async (event) => {
 
 #### 2.3 Graph Snapshot Logging
 
-**File**: `netlify/functions/logging/saveSnapshot.ts`
+**File**: `netlify/functions/logging-saveSnapshot.ts`
 
 ```typescript
 import { Handler } from '@netlify/functions';
@@ -654,7 +650,7 @@ import { verifyToken, extractToken } from '../utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Logging-Opt-Out',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json'
 };
@@ -691,7 +687,7 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const optedOut = event.headers['x-logging-opt-out'] === 'true';
+    // Note: Opt-out is checked on frontend - if user opted out, this endpoint is never called
 
     // Extract user info and auth status
     const token = extractToken(event.headers.authorization);
@@ -729,14 +725,14 @@ export const handler: Handler = async (event) => {
         session_id, sequence_number, chart_id, graph_data,
         edit_type, triggered_by_message_id, edit_instructions,
         edit_success, error_message, user_id, user_email,
-        is_authenticated, opted_out
+        is_authenticated
       )
       SELECT
         ${data.session_id}, seq, ${data.chart_id}, ${JSON.stringify(data.graph_data)},
         ${data.edit_type}, ${data.triggered_by_message_id || null},
         ${data.edit_instructions ? JSON.stringify(data.edit_instructions) : null},
         ${data.edit_success !== false}, ${data.error_message || null},
-        ${user_id || null}, ${user_email || null}, ${is_authenticated}, ${optedOut}
+        ${user_id || null}, ${user_email || null}, ${is_authenticated}
       FROM next_seq
       RETURNING *
     `;
@@ -759,16 +755,12 @@ export const handler: Handler = async (event) => {
 
 ### Phase 3: Frontend Integration
 
-**Duration**: 3-4 days
-
 #### 3.1 Session Management Service
 
 **File**: `src/services/loggingService.ts`
 
 ```typescript
-import { ChartService } from './chartService';
-
-const API_BASE = '/.netlify/functions/logging';
+const API_BASE = '/.netlify/functions';
 
 export interface LoggingSession {
   session_id: string;
@@ -781,11 +773,18 @@ export interface LoggingSession {
 class LoggingService {
   private static authToken: string | null = null;
   private currentSessionId: string | null = null;
+  private currentChartId: string | null = null;
   private sessionTimeout: NodeJS.Timeout | null = null;
   private readonly SESSION_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
+  // Circuit breaker state
+  private static failureCount = 0;
+  private static lastFailureTime = 0;
+  private static readonly MAX_FAILURES = 3;
+  private static readonly RESET_AFTER_MS = 60000; // 1 minute
+
   /**
-   * Set auth token (called from App.tsx)
+   * Set auth token (called from App.tsx, mirrors ChartService pattern)
    */
   static setAuthToken(token: string | null) {
     this.authToken = token;
@@ -799,18 +798,51 @@ class LoggingService {
   }
 
   /**
-   * Initialize or resume a session
+   * Circuit breaker: check if we should skip logging due to repeated failures
    */
-  async initializeSession(chartId: string): Promise<string> {
-    // Check if we have an existing valid session
+  private shouldSkipLogging(): boolean {
+    if (Date.now() - LoggingService.lastFailureTime > LoggingService.RESET_AFTER_MS) {
+      LoggingService.failureCount = 0;
+    }
+    return LoggingService.failureCount >= LoggingService.MAX_FAILURES;
+  }
+
+  /**
+   * Circuit breaker: record a failure
+   */
+  private recordFailure(): void {
+    LoggingService.failureCount++;
+    LoggingService.lastFailureTime = Date.now();
+  }
+
+  /**
+   * Circuit breaker: reset on success
+   */
+  private recordSuccess(): void {
+    LoggingService.failureCount = 0;
+  }
+
+  /**
+   * Initialize or resume a session
+   * IMPORTANT: Only call this AFTER chart data is fully loaded
+   */
+  async initializeSession(chartId: string): Promise<string | null> {
+    // Don't initialize if user has opted out
+    if (this.isOptedOut()) {
+      return null;
+    }
+
+    // Check if we have an existing valid session for this chart
     const existingSessionId = localStorage.getItem('loggingSessionId');
+    const existingChartId = localStorage.getItem('loggingChartId');
     const sessionExpiry = localStorage.getItem('loggingSessionExpiry');
 
-    if (existingSessionId && sessionExpiry) {
+    if (existingSessionId && sessionExpiry && existingChartId === chartId) {
       const expiryTime = parseInt(sessionExpiry, 10);
       if (Date.now() < expiryTime) {
-        // Session still valid
+        // Session still valid for this chart
         this.currentSessionId = existingSessionId;
+        this.currentChartId = chartId;
         this.resetSessionTimeout();
         return existingSessionId;
       }
@@ -823,17 +855,17 @@ class LoggingService {
       await this.createSession(sessionId, chartId);
 
       this.currentSessionId = sessionId;
+      this.currentChartId = chartId;
       localStorage.setItem('loggingSessionId', sessionId);
+      localStorage.setItem('loggingChartId', chartId);
       this.resetSessionTimeout();
+      this.recordSuccess();
 
       return sessionId;
     } catch (error) {
-      console.error('Failed to create session:', error);
-      // Continue with client-side session ID even if backend fails
-      this.currentSessionId = sessionId;
-      localStorage.setItem('loggingSessionId', sessionId);
-      this.resetSessionTimeout();
-      return sessionId;
+      console.error('[LoggingService] Failed to create session:', error);
+      this.recordFailure();
+      return null;
     }
   }
 
@@ -841,6 +873,10 @@ class LoggingService {
    * Create session on backend
    */
   private async createSession(sessionId: string, chartId: string): Promise<void> {
+    if (this.shouldSkipLogging()) {
+      throw new Error('Circuit breaker open - skipping logging');
+    }
+
     const token = this.getAuthToken();
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
@@ -850,11 +886,7 @@ class LoggingService {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    if (this.isOptedOut()) {
-      headers['X-Logging-Opt-Out'] = 'true';
-    }
-
-    await fetch(`${API_BASE}/createSession`, {
+    const response = await fetch(`${API_BASE}/logging-createSession`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -863,29 +895,35 @@ class LoggingService {
         user_agent: navigator.userAgent,
       }),
     });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create session: ${response.status}`);
+    }
   }
 
   /**
    * End current session
    */
   async endSession(): Promise<void> {
-    if (!this.currentSessionId) return;
+    if (!this.currentSessionId || this.shouldSkipLogging()) return;
 
     try {
-      await fetch(`${API_BASE}/endSession`, {
+      await fetch(`${API_BASE}/logging-endSession`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: this.currentSessionId }),
       });
+      this.recordSuccess();
     } catch (error) {
-      console.error('Failed to end session:', error);
+      console.error('[LoggingService] Failed to end session:', error);
+      this.recordFailure();
     }
 
     this.clearSession();
   }
 
   /**
-   * Reset session timeout (call on user activity)
+   * Reset session timeout (call on user activity - throttled externally)
    */
   resetSessionTimeout(): void {
     if (this.sessionTimeout) {
@@ -905,7 +943,9 @@ class LoggingService {
    */
   private clearSession(): void {
     this.currentSessionId = null;
+    this.currentChartId = null;
     localStorage.removeItem('loggingSessionId');
+    localStorage.removeItem('loggingChartId');
     localStorage.removeItem('loggingSessionExpiry');
     if (this.sessionTimeout) {
       clearTimeout(this.sessionTimeout);
@@ -922,16 +962,28 @@ class LoggingService {
 
   /**
    * Check if user has opted out of logging
+   * Stored via PrivacyPolicyPopup checkbox
    */
   isOptedOut(): boolean {
     return localStorage.getItem('usageLoggingOptOut') === 'true';
   }
 
   /**
-   * Set opt-out preference
+   * Set opt-out preference (called from PrivacyPolicyPopup)
    */
   setOptOut(optOut: boolean): void {
     localStorage.setItem('usageLoggingOptOut', optOut ? 'true' : 'false');
+    // If opting out, end any current session
+    if (optOut && this.currentSessionId) {
+      this.endSession();
+    }
+  }
+
+  /**
+   * Check if circuit breaker is allowing requests
+   */
+  isLoggingEnabled(): boolean {
+    return !this.isOptedOut() && !this.shouldSkipLogging();
   }
 }
 
@@ -958,6 +1010,11 @@ async function saveMessageToBackend(data: {
   usage_output_tokens?: number;
   usage_total_tokens?: number;
 }): Promise<void> {
+  // Skip if user has opted out - don't even call the backend
+  if (loggingService.isOptedOut() || !loggingService.isLoggingEnabled()) {
+    return;
+  }
+
   const token = LoggingService.authToken;
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -967,18 +1024,14 @@ async function saveMessageToBackend(data: {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  if (loggingService.isOptedOut()) {
-    headers['X-Logging-Opt-Out'] = 'true';
-  }
-
   try {
-    await fetch('/.netlify/functions/logging/saveMessage', {
+    await fetch('/.netlify/functions/logging-saveMessage', {
       method: 'POST',
       headers,
       body: JSON.stringify(data),
     });
   } catch (error) {
-    console.error('Failed to save message:', error);
+    console.error('[ChatService] Failed to save message:', error);
     // Don't throw - logging failures shouldn't break the app
   }
 }
@@ -1044,40 +1097,56 @@ onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any
 Add imports:
 ```typescript
 import { loggingService, LoggingService } from './services/loggingService';
-import { saveSnapshot } from './services/snapshotService';
+import { saveSnapshot, saveSnapshotDebounced } from './services/snapshotService';
 ```
 
-Add session initialization in useEffect:
+Add session initialization in useEffect (AFTER data is loaded):
 ```typescript
+// Set auth token for logging service (mirrors ChartService pattern)
 useEffect(() => {
-  // Initialize logging session on mount
-  const initSession = async () => {
-    if (currentChartId) {
-      await loggingService.initializeSession(currentChartId);
+  if (accessToken) {
+    LoggingService.setAuthToken(accessToken);
+  } else {
+    LoggingService.setAuthToken(null);
+  }
+}, [accessToken]);
 
-      // Save initial snapshot
-      const sessionId = loggingService.getCurrentSessionId();
-      if (sessionId) {
-        await saveSnapshot({
-          session_id: sessionId,
-          chart_id: currentChartId,
-          graph_data: data,
-          edit_type: 'initial',
-        });
-      }
+// Initialize logging session AFTER chart data is fully loaded
+useEffect(() => {
+  // Wait for data to be loaded before initializing session
+  if (!currentChartId || !data || dataLoading) return;
+
+  // Skip if user has opted out
+  if (loggingService.isOptedOut()) return;
+
+  const initSession = async () => {
+    const sessionId = await loggingService.initializeSession(currentChartId);
+
+    // Save initial snapshot only if session was created
+    if (sessionId) {
+      await saveSnapshot({
+        session_id: sessionId,
+        chart_id: currentChartId,
+        graph_data: data,
+        edit_type: 'initial',
+      });
     }
   };
 
   initSession();
+}, [currentChartId, data, dataLoading]);
 
-  // Set auth token for logging service
-  if (accessToken) {
-    LoggingService.setAuthToken(accessToken);
-  }
+// Throttled activity listener for session timeout (30 second throttle)
+useEffect(() => {
+  const lastActivityRef = { current: 0 };
+  const ACTIVITY_THROTTLE_MS = 30000; // 30 seconds
 
-  // Reset timeout on user activity
   const handleActivity = () => {
-    loggingService.resetSessionTimeout();
+    const now = Date.now();
+    if (now - lastActivityRef.current > ACTIVITY_THROTTLE_MS) {
+      lastActivityRef.current = now;
+      loggingService.resetSessionTimeout();
+    }
   };
 
   window.addEventListener('mousemove', handleActivity);
@@ -1089,12 +1158,12 @@ useEffect(() => {
     window.removeEventListener('mousemove', handleActivity);
     window.removeEventListener('keypress', handleActivity);
   };
-}, [currentChartId, accessToken]);
+}, []);
 ```
 
-Update `handleDataChange` to save snapshots:
+Update `handleDataChange` to save debounced snapshots for manual edits:
 ```typescript
-const handleDataChange = async (
+const handleDataChange = (
   newData: ToCData,
   editType: 'manual_edit' | 'undo' | 'redo' = 'manual_edit'
 ) => {
@@ -1105,10 +1174,11 @@ const handleDataChange = async (
   // Save to backend (existing logic)
   debouncedSave(newData);
 
-  // Save snapshot for logging
+  // Save debounced snapshot for logging (2 second trailing debounce)
+  // This prevents flooding the database with snapshots during rapid edits
   const sessionId = loggingService.getCurrentSessionId();
-  if (sessionId && currentChartId) {
-    await saveSnapshot({
+  if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
+    saveSnapshotDebounced({
       session_id: sessionId,
       chart_id: currentChartId,
       graph_data: newData,
@@ -1234,7 +1304,45 @@ interface SaveSnapshotParams {
   error_message?: string | null;
 }
 
+// Debounce state for manual edits
+let snapshotTimeout: NodeJS.Timeout | null = null;
+let pendingSnapshot: SaveSnapshotParams | null = null;
+const DEBOUNCE_MS = 2000; // 2 second debounce
+
+/**
+ * Save snapshot with debouncing (for manual edits)
+ * Batches rapid edits into single snapshot
+ */
+export function saveSnapshotDebounced(params: SaveSnapshotParams): void {
+  // Skip if user has opted out
+  if (loggingService.isOptedOut() || !loggingService.isLoggingEnabled()) {
+    return;
+  }
+
+  pendingSnapshot = params;
+
+  if (snapshotTimeout) {
+    clearTimeout(snapshotTimeout);
+  }
+
+  snapshotTimeout = setTimeout(async () => {
+    if (pendingSnapshot) {
+      await saveSnapshot(pendingSnapshot);
+      pendingSnapshot = null;
+    }
+  }, DEBOUNCE_MS);
+}
+
+/**
+ * Save snapshot immediately (for AI edits and initial snapshots)
+ * AI edits need immediate save to preserve message link
+ */
 export async function saveSnapshot(params: SaveSnapshotParams): Promise<void> {
+  // Skip if user has opted out
+  if (loggingService.isOptedOut() || !loggingService.isLoggingEnabled()) {
+    return;
+  }
+
   const token = LoggingService.authToken;
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -1244,141 +1352,175 @@ export async function saveSnapshot(params: SaveSnapshotParams): Promise<void> {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  if (loggingService.isOptedOut()) {
-    headers['X-Logging-Opt-Out'] = 'true';
-  }
-
   try {
-    await fetch('/.netlify/functions/logging/saveSnapshot', {
+    await fetch('/.netlify/functions/logging-saveSnapshot', {
       method: 'POST',
       headers,
       body: JSON.stringify(params),
     });
   } catch (error) {
-    console.error('Failed to save snapshot:', error);
+    console.error('[SnapshotService] Failed to save snapshot:', error);
     // Don't throw - logging failures shouldn't break the app
+  }
+}
+
+/**
+ * Flush any pending debounced snapshot (call before page unload)
+ */
+export function flushPendingSnapshot(): void {
+  if (snapshotTimeout) {
+    clearTimeout(snapshotTimeout);
+    snapshotTimeout = null;
+  }
+  if (pendingSnapshot) {
+    // Fire and forget - can't await on page unload
+    saveSnapshot(pendingSnapshot);
+    pendingSnapshot = null;
   }
 }
 ```
 
 ### Phase 4: Privacy & Opt-Out UI
 
-**Duration**: 1 day
+#### 4.1 Update Existing Privacy Popup
 
-#### 4.1 Opt-Out Component
+**File**: `src/components/PrivacyPolicyPopup.tsx` (modify existing)
 
-**File**: `src/components/UsageLoggingBanner.tsx` (new file)
+Add a checkbox for usage logging consent to the existing privacy popup:
 
 ```typescript
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { XMarkIcon, ShieldCheckIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
 import { loggingService } from '../services/loggingService';
 
-export const UsageLoggingBanner: React.FC = () => {
-  const [isOptedOut, setIsOptedOut] = useState(false);
-  const [showBanner, setShowBanner] = useState(false);
+export function PrivacyPolicyPopup() {
+  const [isVisible, setIsVisible] = useState(false);
+  const [allowLogging, setAllowLogging] = useState(true); // Default to opted-in
+  const location = useLocation();
 
   useEffect(() => {
-    // Check if user has already made a choice
-    const hasSeenBanner = localStorage.getItem('loggingBannerSeen') === 'true';
-    const optedOut = loggingService.isOptedOut();
+    // Only show privacy policy on edit routes (not on view-only chart routes)
+    const isChartRoute = location.pathname.includes('/chart/');
+    const isViewRoute = location.pathname.includes('/view');
 
-    setIsOptedOut(optedOut);
-    setShowBanner(!hasSeenBanner);
-  }, []);
+    // Don't show on view-only routes
+    if (isChartRoute || isViewRoute) {
+      return;
+    }
 
-  const handleOptOut = (optOut: boolean) => {
-    loggingService.setOptOut(optOut);
-    setIsOptedOut(optOut);
-    localStorage.setItem('loggingBannerSeen', 'true');
-    setShowBanner(false);
+    // Check if user has already accepted the privacy policy
+    const hasAccepted = localStorage.getItem('privacyPolicyAccepted');
+    if (!hasAccepted) {
+      // Show popup after a short delay to ensure smooth page load
+      setTimeout(() => {
+        setIsVisible(true);
+      }, 1000);
+    }
+  }, [location]);
+
+  const handleAccept = () => {
+    // Store acceptance in localStorage
+    localStorage.setItem('privacyPolicyAccepted', 'true');
+    localStorage.setItem('privacyPolicyAcceptedDate', new Date().toISOString());
+
+    // Store usage logging preference
+    loggingService.setOptOut(!allowLogging);
+
+    setIsVisible(false);
   };
 
-  const handleDismiss = () => {
-    localStorage.setItem('loggingBannerSeen', 'true');
-    setShowBanner(false);
+  const handleClose = () => {
+    // Closing without explicit choice = accept with logging enabled
+    handleAccept();
   };
 
-  if (!showBanner) {
+  if (!isVisible) {
     return null;
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-blue-50 border-t border-blue-200 p-4 shadow-lg z-50">
-      <div className="max-w-4xl mx-auto flex items-center justify-between">
-        <div className="flex-1 pr-4">
-          <p className="text-sm text-gray-800">
-            <strong>Help us improve:</strong> We collect anonymized usage data
-            (chat messages and graph edits) to improve our AI assistant.
-            Your data is used solely for research and is not shared with third parties.
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black bg-opacity-50" />
+
+      {/* Modal */}
+      <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6 animate-fadeIn">
+        {/* Close button */}
+        <button
+          onClick={handleClose}
+          className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+          aria-label="Close"
+        >
+          <XMarkIcon className="w-5 h-5" />
+        </button>
+
+        {/* Icon */}
+        <div className="flex justify-center mb-4">
+          <div className="p-3 bg-blue-100 rounded-full">
+            <ShieldCheckIcon className="w-8 h-8 text-blue-600" />
+          </div>
+        </div>
+
+        {/* Title */}
+        <h2 className="text-xl font-semibold text-gray-900 text-center mb-4">
+          Privacy & Data Protection
+        </h2>
+
+        {/* Content */}
+        <div className="space-y-3 mb-6">
+          <p className="text-sm text-gray-600 text-center">
+            We value your privacy and are committed to protecting your data.
+          </p>
+
+          <p className="text-xs text-gray-500 text-center">
+            By using this application, you agree to our privacy practices.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => handleOptOut(false)}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+
+        {/* Usage Logging Checkbox */}
+        <div className="mb-6 p-3 bg-gray-50 rounded-lg">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allowLogging}
+              onChange={(e) => setAllowLogging(e.target.checked)}
+              className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-800">
+                Help improve AI features
+              </span>
+              <p className="text-xs text-gray-500 mt-1">
+                Share anonymized usage data (chat messages and graph edits) to help us improve the AI assistant.
+              </p>
+            </div>
+          </label>
+        </div>
+
+        {/* Actions */}
+        <div className="space-y-3">
+          <a
+            href="https://docs.google.com/document/d/1rjFIogfs_xGAUmO68Ci1UJOTtpJ2jWvwllJRl7k_sN4/edit?usp=sharing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
           >
-            Allow
-          </button>
+            <DocumentTextIcon className="w-4 h-4" />
+            View Full Privacy Policy
+          </a>
+
           <button
-            onClick={() => handleOptOut(true)}
-            className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+            onClick={handleAccept}
+            className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
           >
-            Opt Out
-          </button>
-          <button
-            onClick={handleDismiss}
-            className="px-4 py-2 text-gray-600 hover:text-gray-800"
-          >
-            Dismiss
+            I Understand
           </button>
         </div>
       </div>
     </div>
   );
-};
-```
-
-#### 4.2 Settings Page Integration
-
-Add opt-out toggle to settings page:
-
-```typescript
-import { loggingService } from '../services/loggingService';
-
-const SettingsPage: React.FC = () => {
-  const [optedOut, setOptedOut] = useState(loggingService.isOptedOut());
-
-  const handleToggle = () => {
-    const newValue = !optedOut;
-    loggingService.setOptOut(newValue);
-    setOptedOut(newValue);
-  };
-
-  return (
-    <div className="settings-page">
-      {/* Other settings... */}
-
-      <div className="setting-item">
-        <h3>Usage Data Collection</h3>
-        <label>
-          <input
-            type="checkbox"
-            checked={!optedOut}
-            onChange={handleToggle}
-          />
-          <span>
-            Allow usage data collection to help improve AI features
-          </span>
-        </label>
-        <p className="text-sm text-gray-600">
-          We collect chat messages and graph edits to evaluate and improve
-          our AI assistant's prompt engineering. All data is anonymized and
-          used solely for research purposes.
-        </p>
-      </div>
-    </div>
-  );
-};
+}
 ```
 
 ---
@@ -1400,11 +1542,12 @@ All endpoints accept optional `Authorization: Bearer <token>` header:
 - If present: User ID extracted from JWT token
 - If absent: User treated as anonymous (`user_id = NULL`)
 
-### Opt-Out Header
+### Opt-Out Behavior
 
-All endpoints respect `X-Logging-Opt-Out: true` header:
-- If present: Data saved with `opted_out = true`
-- Queries for analysis should filter `WHERE opted_out = false`
+Opt-out is handled entirely on the frontend:
+- If user has opted out, logging API endpoints are never called
+- No data is stored for opted-out users
+- This is simpler and more privacy-respecting than storing flagged data
 
 ---
 
@@ -1412,18 +1555,16 @@ All endpoints respect `X-Logging-Opt-Out: true` header:
 
 ### Implementation Details
 
-1. **Opt-out banner**: Shown on first visit to any chart
-2. **Settings toggle**: Available in user settings
-3. **LocalStorage key**: `usageLoggingOptOut` (true/false)
-4. **Database flag**: `opted_out` column in all tables
-5. **Header propagation**: `X-Logging-Opt-Out` sent with all API requests
+1. **Consent checkbox**: Integrated into existing PrivacyPolicyPopup on first visit
+2. **LocalStorage key**: `usageLoggingOptOut` (true/false)
+3. **Frontend enforcement**: If opted out, logging endpoints are never called
+4. **No data stored for opted-out users**: Simpler and more privacy-respecting
 
 ### Data Retention Policy
 
-- **Opted-out data**: Flagged but not deleted (for audit purposes)
-- **Query filtering**: All analysis queries must include `WHERE opted_out = false`
+- **Opted-out data**: Not stored at all (frontend skips API calls)
 - **Anonymization**: No PII stored; user_id is Auth0 subject identifier
-- **Retention period**: TBD (recommend 1 year, then archive/delete)
+- **Retention period**: Data retained indefinitely for evaluation purposes
 
 ### GDPR/Privacy Compliance
 
@@ -1451,7 +1592,6 @@ SELECT
   lm.message_id as event_id
 FROM logging_messages lm
 WHERE lm.session_id = 'TARGET_SESSION_ID'
-  AND lm.opted_out = false
 
 UNION ALL
 
@@ -1465,7 +1605,6 @@ SELECT
   ls.id::text as event_id
 FROM logging_snapshots ls
 WHERE ls.session_id = 'TARGET_SESSION_ID'
-  AND ls.opted_out = false
 
 ORDER BY timestamp;
 ```
@@ -1479,8 +1618,7 @@ SELECT
   SUM(CASE WHEN edit_success THEN 1 ELSE 0 END) as successful_edits,
   ROUND(100.0 * SUM(CASE WHEN edit_success THEN 1 ELSE 0 END) / COUNT(*), 2) as success_rate_percent
 FROM logging_snapshots
-WHERE edit_type = 'ai_edit'
-  AND opted_out = false;
+WHERE edit_type = 'ai_edit';
 ```
 
 ### 3. Prompts That Lead to Failures
@@ -1495,7 +1633,6 @@ FROM logging_snapshots ls
 JOIN logging_messages lm ON ls.triggered_by_message_id = lm.message_id
 WHERE ls.edit_type = 'ai_edit'
   AND ls.edit_success = false
-  AND ls.opted_out = false
 GROUP BY lm.content
 ORDER BY failure_count DESC
 LIMIT 20;
@@ -1515,13 +1652,11 @@ SELECT json_build_object(
     SELECT json_agg(row_to_json(m) ORDER BY m.timestamp)
     FROM logging_messages m
     WHERE m.session_id = 'TARGET_SESSION_ID'
-      AND m.opted_out = false
   ),
   'snapshots', (
     SELECT json_agg(row_to_json(ls) ORDER BY ls.sequence_number)
     FROM logging_snapshots ls
     WHERE ls.session_id = 'TARGET_SESSION_ID'
-      AND ls.opted_out = false
   )
 ) as session_data;
 ```
@@ -1557,7 +1692,6 @@ LEFT JOIN LATERAL (
   LIMIT 1
 ) lm_user ON true
 WHERE ls.edit_type = 'ai_edit'
-  AND ls.opted_out = false
 ORDER BY ls.timestamp;
 ```
 
@@ -1750,24 +1884,24 @@ If critical issues occur:
 
 ## Appendix A: Complete Migration SQL
 
-**File**: `database/migrations/add-usage-logging.sql`
+**File**: `database/migrations/004-add-usage-logging.sql`
 
 ```sql
 -- Migration: Usage Logging System
--- Created: 2025-11-14
+-- Created: 2025-12-04
 -- Purpose: Track user sessions, chat messages, and graph edits for AI evaluation
+-- Note: Opted-out users' data is not stored at all (handled on frontend)
 
 BEGIN;
 
 -- Table 1: Session tracking
 CREATE TABLE logging_sessions (
   session_id UUID PRIMARY KEY,
-  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE CASCADE,
+  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
   user_id TEXT,
   user_email TEXT,
   started_at TIMESTAMP DEFAULT NOW(),
   ended_at TIMESTAMP,
-  opted_out BOOLEAN DEFAULT FALSE,
   user_agent TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
@@ -1783,7 +1917,7 @@ CREATE TABLE logging_messages (
   id SERIAL PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES logging_sessions(session_id) ON DELETE CASCADE,
   message_id UUID NOT NULL UNIQUE,
-  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE CASCADE,
+  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
   role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
   content TEXT NOT NULL,
   timestamp TIMESTAMP DEFAULT NOW(),
@@ -1792,7 +1926,6 @@ CREATE TABLE logging_messages (
   usage_total_tokens INTEGER,
   user_id TEXT,
   user_email TEXT,
-  opted_out BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -1808,7 +1941,7 @@ CREATE TABLE logging_snapshots (
   id SERIAL PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES logging_sessions(session_id) ON DELETE CASCADE,
   sequence_number INTEGER NOT NULL,
-  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE CASCADE,
+  chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
   graph_data JSONB NOT NULL,
   timestamp TIMESTAMP DEFAULT NOW(),
   edit_type VARCHAR(20) NOT NULL CHECK (edit_type IN ('ai_edit', 'manual_edit', 'undo', 'redo', 'initial')),
@@ -1819,7 +1952,6 @@ CREATE TABLE logging_snapshots (
   user_id TEXT,
   user_email TEXT,
   is_authenticated BOOLEAN DEFAULT FALSE,
-  opted_out BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(session_id, sequence_number)
 );
@@ -1829,7 +1961,6 @@ CREATE INDEX idx_logging_snapshots_chart ON logging_snapshots(chart_id);
 CREATE INDEX idx_logging_snapshots_message ON logging_snapshots(triggered_by_message_id) WHERE triggered_by_message_id IS NOT NULL;
 CREATE INDEX idx_logging_snapshots_timestamp ON logging_snapshots(timestamp);
 CREATE INDEX idx_logging_snapshots_edit_type ON logging_snapshots(edit_type);
-CREATE INDEX idx_logging_snapshots_opted_out ON logging_snapshots(opted_out, timestamp) WHERE opted_out = false;
 
 COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for replay and evaluation';
 
@@ -1851,26 +1982,23 @@ COMMIT;
 react-theory-of-change-main/
 ├── database/
 │   └── migrations/
-│       └── add-usage-logging.sql
+│       └── 004-add-usage-logging.sql
 ├── netlify/
 │   └── functions/
-│       ├── logging/
-│       │   ├── createSession.ts
-│       │   ├── endSession.ts
-│       │   ├── saveMessage.ts
-│       │   └── saveSnapshot.ts
+│       ├── logging-createSession.ts (new)
+│       ├── logging-endSession.ts (new)
+│       ├── logging-saveMessage.ts (new)
+│       ├── logging-saveSnapshot.ts (new)
 │       └── utils/
 │           └── auth.ts (existing)
 └── src/
     ├── components/
-    │   ├── UsageLoggingBanner.tsx (new)
+    │   ├── PrivacyPolicyPopup.tsx (modified - add logging checkbox)
     │   └── ChatInterface.tsx (modified)
     ├── services/
     │   ├── loggingService.ts (new)
     │   ├── snapshotService.ts (new)
     │   └── chatService.ts (modified)
-    ├── utils/
-    │   └── graphEdits.ts (modified - return type change)
     └── App.tsx (modified)
 ```
 
