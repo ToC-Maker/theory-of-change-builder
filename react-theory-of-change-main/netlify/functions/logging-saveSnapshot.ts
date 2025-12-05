@@ -11,7 +11,7 @@ const headers = {
 
 interface SaveSnapshotRequest {
   session_id: string;
-  chart_id: string;
+  chart_id?: string | null;
   graph_data: any;
   edit_type: 'ai_edit' | 'manual_edit' | 'undo' | 'redo' | 'initial';
   triggered_by_message_id?: string | null;
@@ -32,8 +32,8 @@ export const handler: Handler = async (event) => {
   try {
     const data = JSON.parse(event.body || '{}') as SaveSnapshotRequest;
 
-    // Validate required fields
-    if (!data.session_id || !data.chart_id || !data.graph_data || !data.edit_type) {
+    // Validate required fields (chart_id can be null for new unsaved charts)
+    if (!data.session_id || !data.graph_data || !data.edit_type) {
       return {
         statusCode: 400,
         headers,
@@ -79,7 +79,7 @@ export const handler: Handler = async (event) => {
         is_authenticated
       )
       SELECT
-        ${data.session_id}, seq, ${data.chart_id}, ${JSON.stringify(data.graph_data)}::jsonb,
+        ${data.session_id}, seq, ${data.chart_id || null}, ${JSON.stringify(data.graph_data)}::jsonb,
         ${data.edit_type}, ${data.triggered_by_message_id || null},
         ${data.edit_instructions ? JSON.stringify(data.edit_instructions) : null}::jsonb,
         ${data.edit_success !== false}, ${data.error_message || null},

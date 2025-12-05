@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react"
 import { ToCData, Node } from "../types"
 import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon, ClockIcon, Bars3Icon } from "@heroicons/react/24/outline"
 import { ChartService, CreateChartResponse, UserChart } from "../services/chartService"
+import { loggingService } from "../services/loggingService"
 import { shortcuts } from "../utils/keyboardShortcuts"
 import { Tooltip } from 'react-tooltip'
 import { useAuth0 } from "@auth0/auth0-react"
@@ -279,6 +280,9 @@ export function EditToolbar({
         setShareData(response)
         // Store the edit token locally
         ChartService.saveEditToken(response.chartId, response.editToken)
+
+        // Update logging session with the new chartId (first save)
+        loggingService.updateSessionChartId(response.chartId)
 
         // For anonymous users, also save to recent charts localStorage
         if (!isAuthenticated) {
