@@ -1,0 +1,9 @@
+{
+  "deno.enable": true,
+  "deno.enablePaths": [
+    "react-theory-of-change-main/netlify/edge-functions"
+  ],
+  "deno.unstable": true,
+  "deno.importMap": "react-theory-of-change-main/.netlify/edge-functions-import-map.json",
+  "deno.path": "/home/moiri/.config/netlify/deno-cli/deno"
+}

@@ -1124,7 +1124,13 @@ function ToCViewer() {
     };
   }, [isSaving]);
 
-  // Cleanup timeouts on unmount
+  // Store currentEditToken in a ref so cleanup can access latest value without re-running
+  const currentEditTokenRef = useRef(currentEditToken);
+  useEffect(() => {
+    currentEditTokenRef.current = currentEditToken;
+  }, [currentEditToken]);
+
+  // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
     return () => {
       if (undoTimeoutRef.current) {
@@ -1133,15 +1139,15 @@ function ToCViewer() {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         // Save any pending changes immediately on unmount
-        if (pendingChangesRef.current && currentEditToken) {
-          ChartService.updateChart(currentEditToken, pendingChangesRef.current).catch(console.error);
+        if (pendingChangesRef.current && currentEditTokenRef.current) {
+          ChartService.updateChart(currentEditTokenRef.current, pendingChangesRef.current).catch(console.error);
         }
       }
       // Flush any pending snapshots and end logging session
       flushPendingSnapshot();
       loggingService.endSession();
     };
-  }, [currentEditToken]);
+  }, []);
 
   // Throttled activity listener for logging session timeout (30 second throttle)
   useEffect(() => {
