@@ -5,7 +5,7 @@ const API_BASE = '/.netlify/functions';
 
 export interface SaveSnapshotParams {
   session_id: string;
-  chart_id: string | null;
+  chart_id: string;
   graph_data: ToCData;
   edit_type: 'ai_edit' | 'manual_edit' | 'undo' | 'redo' | 'initial';
   triggered_by_message_id?: string | null;
