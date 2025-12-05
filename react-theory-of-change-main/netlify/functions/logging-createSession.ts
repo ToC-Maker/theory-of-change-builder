@@ -11,7 +11,7 @@ const headers = {
 
 interface CreateSessionRequest {
   session_id: string;
-  chart_id: string;
+  chart_id?: string | null;
   user_agent?: string;
 }
 
@@ -27,11 +27,11 @@ export const handler: Handler = async (event) => {
   try {
     const { session_id, chart_id, user_agent } = JSON.parse(event.body || '{}') as CreateSessionRequest;
 
-    if (!session_id || !chart_id) {
+    if (!session_id) {
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: 'session_id and chart_id required' })
+        body: JSON.stringify({ error: 'session_id required' })
       };
     }
 
@@ -59,9 +59,10 @@ export const handler: Handler = async (event) => {
     const sql = neon(DATABASE_URL);
 
     // Insert session - ON CONFLICT updates started_at for session resume
+    // chart_id can be null for new unsaved charts
     const result = await sql`
       INSERT INTO logging_sessions (session_id, chart_id, user_id, user_email, user_agent)
-      VALUES (${session_id}, ${chart_id}, ${user_id}, ${user_email}, ${user_agent || null})
+      VALUES (${session_id}, ${chart_id || null}, ${user_id}, ${user_email}, ${user_agent || null})
       ON CONFLICT (session_id) DO UPDATE
       SET started_at = NOW()
       RETURNING *

@@ -2,7 +2,7 @@ const API_BASE = '/.netlify/functions';
 
 export interface LoggingSession {
   session_id: string;
-  chart_id: string;
+  chart_id: string | null;
   user_id?: string;
   started_at: string;
   ended_at?: string;
@@ -64,23 +64,29 @@ class LoggingServiceClass {
 
   /**
    * Initialize or resume a session
-   * IMPORTANT: Only call this AFTER chart data is fully loaded
+   * Can be called with null chartId for new unsaved charts
    */
-  async initializeSession(chartId: string): Promise<string | null> {
+  async initializeSession(chartId: string | null): Promise<string | null> {
     // Don't initialize if user has opted out
     if (this.isOptedOut()) {
       return null;
     }
 
-    // Check if we have an existing valid session for this chart
+    // Check if we have an existing valid session
     const existingSessionId = localStorage.getItem('loggingSessionId');
     const existingChartId = localStorage.getItem('loggingChartId');
     const sessionExpiry = localStorage.getItem('loggingSessionExpiry');
 
-    if (existingSessionId && sessionExpiry && existingChartId === chartId) {
+    // For null chartId (new ToC), check if existing session also has no chart
+    // For non-null chartId, check if it matches
+    const chartIdMatches = chartId === null
+      ? existingChartId === ''
+      : existingChartId === chartId;
+
+    if (existingSessionId && sessionExpiry && chartIdMatches) {
       const expiryTime = parseInt(sessionExpiry, 10);
       if (Date.now() < expiryTime) {
-        // Session still valid for this chart
+        // Session still valid
         this.currentSessionId = existingSessionId;
         this.currentChartId = chartId;
         this.resetSessionTimeout();
@@ -97,7 +103,8 @@ class LoggingServiceClass {
       this.currentSessionId = sessionId;
       this.currentChartId = chartId;
       localStorage.setItem('loggingSessionId', sessionId);
-      localStorage.setItem('loggingChartId', chartId);
+      // Store empty string for null chartId (localStorage doesn't support null)
+      localStorage.setItem('loggingChartId', chartId ?? '');
       this.resetSessionTimeout();
       this.recordSuccess();
 
@@ -112,7 +119,7 @@ class LoggingServiceClass {
   /**
    * Create session on backend
    */
-  private async createSession(sessionId: string, chartId: string): Promise<void> {
+  private async createSession(sessionId: string, chartId: string | null): Promise<void> {
     if (this.shouldSkipLogging()) {
       throw new Error('Circuit breaker open - skipping logging');
     }
@@ -138,6 +145,46 @@ class LoggingServiceClass {
 
     if (!response.ok) {
       throw new Error(`Failed to create session: ${response.status}`);
+    }
+  }
+
+  /**
+   * Update the session's chart_id after first save
+   */
+  async updateSessionChartId(chartId: string): Promise<void> {
+    if (!this.currentSessionId || this.shouldSkipLogging()) {
+      return;
+    }
+
+    const token = this.getAuthToken();
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+    };
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/logging-updateSession`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          session_id: this.currentSessionId,
+          chart_id: chartId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update session: ${response.status}`);
+      }
+
+      this.currentChartId = chartId;
+      localStorage.setItem('loggingChartId', chartId);
+      this.recordSuccess();
+    } catch (error) {
+      console.error('[LoggingService] Failed to update session chartId:', error);
+      this.recordFailure();
     }
   }
 
@@ -238,7 +285,7 @@ class LoggingServiceClass {
    */
   async saveMessage(data: {
     message_id: string;
-    chart_id: string;
+    chart_id: string | null;
     role: 'user' | 'assistant';
     content: string;
     usage_input_tokens?: number;
