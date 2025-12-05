@@ -552,6 +552,7 @@ function ToCViewer() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
+  const [currentChartId, setCurrentChartId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
   const [isManualSyncing, setIsManualSyncing] = useState(false)
@@ -832,12 +833,11 @@ function ToCViewer() {
     pendingChangesRef.current = newData;
 
     // Save debounced snapshot for logging (manual edits)
-    // Use loggingService.getCurrentChartId() since it gets updated on first save
     const sessionId = loggingService.getCurrentSessionId();
-    if (sessionId && loggingService.isLoggingEnabled()) {
+    if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
       saveSnapshotDebounced({
         session_id: sessionId,
-        chart_id: loggingService.getCurrentChartId(),
+        chart_id: currentChartId,
         graph_data: newData,
         edit_type: 'manual_edit',
       });
@@ -912,10 +912,10 @@ function ToCViewer() {
 
       // Save undo snapshot for logging
       const sessionId = loggingService.getCurrentSessionId();
-      if (sessionId && loggingService.isLoggingEnabled()) {
+      if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
         saveSnapshotDebounced({
           session_id: sessionId,
-          chart_id: loggingService.getCurrentChartId(),
+          chart_id: currentChartId,
           graph_data: previousState,
           edit_type: 'undo',
         });
@@ -948,7 +948,7 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken]);
+  }, [undoHistory, data, saveToLocalStorage, currentEditToken, currentChartId]);
 
   const handleRedo = useCallback(() => {
     // Clear any pending saves first
@@ -978,10 +978,10 @@ function ToCViewer() {
 
       // Save redo snapshot for logging
       const sessionId = loggingService.getCurrentSessionId();
-      if (sessionId && loggingService.isLoggingEnabled()) {
+      if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
         saveSnapshotDebounced({
           session_id: sessionId,
-          chart_id: loggingService.getCurrentChartId(),
+          chart_id: currentChartId,
           graph_data: nextState,
           edit_type: 'redo',
         });
@@ -1014,7 +1014,7 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken]);
+  }, [redoHistory, data, saveToLocalStorage, currentEditToken, currentChartId]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -1144,15 +1144,13 @@ function ToCViewer() {
   }, [currentEditToken]);
 
   // Throttled activity listener for logging session timeout (30 second throttle)
-  // Works for both existing charts and new ToCs (session initialized on load)
   useEffect(() => {
+    if (!currentChartId) return;
+
     const lastActivityRef = { current: 0 };
     const ACTIVITY_THROTTLE_MS = 30000; // 30 seconds
 
     const handleActivity = () => {
-      // Only reset timeout if we have an active session
-      if (!loggingService.getCurrentSessionId()) return;
-
       const now = Date.now();
       if (now - lastActivityRef.current > ACTIVITY_THROTTLE_MS) {
         lastActivityRef.current = now;
@@ -1167,7 +1165,7 @@ function ToCViewer() {
       window.removeEventListener('mousemove', handleActivity);
       window.removeEventListener('keypress', handleActivity);
     };
-  }, []);
+  }, [currentChartId]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -1188,6 +1186,7 @@ function ToCViewer() {
           const result = await ChartService.getChartByEditToken(editToken);
           setData(result.chartData);
           setCurrentEditToken(editToken);
+          setCurrentChartId(result.chartId);
 
           // Initialize logging session after chart is loaded
           if (!loggingService.isOptedOut() && result.chartId) {
@@ -1221,23 +1220,9 @@ function ToCViewer() {
           // Save the loaded file data to localStorage for future use
           saveToLocalStorage(jsonData, filename)
         } else {
-          // Default to empty template (new ToC)
+          // Default to empty template
           setData(emptyTemplate)
           saveToLocalStorage(emptyTemplate)
-
-          // Initialize logging session for new ToC (with null chartId)
-          if (!loggingService.isOptedOut()) {
-            const sessionId = await loggingService.initializeSession(null);
-            if (sessionId) {
-              // Save initial snapshot with null chart_id
-              saveSnapshot({
-                session_id: sessionId,
-                chart_id: null,
-                graph_data: emptyTemplate,
-                edit_type: 'initial',
-              });
-            }
-          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load data')

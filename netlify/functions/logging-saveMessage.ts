@@ -12,7 +12,7 @@ const headers = {
 interface SaveMessageRequest {
   session_id: string;
   message_id: string;
-  chart_id?: string | null;
+  chart_id: string;
   role: 'user' | 'assistant';
   content: string;
   usage_input_tokens?: number;
@@ -32,8 +32,8 @@ export const handler: Handler = async (event) => {
   try {
     const data = JSON.parse(event.body || '{}') as SaveMessageRequest;
 
-    // Validate required fields (chart_id can be null for new unsaved charts)
-    if (!data.session_id || !data.message_id || !data.role || !data.content) {
+    // Validate required fields
+    if (!data.session_id || !data.message_id || !data.chart_id || !data.role || !data.content) {
       return {
         statusCode: 400,
         headers,
@@ -70,7 +70,7 @@ export const handler: Handler = async (event) => {
         user_id, user_email
       )
       VALUES (
-        ${data.session_id}, ${data.message_id}, ${data.chart_id || null},
+        ${data.session_id}, ${data.message_id}, ${data.chart_id},
         ${data.role}, ${data.content},
         ${data.usage_input_tokens || null}, ${data.usage_output_tokens || null},
         ${data.usage_total_tokens || null},
