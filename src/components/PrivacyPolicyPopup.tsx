@@ -22,9 +22,12 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
       return;
     }
 
-    // Check if user has already accepted the privacy policy
+    // Check if user has already accepted the privacy policy AND made a logging choice
     const hasAccepted = localStorage.getItem('privacyPolicyAccepted');
-    if (!hasAccepted) {
+    const hasLoggingPreference = localStorage.getItem('usageLoggingOptOut') !== null;
+
+    // Show popup if: never accepted, OR accepted but never chose logging preference
+    if (!hasAccepted || !hasLoggingPreference) {
       // Show popup after a short delay to ensure smooth page load
       setTimeout(() => {
         setIsVisible(true);
