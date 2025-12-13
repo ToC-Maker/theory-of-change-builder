@@ -94,11 +94,18 @@ export const handler: Handler = async (event) => {
       body: JSON.stringify(result[0])
     };
   } catch (error) {
-    console.error('Error saving snapshot:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Error saving snapshot:', errorMessage);
+    if (error instanceof Error && error.stack) {
+      console.error('Stack:', error.stack);
+    }
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: 'Failed to save snapshot' })
+      body: JSON.stringify({
+        error: 'Failed to save snapshot',
+        details: errorMessage
+      })
     };
   }
 };
