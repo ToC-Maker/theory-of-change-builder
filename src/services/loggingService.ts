@@ -209,9 +209,15 @@ class LoggingServiceClass {
 
   /**
    * Check if user has opted out of logging
-   * Stored via PrivacyPolicyPopup checkbox
+   * Returns true if:
+   * - User explicitly opted out via checkbox
+   * - User hasn't accepted privacy policy yet (no consent = no logging)
    */
   isOptedOut(): boolean {
+    // No logging until privacy policy is accepted
+    if (localStorage.getItem('privacyPolicyAccepted') !== 'true') {
+      return true;
+    }
     return localStorage.getItem('usageLoggingOptOut') === 'true';
   }
 

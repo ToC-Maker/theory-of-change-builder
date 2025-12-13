@@ -726,6 +726,23 @@ function ToCViewer() {
     }
   }, [data]);
 
+  // Handler for when user accepts privacy policy
+  const handlePrivacyAccept = useCallback(async (loggingEnabled: boolean) => {
+    // Initialize logging session if user opted in and we have chart data
+    if (loggingEnabled && currentChartId && data) {
+      const sessionId = await loggingService.initializeSession(currentChartId);
+      if (sessionId) {
+        // Save initial snapshot
+        saveSnapshot({
+          session_id: sessionId,
+          chart_id: currentChartId,
+          graph_data: data,
+          edit_type: 'initial',
+        });
+      }
+    }
+  }, [currentChartId, data]);
+
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -1616,6 +1633,9 @@ function ToCViewer() {
           loading={loading}
         />
       </div>
+
+      {/* Privacy Policy Popup */}
+      <PrivacyPolicyPopup onAccept={handlePrivacyAccept} />
     </div>
   )
 }
@@ -1652,7 +1672,6 @@ function App() {
   return (
     <ApiKeyProvider>
       <Auth0RedirectHandler />
-      <PrivacyPolicyPopup />
       <Routes>
         {/* New URL-based routes */}
         <Route path="/" element={<ToCViewer />} />
