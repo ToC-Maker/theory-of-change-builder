@@ -108,7 +108,7 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
                 className="h-3.5 w-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 focus:ring-offset-0"
               />
               <span className="text-xs text-gray-400 group-hover:text-gray-500 transition-colors">
-                Help improve AI
+                Help improve AI by sharing usage data
               </span>
             </label>
 
@@ -116,9 +116,9 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
               href="https://docs.google.com/document/d/1rjFIogfs_xGAUmO68Ci1UJOTtpJ2jWvwllJRl7k_sN4/edit?usp=sharing"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-gray-400 hover:text-gray-500 transition-colors"
+              className="text-xs text-blue-600 hover:text-blue-700"
             >
-              Privacy Policy
+              View Privacy Policy →
             </a>
           </div>
         </div>
