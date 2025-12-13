@@ -61,7 +61,7 @@ function PrivacyModal({
         {hasAcceptedPrivacy ? (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
-              We collect chat messages and graph edits to improve AI features. No personal information is stored beyond what you share in your conversations.
+              We collect chat messages, graph edits, and basic session data to improve AI features.
             </p>
 
             <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
