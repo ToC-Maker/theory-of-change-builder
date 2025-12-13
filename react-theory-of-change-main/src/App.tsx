@@ -706,6 +706,26 @@ function ToCViewer() {
     }
   };
 
+  // Handler for when a new chart is created (auto-save or manual share)
+  const handleChartCreated = useCallback(async (editToken: string, chartId: string) => {
+    setCurrentEditToken(editToken);
+    setCurrentChartId(chartId);
+
+    // Initialize logging session for the new chart
+    if (!loggingService.isOptedOut() && data) {
+      const sessionId = await loggingService.initializeSession(chartId);
+      if (sessionId) {
+        // Save initial snapshot
+        saveSnapshot({
+          session_id: sessionId,
+          chart_id: chartId,
+          graph_data: data,
+          edit_type: 'initial',
+        });
+      }
+    }
+  }, [data]);
+
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -1527,7 +1547,7 @@ function ToCViewer() {
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
-              onEditTokenChange={setCurrentEditToken}
+              onEditTokenChange={handleChartCreated}
               viewportOffset={viewportOffset}
             />
           </div>
