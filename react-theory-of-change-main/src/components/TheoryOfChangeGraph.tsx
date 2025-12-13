@@ -53,7 +53,7 @@ export function ToC({
   zoomScale?: number
   camera?: { x: number; y: number; z: number }
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void
-  onEditTokenChange?: (token: string) => void
+  onEditTokenChange?: (token: string, chartId: string) => void
   viewportOffset?: { left: number; top: number; right: number; bottom: number }
 }) {
   const [data, setData] = useState<ToCData>(initialData)
