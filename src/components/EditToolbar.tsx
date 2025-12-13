@@ -47,8 +47,8 @@ interface EditToolbarProps {
   edgePopup?: any
   // Camera props for toolbar positioning
   camera?: { x: number; y: number; z: number }
-  // Callback to update the edit token when links are generated
-  onEditTokenChange?: (token: string) => void
+  // Callback to notify parent when chart is created/saved
+  onEditTokenChange?: (token: string, chartId: string) => void
   // Container size for embed code generation
   containerSize?: { width: number; height: number }
 }
@@ -300,9 +300,9 @@ export function EditToolbar({
 
         // Update the URL to the edit URL
         window.history.replaceState(null, '', `/edit/${response.editToken}`)
-        // Notify parent component about the new edit token
+        // Notify parent component about the new chart
         if (onEditTokenChange) {
-          onEditTokenChange(response.editToken)
+          onEditTokenChange(response.editToken, response.chartId)
         }
       }
     } catch (err) {
