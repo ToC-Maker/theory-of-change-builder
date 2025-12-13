@@ -3,7 +3,11 @@ import { useLocation } from 'react-router-dom';
 import { XMarkIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { loggingService } from '../services/loggingService';
 
-export function PrivacyPolicyPopup() {
+interface PrivacyPolicyPopupProps {
+  onAccept?: (loggingEnabled: boolean) => void;
+}
+
+export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [allowLogging, setAllowLogging] = useState(true); // Default to opted-in
   const location = useLocation();
@@ -37,6 +41,9 @@ export function PrivacyPolicyPopup() {
     loggingService.setOptOut(!allowLogging);
 
     setIsVisible(false);
+
+    // Notify parent to initialize logging if enabled
+    onAccept?.(allowLogging);
   };
 
   const handleClose = () => {
