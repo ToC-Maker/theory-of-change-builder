@@ -1,10 +1,25 @@
+import { ToCData } from '../types';
+import { EditInstruction } from '../utils/graphEdits';
+
 const API_BASE = '/.netlify/functions';
+
+export interface SaveSnapshotParams {
+  session_id: string;
+  chart_id: string;
+  graph_data: ToCData;
+  edit_type: 'ai_edit' | 'manual_edit' | 'undo' | 'redo' | 'initial';
+  triggered_by_message_id?: string | null;
+  edit_instructions?: EditInstruction[] | null;
+  edit_success?: boolean;
+  error_message?: string | null;
+}
 
 class LoggingServiceClass {
   private currentSessionId: string | null = null;
   private currentChartId: string | null = null;
   private sessionTimeout: ReturnType<typeof setTimeout> | null = null;
   private initializingPromise: Promise<string | null> | null = null;
+  private initializingChartId: string | null = null;
   private readonly SESSION_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
   // Circuit breaker state
@@ -12,6 +27,11 @@ class LoggingServiceClass {
   private lastFailureTime = 0;
   private readonly MAX_FAILURES = 3;
   private readonly RESET_AFTER_MS = 60000; // 1 minute
+
+  // Snapshot debounce state
+  private snapshotTimeout: ReturnType<typeof setTimeout> | null = null;
+  private pendingSnapshot: SaveSnapshotParams | null = null;
+  private readonly DEBOUNCE_MS = 2000; // 2 second debounce
 
   // Static auth token (set from App.tsx, mirrors ChartService pattern)
   private static authToken: string | null = null;
@@ -45,7 +65,7 @@ class LoggingServiceClass {
   /**
    * Circuit breaker: record a failure
    */
-  recordFailure(): void {
+  private recordFailure(): void {
     this.failureCount++;
     this.lastFailureTime = Date.now();
   }
@@ -53,8 +73,44 @@ class LoggingServiceClass {
   /**
    * Circuit breaker: reset on success
    */
-  recordSuccess(): void {
+  private recordSuccess(): void {
     this.failureCount = 0;
+  }
+
+  /**
+   * Build headers with auth token for API requests
+   */
+  private buildHeaders(): HeadersInit {
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    const token = this.getAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  /**
+   * Execute a fetch with circuit breaker protection.
+   * Records success/failure automatically. Returns the Response on success,
+   * or undefined if the circuit breaker is open or the request fails.
+   */
+  private async fetchWithCircuitBreaker(
+    url: string,
+    options: RequestInit
+  ): Promise<Response | undefined> {
+    if (this.shouldSkipLogging()) return undefined;
+
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      this.recordSuccess();
+      return response;
+    } catch (error) {
+      this.recordFailure();
+      throw error;
+    }
   }
 
   /**
@@ -62,13 +118,21 @@ class LoggingServiceClass {
    * IMPORTANT: Only call this AFTER chart data is fully loaded
    */
   async initializeSession(chartId: string): Promise<string | null> {
-    // Deduplicate concurrent calls
-    if (this.initializingPromise) return this.initializingPromise;
+    // Deduplicate concurrent calls for the same chart
+    if (this.initializingPromise) {
+      if (this.initializingChartId === chartId) {
+        return this.initializingPromise;
+      }
+      // Different chart requested — wait for the current init to finish, then start a new one
+      await this.initializingPromise;
+    }
+    this.initializingChartId = chartId;
     this.initializingPromise = this.doInitializeSession(chartId);
     try {
       return await this.initializingPromise;
     } finally {
       this.initializingPromise = null;
+      this.initializingChartId = null;
     }
   }
 
@@ -98,52 +162,29 @@ class LoggingServiceClass {
     const sessionId = crypto.randomUUID();
 
     try {
-      await this.createSession(sessionId, chartId);
+      await this.fetchWithCircuitBreaker(
+        `${API_BASE}/logging-createSession`,
+        {
+          method: 'POST',
+          headers: this.buildHeaders(),
+          body: JSON.stringify({
+            session_id: sessionId,
+            chart_id: chartId,
+            user_agent: navigator.userAgent,
+          }),
+        }
+      );
 
       this.currentSessionId = sessionId;
       this.currentChartId = chartId;
       localStorage.setItem('loggingSessionId', sessionId);
       localStorage.setItem('loggingChartId', chartId);
       this.resetSessionTimeout();
-      this.recordSuccess();
 
       return sessionId;
     } catch (error) {
       console.error('[LoggingService] Failed to create session:', error);
-      this.recordFailure();
       return null;
-    }
-  }
-
-  /**
-   * Create session on backend
-   */
-  private async createSession(sessionId: string, chartId: string): Promise<void> {
-    if (this.shouldSkipLogging()) {
-      throw new Error('Circuit breaker open - skipping logging');
-    }
-
-    const token = this.getAuthToken();
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}/logging-createSession`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        session_id: sessionId,
-        chart_id: chartId,
-        user_agent: navigator.userAgent,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to create session: ${response.status}`);
     }
   }
 
@@ -153,40 +194,35 @@ class LoggingServiceClass {
   async endSession(): Promise<void> {
     if (!this.currentSessionId || this.shouldSkipLogging()) return;
 
-    const token = this.getAuthToken();
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
     try {
-      const response = await fetch(`${API_BASE}/logging-endSession`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ session_id: this.currentSessionId }),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to end session: ${response.status}`);
-      }
-      this.recordSuccess();
+      await this.fetchWithCircuitBreaker(
+        `${API_BASE}/logging-endSession`,
+        {
+          method: 'POST',
+          headers: this.buildHeaders(),
+          body: JSON.stringify({ session_id: this.currentSessionId }),
+        }
+      );
+      this.clearSession();
     } catch (error) {
       console.error('[LoggingService] Failed to end session:', error);
-      this.recordFailure();
+      // Don't clear session state on failure — allows retry
     }
-
-    this.clearSession();
   }
 
   /**
    * End session via sendBeacon (reliable on page unload)
    */
   endSessionBeacon(): void {
-    if (!this.currentSessionId) return;
+    if (!this.currentSessionId || this.shouldSkipLogging()) return;
     const blob = new Blob(
       [JSON.stringify({ session_id: this.currentSessionId })],
       { type: 'application/json' }
     );
-    navigator.sendBeacon(`${API_BASE}/logging-endSession`, blob);
+    const queued = navigator.sendBeacon(`${API_BASE}/logging-endSession`, blob);
+    if (!queued) {
+      console.warn('[LoggingService] sendBeacon failed — payload may exceed ~64KB limit');
+    }
     this.clearSession();
   }
 
@@ -267,6 +303,82 @@ class LoggingServiceClass {
     return !this.isOptedOut() && !this.shouldSkipLogging();
   }
 
+  // ---------------------------------------------------------------------------
+  // Snapshot methods (moved from snapshotService)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Save snapshot immediately (for AI edits and initial snapshots).
+   * Also called internally after the debounce period.
+   */
+  async saveSnapshot(params: SaveSnapshotParams): Promise<void> {
+    if (!this.isLoggingEnabled()) return;
+
+    try {
+      await this.fetchWithCircuitBreaker(
+        `${API_BASE}/logging-saveSnapshot`,
+        {
+          method: 'POST',
+          headers: this.buildHeaders(),
+          body: JSON.stringify(params),
+        }
+      );
+    } catch (error) {
+      console.error('[LoggingService] Failed to save snapshot:', error);
+      // Don't throw - logging failures shouldn't break the app
+    }
+  }
+
+  /**
+   * Save snapshot with debouncing (for manual edits).
+   * Batches rapid edits into a single snapshot.
+   */
+  saveSnapshotDebounced(params: SaveSnapshotParams): void {
+    if (!this.isLoggingEnabled()) return;
+
+    this.pendingSnapshot = params;
+
+    if (this.snapshotTimeout) {
+      clearTimeout(this.snapshotTimeout);
+    }
+
+    this.snapshotTimeout = setTimeout(async () => {
+      if (this.pendingSnapshot) {
+        await this.saveSnapshot(this.pendingSnapshot);
+        this.pendingSnapshot = null;
+      }
+    }, this.DEBOUNCE_MS);
+  }
+
+  /**
+   * Flush any pending debounced snapshot via sendBeacon (reliable on page unload)
+   */
+  flushPendingSnapshot(): void {
+    if (this.snapshotTimeout) {
+      clearTimeout(this.snapshotTimeout);
+      this.snapshotTimeout = null;
+    }
+    if (this.pendingSnapshot) {
+      if (!this.isLoggingEnabled()) {
+        this.pendingSnapshot = null;
+        return;
+      }
+      const blob = new Blob(
+        [JSON.stringify(this.pendingSnapshot)],
+        { type: 'application/json' }
+      );
+      const queued = navigator.sendBeacon(`${API_BASE}/logging-saveSnapshot`, blob);
+      if (!queued) {
+        console.warn('[LoggingService] sendBeacon failed — payload may exceed ~64KB limit');
+      }
+      this.pendingSnapshot = null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Message logging
+  // ---------------------------------------------------------------------------
+
   /**
    * Save a message to the logging backend
    */
@@ -284,34 +396,77 @@ class LoggingServiceClass {
       return;
     }
 
-    const token = this.getAuthToken();
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
     try {
-      const response = await fetch(`${API_BASE}/logging-saveMessage`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          session_id: this.currentSessionId,
-          ...data,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to save message: ${response.status}`);
-      }
-      this.recordSuccess();
+      await this.fetchWithCircuitBreaker(
+        `${API_BASE}/logging-saveMessage`,
+        {
+          method: 'POST',
+          headers: this.buildHeaders(),
+          body: JSON.stringify({
+            session_id: this.currentSessionId,
+            ...data,
+          }),
+        }
+      );
     } catch (error) {
       console.error('[LoggingService] Failed to save message:', error);
-      this.recordFailure();
       // Don't throw - logging failures shouldn't break the app
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // High-level convenience methods (for ChatInterface)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Log a user or assistant message. Guards on active session internally.
+   */
+  logUserMessage(params: {
+    messageId: string;
+    role: 'user' | 'assistant';
+    content: string;
+    tokenUsage?: { input_tokens?: number; output_tokens?: number };
+  }): void {
+    const chartId = this.currentChartId;
+    if (!chartId) return;
+
+    this.saveMessage({
+      message_id: params.messageId,
+      chart_id: chartId,
+      role: params.role,
+      content: params.content,
+      usage_input_tokens: params.tokenUsage?.input_tokens,
+      usage_output_tokens: params.tokenUsage?.output_tokens,
+      usage_total_tokens: params.tokenUsage
+        ? (params.tokenUsage.input_tokens || 0) + (params.tokenUsage.output_tokens || 0)
+        : undefined,
+    });
+  }
+
+  /**
+   * Log an AI edit (success or failure). Guards on active session internally.
+   */
+  logAIEdit(params: {
+    graphData: ToCData;
+    messageId: string;
+    editInstructions: EditInstruction[];
+    success: boolean;
+    error?: string;
+  }): void {
+    const sessionId = this.currentSessionId;
+    const chartId = this.currentChartId;
+    if (!sessionId || !chartId) return;
+
+    this.saveSnapshot({
+      session_id: sessionId,
+      chart_id: chartId,
+      graph_data: params.graphData,
+      edit_type: 'ai_edit',
+      triggered_by_message_id: params.messageId,
+      edit_instructions: params.editInstructions,
+      edit_success: params.success,
+      error_message: params.success ? null : (params.error || 'Unknown error'),
+    });
   }
 }
 

@@ -17,8 +17,29 @@ export const handler: Handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
+  // Reject oversized payloads
+  const bodyLength = Buffer.byteLength(event.body || '', 'utf8');
+  if (bodyLength > 10_000) {
+    return {
+      statusCode: 413,
+      headers,
+      body: JSON.stringify({ error: 'Payload too large' })
+    };
+  }
+
+  let parsed: { session_id?: string };
   try {
-    const { session_id } = JSON.parse(event.body || '{}');
+    parsed = JSON.parse(event.body || '{}');
+  } catch {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid JSON' })
+    };
+  }
+
+  try {
+    const { session_id } = parsed;
 
     if (!session_id) {
       return {
