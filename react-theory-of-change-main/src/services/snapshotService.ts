@@ -1,4 +1,5 @@
 import { ToCData } from '../types';
+import { EditInstruction } from '../utils/graphEdits';
 import { loggingService } from './loggingService';
 
 const API_BASE = '/.netlify/functions';
@@ -9,7 +10,7 @@ export interface SaveSnapshotParams {
   graph_data: ToCData;
   edit_type: 'ai_edit' | 'manual_edit' | 'undo' | 'redo' | 'initial';
   triggered_by_message_id?: string | null;
-  edit_instructions?: any[] | null;
+  edit_instructions?: EditInstruction[] | null;
   edit_success?: boolean;
   error_message?: string | null;
 }
@@ -44,8 +45,8 @@ export function saveSnapshotDebounced(params: SaveSnapshotParams): void {
 }
 
 /**
- * Save snapshot immediately (for AI edits and initial snapshots)
- * AI edits need immediate save to preserve message link
+ * Save snapshot immediately (for AI edits and initial snapshots).
+ * Also called internally by saveSnapshotDebounced after the debounce period.
  */
 export async function saveSnapshot(params: SaveSnapshotParams): Promise<void> {
   // Skip if user has opted out
@@ -72,14 +73,16 @@ export async function saveSnapshot(params: SaveSnapshotParams): Promise<void> {
     if (!response.ok) {
       throw new Error(`Failed to save snapshot: ${response.status}`);
     }
+    loggingService.recordSuccess();
   } catch (error) {
     console.error('[SnapshotService] Failed to save snapshot:', error);
+    loggingService.recordFailure();
     // Don't throw - logging failures shouldn't break the app
   }
 }
 
 /**
- * Flush any pending debounced snapshot (call before page unload)
+ * Flush any pending debounced snapshot via sendBeacon (reliable on page unload)
  */
 export function flushPendingSnapshot(): void {
   if (snapshotTimeout) {
@@ -87,8 +90,11 @@ export function flushPendingSnapshot(): void {
     snapshotTimeout = null;
   }
   if (pendingSnapshot) {
-    // Fire and forget - can't await on page unload
-    saveSnapshot(pendingSnapshot);
+    const blob = new Blob(
+      [JSON.stringify(pendingSnapshot)],
+      { type: 'application/json' }
+    );
+    navigator.sendBeacon(`${API_BASE}/logging-saveSnapshot`, blob);
     pendingSnapshot = null;
   }
 }

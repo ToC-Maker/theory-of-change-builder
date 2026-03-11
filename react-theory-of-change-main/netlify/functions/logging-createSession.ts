@@ -64,7 +64,7 @@ export const handler: Handler = async (event) => {
       VALUES (${session_id}, ${chart_id}, ${user_id}, ${user_email}, ${user_agent || null})
       ON CONFLICT (session_id) DO UPDATE
       SET started_at = NOW()
-      RETURNING *
+      RETURNING session_id, started_at
     `;
 
     return {

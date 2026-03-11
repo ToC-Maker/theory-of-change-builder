@@ -7,9 +7,11 @@ import { loggingService } from "../services/loggingService"
 function PrivacyModal({
   isOpen,
   onClose,
+  onLoggingEnabled,
 }: {
   isOpen: boolean
   onClose: () => void
+  onLoggingEnabled?: () => void
 }) {
   // Read current state fresh each time modal opens
   const [loggingEnabled, setLoggingEnabled] = useState(false)
@@ -31,6 +33,9 @@ function PrivacyModal({
     const newValue = !loggingEnabled
     setLoggingEnabled(newValue)
     loggingService.setOptOut(!newValue)
+    if (newValue) {
+      onLoggingEnabled?.()
+    }
   }
 
   return (
@@ -102,7 +107,7 @@ function PrivacyModal({
   )
 }
 
-const AuthButton = () => {
+const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => {
   const { user, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0()
   const [showDropdown, setShowDropdown] = useState(false)
   const [showPrivacyModal, setShowPrivacyModal] = useState(false)
@@ -204,6 +209,7 @@ const AuthButton = () => {
         <PrivacyModal
           isOpen={showPrivacyModal}
           onClose={() => setShowPrivacyModal(false)}
+          onLoggingEnabled={onLoggingEnabled}
         />
       </div>
     )

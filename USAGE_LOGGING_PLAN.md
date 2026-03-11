@@ -2,7 +2,7 @@
 
 **Purpose**: Collect comprehensive user interaction data (chat conversations, graph edits, sessions) for future AI evaluation and prompt engineering improvements.
 
-**Last Updated**: 2025-12-04
+**Last Updated**: 2026-03-11
 
 ---
 
@@ -41,7 +41,7 @@
 3. **Debounced manual edits**: 2-second trailing debounce for manual edit snapshots to prevent flood
 4. **Message-to-edit linking**: Direct foreign key relationship via `message_id`
 5. **Sequence numbers**: Guarantee correct ordering even with concurrent edits or clock skew
-6. **Server-side storage**: Move chat history from localStorage to database for persistence
+6. **Server-side logging**: Store copies of chat messages in the database for analysis
 7. **Circuit breaker**: Skip logging after 3 consecutive failures, retry after 1 minute
 8. **Preserve data on chart deletion**: Use `ON DELETE SET NULL` to keep logs when charts are deleted
 
@@ -67,7 +67,7 @@ This is a **logging system** that collects data for **future evaluation**. We're
 ┌─────────────────────────────────────────────────────────────┐
 │              Netlify Functions (Node.js)                    │
 │  ┌─────────────────┐  ┌────────────────┐  ┌─────────────┐ │
-│  │ saveMessage     │  │ saveSnapshot   │  │ getSession  │ │
+│  │ saveMessage     │  │ saveSnapshot   │  │ endSession  │ │
 │  └────────┬────────┘  └────────┬───────┘  └──────┬──────┘ │
 │           │                    │                  │         │
 └───────────┼────────────────────┼──────────────────┼─────────┘
@@ -285,6 +285,9 @@ COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for
    │
    ├─► Frontend: onDataChange() triggered
    │
+   ├─► 2-second trailing debounce (prevents flooding during rapid edits)
+   │   └─ Each new edit resets the timer; only the final state is saved
+   │
    ├─► Get next sequence number (atomic)
    │
    └─► Save snapshot to logging_snapshots:
@@ -390,7 +393,7 @@ Create new Netlify functions in `netlify/functions/` (flat structure, prefixed w
 ```typescript
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
-import { verifyToken, extractToken } from '../utils/auth';
+import { verifyToken, extractToken } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -541,7 +544,7 @@ export const handler: Handler = async (event) => {
 ```typescript
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
-import { verifyToken, extractToken } from '../utils/auth';
+import { verifyToken, extractToken } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -646,7 +649,7 @@ export const handler: Handler = async (event) => {
 ```typescript
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
-import { verifyToken, extractToken } from '../utils/auth';
+import { verifyToken, extractToken } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -1492,7 +1495,7 @@ export function PrivacyPolicyPopup() {
                 Help improve AI features
               </span>
               <p className="text-xs text-gray-500 mt-1">
-                Share anonymized usage data (chat messages and graph edits) to help us improve the AI assistant.
+                Share usage data (chat messages and graph edits) to help us improve the AI assistant.
               </p>
             </div>
           </label>
@@ -1563,7 +1566,7 @@ Opt-out is handled entirely on the frontend:
 ### Data Retention Policy
 
 - **Opted-out data**: Not stored at all (frontend skips API calls)
-- **Anonymization**: No PII stored; user_id is Auth0 subject identifier
+- **PII note**: user_email and Auth0 subject IDs (user_id) are stored; treat as pseudonymized data requiring appropriate access controls
 - **Retention period**: Data retained indefinitely for evaluation purposes
 
 ### GDPR/Privacy Compliance
@@ -1884,7 +1887,7 @@ If critical issues occur:
 
 ## Appendix A: Complete Migration SQL
 
-**File**: `database/migrations/004-add-usage-logging.sql`
+**File**: `database/migrations/add-usage-logging.sql`
 
 ```sql
 -- Migration: Usage Logging System
@@ -1982,7 +1985,7 @@ COMMIT;
 react-theory-of-change-main/
 ├── database/
 │   └── migrations/
-│       └── 004-add-usage-logging.sql
+│       └── add-usage-logging.sql
 ├── netlify/
 │   └── functions/
 │       ├── logging-createSession.ts (new)

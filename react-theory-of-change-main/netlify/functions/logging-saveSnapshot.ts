@@ -41,6 +41,15 @@ export const handler: Handler = async (event) => {
       };
     }
 
+    const validEditTypes = ['ai_edit', 'manual_edit', 'undo', 'redo', 'initial'];
+    if (!validEditTypes.includes(data.edit_type)) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Invalid edit_type' })
+      };
+    }
+
     // Extract user info and auth status
     const token = extractToken(event.headers.authorization);
     let user_id = null;
@@ -71,6 +80,7 @@ export const handler: Handler = async (event) => {
         SELECT COALESCE(MAX(sequence_number), 0) + 1 as seq
         FROM logging_snapshots
         WHERE session_id = ${data.session_id}
+        FOR UPDATE
       )
       INSERT INTO logging_snapshots (
         session_id, sequence_number, chart_id, graph_data,
@@ -85,7 +95,7 @@ export const handler: Handler = async (event) => {
         ${data.edit_success !== false}, ${data.error_message || null},
         ${user_id}, ${user_email}, ${is_authenticated}
       FROM next_seq
-      RETURNING *
+      RETURNING id, sequence_number
     `;
 
     return {
@@ -102,10 +112,7 @@ export const handler: Handler = async (event) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({
-        error: 'Failed to save snapshot',
-        details: errorMessage
-      })
+      body: JSON.stringify({ error: 'Failed to save snapshot' })
     };
   }
 };
