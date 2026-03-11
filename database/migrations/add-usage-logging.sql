@@ -6,7 +6,7 @@
 BEGIN;
 
 -- Table 1: Session tracking
-CREATE TABLE logging_sessions (
+CREATE TABLE IF NOT EXISTS logging_sessions (
   session_id UUID PRIMARY KEY,
   chart_id VARCHAR(12) REFERENCES charts(id) ON DELETE SET NULL,  -- Keep logs when chart deleted
   user_id TEXT,
@@ -17,14 +17,14 @@ CREATE TABLE logging_sessions (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_logging_sessions_chart ON logging_sessions(chart_id);
-CREATE INDEX idx_logging_sessions_user ON logging_sessions(user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_logging_sessions_started ON logging_sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_logging_sessions_chart ON logging_sessions(chart_id);
+CREATE INDEX IF NOT EXISTS idx_logging_sessions_user ON logging_sessions(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_logging_sessions_started ON logging_sessions(started_at);
 
 COMMENT ON TABLE logging_sessions IS 'User session tracking for usage logging and future evaluation';
 
 -- Table 2: Chat message logs
-CREATE TABLE logging_messages (
+CREATE TABLE IF NOT EXISTS logging_messages (
   id SERIAL PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES logging_sessions(session_id) ON DELETE CASCADE,
   message_id UUID NOT NULL UNIQUE,
@@ -40,15 +40,15 @@ CREATE TABLE logging_messages (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_logging_messages_session ON logging_messages(session_id, timestamp);
-CREATE INDEX idx_logging_messages_chart ON logging_messages(chart_id);
-CREATE INDEX idx_logging_messages_message_id ON logging_messages(message_id);
-CREATE INDEX idx_logging_messages_timestamp ON logging_messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_logging_messages_session ON logging_messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_logging_messages_chart ON logging_messages(chart_id);
+CREATE INDEX IF NOT EXISTS idx_logging_messages_message_id ON logging_messages(message_id);
+CREATE INDEX IF NOT EXISTS idx_logging_messages_timestamp ON logging_messages(timestamp);
 
 COMMENT ON TABLE logging_messages IS 'Chat message logs for AI evaluation and prompt engineering';
 
 -- Table 3: Graph state snapshots
-CREATE TABLE logging_snapshots (
+CREATE TABLE IF NOT EXISTS logging_snapshots (
   id SERIAL PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES logging_sessions(session_id) ON DELETE CASCADE,
   sequence_number INTEGER NOT NULL,
@@ -67,11 +67,11 @@ CREATE TABLE logging_snapshots (
   UNIQUE(session_id, sequence_number)
 );
 
-CREATE INDEX idx_logging_snapshots_session_seq ON logging_snapshots(session_id, sequence_number);
-CREATE INDEX idx_logging_snapshots_chart ON logging_snapshots(chart_id);
-CREATE INDEX idx_logging_snapshots_message ON logging_snapshots(triggered_by_message_id) WHERE triggered_by_message_id IS NOT NULL;
-CREATE INDEX idx_logging_snapshots_timestamp ON logging_snapshots(timestamp);
-CREATE INDEX idx_logging_snapshots_edit_type ON logging_snapshots(edit_type);
+CREATE INDEX IF NOT EXISTS idx_logging_snapshots_session_seq ON logging_snapshots(session_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_logging_snapshots_chart ON logging_snapshots(chart_id);
+CREATE INDEX IF NOT EXISTS idx_logging_snapshots_message ON logging_snapshots(triggered_by_message_id) WHERE triggered_by_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_logging_snapshots_timestamp ON logging_snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_logging_snapshots_edit_type ON logging_snapshots(edit_type);
 
 COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for replay and evaluation';
 
