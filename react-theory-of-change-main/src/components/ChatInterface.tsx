@@ -4,7 +4,6 @@ import { useParams, useLocation } from 'react-router-dom';
 import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
-import { saveSnapshot } from '../services/snapshotService';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
@@ -365,15 +364,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
 
     // Log user message (fire and forget)
-    const chartId = loggingService.getCurrentChartId();
-    if (chartId) {
-      loggingService.saveMessage({
-        message_id: userMessageId,
-        chart_id: chartId,
-        role: 'user',
-        content: userMessage.content,
-      });
-    }
+    loggingService.logUserMessage({
+      messageId: userMessageId,
+      role: 'user',
+      content: userMessage.content,
+    });
 
     // Create a placeholder streaming message
     streamingMessageRef.current = {
@@ -435,17 +430,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           streamingMessageRef.current = null;
 
           // Log assistant message (fire and forget)
-          if (chartId) {
-            loggingService.saveMessage({
-              message_id: assistantMessageId,
-              chart_id: chartId,
-              role: 'assistant',
-              content: finalMessage,
-              usage_input_tokens: usage?.input_tokens,
-              usage_output_tokens: usage?.output_tokens,
-              usage_total_tokens: usage ? (usage.input_tokens || 0) + (usage.output_tokens || 0) : undefined,
-            });
-          }
+          loggingService.logUserMessage({
+            messageId: assistantMessageId,
+            role: 'assistant',
+            content: finalMessage,
+            tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
+          });
 
           // Track token usage in database
           if (usage?.input_tokens && params.editToken) {
@@ -464,36 +454,24 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               const updatedGraph = applyEdits(graphData, editInstructions);
               onGraphUpdate(updatedGraph);
 
-              // Save AI edit snapshot with message link
-              const sessionId = loggingService.getCurrentSessionId();
-              if (sessionId && chartId) {
-                saveSnapshot({
-                  session_id: sessionId,
-                  chart_id: chartId,
-                  graph_data: updatedGraph,
-                  edit_type: 'ai_edit',
-                  triggered_by_message_id: assistantMessageId,
-                  edit_instructions: editInstructions,
-                  edit_success: true,
-                });
-              }
+              // Log successful AI edit
+              loggingService.logAIEdit({
+                graphData: updatedGraph,
+                messageId: assistantMessageId,
+                editInstructions,
+                success: true,
+              });
             } catch (error) {
               console.error('Error applying graph edits:', error);
 
-              // Save failed AI edit snapshot
-              const sessionId = loggingService.getCurrentSessionId();
-              if (sessionId && chartId) {
-                saveSnapshot({
-                  session_id: sessionId,
-                  chart_id: chartId,
-                  graph_data: graphData, // Original unchanged graph
-                  edit_type: 'ai_edit',
-                  triggered_by_message_id: assistantMessageId,
-                  edit_instructions: editInstructions,
-                  edit_success: false,
-                  error_message: error instanceof Error ? error.message : 'Unknown error',
-                });
-              }
+              // Log failed AI edit
+              loggingService.logAIEdit({
+                graphData: graphData, // Original unchanged graph
+                messageId: assistantMessageId,
+                editInstructions,
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error',
+              });
 
               // Add an error message to the chat
               const errorMessage: ChatMessage = {

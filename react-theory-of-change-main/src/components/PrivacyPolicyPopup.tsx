@@ -9,7 +9,7 @@ interface PrivacyPolicyPopupProps {
 
 export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
   const [isVisible, setIsVisible] = useState(false);
-  const [allowLogging, setAllowLogging] = useState(true); // Default to opted-in
+  const [optOut, setOptOut] = useState(false); // Unchecked by default (logging enabled)
   const location = useLocation();
 
   // Inject fade-in animation style once
@@ -59,13 +59,13 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     localStorage.setItem('privacyPolicyAccepted', 'true');
     localStorage.setItem('privacyPolicyAcceptedDate', new Date().toISOString());
 
-    // Store usage logging preference (opt-out if unchecked)
-    loggingService.setOptOut(!allowLogging);
+    // Store usage logging preference
+    loggingService.setOptOut(optOut);
 
     setIsVisible(false);
 
     // Notify parent to initialize logging if enabled
-    onAccept?.(allowLogging);
+    onAccept?.(!optOut);
   };
 
   if (!isVisible) {
@@ -93,8 +93,9 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
 
         {/* Content */}
         <p className="text-sm text-gray-600 text-center mb-5">
-          We value your privacy and are committed to protecting your data.
-          By using this application, you agree to our privacy practices.
+          To improve the AI assistant, we collect usage data such as chat messages
+          and graph edits. No email addresses are stored. You can change this
+          preference anytime in Settings.
         </p>
 
         {/* Actions */}
@@ -110,12 +111,12 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
             <label className="flex items-center gap-2 cursor-pointer group">
               <input
                 type="checkbox"
-                checked={allowLogging}
-                onChange={(e) => setAllowLogging(e.target.checked)}
+                checked={optOut}
+                onChange={(e) => setOptOut(e.target.checked)}
                 className="h-3.5 w-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 focus:ring-offset-0"
               />
               <span className="text-xs text-gray-400 group-hover:text-gray-500 transition-colors">
-                Help improve AI by sharing usage data
+                I do not want to share usage data
               </span>
             </label>
 
