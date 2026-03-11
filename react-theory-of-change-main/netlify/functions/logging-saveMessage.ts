@@ -41,6 +41,15 @@ export const handler: Handler = async (event) => {
       };
     }
 
+    const validRoles = ['user', 'assistant'];
+    if (!validRoles.includes(data.role)) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Invalid role. Must be "user" or "assistant"' })
+      };
+    }
+
     // Extract user info from auth token
     const token = extractToken(event.headers.authorization);
     let user_id = null;
@@ -72,12 +81,12 @@ export const handler: Handler = async (event) => {
       VALUES (
         ${data.session_id}, ${data.message_id}, ${data.chart_id},
         ${data.role}, ${data.content},
-        ${data.usage_input_tokens || null}, ${data.usage_output_tokens || null},
-        ${data.usage_total_tokens || null},
+        ${data.usage_input_tokens ?? null}, ${data.usage_output_tokens ?? null},
+        ${data.usage_total_tokens ?? null},
         ${user_id}, ${user_email}
       )
       ON CONFLICT (message_id) DO NOTHING
-      RETURNING *
+      RETURNING message_id
     `;
 
     return {

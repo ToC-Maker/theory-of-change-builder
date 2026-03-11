@@ -10,6 +10,7 @@ import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
 import { loggingService, LoggingServiceClass } from "./services/loggingService"
+import type { SaveSnapshotParams } from "./services/snapshotService"
 import { saveSnapshot, saveSnapshotDebounced, flushPendingSnapshot } from "./services/snapshotService"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import AuthButton from "./components/AuthButton"
@@ -706,42 +707,42 @@ function ToCViewer() {
     }
   };
 
+  // Initialize logging session and save initial snapshot (reused in multiple flows)
+  const initializeLogging = useCallback(async (chartId: string, graphData: ToCData) => {
+    if (loggingService.isOptedOut()) return;
+    const sessionId = await loggingService.initializeSession(chartId);
+    if (sessionId) {
+      saveSnapshot({
+        session_id: sessionId,
+        chart_id: chartId,
+        graph_data: graphData,
+        edit_type: 'initial',
+      });
+    }
+  }, []);
+
   // Handler for when a new chart is created (auto-save or manual share)
   const handleChartCreated = useCallback(async (editToken: string, chartId: string) => {
     setCurrentEditToken(editToken);
     setCurrentChartId(chartId);
-
-    // Initialize logging session for the new chart
-    if (!loggingService.isOptedOut() && data) {
-      const sessionId = await loggingService.initializeSession(chartId);
-      if (sessionId) {
-        // Save initial snapshot
-        saveSnapshot({
-          session_id: sessionId,
-          chart_id: chartId,
-          graph_data: data,
-          edit_type: 'initial',
-        });
-      }
+    if (dataRef.current) {
+      initializeLogging(chartId, dataRef.current);
     }
-  }, [data]);
+  }, [initializeLogging]);
 
   // Handler for when user accepts privacy policy
   const handlePrivacyAccept = useCallback(async (loggingEnabled: boolean) => {
-    // Initialize logging session if user opted in and we have chart data
-    if (loggingEnabled && currentChartId && data) {
-      const sessionId = await loggingService.initializeSession(currentChartId);
-      if (sessionId) {
-        // Save initial snapshot
-        saveSnapshot({
-          session_id: sessionId,
-          chart_id: currentChartId,
-          graph_data: data,
-          edit_type: 'initial',
-        });
-      }
+    if (loggingEnabled && currentChartId && dataRef.current) {
+      initializeLogging(currentChartId, dataRef.current);
     }
-  }, [currentChartId, data]);
+  }, [currentChartId, initializeLogging]);
+
+  // Handler for when user re-enables logging from settings
+  const handleLoggingEnabled = useCallback(async () => {
+    if (currentChartId && dataRef.current) {
+      initializeLogging(currentChartId, dataRef.current);
+    }
+  }, [currentChartId, initializeLogging]);
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -854,13 +855,28 @@ function ToCViewer() {
   // Debounced save to database
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingChangesRef = useRef<ToCData | null>(null);
+  const dataRef = useRef<ToCData | null>(data);
+  useEffect(() => { dataRef.current = data; }, [data]);
 
-  const handleDataChange = (newData: ToCData) => {
+  // Log a graph change snapshot (guards on session + enabled state)
+  const logGraphChange = useCallback((graphData: ToCData, editType: SaveSnapshotParams['edit_type']) => {
+    const sessionId = loggingService.getCurrentSessionId();
+    if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
+      saveSnapshotDebounced({
+        session_id: sessionId,
+        chart_id: currentChartId,
+        graph_data: graphData,
+        edit_type: editType,
+      });
+    }
+  }, [currentChartId]);
+
+  const handleDataChange = useCallback((newData: ToCData) => {
     console.log('App handleDataChange called');
 
     // Save current state to history before updating
-    if (data) {
-      saveToHistory(data);
+    if (dataRef.current) {
+      saveToHistory(dataRef.current);
     }
 
     // Clear redo history when new changes are made
@@ -870,15 +886,7 @@ function ToCViewer() {
     pendingChangesRef.current = newData;
 
     // Save debounced snapshot for logging (manual edits)
-    const sessionId = loggingService.getCurrentSessionId();
-    if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
-      saveSnapshotDebounced({
-        session_id: sessionId,
-        chart_id: currentChartId,
-        graph_data: newData,
-        edit_type: 'manual_edit',
-      });
-    }
+    logGraphChange(newData, 'manual_edit');
 
     // Always save to localStorage immediately (local backup)
     if (!currentEditToken) {
@@ -918,7 +926,7 @@ function ToCViewer() {
       }
       saveTimeoutRef.current = null;
     }, 300); // 300ms debounce
-  };
+  }, [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   const handleUndo = useCallback(() => {
     // Clear any pending saves first
@@ -948,15 +956,7 @@ function ToCViewer() {
       saveToLocalStorage(previousState);
 
       // Save undo snapshot for logging
-      const sessionId = loggingService.getCurrentSessionId();
-      if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
-        saveSnapshotDebounced({
-          session_id: sessionId,
-          chart_id: currentChartId,
-          graph_data: previousState,
-          edit_type: 'undo',
-        });
-      }
+      logGraphChange(previousState, 'undo');
 
       // Trigger debounced database save for undo
       if (currentEditToken) {
@@ -985,7 +985,7 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken, currentChartId]);
+  }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   const handleRedo = useCallback(() => {
     // Clear any pending saves first
@@ -1014,15 +1014,7 @@ function ToCViewer() {
       saveToLocalStorage(nextState);
 
       // Save redo snapshot for logging
-      const sessionId = loggingService.getCurrentSessionId();
-      if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
-        saveSnapshotDebounced({
-          session_id: sessionId,
-          chart_id: currentChartId,
-          graph_data: nextState,
-          edit_type: 'redo',
-        });
-      }
+      logGraphChange(nextState, 'redo');
 
       // Trigger debounced database save for redo
       if (currentEditToken) {
@@ -1051,7 +1043,7 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken, currentChartId]);
+  }, [redoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -1167,6 +1159,16 @@ function ToCViewer() {
     currentEditTokenRef.current = currentEditToken;
   }, [currentEditToken]);
 
+  // Reliable logging cleanup on page close via sendBeacon
+  useEffect(() => {
+    const handlePageHide = () => {
+      flushPendingSnapshot();
+      loggingService.endSessionBeacon();
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, []);
+
   // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
     return () => {
@@ -1180,7 +1182,7 @@ function ToCViewer() {
           ChartService.updateChart(currentEditTokenRef.current, pendingChangesRef.current).catch(console.error);
         }
       }
-      // Flush any pending snapshots and end logging session
+      // Flush any pending snapshots and end logging session (for in-app navigation)
       flushPendingSnapshot();
       loggingService.endSession();
     };
@@ -1202,11 +1204,11 @@ function ToCViewer() {
     };
 
     window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('keypress', handleActivity);
+    window.addEventListener('keydown', handleActivity);
 
     return () => {
       window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('keypress', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
     };
   }, [currentChartId]);
 
@@ -1232,18 +1234,7 @@ function ToCViewer() {
           setCurrentChartId(result.chartId);
 
           // Initialize logging session after chart is loaded
-          if (!loggingService.isOptedOut() && result.chartId) {
-            const sessionId = await loggingService.initializeSession(result.chartId);
-            if (sessionId) {
-              // Save initial snapshot
-              saveSnapshot({
-                session_id: sessionId,
-                chart_id: result.chartId,
-                graph_data: result.chartData,
-                edit_type: 'initial',
-              });
-            }
-          }
+          initializeLogging(result.chartId, result.chartData);
         } else if (filename) {
           // Fallback to file-based loading for backwards compatibility
           const savedData = loadFromLocalStorage(filename);
@@ -1564,7 +1555,7 @@ function ToCViewer() {
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
-              onEditTokenChange={handleChartCreated}
+              onChartCreated={handleChartCreated}
               viewportOffset={viewportOffset}
             />
           </div>
@@ -1580,7 +1571,7 @@ function ToCViewer() {
           zIndex: 9999
         }}
       >
-        <AuthButton />
+        <AuthButton onLoggingEnabled={handleLoggingEnabled} />
       </div>
 
       {/* Zoom Controls - Google Maps Style (hidden on mobile) */}

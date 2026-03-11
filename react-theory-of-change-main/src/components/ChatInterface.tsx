@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { chatService, ChatMessage } from '../services/chatService';
-import { applyEdits, cleanResponseContent, parseEditInstructions } from '../utils/graphEdits';
+import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { saveSnapshot } from '../services/snapshotService';
 import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { XMarkIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
+import { ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { loggingService } from '../services/loggingService';
 
 interface PrivacyPolicyPopupProps {
@@ -11,6 +11,25 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [allowLogging, setAllowLogging] = useState(true); // Default to opted-in
   const location = useLocation();
+
+  // Inject fade-in animation style once
+  useEffect(() => {
+    const styleId = 'privacy-popup-animation';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      @keyframes fadeIn {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      .animate-fadeIn { animation: fadeIn 0.2s ease-out; }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      document.getElementById(styleId)?.remove();
+    };
+  }, []);
 
   useEffect(() => {
     // Only show privacy policy on edit routes (not on view-only chart routes)
@@ -49,32 +68,17 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     onAccept?.(allowLogging);
   };
 
-  const handleClose = () => {
-    // For now, closing is the same as accepting
-    // You could implement different behavior if needed
-    handleAccept();
-  };
-
   if (!isVisible) {
     return null;
   }
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-      {/* Backdrop */}
+      {/* Backdrop — not clickable, popup is not dismissable */}
       <div className="absolute inset-0 bg-black bg-opacity-50" />
 
       {/* Modal */}
       <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6 animate-fadeIn">
-        {/* Close button */}
-        <button
-          onClick={handleClose}
-          className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-          aria-label="Close"
-        >
-          <XMarkIcon className="w-5 h-5" />
-        </button>
-
         {/* Icon */}
         <div className="flex justify-center mb-4">
           <div className="p-3 bg-blue-100 rounded-full">
@@ -129,23 +133,3 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     </div>
   );
 }
-
-// Add fade-in animation styles
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-      transform: scale(0.95);
-    }
-    to {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
-  .animate-fadeIn {
-    animation: fadeIn 0.2s ease-out;
-  }
-`;
-document.head.appendChild(style);
