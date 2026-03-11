@@ -29,9 +29,28 @@ export const handler: Handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
-  try {
-    const data = JSON.parse(event.body || '{}') as SaveSnapshotRequest;
+  // Reject oversized payloads (graph_data max 1MB + overhead)
+  const bodyLength = Buffer.byteLength(event.body || '', 'utf8');
+  if (bodyLength > 1_500_000) {
+    return {
+      statusCode: 413,
+      headers,
+      body: JSON.stringify({ error: 'Payload too large' })
+    };
+  }
 
+  let data: SaveSnapshotRequest;
+  try {
+    data = JSON.parse(event.body || '{}') as SaveSnapshotRequest;
+  } catch {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid JSON' })
+    };
+  }
+
+  try {
     // Validate required fields
     if (!data.session_id || !data.chart_id || !data.graph_data || !data.edit_type) {
       return {
@@ -50,17 +69,44 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Extract user info and auth status
+    // Validate field sizes
+    const graphDataSize = Buffer.byteLength(JSON.stringify(data.graph_data), 'utf8');
+    if (graphDataSize > 1_000_000) {
+      return {
+        statusCode: 413,
+        headers,
+        body: JSON.stringify({ error: 'graph_data exceeds 1MB limit' })
+      };
+    }
+
+    if (data.edit_instructions) {
+      const editInstructionsSize = Buffer.byteLength(JSON.stringify(data.edit_instructions), 'utf8');
+      if (editInstructionsSize > 100_000) {
+        return {
+          statusCode: 413,
+          headers,
+          body: JSON.stringify({ error: 'edit_instructions exceeds 100KB limit' })
+        };
+      }
+    }
+
+    if (data.error_message && Buffer.byteLength(data.error_message, 'utf8') > 10_000) {
+      return {
+        statusCode: 413,
+        headers,
+        body: JSON.stringify({ error: 'error_message exceeds 10KB limit' })
+      };
+    }
+
+    // Extract user_id and auth status
     const token = extractToken(event.headers.authorization);
     let user_id = null;
-    let user_email = null;
     let is_authenticated = false;
 
     if (token) {
       try {
         const decoded = await verifyToken(token);
         user_id = decoded.sub;
-        user_email = decoded.email || decoded.name;
         is_authenticated = true;
       } catch (err) {
         console.error('[logging-saveSnapshot] Token verification failed:', err);
@@ -74,18 +120,22 @@ export const handler: Handler = async (event) => {
     }
     const sql = neon(DATABASE_URL);
 
-    // Atomically get next sequence number and insert snapshot
+    // Atomically get next sequence number and insert snapshot.
+    // Use pg_advisory_xact_lock to serialize inserts per session_id,
+    // preventing duplicate sequence numbers from concurrent requests.
     const result = await sql`
-      WITH next_seq AS (
+      WITH lock AS (
+        SELECT pg_advisory_xact_lock(hashtext(${data.session_id}))
+      ),
+      next_seq AS (
         SELECT COALESCE(MAX(sequence_number), 0) + 1 as seq
-        FROM logging_snapshots
+        FROM logging_snapshots, lock
         WHERE session_id = ${data.session_id}
-        FOR UPDATE
       )
       INSERT INTO logging_snapshots (
         session_id, sequence_number, chart_id, graph_data,
         edit_type, triggered_by_message_id, edit_instructions,
-        edit_success, error_message, user_id, user_email,
+        edit_success, error_message, user_id,
         is_authenticated
       )
       SELECT
@@ -93,7 +143,7 @@ export const handler: Handler = async (event) => {
         ${data.edit_type}, ${data.triggered_by_message_id || null},
         ${data.edit_instructions ? JSON.stringify(data.edit_instructions) : null}::jsonb,
         ${data.edit_success !== false}, ${data.error_message || null},
-        ${user_id}, ${user_email}, ${is_authenticated}
+        ${user_id}, ${is_authenticated}
       FROM next_seq
       RETURNING id, sequence_number
     `;

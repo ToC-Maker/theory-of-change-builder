@@ -9,9 +9,8 @@ import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
-import { loggingService, LoggingServiceClass } from "./services/loggingService"
-import type { SaveSnapshotParams } from "./services/snapshotService"
-import { saveSnapshot, saveSnapshotDebounced, flushPendingSnapshot } from "./services/snapshotService"
+import { LoggingServiceClass } from "./services/loggingService"
+import { useLoggingSession } from "./hooks/useLoggingSession"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import AuthButton from "./components/AuthButton"
 import "./App.css"
@@ -707,19 +706,13 @@ function ToCViewer() {
     }
   };
 
-  // Initialize logging session and save initial snapshot (reused in multiple flows)
-  const initializeLogging = useCallback(async (chartId: string, graphData: ToCData) => {
-    if (loggingService.isOptedOut()) return;
-    const sessionId = await loggingService.initializeSession(chartId);
-    if (sessionId) {
-      saveSnapshot({
-        session_id: sessionId,
-        chart_id: chartId,
-        graph_data: graphData,
-        edit_type: 'initial',
-      });
-    }
-  }, []);
+  // Logging session lifecycle (session init, activity tracking, cleanup)
+  const {
+    initializeLogging,
+    handlePrivacyAccept,
+    handleLoggingEnabled,
+    logGraphChange,
+  } = useLoggingSession({ chartId: currentChartId, graphData: data });
 
   // Handler for when a new chart is created (auto-save or manual share)
   const handleChartCreated = useCallback(async (editToken: string, chartId: string) => {
@@ -729,20 +722,6 @@ function ToCViewer() {
       initializeLogging(chartId, dataRef.current);
     }
   }, [initializeLogging]);
-
-  // Handler for when user accepts privacy policy
-  const handlePrivacyAccept = useCallback(async (loggingEnabled: boolean) => {
-    if (loggingEnabled && currentChartId && dataRef.current) {
-      initializeLogging(currentChartId, dataRef.current);
-    }
-  }, [currentChartId, initializeLogging]);
-
-  // Handler for when user re-enables logging from settings
-  const handleLoggingEnabled = useCallback(async () => {
-    if (currentChartId && dataRef.current) {
-      initializeLogging(currentChartId, dataRef.current);
-    }
-  }, [currentChartId, initializeLogging]);
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -857,19 +836,6 @@ function ToCViewer() {
   const pendingChangesRef = useRef<ToCData | null>(null);
   const dataRef = useRef<ToCData | null>(data);
   useEffect(() => { dataRef.current = data; }, [data]);
-
-  // Log a graph change snapshot (guards on session + enabled state)
-  const logGraphChange = useCallback((graphData: ToCData, editType: SaveSnapshotParams['edit_type']) => {
-    const sessionId = loggingService.getCurrentSessionId();
-    if (sessionId && currentChartId && loggingService.isLoggingEnabled()) {
-      saveSnapshotDebounced({
-        session_id: sessionId,
-        chart_id: currentChartId,
-        graph_data: graphData,
-        edit_type: editType,
-      });
-    }
-  }, [currentChartId]);
 
   const handleDataChange = useCallback((newData: ToCData) => {
     console.log('App handleDataChange called');
@@ -1159,16 +1125,6 @@ function ToCViewer() {
     currentEditTokenRef.current = currentEditToken;
   }, [currentEditToken]);
 
-  // Reliable logging cleanup on page close via sendBeacon
-  useEffect(() => {
-    const handlePageHide = () => {
-      flushPendingSnapshot();
-      loggingService.endSessionBeacon();
-    };
-    window.addEventListener('pagehide', handlePageHide);
-    return () => window.removeEventListener('pagehide', handlePageHide);
-  }, []);
-
   // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
     return () => {
@@ -1182,35 +1138,8 @@ function ToCViewer() {
           ChartService.updateChart(currentEditTokenRef.current, pendingChangesRef.current).catch(console.error);
         }
       }
-      // Flush any pending snapshots and end logging session (for in-app navigation)
-      flushPendingSnapshot();
-      loggingService.endSession();
     };
   }, []);
-
-  // Throttled activity listener for logging session timeout (30 second throttle)
-  useEffect(() => {
-    if (!currentChartId) return;
-
-    const lastActivityRef = { current: 0 };
-    const ACTIVITY_THROTTLE_MS = 30000; // 30 seconds
-
-    const handleActivity = () => {
-      const now = Date.now();
-      if (now - lastActivityRef.current > ACTIVITY_THROTTLE_MS) {
-        lastActivityRef.current = now;
-        loggingService.resetSessionTimeout();
-      }
-    };
-
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('keydown', handleActivity);
-
-    return () => {
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
-    };
-  }, [currentChartId]);
 
   useEffect(() => {
     const loadData = async () => {
