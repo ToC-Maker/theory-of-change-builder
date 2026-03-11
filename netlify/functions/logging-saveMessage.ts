@@ -29,9 +29,28 @@ export const handler: Handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
-  try {
-    const data = JSON.parse(event.body || '{}') as SaveMessageRequest;
+  // Reject oversized payloads (content max 100KB + overhead)
+  const bodyLength = Buffer.byteLength(event.body || '', 'utf8');
+  if (bodyLength > 200_000) {
+    return {
+      statusCode: 413,
+      headers,
+      body: JSON.stringify({ error: 'Payload too large' })
+    };
+  }
 
+  let data: SaveMessageRequest;
+  try {
+    data = JSON.parse(event.body || '{}') as SaveMessageRequest;
+  } catch {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ error: 'Invalid JSON' })
+    };
+  }
+
+  try {
     // Validate required fields
     if (!data.session_id || !data.message_id || !data.chart_id || !data.role || !data.content) {
       return {
@@ -50,16 +69,23 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Extract user info from auth token
+    // Validate field sizes
+    if (Buffer.byteLength(data.content, 'utf8') > 100_000) {
+      return {
+        statusCode: 413,
+        headers,
+        body: JSON.stringify({ error: 'content exceeds 100KB limit' })
+      };
+    }
+
+    // Extract user_id from auth token
     const token = extractToken(event.headers.authorization);
     let user_id = null;
-    let user_email = null;
 
     if (token) {
       try {
         const decoded = await verifyToken(token);
         user_id = decoded.sub;
-        user_email = decoded.email || decoded.name;
       } catch (err) {
         console.error('[logging-saveMessage] Token verification failed:', err);
         // Continue as anonymous
@@ -76,14 +102,14 @@ export const handler: Handler = async (event) => {
       INSERT INTO logging_messages (
         session_id, message_id, chart_id, role, content,
         usage_input_tokens, usage_output_tokens, usage_total_tokens,
-        user_id, user_email
+        user_id
       )
       VALUES (
         ${data.session_id}, ${data.message_id}, ${data.chart_id},
         ${data.role}, ${data.content},
         ${data.usage_input_tokens ?? null}, ${data.usage_output_tokens ?? null},
         ${data.usage_total_tokens ?? null},
-        ${user_id}, ${user_email}
+        ${user_id}
       )
       ON CONFLICT (message_id) DO NOTHING
       RETURNING message_id
