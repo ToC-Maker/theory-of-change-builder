@@ -32,7 +32,7 @@ export function ToC({
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
-  onEditTokenChange,
+  onChartCreated,
   viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 }
 }: {
   data: ToCData
@@ -53,7 +53,7 @@ export function ToC({
   zoomScale?: number
   camera?: { x: number; y: number; z: number }
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void
-  onEditTokenChange?: (token: string, chartId: string) => void
+  onChartCreated?: (token: string, chartId: string) => void
   viewportOffset?: { left: number; top: number; right: number; bottom: number }
 }) {
   const [data, setData] = useState<ToCData>(initialData)
@@ -1490,7 +1490,7 @@ export function ToC({
         nodePopup={nodePopup}
         edgePopup={edgePopup}
         camera={camera}
-        onEditTokenChange={onEditTokenChange}
+        onChartCreated={onChartCreated}
         containerSize={svgSize}
       />,
         document.body

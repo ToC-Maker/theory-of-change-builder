@@ -1,17 +1,10 @@
 const API_BASE = '/.netlify/functions';
 
-export interface LoggingSession {
-  session_id: string;
-  chart_id: string;
-  user_id?: string;
-  started_at: string;
-  ended_at?: string;
-}
-
 class LoggingServiceClass {
   private currentSessionId: string | null = null;
   private currentChartId: string | null = null;
   private sessionTimeout: ReturnType<typeof setTimeout> | null = null;
+  private initializingPromise: Promise<string | null> | null = null;
   private readonly SESSION_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
   // Circuit breaker state
@@ -38,19 +31,21 @@ class LoggingServiceClass {
   }
 
   /**
-   * Circuit breaker: check if we should skip logging due to repeated failures
+   * Circuit breaker: check if we should skip logging due to repeated failures.
+   * Pure check with no side effects — reset happens only on success via recordSuccess().
    */
   private shouldSkipLogging(): boolean {
-    if (Date.now() - this.lastFailureTime > this.RESET_AFTER_MS) {
-      this.failureCount = 0;
+    if (this.failureCount >= this.MAX_FAILURES) {
+      // Allow a retry after the reset window
+      return Date.now() - this.lastFailureTime <= this.RESET_AFTER_MS;
     }
-    return this.failureCount >= this.MAX_FAILURES;
+    return false;
   }
 
   /**
    * Circuit breaker: record a failure
    */
-  private recordFailure(): void {
+  recordFailure(): void {
     this.failureCount++;
     this.lastFailureTime = Date.now();
   }
@@ -58,7 +53,7 @@ class LoggingServiceClass {
   /**
    * Circuit breaker: reset on success
    */
-  private recordSuccess(): void {
+  recordSuccess(): void {
     this.failureCount = 0;
   }
 
@@ -67,8 +62,19 @@ class LoggingServiceClass {
    * IMPORTANT: Only call this AFTER chart data is fully loaded
    */
   async initializeSession(chartId: string): Promise<string | null> {
-    // Don't initialize if user has opted out
-    if (this.isOptedOut()) {
+    // Deduplicate concurrent calls
+    if (this.initializingPromise) return this.initializingPromise;
+    this.initializingPromise = this.doInitializeSession(chartId);
+    try {
+      return await this.initializingPromise;
+    } finally {
+      this.initializingPromise = null;
+    }
+  }
+
+  private async doInitializeSession(chartId: string): Promise<string | null> {
+    // Don't initialize if user has opted out or circuit breaker is open
+    if (this.isOptedOut() || this.shouldSkipLogging()) {
       return null;
     }
 
@@ -147,18 +153,40 @@ class LoggingServiceClass {
   async endSession(): Promise<void> {
     if (!this.currentSessionId || this.shouldSkipLogging()) return;
 
+    const token = this.getAuthToken();
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     try {
-      await fetch(`${API_BASE}/logging-endSession`, {
+      const response = await fetch(`${API_BASE}/logging-endSession`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ session_id: this.currentSessionId }),
       });
+      if (!response.ok) {
+        throw new Error(`Failed to end session: ${response.status}`);
+      }
       this.recordSuccess();
     } catch (error) {
       console.error('[LoggingService] Failed to end session:', error);
       this.recordFailure();
     }
 
+    this.clearSession();
+  }
+
+  /**
+   * End session via sendBeacon (reliable on page unload)
+   */
+  endSessionBeacon(): void {
+    if (!this.currentSessionId) return;
+    const blob = new Blob(
+      [JSON.stringify({ session_id: this.currentSessionId })],
+      { type: 'application/json' }
+    );
+    navigator.sendBeacon(`${API_BASE}/logging-endSession`, blob);
     this.clearSession();
   }
 
