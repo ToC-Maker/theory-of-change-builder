@@ -1,6 +1,6 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
-import { verifyToken, extractToken, migrateUserIfNeeded } from './utils/auth';
+import { verifyToken, extractToken, tryMigrateDecoded } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -91,10 +91,8 @@ export const handler: Handler = async (event) => {
         const userId = decodedToken.sub;
         const userEmail = decodedToken.email || decodedToken.name;
 
-        // Migrate user data if they logged in with a new Auth0 tenant
-        if (userEmail) {
-          await migrateUserIfNeeded(sql, userId, userEmail);
-        }
+        // Migrate user data if they logged in with a new Auth0 tenant (different sub, same email)
+        await tryMigrateDecoded(sql, decodedToken, 'getChart');
 
         // Check if user already has permission or a pending request
         const existingPermission = await sql`
@@ -162,10 +160,8 @@ export const handler: Handler = async (event) => {
             const userId = decodedToken.sub;
             const userEmail = decodedToken.email || decodedToken.name;
 
-            // Migrate user data if they logged in with a new Auth0 tenant
-            if (userEmail) {
-              await migrateUserIfNeeded(sql, userId, userEmail);
-            }
+            // Migrate user data if they logged in with a new Auth0 tenant (different sub, same email)
+            await tryMigrateDecoded(sql, decodedToken, 'getChart');
 
             // Auto-add authenticated user to permissions if they're not already there
             const existingPermission = await sql`

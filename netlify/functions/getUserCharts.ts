@@ -1,6 +1,6 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
-import { verifyToken, extractToken, migrateUserIfNeeded } from './utils/auth';
+import { tryMigrateUser } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -43,19 +43,7 @@ export const handler: Handler = async (event) => {
     const sql = neon(DATABASE_URL);
 
     // Migrate user data if they logged in with a new Auth0 tenant (different sub, same email)
-    const token = extractToken(event.headers.authorization);
-    if (token) {
-      try {
-        const decodedToken = await verifyToken(token);
-        const email = decodedToken.email || decodedToken.name;
-        if (email) {
-          await migrateUserIfNeeded(sql, userId, email);
-        }
-      } catch (err) {
-        // Token verification failure is non-fatal here — continue with the query
-        console.log('[getUserCharts] Token verification failed, skipping migration check');
-      }
-    }
+    await tryMigrateUser(sql, event.headers.authorization, 'getUserCharts');
 
     // Fetch charts where user has permission (owner or editor) OR where user is the creator
     // This ensures charts appear even if permission entry wasn't created yet
