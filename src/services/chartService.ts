@@ -166,7 +166,12 @@ export class ChartService {
     const params = new URLSearchParams();
     params.append('userId', userId);
 
-    const response = await fetch(`${API_BASE}/getUserCharts?${params}`);
+    const headers: Record<string, string> = {};
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
+    const response = await fetch(`${API_BASE}/getUserCharts?${params}`, { headers });
 
     if (!response.ok) {
       throw new Error('Failed to fetch user charts');
