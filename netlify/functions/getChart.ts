@@ -94,6 +94,10 @@ export const handler: Handler = async (event) => {
         // Migrate user data if they logged in with a new Auth0 tenant (different sub, same email)
         await tryMigrateDecoded(sql, decodedToken, 'getChart');
 
+        // Re-read chart owner after migration (may have changed from old sub to new sub)
+        const refreshed = await sql`SELECT user_id FROM charts WHERE id = ${result[0].id}`;
+        const currentOwnerId = refreshed[0]?.user_id ?? chartOwnerId;
+
         // Check if user already has permission or a pending request
         const existingPermission = await sql`
           SELECT user_id, status FROM chart_permissions
@@ -102,9 +106,9 @@ export const handler: Handler = async (event) => {
 
         if (existingPermission.length === 0) {
           // Determine permission level: owner if they created it, edit otherwise
-          const permissionLevel = userId === chartOwnerId ? 'owner' : 'edit';
+          const permissionLevel = userId === currentOwnerId ? 'owner' : 'edit';
 
-          if (userId === chartOwnerId) {
+          if (userId === currentOwnerId) {
             // If they're the owner, auto-approve
             await sql`
               INSERT INTO chart_permissions (chart_id, user_id, user_email, permission_level, granted_by, status)
@@ -114,7 +118,7 @@ export const handler: Handler = async (event) => {
             // Create a pending access request for non-owners
             await sql`
               INSERT INTO chart_permissions (chart_id, user_id, user_email, permission_level, granted_by, status)
-              VALUES (${result[0].id}, ${userId}, ${userEmail}, ${permissionLevel}, ${chartOwnerId}, 'pending')
+              VALUES (${result[0].id}, ${userId}, ${userEmail}, ${permissionLevel}, ${currentOwnerId}, 'pending')
             `;
 
             return {
