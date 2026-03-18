@@ -1,7 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
 import crypto from 'crypto';
-import { verifyToken, extractToken } from './utils/auth';
+import { verifyToken, extractToken, tryMigrateUser } from './utils/auth';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -56,6 +56,9 @@ export const handler: Handler = async (event) => {
 
     // Connect to database
     const sql = neon(DATABASE_URL);
+
+    // Migrate user data if they logged in with a new Auth0 tenant (different sub, same email)
+    await tryMigrateUser(sql, event.headers.authorization, 'createChart');
 
     // Extract chart title from chart data
     const chartTitle = chartData.title || 'Theory of Change';
