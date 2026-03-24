@@ -9,7 +9,7 @@ interface PrivacyPolicyPopupProps {
 
 export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
   const [isVisible, setIsVisible] = useState(false);
-  const [optOut, setOptOut] = useState(false); // Unchecked by default (logging enabled)
+  const [shareData, setShareData] = useState(true); // Checked by default (logging enabled)
   const location = useLocation();
 
   // Inject fade-in animation style once
@@ -60,12 +60,12 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     localStorage.setItem('privacyPolicyAcceptedDate', new Date().toISOString());
 
     // Store usage logging preference
-    loggingService.setOptOut(optOut);
+    loggingService.setOptOut(!shareData);
 
     setIsVisible(false);
 
     // Notify parent to initialize logging if enabled
-    onAccept?.(!optOut);
+    onAccept?.(shareData);
   };
 
   if (!isVisible) {
@@ -94,8 +94,7 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
         {/* Content */}
         <p className="text-sm text-gray-600 text-center mb-5">
           To improve the AI assistant, we collect usage data such as chat messages
-          and graph edits. No email addresses are stored. You can change this
-          preference anytime in Settings.
+          and graph edits. You can change this anytime under Account &gt; Data &amp; Privacy.
         </p>
 
         {/* Actions */}
@@ -108,15 +107,15 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
           </button>
 
           <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 cursor-pointer group">
+            <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={optOut}
-                onChange={(e) => setOptOut(e.target.checked)}
+                checked={shareData}
+                onChange={(e) => setShareData(e.target.checked)}
                 className="h-3.5 w-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 focus:ring-offset-0"
               />
-              <span className="text-xs text-gray-400 group-hover:text-gray-500 transition-colors">
-                I do not want to share usage data
+              <span className="text-xs text-gray-500">
+                Help improve AI by sharing usage data
               </span>
             </label>
 
