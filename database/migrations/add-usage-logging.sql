@@ -1,9 +1,10 @@
 -- Migration: Usage Logging System
 -- Created: 2025-12-04
 -- Updated: 2026-03-11 - Removed user_email (data minimization), added 24-month auto-purge
+-- Updated: 2026-03-24 - Added logging_preferences table, scheduled pg_cron purge directly
 -- Purpose: Track user sessions, chat messages, and graph edits for AI evaluation
 -- Legal basis: Legitimate interests, Art. 6(1)(f) GDPR - see docs/legitimate-interest-assessment.md
--- Note: Opted-out users' data is not stored at all (handled on frontend)
+-- Note: Opted-out users' data is not stored. Enforced both client-side (loggingService) and server-side (logging_preferences table + isUserOptedOut check).
 
 BEGIN;
 
@@ -74,22 +75,25 @@ CREATE INDEX IF NOT EXISTS idx_logging_snapshots_edit_type ON logging_snapshots(
 
 COMMENT ON TABLE logging_snapshots IS 'Graph state snapshots after each edit for replay and evaluation';
 
+-- Table 4: User logging preferences (server-side opt-out persistence)
+CREATE TABLE IF NOT EXISTS logging_preferences (
+  user_id TEXT PRIMARY KEY,
+  opted_out BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE logging_preferences IS 'Server-side storage of user opt-out preferences for usage logging. Authenticated users sync their preference here so it persists across devices and browsers.';
+
 COMMIT;
 
 -- =============================================================================
 -- Auto-purge: 24-month retention policy
 -- Retention period: 24 months from session start
 -- CASCADE on logging_sessions will automatically delete associated messages and snapshots.
--- Schedule this to run periodically (e.g., daily or weekly via pg_cron or external cron job).
+-- Scheduled automatically below via pg_cron (weekly, Sundays at 03:00 UTC).
 -- =============================================================================
 
--- To install pg_cron (if available on your PostgreSQL provider):
---   CREATE EXTENSION IF NOT EXISTS pg_cron;
---   SELECT cron.schedule('purge-old-logging-data', '0 3 * * 0',
---     $$DELETE FROM logging_sessions WHERE started_at < NOW() - INTERVAL '24 months'$$
---   );
-
--- Standalone purge function (can be called manually or via external cron):
+-- Purge function: deletes sessions (and cascaded messages/snapshots) older than 24 months
 CREATE OR REPLACE FUNCTION purge_old_logging_data() RETURNS INTEGER AS $$
 DECLARE
   deleted_count INTEGER;
@@ -102,11 +106,21 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-COMMENT ON FUNCTION purge_old_logging_data() IS 'Purge logging sessions (and cascaded messages/snapshots) older than 24 months. Schedule via pg_cron or external cron job.';
+COMMENT ON FUNCTION purge_old_logging_data() IS 'Purge logging sessions (and cascaded messages/snapshots) older than 24 months.';
+
+-- Schedule weekly purge via pg_cron (requires Neon paid plan; may need enabling in dashboard)
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+SELECT cron.schedule(
+  'purge-old-logging-data',
+  '0 3 * * 0',
+  $$SELECT purge_old_logging_data()$$
+);
 
 -- Rollback script (save separately or run manually if needed):
 -- BEGIN;
+-- SELECT cron.unschedule('purge-old-logging-data');
 -- DROP FUNCTION IF EXISTS purge_old_logging_data();
+-- DROP TABLE IF EXISTS logging_preferences CASCADE;
 -- DROP TABLE IF EXISTS logging_snapshots CASCADE;
 -- DROP TABLE IF EXISTS logging_messages CASCADE;
 -- DROP TABLE IF EXISTS logging_sessions CASCADE;

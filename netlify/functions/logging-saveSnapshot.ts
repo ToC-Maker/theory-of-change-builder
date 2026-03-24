@@ -1,6 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
 import { verifyToken, extractToken } from './utils/auth';
+import { isUserOptedOut } from './utils/logging-optout';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -110,7 +111,11 @@ export const handler: Handler = async (event) => {
         is_authenticated = true;
       } catch (err) {
         console.error('[logging-saveSnapshot] Token verification failed:', err);
-        // Continue as anonymous
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'Token verification failed' })
+        };
       }
     }
 
@@ -119,6 +124,15 @@ export const handler: Handler = async (event) => {
       throw new Error('DATABASE_URL not configured');
     }
     const sql = neon(DATABASE_URL);
+
+    // Server-side opt-out check
+    if (await isUserOptedOut(sql, user_id)) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ opted_out: true })
+      };
+    }
 
     // Atomically get next sequence number and insert snapshot.
     // Use pg_advisory_xact_lock to serialize inserts per session_id,
