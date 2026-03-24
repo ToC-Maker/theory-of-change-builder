@@ -162,7 +162,7 @@ class LoggingServiceClass {
     const sessionId = crypto.randomUUID();
 
     try {
-      await this.fetchWithCircuitBreaker(
+      const response = await this.fetchWithCircuitBreaker(
         `${API_BASE}/logging-createSession`,
         {
           method: 'POST',
@@ -174,6 +174,16 @@ class LoggingServiceClass {
           }),
         }
       );
+
+      if (!response) {
+        return null; // Circuit breaker open
+      }
+
+      // Check if server indicated user has opted out
+      const body = await response.json().catch(() => null);
+      if (body?.opted_out) {
+        return null;
+      }
 
       this.currentSessionId = sessionId;
       this.currentChartId = chartId;
@@ -214,7 +224,7 @@ class LoggingServiceClass {
    * End session via sendBeacon (reliable on page unload)
    */
   endSessionBeacon(): void {
-    if (!this.currentSessionId || this.shouldSkipLogging()) return;
+    if (!this.currentSessionId || !this.isLoggingEnabled()) return;
     const blob = new Blob(
       [JSON.stringify({ session_id: this.currentSessionId })],
       { type: 'application/json' }
@@ -286,13 +296,71 @@ class LoggingServiceClass {
   }
 
   /**
-   * Set opt-out preference (called from PrivacyPolicyPopup)
+   * Set opt-out preference (called from PrivacyPolicyPopup and Settings modal)
+   * Saves to localStorage and syncs to server for authenticated users.
    */
   setOptOut(optOut: boolean): void {
     localStorage.setItem('usageLoggingOptOut', optOut ? 'true' : 'false');
     // If opting out, end any current session
     if (optOut && this.currentSessionId) {
       this.endSession();
+    }
+    // Sync to server for authenticated users
+    this.syncPreferenceToServer(optOut);
+  }
+
+  /**
+   * Sync opt-out preference to server (for authenticated users).
+   * Fire-and-forget — failures don't affect the local preference.
+   * Server sync is best-effort; local preference takes effect immediately.
+   */
+  private async syncPreferenceToServer(optOut: boolean): Promise<void> {
+    const token = this.getAuthToken();
+    if (!token) return; // Anonymous users: local-only
+
+    try {
+      const response = await fetch(`${API_BASE}/logging-preference`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ opted_out: optOut }),
+      });
+      if (!response.ok) {
+        console.error(
+          `[LoggingService] Server rejected preference sync: HTTP ${response.status}`
+        );
+      }
+    } catch (error) {
+      console.error('[LoggingService] Failed to sync preference to server:', error);
+    }
+  }
+
+  /**
+   * Fetch server-side preference and sync to localStorage.
+   * Call this after login / when auth token becomes available.
+   * Server is source of truth for authenticated users: overwrites local preference.
+   */
+  async syncPreferenceFromServer(): Promise<void> {
+    const token = this.getAuthToken();
+    if (!token) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/logging-preference`, {
+        method: 'GET',
+        headers: this.buildHeaders(),
+      });
+      if (!response.ok) {
+        console.warn(
+          `[LoggingService] Failed to fetch preference from server: HTTP ${response.status}`
+        );
+        return;
+      }
+
+      const data = await response.json();
+      if (typeof data.opted_out === 'boolean') {
+        localStorage.setItem('usageLoggingOptOut', data.opted_out ? 'true' : 'false');
+      }
+    } catch (error) {
+      console.error('[LoggingService] Failed to fetch preference from server:', error);
     }
   }
 

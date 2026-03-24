@@ -9,7 +9,11 @@ interface PrivacyPolicyPopupProps {
 
 export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
   const [isVisible, setIsVisible] = useState(false);
-  const [shareData, setShareData] = useState(true); // Checked by default (logging enabled)
+  const [shareData, setShareData] = useState(() => {
+    // Respect any existing preference (e.g. synced from server on login)
+    const stored = localStorage.getItem('usageLoggingOptOut');
+    return stored === null ? true : stored !== 'true';
+  });
   const location = useLocation();
 
   // Inject fade-in animation style once
