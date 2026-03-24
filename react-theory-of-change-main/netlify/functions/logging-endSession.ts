@@ -1,5 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
+import { verifyToken, extractToken } from './utils/auth';
+import { isUserOptedOut } from './utils/logging-optout';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -49,11 +51,38 @@ export const handler: Handler = async (event) => {
       };
     }
 
+    // Extract user_id from auth token (if present)
+    const token = extractToken(event.headers.authorization);
+    let user_id = null;
+
+    if (token) {
+      try {
+        const decoded = await verifyToken(token);
+        user_id = decoded.sub;
+      } catch (err) {
+        console.error('[logging-endSession] Token verification failed:', err);
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'Token verification failed' })
+        };
+      }
+    }
+
     const DATABASE_URL = process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL;
     if (!DATABASE_URL) {
       throw new Error('DATABASE_URL not configured');
     }
     const sql = neon(DATABASE_URL);
+
+    // Server-side opt-out check
+    if (await isUserOptedOut(sql, user_id)) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ opted_out: true })
+      };
+    }
 
     await sql`
       UPDATE logging_sessions

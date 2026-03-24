@@ -1,6 +1,7 @@
 import { Handler } from '@netlify/functions';
 import { neon } from '@neondatabase/serverless';
 import { verifyToken, extractToken } from './utils/auth';
+import { isUserOptedOut } from './utils/logging-optout';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -75,7 +76,13 @@ export const handler: Handler = async (event) => {
         user_id = decoded.sub;
       } catch (err) {
         console.error('[logging-createSession] Token verification failed:', err);
-        // Continue as anonymous
+        // Auth header was present but invalid — don't fall back to anonymous
+        // (would bypass server-side opt-out check)
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'Token verification failed' })
+        };
       }
     }
 
@@ -85,6 +92,15 @@ export const handler: Handler = async (event) => {
       throw new Error('DATABASE_URL not configured');
     }
     const sql = neon(DATABASE_URL);
+
+    // Server-side opt-out check
+    if (await isUserOptedOut(sql, user_id)) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ opted_out: true })
+      };
+    }
 
     // Insert session - ON CONFLICT updates started_at for session resume
     const result = await sql`

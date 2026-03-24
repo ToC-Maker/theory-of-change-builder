@@ -9,7 +9,7 @@ import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
-import { LoggingServiceClass } from "./services/loggingService"
+import { LoggingServiceClass, loggingService } from "./services/loggingService"
 import { useLoggingSession } from "./hooks/useLoggingSession"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import AuthButton from "./components/AuthButton"
@@ -627,6 +627,8 @@ function ToCViewer() {
           if (idToken) {
             ChartService.setAuthToken(idToken);
             LoggingServiceClass.setAuthToken(idToken);
+            // Sync server-side logging preference to localStorage before proceeding
+            await loggingService.syncPreferenceFromServer();
             console.log('[App] Auth token set on ChartService and LoggingService (length:', idToken.length, ')');
             setAuthTokenReady(true);
           } else {
