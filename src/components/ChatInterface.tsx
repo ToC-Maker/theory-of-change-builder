@@ -55,12 +55,13 @@ interface ChatInterfaceProps {
 
 const MODELS = {
   'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+  'claude-opus-4-6': 'Claude Opus 4.6',
 } as const;
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
   const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
-  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-6');
+  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-6');
 
   // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
@@ -1264,7 +1265,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </button>
                     </div>
                     <div className="flex items-center gap-2">
-                      {/* Model dropdown - hidden while only one model; uncomment when adding more models
                       <div className="relative" ref={modelDropdownRef}>
                         <button
                           onClick={() => setShowModelDropdown(!showModelDropdown)}
@@ -1288,13 +1288,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                                   selectedModel === key ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
                                 }`}
                               >
-                                {key}
+                                {name}
                               </button>
                             ))}
                           </div>
                         )}
                       </div>
-                      */}
 
                       {isStreaming ? (
                         <button
