@@ -111,7 +111,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [apiKeyError, setApiKeyError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [extendedThinkingEnabled, setExtendedThinkingEnabled] = useState(true);
 
   // Generate mode state
