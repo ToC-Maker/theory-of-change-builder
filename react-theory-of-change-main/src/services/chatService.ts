@@ -160,7 +160,7 @@ class ChatService {
       onSearchComplete?: (results?: any[]) => void;
     } = {},
     signal?: AbortSignal,
-    model: string = "claude-sonnet-4-6",
+    model: string = "claude-opus-4-6",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
