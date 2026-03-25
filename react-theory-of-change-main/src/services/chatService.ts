@@ -18,6 +18,11 @@ export interface ChatMessage {
 
 class ChatService {
   private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
+  private authToken: string | null = null;
+
+  setAuthToken(token: string | null) {
+    this.authToken = token;
+  }
 
   private async streamFromEdgeFunction(
     url: string,
@@ -31,11 +36,16 @@ class ChatService {
     },
     signal?: AbortSignal
   ): Promise<void> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(requestBody),
       signal,
     });
@@ -153,8 +163,7 @@ class ChatService {
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
-    extendedThinkingEnabled: boolean = false,
-    userId?: string
+    extendedThinkingEnabled: boolean = false
   ): Promise<void> {
     try {
       // Process the last user message
@@ -226,8 +235,7 @@ class ChatService {
           role: msg.role as 'user' | 'assistant',
           content: msg.content
         })),
-        stream: true,
-        ...(userId && { metadata: { user_id: userId } })
+        stream: true
       };
 
       // Add web search with dynamic filtering (auto-injects code_execution)
