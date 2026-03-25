@@ -57,7 +57,8 @@ class ChatService {
         statusText: response.statusText,
         errorData
       });
-      throw new Error(errorData.error || errorData.details || `HTTP error! status: ${response.status}`);
+      const msg = errorData?.error?.message || errorData?.error?.type || errorData?.details || `HTTP error! status: ${response.status}`;
+      throw new Error(msg);
     }
 
     if (!response.body) {

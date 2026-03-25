@@ -1,7 +1,10 @@
 async function hashIP(ip: string): Promise<string> {
-  const data = new TextEncoder().encode(ip);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hash))
+  const salt = Deno.env.get('IP_HASH_SALT') || 'toc-tool-default-salt';
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(salt), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ip));
+  return Array.from(new Uint8Array(sig))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 }
@@ -30,6 +33,10 @@ export default async (request: Request) => {
     const body = await request.json();
 
     // Set metadata.user_id server-side (never trust client-provided value)
+    // Note: JWT is decoded but not signature-verified. A malicious user could forge
+    // a sub claim to misattribute usage in Anthropic's abuse tracking, but this is
+    // not used for authorization. Full JWKS verification would add ~100-200ms latency
+    // per request (edge functions can't cache across invocations).
     let userId: string | null = null;
     const authHeader = request.headers.get('authorization');
     if (authHeader?.startsWith('Bearer ')) {
@@ -38,7 +45,9 @@ export default async (request: Request) => {
         const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
         const payload = JSON.parse(atob(b64));
         if (payload.sub) userId = payload.sub;
-      } catch {}
+      } catch (e) {
+        console.warn('Failed to decode JWT for user_id:', e);
+      }
     }
     if (!userId) {
       try {
