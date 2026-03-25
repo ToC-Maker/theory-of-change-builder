@@ -1,0 +1,27 @@
+name: Purge old logging data
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # Weekly, Sundays 03:00 UTC (matches pg_cron schedule)
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Verify database secret is set
+        env:
+          DATABASE_URL: ${{ secrets.NETLIFY_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::NETLIFY_DATABASE_URL secret is not set"
+            exit 1
+          fi
+      - name: Purge logging data older than 24 months
+        env:
+          DATABASE_URL: ${{ secrets.NETLIFY_DATABASE_URL }}
+        run: |
+          psql "$DATABASE_URL" -c "SELECT purge_old_logging_data();"
