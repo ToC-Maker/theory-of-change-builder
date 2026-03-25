@@ -21,8 +21,6 @@ export default async (request: Request) => {
     // Parse the request body
     const body = await request.json();
 
-    console.log('Edge function called with body:', JSON.stringify(body, null, 2));
-
     // Forward the request to Anthropic API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
