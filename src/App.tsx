@@ -9,6 +9,7 @@ import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
+import { chatService } from "./services/chatService"
 import { LoggingServiceClass, loggingService } from "./services/loggingService"
 import { useLoggingSession } from "./hooks/useLoggingSession"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
@@ -626,6 +627,7 @@ function ToCViewer() {
           const idToken = idTokenClaims?.__raw;
           if (idToken) {
             ChartService.setAuthToken(idToken);
+            chatService.setAuthToken(idToken);
             LoggingServiceClass.setAuthToken(idToken);
             // Sync server-side logging preference to localStorage before proceeding
             await loggingService.syncPreferenceFromServer();
@@ -634,12 +636,14 @@ function ToCViewer() {
           } else {
             console.error('[App] ID token not available');
             ChartService.setAuthToken(null);
+            chatService.setAuthToken(null);
             LoggingServiceClass.setAuthToken(null);
             setAuthTokenReady(true); // Ready even if no token (anonymous mode)
           }
         } catch (err) {
           console.error('[App] Failed to get ID token:', err);
           ChartService.setAuthToken(null);
+          chatService.setAuthToken(null);
           LoggingServiceClass.setAuthToken(null);
           setAuthTokenReady(true); // Ready even if error (anonymous mode)
         }
@@ -647,6 +651,7 @@ function ToCViewer() {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
         ChartService.setAuthToken(null);
+        chatService.setAuthToken(null);
         LoggingServiceClass.setAuthToken(null);
         setAuthTokenReady(true); // Ready for anonymous mode
       } else {

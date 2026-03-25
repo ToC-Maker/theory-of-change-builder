@@ -1,3 +1,11 @@
+async function hashIP(ip: string): Promise<string> {
+  const data = new TextEncoder().encode(ip);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 export default async (request: Request) => {
   // Only allow POST requests
   if (request.method !== 'POST') {
@@ -20,6 +28,29 @@ export default async (request: Request) => {
   try {
     // Parse the request body
     const body = await request.json();
+
+    // Set metadata.user_id server-side (never trust client-provided value)
+    let userId: string | null = null;
+    const authHeader = request.headers.get('authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        const b64url = authHeader.slice(7).split('.')[1];
+        const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(atob(b64));
+        if (payload.sub) userId = payload.sub;
+      } catch {}
+    }
+    if (!userId) {
+      try {
+        const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+          || request.headers.get('x-real-ip')
+          || 'unknown';
+        userId = `anon-${await hashIP(ip)}`;
+      } catch {
+        userId = 'anon-unknown';
+      }
+    }
+    body.metadata = { user_id: userId };
 
     // Forward the request to Anthropic API
     const response = await fetch('https://api.anthropic.com/v1/messages', {

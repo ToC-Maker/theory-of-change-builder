@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
-import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
@@ -60,7 +59,6 @@ const MODELS = {
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
   const { apiKey, setApiKey, isConfigured } = useApiKey();
-  const { user } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-sonnet-4-6');
 
@@ -509,8 +507,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      extendedThinkingEnabled,
-      user?.sub
+      extendedThinkingEnabled
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -774,8 +771,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      extendedThinkingEnabled,
-      user?.sub
+      extendedThinkingEnabled
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
