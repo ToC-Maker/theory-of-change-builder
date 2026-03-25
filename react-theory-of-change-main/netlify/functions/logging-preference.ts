@@ -52,10 +52,14 @@ export const handler: Handler = async (event) => {
       const result = await sql`
         SELECT opted_out FROM logging_preferences WHERE user_id = ${user_id}
       `;
+      const hasRecord = result.length > 0;
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ opted_out: result[0]?.opted_out ?? false })
+        body: JSON.stringify({
+          opted_out: hasRecord ? result[0].opted_out : false,
+          has_record: hasRecord
+        })
       };
     }
 
