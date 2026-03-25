@@ -28,7 +28,7 @@ npm run storybook        # Component development (port 6006)
 - **Backend**: Netlify Functions (Node.js) + Edge Functions (Deno)
 - **Database**: Neon PostgreSQL (serverless)
 - **Auth**: Auth0 (JWT validation server-side)
-- **AI**: Google Gemini API via `/api/gemini-stream` edge function
+- **AI**: Anthropic Claude API via `/api/anthropic-stream` edge function
 
 ## Critical Architecture Notes
 
@@ -89,7 +89,7 @@ Required in `.env.local` and Netlify:
 DATABASE_URL=postgresql://...              # Neon connection string
 VITE_AUTH0_DOMAIN=your-domain.auth0.com   # Public (VITE_ prefix exposed to client)
 VITE_AUTH0_CLIENT_ID=your-client-id       # Public
-GEMINI_API_KEY=AIza...                    # Server-side only (edge function)
+ANTHROPIC_API_KEY=sk-ant-...              # Server-side only (edge function)
 ```
 
 **Never** commit API keys. `VITE_*` variables are client-exposed by design (Auth0 public credentials).
@@ -126,7 +126,7 @@ PDF parsing uses `pdfjs-dist` with web worker. If PDFs fail to parse:
 
 ### Local Development with Functions
 Use `netlify dev` (not `npm run dev`) when testing:
-- AI features (requires edge function `/api/gemini-stream`)
+- AI features (requires edge function `/api/anthropic-stream`)
 - Database operations (requires serverless functions)
 - Auth flows (requires proper callback URLs)
 
@@ -140,7 +140,7 @@ Use `netlify dev` (not `npm run dev`) when testing:
 - `src/services/chartService.ts` - API client for CRUD operations
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `netlify/functions/` - Serverless functions (getChart, updateChart, etc.)
-- `netlify/edge-functions/gemini-stream.ts` - AI streaming proxy
+- `netlify/edge-functions/anthropic-stream.ts` - AI streaming proxy
 
 For complex graph editing logic or connection rendering issues, see `ConnectionsComponent.tsx` and `graphEdits.ts`.
 

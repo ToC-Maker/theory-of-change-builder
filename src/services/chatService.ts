@@ -17,15 +17,11 @@ export interface ChatMessage {
 }
 
 class ChatService {
-  private readonly GEMINI_EDGE_FUNCTION_URL = '/api/gemini-stream';
-  private readonly ANTHROPIC_EDGE_FUNCTION_URL = '/api/anthropic-stream';
+  private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
+  private authToken: string | null = null;
 
-  private getEdgeFunctionUrl(model: string): string {
-    // Route to Anthropic for Claude models, Gemini for everything else
-    if (model.startsWith('claude-')) {
-      return this.ANTHROPIC_EDGE_FUNCTION_URL;
-    }
-    return this.GEMINI_EDGE_FUNCTION_URL;
+  setAuthToken(token: string | null) {
+    this.authToken = token;
   }
 
   private async streamFromEdgeFunction(
@@ -40,11 +36,16 @@ class ChatService {
     },
     signal?: AbortSignal
   ): Promise<void> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(requestBody),
       signal,
     });
@@ -56,7 +57,8 @@ class ChatService {
         statusText: response.statusText,
         errorData
       });
-      throw new Error(errorData.error || errorData.details || `HTTP error! status: ${response.status}`);
+      const msg = errorData?.error?.message || errorData?.error?.type || errorData?.details || `HTTP error! status: ${response.status}`;
+      throw new Error(msg);
     }
 
     if (!response.body) {
@@ -136,7 +138,6 @@ class ChatService {
               }
             } catch (e) {
               // Ignore JSON parse errors for partial data
-              console.warn('Failed to parse SSE data:', e);
             }
           }
         }
@@ -159,7 +160,7 @@ class ChatService {
       onSearchComplete?: (results?: any[]) => void;
     } = {},
     signal?: AbortSignal,
-    model: string = "gemini-2.0-flash",
+    model: string = "claude-sonnet-4-6",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
@@ -225,8 +226,12 @@ class ChatService {
       // Create request body for edge function
       const requestBody: any = {
         model,
-        max_tokens: 20000,
-        system: systemPrompt,
+        max_tokens: 64000,
+        system: [{
+          type: "text",
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" }
+        }],
         messages: processedMessages.map(msg => ({
           role: msg.role as 'user' | 'assistant',
           content: msg.content
@@ -234,33 +239,29 @@ class ChatService {
         stream: true
       };
 
-      // Add web search tool if enabled
+      // Add web search with dynamic filtering (auto-injects code_execution)
       if (webSearchEnabled) {
         requestBody.tools = [{
-          type: "web_search_20250305",
-          name: "web_search",
-          max_uses: 5
+          type: "web_search_20260209",
+          name: "web_search"
         }];
       }
 
-      // Add extended thinking if enabled
+      // Add adaptive thinking if enabled (Claude decides how much to think)
       if (extendedThinkingEnabled) {
         requestBody.thinking = {
-          type: "enabled",
-          budget_tokens: 10000  // You can adjust this value as needed
+          type: "adaptive"
         };
       }
 
-      // Stream from edge function (route based on model)
-      const edgeFunctionUrl = this.getEdgeFunctionUrl(model);
-      await this.streamFromEdgeFunction(edgeFunctionUrl, requestBody, callbacks, signal);
+      await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal);
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
-        const errorMessage = error.message.includes('rate_limit') || error.message.includes('RESOURCE_EXHAUSTED') ? "Rate limit exceeded. Please wait and try again." :
-                           error.message.includes('invalid_api_key') || error.message.includes('API_KEY_INVALID') ? "Invalid API key. Please check your settings." :
-                           error.message.includes('insufficient_quota') || error.message.includes('QUOTA_EXCEEDED') ? "Insufficient API quota." :
+        const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
+                           error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
+                           error.message.includes('insufficient_quota') ? "Insufficient API quota." :
                            error.message.includes('network') ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 

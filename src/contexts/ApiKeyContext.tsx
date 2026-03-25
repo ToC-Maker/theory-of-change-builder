@@ -9,7 +9,7 @@ interface ApiKeyContextType {
 
 const ApiKeyContext = createContext<ApiKeyContextType | undefined>(undefined);
 
-const API_KEY_STORAGE_KEY = 'gemini_api_key';
+const API_KEY_STORAGE_KEY = 'api_key';
 
 interface ApiKeyProviderProps {
   children: ReactNode;
@@ -75,7 +75,6 @@ export function validateApiKey(key: string): { isValid: boolean; error?: string 
     return { isValid: false, error: 'API key is required' };
   }
 
-  // Gemini API keys are typically 39 characters and start with "AIza"
   if (trimmedKey.length < 30) {
     return { isValid: false, error: 'API key appears to be too short' };
   }
