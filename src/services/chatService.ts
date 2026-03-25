@@ -127,7 +127,6 @@ class ChatService {
               }
             } catch (e) {
               // Ignore JSON parse errors for partial data
-              console.warn('Failed to parse SSE data:', e);
             }
           }
         }
@@ -225,20 +224,19 @@ class ChatService {
         stream: true
       };
 
-      // Add web search tool if enabled
+      // Add web search with dynamic filtering (auto-injects code_execution)
       if (webSearchEnabled) {
         requestBody.tools = [{
-          type: "web_search_20250305",
+          type: "web_search_20260209",
           name: "web_search",
           max_uses: 5
         }];
       }
 
-      // Add extended thinking if enabled
+      // Add adaptive thinking if enabled (Claude decides how much to think)
       if (extendedThinkingEnabled) {
         requestBody.thinking = {
-          type: "enabled",
-          budget_tokens: 10000  // You can adjust this value as needed
+          type: "adaptive"
         };
       }
 
