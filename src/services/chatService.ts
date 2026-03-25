@@ -17,16 +17,7 @@ export interface ChatMessage {
 }
 
 class ChatService {
-  private readonly GEMINI_EDGE_FUNCTION_URL = '/api/gemini-stream';
-  private readonly ANTHROPIC_EDGE_FUNCTION_URL = '/api/anthropic-stream';
-
-  private getEdgeFunctionUrl(model: string): string {
-    // Route to Anthropic for Claude models, Gemini for everything else
-    if (model.startsWith('claude-')) {
-      return this.ANTHROPIC_EDGE_FUNCTION_URL;
-    }
-    return this.GEMINI_EDGE_FUNCTION_URL;
-  }
+  private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
 
   private async streamFromEdgeFunction(
     url: string,
@@ -159,7 +150,7 @@ class ChatService {
       onSearchComplete?: (results?: any[]) => void;
     } = {},
     signal?: AbortSignal,
-    model: string = "gemini-2.0-flash",
+    model: string = "claude-sonnet-4-6",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
@@ -251,16 +242,14 @@ class ChatService {
         };
       }
 
-      // Stream from edge function (route based on model)
-      const edgeFunctionUrl = this.getEdgeFunctionUrl(model);
-      await this.streamFromEdgeFunction(edgeFunctionUrl, requestBody, callbacks, signal);
+      await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal);
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
-        const errorMessage = error.message.includes('rate_limit') || error.message.includes('RESOURCE_EXHAUSTED') ? "Rate limit exceeded. Please wait and try again." :
-                           error.message.includes('invalid_api_key') || error.message.includes('API_KEY_INVALID') ? "Invalid API key. Please check your settings." :
-                           error.message.includes('insufficient_quota') || error.message.includes('QUOTA_EXCEEDED') ? "Insufficient API quota." :
+        const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
+                           error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
+                           error.message.includes('insufficient_quota') ? "Insufficient API quota." :
                            error.message.includes('network') ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
