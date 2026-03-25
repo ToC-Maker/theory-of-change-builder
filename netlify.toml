@@ -40,6 +40,27 @@
   status = 404
   force = true
 
+# Exclude Vite dev server paths from redirects
+[[redirects]]
+  from = "/@vite/*"
+  to = "/@vite/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/@react-refresh"
+  to = "/@react-refresh"
+  status = 200
+
+[[redirects]]
+  from = "/src/*"
+  to = "/src/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/node_modules/*"
+  to = "/node_modules/:splat"
+  status = 200
+
 # SPA fallback - REQUIRED for production routes to work
 [[redirects]]
   from = "/*"

@@ -9,6 +9,8 @@ import { GraphTutorial } from "./components/GraphTutorial"
 import { PrivacyPolicyPopup } from "./components/PrivacyPolicyPopup"
 import { ApiKeyProvider } from "./contexts/ApiKeyContext"
 import { ChartService } from "./services/chartService"
+import { LoggingServiceClass, loggingService } from "./services/loggingService"
+import { useLoggingSession } from "./hooks/useLoggingSession"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import AuthButton from "./components/AuthButton"
 import "./App.css"
@@ -550,6 +552,7 @@ function ToCViewer() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false)
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null)
+  const [currentChartId, setCurrentChartId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null)
   const [isManualSyncing, setIsManualSyncing] = useState(false)
@@ -613,7 +616,7 @@ function ToCViewer() {
     excludeFromPan,
   })
 
-  // Set Auth0 token on ChartService when user is authenticated
+  // Set Auth0 token on ChartService and LoggingService when user is authenticated
   useEffect(() => {
     const setToken = async () => {
       if (isAuthenticated && !authLoading) {
@@ -623,22 +626,28 @@ function ToCViewer() {
           const idToken = idTokenClaims?.__raw;
           if (idToken) {
             ChartService.setAuthToken(idToken);
-            console.log('[App] Auth token set on ChartService (length:', idToken.length, ')');
+            LoggingServiceClass.setAuthToken(idToken);
+            // Sync server-side logging preference to localStorage before proceeding
+            await loggingService.syncPreferenceFromServer();
+            console.log('[App] Auth token set on ChartService and LoggingService (length:', idToken.length, ')');
             setAuthTokenReady(true);
           } else {
             console.error('[App] ID token not available');
             ChartService.setAuthToken(null);
+            LoggingServiceClass.setAuthToken(null);
             setAuthTokenReady(true); // Ready even if no token (anonymous mode)
           }
         } catch (err) {
           console.error('[App] Failed to get ID token:', err);
           ChartService.setAuthToken(null);
+          LoggingServiceClass.setAuthToken(null);
           setAuthTokenReady(true); // Ready even if error (anonymous mode)
         }
       } else if (!authLoading) {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
         ChartService.setAuthToken(null);
+        LoggingServiceClass.setAuthToken(null);
         setAuthTokenReady(true); // Ready for anonymous mode
       } else {
         // Auth still loading
@@ -698,6 +707,23 @@ function ToCViewer() {
       setIsManualSyncing(false);
     }
   };
+
+  // Logging session lifecycle (session init, activity tracking, cleanup)
+  const {
+    initializeLogging,
+    handlePrivacyAccept,
+    handleLoggingEnabled,
+    logGraphChange,
+  } = useLoggingSession({ chartId: currentChartId, graphData: data });
+
+  // Handler for when a new chart is created (auto-save or manual share)
+  const handleChartCreated = useCallback(async (editToken: string, chartId: string) => {
+    setCurrentEditToken(editToken);
+    setCurrentChartId(chartId);
+    if (dataRef.current) {
+      initializeLogging(chartId, dataRef.current);
+    }
+  }, [initializeLogging]);
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -810,13 +836,15 @@ function ToCViewer() {
   // Debounced save to database
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingChangesRef = useRef<ToCData | null>(null);
+  const dataRef = useRef<ToCData | null>(data);
+  useEffect(() => { dataRef.current = data; }, [data]);
 
-  const handleDataChange = (newData: ToCData) => {
+  const handleDataChange = useCallback((newData: ToCData) => {
     console.log('App handleDataChange called');
 
     // Save current state to history before updating
-    if (data) {
-      saveToHistory(data);
+    if (dataRef.current) {
+      saveToHistory(dataRef.current);
     }
 
     // Clear redo history when new changes are made
@@ -824,6 +852,9 @@ function ToCViewer() {
 
     setData(newData);
     pendingChangesRef.current = newData;
+
+    // Save debounced snapshot for logging (manual edits)
+    logGraphChange(newData, 'manual_edit');
 
     // Always save to localStorage immediately (local backup)
     if (!currentEditToken) {
@@ -863,7 +894,7 @@ function ToCViewer() {
       }
       saveTimeoutRef.current = null;
     }, 300); // 300ms debounce
-  };
+  }, [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   const handleUndo = useCallback(() => {
     // Clear any pending saves first
@@ -892,6 +923,9 @@ function ToCViewer() {
       pendingChangesRef.current = previousState;
       saveToLocalStorage(previousState);
 
+      // Save undo snapshot for logging
+      logGraphChange(previousState, 'undo');
+
       // Trigger debounced database save for undo
       if (currentEditToken) {
         if (saveTimeoutRef.current) {
@@ -919,7 +953,7 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken]);
+  }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   const handleRedo = useCallback(() => {
     // Clear any pending saves first
@@ -946,6 +980,9 @@ function ToCViewer() {
       setData(nextState);
       pendingChangesRef.current = nextState;
       saveToLocalStorage(nextState);
+
+      // Save redo snapshot for logging
+      logGraphChange(nextState, 'redo');
 
       // Trigger debounced database save for redo
       if (currentEditToken) {
@@ -974,7 +1011,7 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken]);
+  }, [redoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -1084,7 +1121,13 @@ function ToCViewer() {
     };
   }, [isSaving]);
 
-  // Cleanup timeouts on unmount
+  // Store currentEditToken in a ref so cleanup can access latest value without re-running
+  const currentEditTokenRef = useRef(currentEditToken);
+  useEffect(() => {
+    currentEditTokenRef.current = currentEditToken;
+  }, [currentEditToken]);
+
+  // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
     return () => {
       if (undoTimeoutRef.current) {
@@ -1093,12 +1136,12 @@ function ToCViewer() {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         // Save any pending changes immediately on unmount
-        if (pendingChangesRef.current && currentEditToken) {
-          ChartService.updateChart(currentEditToken, pendingChangesRef.current).catch(console.error);
+        if (pendingChangesRef.current && currentEditTokenRef.current) {
+          ChartService.updateChart(currentEditTokenRef.current, pendingChangesRef.current).catch(console.error);
         }
       }
     };
-  }, [currentEditToken]);
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
@@ -1119,6 +1162,10 @@ function ToCViewer() {
           const result = await ChartService.getChartByEditToken(editToken);
           setData(result.chartData);
           setCurrentEditToken(editToken);
+          setCurrentChartId(result.chartId);
+
+          // Initialize logging session after chart is loaded
+          initializeLogging(result.chartId, result.chartData);
         } else if (filename) {
           // Fallback to file-based loading for backwards compatibility
           const savedData = loadFromLocalStorage(filename);
@@ -1439,7 +1486,7 @@ function ToCViewer() {
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
-              onEditTokenChange={setCurrentEditToken}
+              onChartCreated={handleChartCreated}
               viewportOffset={viewportOffset}
             />
           </div>
@@ -1455,7 +1502,7 @@ function ToCViewer() {
           zIndex: 9999
         }}
       >
-        <AuthButton />
+        <AuthButton onLoggingEnabled={handleLoggingEnabled} />
       </div>
 
       {/* Zoom Controls - Google Maps Style (hidden on mobile) */}
@@ -1508,6 +1555,9 @@ function ToCViewer() {
           loading={loading}
         />
       </div>
+
+      {/* Privacy Policy Popup */}
+      <PrivacyPolicyPopup onAccept={handlePrivacyAccept} />
     </div>
   )
 }
@@ -1544,7 +1594,6 @@ function App() {
   return (
     <ApiKeyProvider>
       <Auth0RedirectHandler />
-      <PrivacyPolicyPopup />
       <Routes>
         {/* New URL-based routes */}
         <Route path="/" element={<ToCViewer />} />
