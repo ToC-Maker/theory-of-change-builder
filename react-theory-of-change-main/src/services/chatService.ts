@@ -153,7 +153,8 @@ class ChatService {
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
-    extendedThinkingEnabled: boolean = false
+    extendedThinkingEnabled: boolean = false,
+    userId?: string
   ): Promise<void> {
     try {
       // Process the last user message
@@ -215,21 +216,25 @@ class ChatService {
       // Create request body for edge function
       const requestBody: any = {
         model,
-        max_tokens: 20000,
-        system: systemPrompt,
+        max_tokens: 64000,
+        system: [{
+          type: "text",
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" }
+        }],
         messages: processedMessages.map(msg => ({
           role: msg.role as 'user' | 'assistant',
           content: msg.content
         })),
-        stream: true
+        stream: true,
+        ...(userId && { metadata: { user_id: userId } })
       };
 
       // Add web search with dynamic filtering (auto-injects code_execution)
       if (webSearchEnabled) {
         requestBody.tools = [{
           type: "web_search_20260209",
-          name: "web_search",
-          max_uses: 5
+          name: "web_search"
         }];
       }
 
