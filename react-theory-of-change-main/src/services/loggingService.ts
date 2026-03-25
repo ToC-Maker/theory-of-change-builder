@@ -356,6 +356,13 @@ class LoggingServiceClass {
       }
 
       const data = await response.json();
+      if (data.has_record === false) {
+        // First login: server has no preference record for this user.
+        // Clear localStorage so the privacy popup re-shows for an explicit choice.
+        localStorage.removeItem('privacyPolicyAccepted');
+        localStorage.removeItem('usageLoggingOptOut');
+        return;
+      }
       if (typeof data.opted_out === 'boolean') {
         localStorage.setItem('usageLoggingOptOut', data.opted_out ? 'true' : 'false');
       }
