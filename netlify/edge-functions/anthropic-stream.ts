@@ -1,5 +1,6 @@
 async function hashIP(ip: string): Promise<string> {
-  const salt = Deno.env.get('IP_HASH_SALT') || 'toc-tool-default-salt';
+  const salt = Deno.env.get('IP_HASH_SALT');
+  if (!salt) throw new Error('IP_HASH_SALT environment variable must be set');
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(salt), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
   );
