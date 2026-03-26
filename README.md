@@ -1,67 +1,90 @@
-# Theory of Change Graph Builder
+# Theory of Change Builder
 
-An interactive web application for creating and sharing Theory of Change diagrams with persistent URLs and collaborative editing.
+An interactive web application for creating [Theory of Change](https://en.wikipedia.org/wiki/Theory_of_change) diagrams with AI assistance. Built for nonprofits, researchers, and anyone designing interventions who wants to think rigorously about how their work leads to impact.
+
+A Theory of Change maps the causal chain from your activities to your intended impact, making assumptions explicit, testable, and open to scrutiny. This tool helps you build those maps collaboratively, with an AI co-pilot that challenges weak logic and demands evidence.
 
 ## Features
 
-- 📊 Interactive drag-and-drop graph creation
-- 🔗 Shareable URLs with view/edit permissions
-- 💾 Automatic cloud saving
-- 📱 Responsive design
-- ⚡ Real-time collaboration ready
+- **AI-assisted graph building**: An AI co-pilot guides you through constructing your Theory of Change step by step, challenging assumptions and suggesting evidence
+- **Interactive graph editor**: Drag-and-drop nodes, draw connections, and organize your causal chain visually
+- **Confidence scoring**: Rate the strength of each causal link (0-100%) with evidence and assumptions attached
+- **Shareable URLs**: Every chart gets a persistent URL for viewing (`/chart/{id}`) or editing (`/edit/{token}`)
+- **Permission system**: Control who can view or edit your charts, with link sharing and approval workflows
+- **PDF and document import**: Upload existing Theory of Change documents to seed your graph
+- **Cloud saving**: Charts are automatically saved to the database
+- **Auth0 authentication**: Optional sign-in for chart ownership and access control
+- **Undo/redo**: Full history of edits with keyboard shortcuts
 
-## Quick Start
+## Getting Started
 
-### Development
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) (v18+)
+- [Netlify CLI](https://docs.netlify.com/cli/get-started/) (for local development with backend functions)
+- A [Neon](https://neon.tech) PostgreSQL database
+- An [Auth0](https://auth0.com) application (for authentication)
+- An [Anthropic API key](https://console.anthropic.com/) (for AI features)
+
+### Installation
+
 ```bash
+git clone https://github.com/ToC-Maker/theory-of-change-builder.git
+cd theory-of-change-builder
 npm install
-npm run dev
 ```
 
-### Production Deploy (Netlify)
-```bash
-npm run build
-```
+### Environment Variables
 
-## Environment Setup
-
-### Required Environment Variables
-Add these to your `.env.local` for development and Netlify environment for production:
+Create a `.env.local` file:
 
 ```env
-DATABASE_URL=your-neon-postgresql-connection-string
+DATABASE_URL=postgresql://...              # Neon connection string
+VITE_AUTH0_DOMAIN=your-domain.auth0.com    # Auth0 domain (public, client-side)
+VITE_AUTH0_CLIENT_ID=your-client-id        # Auth0 client ID (public, client-side)
+ANTHROPIC_API_KEY=sk-ant-...               # Anthropic API key (server-side only)
+IP_HASH_SALT=your-random-salt              # Salt for IP hashing (server-side only)
 ```
 
 ### Database Setup
+
 1. Create a [Neon](https://neon.tech) PostgreSQL database
-2. Run the schema creation (table will be auto-created on first use)
-3. Add your DATABASE_URL to environment variables
+2. Run the schema from `database/schema.sql`
+3. Apply migrations from `database/migrations/` in order
 
-## Architecture
-
-- **Frontend**: React + TypeScript + Vite
-- **Backend**: Netlify Functions (serverless)
-- **Database**: PostgreSQL (Neon)
-- **Deployment**: Netlify
-
-## API Endpoints
-
-- `POST /.netlify/functions/createChart` - Create new chart
-- `GET /.netlify/functions/getChart` - Fetch chart by ID or edit token
-- `POST /.netlify/functions/updateChart` - Update existing chart
-
-## URL Structure
-
-- `/` - Create new chart
-- `/chart/{id}` - View chart (read-only)
-- `/edit/{token}` - Edit chart (full permissions)
-
-## Local Testing
+### Running Locally
 
 ```bash
-# With Netlify Dev (recommended)
-npm install -g netlify-cli
+# Full-stack development (recommended: includes backend functions and AI features)
 netlify dev
 
-# App will be available at http://localhost:8888
+# Frontend only (no backend functions)
+npm run dev
 ```
+
+The app will be available at `http://localhost:8888` (Netlify Dev) or `http://localhost:5173` (Vite only).
+
+## Usage
+
+1. **Create a new chart** at the root URL
+2. **Use the AI assistant** (chat panel) to build your Theory of Change step by step, or create nodes manually
+3. **Share your chart** using the share button to get view-only or edit links
+4. **Import documents** by uploading PDFs or text files describing an existing Theory of Change
+
+### URL Structure
+
+- `/` -- Create a new chart
+- `/chart/{id}` -- View a chart (read-only)
+- `/edit/{token}` -- Edit a chart (with permissions)
+
+## Tech Stack
+
+- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router 7
+- **Backend**: Netlify Functions (Node.js) + Edge Functions (Deno)
+- **Database**: Neon PostgreSQL (serverless)
+- **Auth**: Auth0
+- **AI**: Anthropic Claude API
+
+## Contributing
+
+Contributions are welcome. See `CLAUDE.md` for architecture details and development guidance.
