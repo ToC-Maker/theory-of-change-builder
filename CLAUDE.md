@@ -144,7 +144,7 @@ Use `netlify dev` (not `npm run dev`) when testing:
 
 For complex graph editing logic or connection rendering issues, see `ConnectionsComponent.tsx` and `graphEdits.ts`.
 
-For Auth0 integration details or permission system changes, see `AUTH0_INTEGRATION_GUIDE.md`.
+For Auth0 integration details or permission system changes, see the Auth0 configuration in `netlify/functions/utils/auth.ts`.
 
 ## Testing
 

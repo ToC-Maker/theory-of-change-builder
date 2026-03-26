@@ -30,3 +30,15 @@ dist-ssr
 
 # Test files with sensitive data
 test-database.js
+
+# Netlify
+.netlify/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Internal planning
+plans/
+
+# Storybook build
+storybook-static/

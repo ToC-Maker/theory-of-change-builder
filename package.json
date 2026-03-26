@@ -1,7 +1,12 @@
 {
-  "name": "react-theory-of-change",
+  "name": "theory-of-change-builder",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Interactive web app for creating Theory of Change diagrams with AI assistance",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ToC-Maker/theory-of-change-builder"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
