@@ -379,6 +379,52 @@ class LoggingServiceClass {
   }
 
   // ---------------------------------------------------------------------------
+  // Error reporting
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Report a client-side error to the backend. Fire-and-forget: never throws.
+   * Does NOT require an active logging session (errors may occur before session init).
+   */
+  reportError(error: {
+    error_name: string;
+    error_message: string;
+    http_status?: number;
+    stack_trace?: string;
+    chart_id?: string;
+    request_metadata?: Record<string, unknown>;
+  }): void {
+    // Only check circuit breaker, not opt-out. Error reports are operational
+    // diagnostics (not AI improvement data), so they aren't subject to the
+    // usage data opt-out.
+    if (this.shouldSkipLogging()) return;
+
+    const payload = {
+      error_id: crypto.randomUUID(),
+      error_name: error.error_name,
+      error_message: error.error_message,
+      http_status: error.http_status,
+      stack_trace: error.stack_trace?.slice(0, 4096),
+      user_agent: navigator.userAgent,
+      chart_id: error.chart_id || this.currentChartId || undefined,
+      session_id: this.currentSessionId || undefined,
+      request_metadata: error.request_metadata,
+    };
+
+    // Fire-and-forget: no await, errors caught internally
+    this.fetchWithCircuitBreaker(
+      `${API_BASE}/logging-reportError`,
+      {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(payload),
+      }
+    ).catch((err) => {
+      console.error('[LoggingService] Failed to report error:', err);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Snapshot methods (moved from snapshotService)
   // ---------------------------------------------------------------------------
 
