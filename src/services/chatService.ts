@@ -97,9 +97,14 @@ class ChatService {
               continue;
             }
 
+            let event;
             try {
-              const event = JSON.parse(data);
+              event = JSON.parse(data);
+            } catch {
+              continue; // partial SSE data, wait for more
+            }
 
+            try {
               // Handle web search events
               if (event.type === 'content_block_start' && event.content_block?.type === 'server_tool_use') {
                 if (event.content_block.name === 'web_search' && !hasSearched) {
@@ -137,7 +142,9 @@ class ChatService {
                 return;
               }
             } catch (e) {
-              // Ignore JSON parse errors for partial data
+              console.error('[ChatService] Error processing SSE event:', e);
+              callbacks.onError?.('An error occurred while processing the response.');
+              return;
             }
           }
         }
