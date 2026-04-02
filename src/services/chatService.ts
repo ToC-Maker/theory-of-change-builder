@@ -3,6 +3,7 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
+import { loggingService } from './loggingService';
 
 export interface ChatMessage {
   id: string;
@@ -58,7 +59,9 @@ class ChatService {
         errorData
       });
       const msg = errorData?.error?.message || errorData?.error?.type || errorData?.details || `HTTP error! status: ${response.status}`;
-      throw new Error(msg);
+      const err = new Error(msg);
+      (err as any).httpStatus = response.status;
+      throw err;
     }
 
     if (!response.body) {
@@ -266,13 +269,57 @@ class ChatService {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
+        const httpStatus = (error as any).httpStatus as number | undefined;
+
+        // Detect network errors across browsers:
+        // Chrome: TypeError "Failed to fetch", Firefox: TypeError "NetworkError..."
+        const isNetworkError = error.name === 'TypeError' ||
+                               error.message.includes('network') ||
+                               error.message.includes('Failed to fetch');
+
         const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
                            error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
                            error.message.includes('insufficient_quota') ? "Insufficient API quota." :
-                           error.message.includes('network') ? "Network error. Please check your connection." :
+                           isNetworkError ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
+        console.error('[ChatService] Request failed:', {
+          errorName: error.name,
+          originalMessage: error.message,
+          httpStatus,
+          userFacingMessage: errorMessage,
+          stack: error.stack,
+        });
+
+        loggingService.reportError({
+          error_name: error.name,
+          error_message: error.message,
+          http_status: httpStatus,
+          stack_trace: error.stack,
+          request_metadata: {
+            model,
+            mode,
+            messageCount: messages.length,
+            webSearchEnabled,
+            extendedThinkingEnabled,
+          },
+        });
+
         callbacks.onError?.(errorMessage);
+      } else {
+        console.error('[ChatService] Non-Error thrown:', error);
+        loggingService.reportError({
+          error_name: 'NonErrorThrown',
+          error_message: String(error),
+          request_metadata: {
+            model,
+            mode,
+            messageCount: messages.length,
+            webSearchEnabled,
+            extendedThinkingEnabled,
+          },
+        });
+        callbacks.onError?.("An error occurred. Please try again.");
       }
     }
   }
