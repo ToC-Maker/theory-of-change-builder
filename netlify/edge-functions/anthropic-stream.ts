@@ -73,7 +73,7 @@ export default async (request: Request) => {
     }
     // Log client disconnects for transport-layer debugging
     request.signal.addEventListener('abort', () => {
-      console.error(JSON.stringify({
+      console.log(JSON.stringify({
         event: 'client_disconnect',
         timestamp: new Date().toISOString(),
         userId,
