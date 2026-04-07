@@ -71,6 +71,15 @@ export default async (request: Request) => {
         userId = 'anon-unknown';
       }
     }
+    // Log client disconnects for transport-layer debugging
+    request.signal.addEventListener('abort', () => {
+      console.log(JSON.stringify({
+        event: 'client_disconnect',
+        timestamp: new Date().toISOString(),
+        userId,
+      }));
+    });
+
     body.metadata = { user_id: userId };
 
     // Forward the request to Anthropic API
