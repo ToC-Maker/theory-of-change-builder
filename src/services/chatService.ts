@@ -17,6 +17,81 @@ export interface ChatMessage {
   };
 }
 
+class StreamingContext {
+  phase: 'connecting' | 'headers_received' | 'streaming' | 'complete' = 'connecting';
+  startTime: number;
+  ttfbTime: number | null = null;
+  lastChunkTime: number;
+  chunkCount = 0;
+  bytesReceived = 0;
+  payloadSizeBytes: number;
+  protocol: string | null = null;
+  networkInfo: { effectiveType: string; rtt: number; downlink: number } | null = null;
+
+  constructor(payloadSizeBytes: number) {
+    this.payloadSizeBytes = payloadSizeBytes;
+    this.startTime = performance.now();
+    this.lastChunkTime = this.startTime;
+    try {
+      if ('connection' in navigator) {
+        const conn = (navigator as any).connection;
+        if (conn) {
+          this.networkInfo = {
+            effectiveType: conn.effectiveType ?? 'unknown',
+            rtt: conn.rtt ?? 0,
+            downlink: conn.downlink ?? 0,
+          };
+        }
+      }
+    } catch { /* network info unavailable */ }
+  }
+
+  markHeadersReceived(): void {
+    this.phase = 'headers_received';
+    this.ttfbTime = performance.now();
+  }
+
+  markChunkReceived(bytes: number): void {
+    this.phase = 'streaming';
+    this.chunkCount++;
+    this.bytesReceived += bytes;
+    this.lastChunkTime = performance.now();
+  }
+
+  markComplete(): void {
+    this.phase = 'complete';
+  }
+
+  captureProtocol(url: string): void {
+    try {
+      const entries = performance.getEntriesByName(url, 'resource') as PerformanceResourceTiming[];
+      if (entries.length > 0) {
+        const last = entries[entries.length - 1];
+        if (last.nextHopProtocol) {
+          this.protocol = last.nextHopProtocol;
+        }
+      }
+    } catch { /* Performance API unavailable */ }
+  }
+
+  toMetadata(): Record<string, unknown> {
+    const now = performance.now();
+    return {
+      streaming: {
+        phase: this.phase,
+        durationMs: Math.round(now - this.startTime),
+        ttfbMs: this.ttfbTime != null ? Math.round(this.ttfbTime - this.startTime) : null,
+        timeSinceLastChunkMs: Math.round(now - this.lastChunkTime),
+        chunkCount: this.chunkCount,
+        bytesReceived: this.bytesReceived,
+        payloadSizeBytes: this.payloadSizeBytes,
+        protocol: this.protocol,
+        network: this.networkInfo,
+      },
+    };
+  }
+}
+
 class ChatService {
   private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
   private authToken: string | null = null;
@@ -35,7 +110,8 @@ class ChatService {
       onSearchStart?: () => void;
       onSearchComplete?: (results?: any[]) => void;
     },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    ctx?: StreamingContext
   ): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -68,6 +144,9 @@ class ChatService {
       throw new Error('No response body');
     }
 
+    ctx?.markHeadersReceived();
+    ctx?.captureProtocol(url);
+
     // Parse SSE stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -85,6 +164,7 @@ class ChatService {
           throw new DOMException('Aborted', 'AbortError');
         }
 
+        ctx?.markChunkReceived(value.byteLength);
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -139,6 +219,7 @@ class ChatService {
               } else if (event.type === 'message_delta' && event.usage) {
                 usage = { ...usage, ...event.usage };
               } else if (event.type === 'message_stop') {
+                ctx?.markComplete();
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onComplete?.(cleanContent, editInstructions, usage);
@@ -146,8 +227,7 @@ class ChatService {
               }
             } catch (e) {
               console.error('[ChatService] Error processing SSE event:', e);
-              callbacks.onError?.('An error occurred while processing the response.');
-              return;
+              throw e instanceof Error ? e : new Error(String(e));
             }
           }
         }
@@ -176,6 +256,7 @@ class ChatService {
     highlightedNodes?: Set<string>,
     extendedThinkingEnabled: boolean = false
   ): Promise<void> {
+    let ctx: StreamingContext | undefined;
     try {
       // Process the last user message
       const processedMessages = [...messages];
@@ -264,7 +345,10 @@ class ChatService {
         };
       }
 
-      await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal);
+      const serializedBody = JSON.stringify(requestBody);
+      ctx = new StreamingContext(new TextEncoder().encode(serializedBody).byteLength);
+
+      await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal, ctx);
     } catch (error) {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
@@ -302,6 +386,7 @@ class ChatService {
             messageCount: messages.length,
             webSearchEnabled,
             extendedThinkingEnabled,
+            ...ctx?.toMetadata(),
           },
         });
 
@@ -317,6 +402,7 @@ class ChatService {
             messageCount: messages.length,
             webSearchEnabled,
             extendedThinkingEnabled,
+            ...ctx?.toMetadata(),
           },
         });
         callbacks.onError?.("An error occurred. Please try again.");
