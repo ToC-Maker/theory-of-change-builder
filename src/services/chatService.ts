@@ -17,19 +17,45 @@ export interface ChatMessage {
   };
 }
 
+interface StreamingMetadata {
+  streaming: {
+    phase: string;
+    durationMs: number;
+    ttfbMs: number | null;
+    timeSinceLastChunkMs: number;
+    chunkCount: number;
+    bytesReceived: number;
+    payloadSizeBytes: number;
+    protocol: string | null;
+    network: { effectiveType: string; rtt: number; downlink: number } | null;
+  };
+}
+
+/**
+ * Captures timing, protocol, and network metadata during an SSE streaming
+ * request. On error, toMetadata() is merged into the loggingService error
+ * report to diagnose transport-layer failures (e.g., QUIC disconnects,
+ * slow TTFB, protocol issues).
+ *
+ * Lifecycle: constructed before fetch → markHeadersReceived() after response
+ * headers → markChunkReceived() per chunk → markComplete() on message_stop.
+ */
 class StreamingContext {
-  phase: 'connecting' | 'headers_received' | 'streaming' | 'complete' = 'connecting';
-  startTime: number;
+  phase: 'connecting' | 'headers_received' | 'streaming' | 'complete' | 'error' = 'connecting';
+  readonly startTime: number;
   ttfbTime: number | null = null;
   lastChunkTime: number;
   chunkCount = 0;
   bytesReceived = 0;
-  payloadSizeBytes: number;
-  protocol: string | null = null;
-  networkInfo: { effectiveType: string; rtt: number; downlink: number } | null = null;
+  readonly payloadSizeBytes: number;
+  private requestUrl: string;
+  // Network Information API (Chromium-only): captures connection quality
+  // to correlate failures with poor connectivity. Returns null in Firefox/Safari.
+  readonly networkInfo: { effectiveType: string; rtt: number; downlink: number } | null = null;
 
-  constructor(payloadSizeBytes: number) {
+  constructor(payloadSizeBytes: number, requestUrl: string) {
     this.payloadSizeBytes = payloadSizeBytes;
+    this.requestUrl = requestUrl;
     this.startTime = performance.now();
     this.lastChunkTime = this.startTime;
     try {
@@ -62,19 +88,28 @@ class StreamingContext {
     this.phase = 'complete';
   }
 
-  captureProtocol(url: string): void {
+  markError(): void {
+    this.phase = 'error';
+  }
+
+  // Resource Timing API: nextHopProtocol reveals h2/h3/h1.1, useful for
+  // diagnosing transport-layer failures. Resolved lazily since the entry
+  // may not be finalized until the stream completes.
+  private resolveProtocol(): string | null {
     try {
-      const entries = performance.getEntriesByName(url, 'resource') as PerformanceResourceTiming[];
+      const resolved = new URL(this.requestUrl, location.origin).href;
+      const entries = performance.getEntriesByName(resolved, 'resource') as PerformanceResourceTiming[];
       if (entries.length > 0) {
         const last = entries[entries.length - 1];
         if (last.nextHopProtocol) {
-          this.protocol = last.nextHopProtocol;
+          return last.nextHopProtocol;
         }
       }
     } catch { /* Performance API unavailable */ }
+    return null;
   }
 
-  toMetadata(): Record<string, unknown> {
+  toMetadata(): StreamingMetadata {
     const now = performance.now();
     return {
       streaming: {
@@ -85,7 +120,7 @@ class StreamingContext {
         chunkCount: this.chunkCount,
         bytesReceived: this.bytesReceived,
         payloadSizeBytes: this.payloadSizeBytes,
-        protocol: this.protocol,
+        protocol: this.resolveProtocol(),
         network: this.networkInfo,
       },
     };
@@ -145,7 +180,6 @@ class ChatService {
     }
 
     ctx?.markHeadersReceived();
-    ctx?.captureProtocol(url);
 
     // Parse SSE stream
     const reader = response.body.getReader();
@@ -222,18 +256,35 @@ class ChatService {
                 ctx?.markComplete();
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
-                callbacks.onComplete?.(cleanContent, editInstructions, usage);
+                // Separate try so callback bugs aren't reported as streaming failures
+                try {
+                  callbacks.onComplete?.(cleanContent, editInstructions, usage);
+                } catch (callbackErr) {
+                  console.error('[ChatService] onComplete callback error:', callbackErr);
+                }
                 return;
               }
             } catch (e) {
               console.error('[ChatService] Error processing SSE event:', e);
-              throw e instanceof Error ? e : new Error(String(e));
+              // Re-throw to outer handler so StreamingContext diagnostics are
+              // included in the error report. Previously this silently returned
+              // after calling onError, losing all transport context.
+              const wrapped = e instanceof Error ? e : new Error(String(e));
+              (wrapped as any).isSSEProcessingError = true;
+              throw wrapped;
             }
           }
         }
       }
     } finally {
       reader.releaseLock();
+    }
+
+    // Stream ended without message_stop — treat as incomplete
+    if (ctx && ctx.phase !== 'complete') {
+      throw new Error(
+        `Stream ended unexpectedly in phase "${ctx.phase}" after ${ctx.chunkCount} chunks`
+      );
     }
   }
 
@@ -346,14 +397,23 @@ class ChatService {
       }
 
       const serializedBody = JSON.stringify(requestBody);
-      ctx = new StreamingContext(new TextEncoder().encode(serializedBody).byteLength);
+      ctx = new StreamingContext(serializedBody.length, this.EDGE_FUNCTION_URL);
 
       await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal, ctx);
     } catch (error) {
+      ctx?.markError();
+      let streamingMeta: Record<string, unknown> = {};
+      try {
+        if (ctx) streamingMeta = ctx.toMetadata();
+      } catch (metaErr) {
+        console.warn('[ChatService] Failed to collect streaming metadata:', metaErr);
+      }
+
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
         const httpStatus = (error as any).httpStatus as number | undefined;
+        const isSSEProcessingError = (error as any).isSSEProcessingError === true;
 
         // Detect network errors across browsers:
         // Chrome: TypeError "Failed to fetch", Firefox: TypeError "NetworkError..."
@@ -364,6 +424,7 @@ class ChatService {
         const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
                            error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
                            error.message.includes('insufficient_quota') ? "Insufficient API quota." :
+                           isSSEProcessingError ? "Failed to process the AI response. Please try again." :
                            isNetworkError ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
@@ -386,7 +447,7 @@ class ChatService {
             messageCount: messages.length,
             webSearchEnabled,
             extendedThinkingEnabled,
-            ...ctx?.toMetadata(),
+            ...streamingMeta,
           },
         });
 
@@ -402,7 +463,7 @@ class ChatService {
             messageCount: messages.length,
             webSearchEnabled,
             extendedThinkingEnabled,
-            ...ctx?.toMetadata(),
+            ...streamingMeta,
           },
         });
         callbacks.onError?.("An error occurred. Please try again.");
