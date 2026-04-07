@@ -10,10 +10,21 @@ async function hashIP(ip: string): Promise<string> {
     .join('');
 }
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 export default async (request: Request) => {
+  // Handle CORS preflight
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
   // Only allow POST requests
   if (request.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders });
   }
 
   // Get the API key from environment variables
@@ -24,7 +35,7 @@ export default async (request: Request) => {
       JSON.stringify({ error: 'API key not configured on server' }),
       {
         status: 500,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       }
     );
   }
@@ -80,18 +91,24 @@ export default async (request: Request) => {
       return new Response(errorText, {
         status: response.status,
         headers: {
+          ...corsHeaders,
           'Content-Type': 'application/json',
         },
       });
     }
 
     // Stream the response back to the client
+    // Note: Connection: keep-alive is a hop-by-hop header forbidden in HTTP/2+
+    // (RFC 9113 §8.2.2, RFC 9114 §4.2); it caused ERR_QUIC_PROTOCOL_ERROR
+    // when Cloudflare proxied the response over HTTP/3.
+    // X-Accel-Buffering: no prevents reverse proxy buffering of the SSE stream.
     return new Response(response.body, {
       status: response.status,
       headers: {
+        ...corsHeaders,
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
       },
     });
   } catch (error) {
@@ -102,7 +119,7 @@ export default async (request: Request) => {
       }),
       {
         status: 500,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       }
     );
   }
