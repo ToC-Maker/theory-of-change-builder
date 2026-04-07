@@ -98,6 +98,10 @@ export default async (request: Request) => {
     }
 
     // Stream the response back to the client
+    // Note: Connection: keep-alive is a hop-by-hop header forbidden in HTTP/2+
+    // (RFC 9113 §8.2.2, RFC 9114 §4.2); it caused ERR_QUIC_PROTOCOL_ERROR
+    // when Cloudflare proxied the response over HTTP/3.
+    // X-Accel-Buffering: no prevents reverse proxy buffering of the SSE stream.
     return new Response(response.body, {
       status: response.status,
       headers: {
