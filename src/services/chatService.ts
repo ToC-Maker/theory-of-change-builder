@@ -425,13 +425,17 @@ class ChatService {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
-        const httpStatus = (error as any).httpStatus as number | undefined;
-        const isSSEProcessingError = (error as any).isSSEProcessingError === true;
+        let httpStatus = (error as any).httpStatus as number | undefined;
+        let isSSEProcessingError = (error as any).isSSEProcessingError === true;
 
-        const isNetworkErr = ChatService.isNetworkError(error);
+        let isNetworkErr = ChatService.isNetworkError(error);
 
-        // Attempt H2 fallback retry on network errors (QUIC failures, etc.)
-        if (isNetworkErr && !retriedWithH2 && !signal?.aborted) {
+        // Retry with ?force-h2=1: the edge function responds with Alt-Svc: clear,
+        // telling the browser to stop using H3 for this origin. This retry itself
+        // may still use H3 (browser caches connections), but subsequent requests
+        // will fall back to H2. The retry also helps with transient QUIC failures
+        // that succeed on a fresh connection attempt.
+        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== undefined) {
           retriedWithH2 = true;
 
           // Log the first failure for observability
@@ -466,11 +470,19 @@ class ChatService {
             );
             return; // Retry succeeded, callbacks already fired
           } catch (retryError) {
+            // If user aborted during retry, exit cleanly
+            if (retryError instanceof DOMException && retryError.name === 'AbortError') return;
+            if (signal?.aborted) return;
+
             // Retry also failed — update context for error reporting below
             retryCtx.markError();
             try { streamingMeta = retryCtx.toMetadata(); } catch { /* ignore */ }
             // Re-assign error for the reporting below
             error = retryError instanceof Error ? retryError : new Error(String(retryError));
+            // Recompute flags for the retry error
+            httpStatus = (error as any).httpStatus as number | undefined;
+            isSSEProcessingError = (error as any).isSSEProcessingError === true;
+            isNetworkErr = ChatService.isNetworkError(error);
             // Fall through to normal error handling
           }
         }

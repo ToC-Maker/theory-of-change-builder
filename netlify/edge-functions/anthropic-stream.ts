@@ -49,6 +49,9 @@ function createKeepaliveStream(
     flush() {
       clearInterval(intervalId);
     },
+    cancel() {
+      clearInterval(intervalId);
+    },
   });
 
   return source.pipeThrough(transform);
@@ -66,7 +69,9 @@ export default async (request: Request) => {
   }
 
   // Detect retry request for HTTP/2 fallback (parsed early so error
-  // responses can also include Alt-Svc: clear when appropriate)
+  // responses can also include Alt-Svc: clear when appropriate).
+  // Error responses also need Alt-Svc: clear so the browser stops using H3
+  // for subsequent requests to this origin, not just the streaming endpoint.
   const requestUrl = new URL(request.url);
   const forceH2 = requestUrl.searchParams.get('force-h2') === '1';
 
