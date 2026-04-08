@@ -28,6 +28,10 @@ class LoggingServiceClass {
   private readonly MAX_FAILURES = 3;
   private readonly RESET_AFTER_MS = 60000; // 1 minute
 
+  // Beacon rate limit (separate from circuit breaker to avoid flooding via sendBeacon)
+  private lastBeaconTime = 0;
+  private readonly BEACON_COOLDOWN_MS = 30000; // 30 seconds
+
   // Snapshot debounce state
   private snapshotTimeout: ReturnType<typeof setTimeout> | null = null;
   private pendingSnapshot: SaveSnapshotParams | null = null;
@@ -397,7 +401,6 @@ class LoggingServiceClass {
     // Only check circuit breaker, not opt-out. Error reports are operational
     // diagnostics (not AI improvement data), so they aren't subject to the
     // usage data opt-out.
-    if (this.shouldSkipLogging()) return;
 
     const payload = {
       error_id: crypto.randomUUID(),
@@ -411,6 +414,14 @@ class LoggingServiceClass {
       request_metadata: error.request_metadata,
     };
 
+    if (this.shouldSkipLogging()) {
+      // Circuit breaker is open for fetch, but try sendBeacon as a
+      // last resort (different transport, may work when fetch can't).
+      // Rate-limited separately to prevent flooding.
+      this.sendErrorBeacon(payload);
+      return;
+    }
+
     const url = `${API_BASE}/logging-reportError`;
 
     // Fire-and-forget: no await, errors caught internally.
@@ -422,16 +433,32 @@ class LoggingServiceClass {
       body: JSON.stringify(payload),
     }).catch((err) => {
       console.error('[LoggingService] Failed to report error via fetch, trying sendBeacon:', err);
-      try {
-        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-        const queued = navigator.sendBeacon(url, blob);
-        if (!queued) {
-          console.error('[LoggingService] sendBeacon also failed — payload may exceed limit');
-        }
-      } catch (beaconErr) {
-        console.error('[LoggingService] sendBeacon fallback error:', beaconErr);
-      }
+      this.sendErrorBeacon(payload);
     });
+  }
+
+  /**
+   * Last-resort error reporting via sendBeacon. Used when fetch fails
+   * (broken QUIC connection) or when the circuit breaker is open.
+   * Note: sendBeacon cannot send custom headers, so the Authorization
+   * token is lost and user_id will be null in the error row.
+   * The backend already accepts anonymous reports so data still arrives.
+   */
+  private sendErrorBeacon(payload: Record<string, unknown>): void {
+    const now = Date.now();
+    if (now - this.lastBeaconTime < this.BEACON_COOLDOWN_MS) return;
+    this.lastBeaconTime = now;
+
+    try {
+      const url = `${API_BASE}/logging-reportError`;
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+      const queued = navigator.sendBeacon(url, blob);
+      if (!queued) {
+        console.error('[LoggingService] sendBeacon failed — browser beacon queue may be full or payload too large');
+      }
+    } catch (beaconErr) {
+      console.error('[LoggingService] sendBeacon fallback error:', beaconErr);
+    }
   }
 
   // ---------------------------------------------------------------------------
