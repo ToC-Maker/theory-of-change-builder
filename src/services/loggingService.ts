@@ -411,16 +411,26 @@ class LoggingServiceClass {
       request_metadata: error.request_metadata,
     };
 
-    // Fire-and-forget: no await, errors caught internally
-    this.fetchWithCircuitBreaker(
-      `${API_BASE}/logging-reportError`,
-      {
-        method: 'POST',
-        headers: this.buildHeaders(),
-        body: JSON.stringify(payload),
+    const url = `${API_BASE}/logging-reportError`;
+
+    // Fire-and-forget: no await, errors caught internally.
+    // If fetch fails (e.g. broken QUIC connection), fall back to sendBeacon
+    // which uses a different browser transport mechanism.
+    this.fetchWithCircuitBreaker(url, {
+      method: 'POST',
+      headers: this.buildHeaders(),
+      body: JSON.stringify(payload),
+    }).catch((err) => {
+      console.error('[LoggingService] Failed to report error via fetch, trying sendBeacon:', err);
+      try {
+        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+        const queued = navigator.sendBeacon(url, blob);
+        if (!queued) {
+          console.error('[LoggingService] sendBeacon also failed — payload may exceed limit');
+        }
+      } catch (beaconErr) {
+        console.error('[LoggingService] sendBeacon fallback error:', beaconErr);
       }
-    ).catch((err) => {
-      console.error('[LoggingService] Failed to report error:', err);
     });
   }
 
