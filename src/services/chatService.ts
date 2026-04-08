@@ -494,7 +494,16 @@ class ChatService {
                            isNetworkErr ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
-        console.error('[ChatService] Request failed:', {
+        // One-liner for quick scanning in text logs; structured object below for DevTools drill-down
+        console.error(
+          `[ChatService] Request failed: ${error.name}: ${error.message}` +
+          ` | phase=${(streamingMeta as any)?.streaming?.phase ?? 'unknown'}` +
+          ` protocol=${(streamingMeta as any)?.streaming?.protocol ?? 'unknown'}` +
+          ` duration=${(streamingMeta as any)?.streaming?.durationMs ?? '?'}ms` +
+          ` chunks=${(streamingMeta as any)?.streaming?.chunkCount ?? '?'}` +
+          ` http=${httpStatus ?? 'none'}`
+        );
+        console.error('[ChatService] Request details:', {
           errorName: error.name,
           originalMessage: error.message,
           httpStatus: (error as any).httpStatus ?? httpStatus,
