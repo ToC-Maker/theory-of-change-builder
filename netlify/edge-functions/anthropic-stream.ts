@@ -16,6 +16,47 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+/**
+ * Wraps an SSE stream with periodic keepalive comments to prevent
+ * Cloudflare's ~60s QUIC max_idle_timeout from killing long-running
+ * responses. SSE comment lines (`: keepalive`) are ignored by
+ * EventSource parsers and the client's manual line parser.
+ */
+function createKeepaliveStream(
+  source: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  intervalMs = 25000
+): ReadableStream<Uint8Array> {
+  const keepaliveBytes = new TextEncoder().encode(': keepalive\n\n');
+  let intervalId: ReturnType<typeof setInterval>;
+
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    start(controller) {
+      intervalId = setInterval(() => {
+        try {
+          controller.enqueue(keepaliveBytes);
+        } catch {
+          // Controller closed, clean up
+          clearInterval(intervalId);
+        }
+      }, intervalMs);
+
+      signal.addEventListener('abort', () => clearInterval(intervalId));
+    },
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    },
+    flush() {
+      clearInterval(intervalId);
+    },
+    cancel() {
+      clearInterval(intervalId);
+    },
+  });
+
+  return source.pipeThrough(transform);
+}
+
 export default async (request: Request) => {
   // Handle CORS preflight
   if (request.method === 'OPTIONS') {
@@ -27,6 +68,13 @@ export default async (request: Request) => {
     return new Response('Method not allowed', { status: 405, headers: corsHeaders });
   }
 
+  // Detect retry request for HTTP/2 fallback (parsed early so error
+  // responses can also include Alt-Svc: clear when appropriate).
+  // Error responses also need Alt-Svc: clear so the browser stops using H3
+  // for subsequent requests to this origin, not just the streaming endpoint.
+  const requestUrl = new URL(request.url);
+  const forceH2 = requestUrl.searchParams.get('force-h2') === '1';
+
   // Get the API key from environment variables
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
 
@@ -35,7 +83,11 @@ export default async (request: Request) => {
       JSON.stringify({ error: 'API key not configured on server' }),
       {
         status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+          ...(forceH2 ? { 'Alt-Svc': 'clear' } : {}),
+        }
       }
     );
   }
@@ -102,6 +154,7 @@ export default async (request: Request) => {
         headers: {
           ...corsHeaders,
           'Content-Type': 'application/json',
+          ...(forceH2 ? { 'Alt-Svc': 'clear' } : {}),
         },
       });
     }
@@ -111,14 +164,22 @@ export default async (request: Request) => {
     // (RFC 9113 §8.2.2, RFC 9114 §4.2); it caused ERR_QUIC_PROTOCOL_ERROR
     // when Cloudflare proxied the response over HTTP/3.
     // X-Accel-Buffering: no prevents reverse proxy buffering of the SSE stream.
-    return new Response(response.body, {
+    const responseHeaders: Record<string, string> = {
+      ...corsHeaders,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    };
+    if (forceH2) {
+      // Tell browser to stop using HTTP/3 for this origin (RFC 7838)
+      responseHeaders['Alt-Svc'] = 'clear';
+    }
+
+    // Wrap stream with keepalive comments to prevent Cloudflare's
+    // ~60s QUIC idle timeout from killing long-running responses.
+    return new Response(createKeepaliveStream(response.body!, request.signal), {
       status: response.status,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'X-Accel-Buffering': 'no',
-      },
+      headers: responseHeaders,
     });
   } catch (error) {
     return new Response(
@@ -128,7 +189,11 @@ export default async (request: Request) => {
       }),
       {
         status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+          ...(forceH2 ? { 'Alt-Svc': 'clear' } : {}),
+        }
       }
     );
   }
