@@ -28,6 +28,7 @@ interface StreamingMetadata {
     payloadSizeBytes: number;
     protocol: string | null;
     network: { effectiveType: string; rtt: number; downlink: number } | null;
+    retryAttempt: number;
   };
 }
 
@@ -47,6 +48,7 @@ class StreamingContext {
   lastChunkTime: number;
   chunkCount = 0;
   bytesReceived = 0;
+  retryAttempt = 0;
   readonly payloadSizeBytes: number;
   private requestUrl: string;
   // Network Information API (Chromium-only): captures connection quality
@@ -122,6 +124,7 @@ class StreamingContext {
         payloadSizeBytes: this.payloadSizeBytes,
         protocol: this.resolveProtocol(),
         network: this.networkInfo,
+        retryAttempt: this.retryAttempt,
       },
     };
   }
@@ -130,6 +133,12 @@ class StreamingContext {
 class ChatService {
   private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
   private authToken: string | null = null;
+
+  private static isNetworkError(error: Error): boolean {
+    return error.name === 'TypeError' ||
+           error.message.includes('network') ||
+           error.message.includes('Failed to fetch');
+  }
 
   setAuthToken(token: string | null) {
     this.authToken = token;
@@ -308,6 +317,9 @@ class ChatService {
     extendedThinkingEnabled: boolean = false
   ): Promise<void> {
     let ctx: StreamingContext | undefined;
+    let requestBody: any;
+    let serializedBody: string;
+    let retriedWithH2 = false;
     try {
       // Process the last user message
       const processedMessages = [...messages];
@@ -366,7 +378,7 @@ class ChatService {
         : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
       // Create request body for edge function
-      const requestBody: any = {
+      requestBody = {
         model,
         max_tokens: 64000,
         system: [{
@@ -396,11 +408,12 @@ class ChatService {
         };
       }
 
-      const serializedBody = JSON.stringify(requestBody);
+      serializedBody = JSON.stringify(requestBody);
       ctx = new StreamingContext(serializedBody.length, this.EDGE_FUNCTION_URL);
 
       await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal, ctx);
-    } catch (error) {
+    } catch (caughtError) {
+      let error = caughtError;
       ctx?.markError();
       let streamingMeta: Record<string, unknown> = {};
       try {
@@ -412,26 +425,79 @@ class ChatService {
       if (error instanceof Error) {
         if (error.name === 'AbortError') return;
 
-        const httpStatus = (error as any).httpStatus as number | undefined;
-        const isSSEProcessingError = (error as any).isSSEProcessingError === true;
+        let httpStatus = (error as any).httpStatus as number | undefined;
+        let isSSEProcessingError = (error as any).isSSEProcessingError === true;
 
-        // Detect network errors across browsers:
-        // Chrome: TypeError "Failed to fetch", Firefox: TypeError "NetworkError..."
-        const isNetworkError = error.name === 'TypeError' ||
-                               error.message.includes('network') ||
-                               error.message.includes('Failed to fetch');
+        let isNetworkErr = ChatService.isNetworkError(error);
+
+        // Retry with ?force-h2=1: the edge function responds with Alt-Svc: clear,
+        // telling the browser to stop using H3 for this origin. This retry itself
+        // may still use H3 (browser caches connections), but subsequent requests
+        // will fall back to H2. The retry also helps with transient QUIC failures
+        // that succeed on a fresh connection attempt.
+        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== undefined) {
+          retriedWithH2 = true;
+
+          // Log the first failure for observability
+          loggingService.reportError({
+            error_name: 'NetworkErrorRetrying',
+            error_message: error.message,
+            http_status: httpStatus,
+            stack_trace: error.stack,
+            request_metadata: {
+              model, mode, messageCount: messages.length,
+              webSearchEnabled, extendedThinkingEnabled,
+              ...streamingMeta,
+            },
+          });
+
+          console.warn('[ChatService] Network error, retrying with force-h2=1...');
+
+          // Retry with HTTP/2 fallback
+          const retryCtx = new StreamingContext(
+            serializedBody.length,
+            this.EDGE_FUNCTION_URL + '?force-h2=1'
+          );
+          retryCtx.retryAttempt = 1;
+
+          try {
+            await this.streamFromEdgeFunction(
+              this.EDGE_FUNCTION_URL + '?force-h2=1',
+              requestBody,
+              callbacks,
+              signal,
+              retryCtx
+            );
+            return; // Retry succeeded, callbacks already fired
+          } catch (retryError) {
+            // If user aborted during retry, exit cleanly
+            if (retryError instanceof DOMException && retryError.name === 'AbortError') return;
+            if (signal?.aborted) return;
+
+            // Retry also failed — update context for error reporting below
+            retryCtx.markError();
+            try { streamingMeta = retryCtx.toMetadata(); } catch { /* ignore */ }
+            // Re-assign error for the reporting below
+            error = retryError instanceof Error ? retryError : new Error(String(retryError));
+            // Recompute flags for the retry error
+            httpStatus = (error as any).httpStatus as number | undefined;
+            isSSEProcessingError = (error as any).isSSEProcessingError === true;
+            isNetworkErr = ChatService.isNetworkError(error);
+            // Fall through to normal error handling
+          }
+        }
 
         const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
                            error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
                            error.message.includes('insufficient_quota') ? "Insufficient API quota." :
                            isSSEProcessingError ? "Failed to process the AI response. Please try again." :
-                           isNetworkError ? "Network error. Please check your connection." :
+                           isNetworkErr ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
         console.error('[ChatService] Request failed:', {
           errorName: error.name,
           originalMessage: error.message,
-          httpStatus,
+          httpStatus: (error as any).httpStatus ?? httpStatus,
           userFacingMessage: errorMessage,
           stack: error.stack,
         });
@@ -439,7 +505,7 @@ class ChatService {
         loggingService.reportError({
           error_name: error.name,
           error_message: error.message,
-          http_status: httpStatus,
+          http_status: (error as any).httpStatus ?? httpStatus,
           stack_trace: error.stack,
           request_metadata: {
             model,
