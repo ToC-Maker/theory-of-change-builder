@@ -2,9 +2,15 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
+  let body: { editToken?: string; chartData?: any };
+  try {
+    body = await request.json() as { editToken?: string; chartData?: any };
+  } catch {
+    return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+  }
 
   try {
-    const { editToken, chartData } = await request.json() as { editToken?: string; chartData?: any };
+    const { editToken, chartData } = body;
 
     if (!editToken || !chartData) {
       return Response.json({ error: 'Edit token and chart data are required' }, { status: 400 });

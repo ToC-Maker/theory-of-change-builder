@@ -1,9 +1,12 @@
 import { jwtVerify, createRemoteJWKSet } from 'jose';
-import { neon, NeonQueryFunction } from '@neondatabase/serverless';
+import { JWKSTimeout, JWKSInvalid } from 'jose/errors';
+import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { Env } from './types';
 
 // jose caches JWKS keys internally; module-level variable persists across
-// warm invocations within the same Workers isolate.
+// warm invocations within the same Workers isolate. Auth0 key rotations
+// are picked up when the isolate is recycled or when jose's internal
+// cache expires.
 let cachedJWKS: ReturnType<typeof createRemoteJWKSet>;
 let cachedDomain: string;
 
@@ -17,16 +20,47 @@ function getJWKS(domain: string) {
   return cachedJWKS;
 }
 
+/**
+ * Thrown when JWKS fetch fails (Auth0 outage, DNS error, timeout).
+ * Callers should return 502/503, not 401, since the token may be valid.
+ */
+export class JWKSFetchError extends Error {
+  constructor(cause: unknown) {
+    super('Failed to fetch JWKS signing keys');
+    this.name = 'JWKSFetchError';
+    this.cause = cause;
+  }
+}
+
+export interface DecodedToken {
+  sub: string;
+  email?: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
 export async function verifyToken(
   token: string,
   env: Env
-): Promise<{ sub: string; email?: string; name?: string; [key: string]: unknown }> {
-  const { payload } = await jwtVerify(token, getJWKS(env.VITE_AUTH0_DOMAIN), {
-    audience: env.VITE_AUTH0_CLIENT_ID,
-    issuer: `https://${env.VITE_AUTH0_DOMAIN}/`,
-    algorithms: ['RS256'],
-  });
-  return payload as { sub: string; email?: string; name?: string; [key: string]: unknown };
+): Promise<DecodedToken> {
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(token, getJWKS(env.VITE_AUTH0_DOMAIN), {
+      audience: env.VITE_AUTH0_CLIENT_ID,
+      issuer: `https://${env.VITE_AUTH0_DOMAIN}/`,
+      algorithms: ['RS256'],
+    }));
+  } catch (err) {
+    // Distinguish infrastructure errors from token validation errors
+    if (err instanceof JWKSTimeout || err instanceof JWKSInvalid || err instanceof TypeError) {
+      throw new JWKSFetchError(err);
+    }
+    throw err;
+  }
+  if (typeof payload.sub !== 'string') {
+    throw new Error('JWT missing required sub claim');
+  }
+  return payload as DecodedToken;
 }
 
 export function extractToken(authHeader: string | null): string | null {

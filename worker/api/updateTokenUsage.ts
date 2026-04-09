@@ -2,9 +2,15 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
+  let body: { editToken?: string; tokensUsed?: number };
+  try {
+    body = await request.json() as { editToken?: string; tokensUsed?: number };
+  } catch {
+    return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+  }
 
   try {
-    const { editToken, tokensUsed } = await request.json() as { editToken?: string; tokensUsed?: number };
+    const { editToken, tokensUsed } = body;
 
     if (!editToken || typeof tokensUsed !== 'number') {
       return Response.json({ error: 'Edit token and tokensUsed are required' }, { status: 400 });

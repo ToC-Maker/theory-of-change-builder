@@ -10,9 +10,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'Method not allowed' }, { status: 405 });
   }
 
-  const sql = getDb(env);
-
   try {
+    const sql = getDb(env);
     // Verify authentication for all requests
     const token = extractToken(request.headers.get('authorization'));
     if (!token) {
@@ -69,7 +68,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     // PATCH - Update a user's permission level or approve/reject access
     if (method === 'PATCH') {
-      const { chartId, targetUserId, permissionLevel, action } = await request.json() as any;
+      let patchBody: { chartId?: string; targetUserId?: string; permissionLevel?: string; action?: string };
+      try { patchBody = await request.json() as typeof patchBody; }
+      catch { return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 }); }
+      const { chartId, targetUserId, permissionLevel, action } = patchBody;
 
       if (!chartId || !targetUserId) {
         return Response.json({ error: 'Chart ID and target user ID are required' }, { status: 400 });
@@ -131,7 +133,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     // PUT - Update link sharing settings
     if (method === 'PUT') {
-      const { chartId, linkSharingLevel } = await request.json() as any;
+      let putBody: { chartId?: string; linkSharingLevel?: string };
+      try { putBody = await request.json() as typeof putBody; }
+      catch { return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 }); }
+      const { chartId, linkSharingLevel } = putBody;
 
       if (!chartId || !linkSharingLevel) {
         return Response.json({ error: 'Chart ID and link sharing level are required' }, { status: 400 });
@@ -165,7 +170,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     // DELETE - Remove a permission
     if (method === 'DELETE') {
-      const { chartId, targetUserId } = await request.json() as any;
+      let deleteBody: { chartId?: string; targetUserId?: string };
+      try { deleteBody = await request.json() as typeof deleteBody; }
+      catch { return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 }); }
+      const { chartId, targetUserId } = deleteBody;
 
       if (!chartId || !targetUserId) {
         return Response.json({ error: 'Chart ID and target user ID are required' }, { status: 400 });
@@ -202,6 +210,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ success: true, message: 'Permission removed successfully' });
     }
 
+    // Unreachable: method guard at top rejects non-GET/PATCH/PUT/DELETE
     return Response.json({ error: 'Method not allowed' }, { status: 405 });
   } catch (error) {
     console.error('Error managing permissions:', error);

@@ -42,7 +42,7 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
     localStorage.removeItem(API_KEY_STORAGE_KEY);
   };
 
-  // API key is now managed on the backend via edge function, always return true
+  // API key is managed server-side, always return true
   const isConfigured = true;
 
   const value: ApiKeyContextType = {

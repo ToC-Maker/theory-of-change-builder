@@ -82,7 +82,7 @@ For full-stack dev with hot reloading: run `npm run dev` in one terminal, then `
 ## Tech Stack
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router 7
-- **Backend**: Cloudflare Pages Functions (Workers runtime)
+- **Backend**: Cloudflare Workers (with Static Assets)
 - **Database**: Neon PostgreSQL (serverless)
 - **Auth**: Auth0
 - **AI**: Anthropic Claude API

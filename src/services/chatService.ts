@@ -131,7 +131,7 @@ class StreamingContext {
 }
 
 class ChatService {
-  private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
+  private readonly STREAM_API_URL = '/api/anthropic-stream';
   private authToken: string | null = null;
 
   private static isNetworkError(error: Error): boolean {
@@ -377,7 +377,7 @@ class ChatService {
         ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
         : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
-      // Create request body for edge function
+      // Create request body for streaming API
       requestBody = {
         model,
         max_tokens: 64000,
@@ -409,9 +409,9 @@ class ChatService {
       }
 
       serializedBody = JSON.stringify(requestBody);
-      ctx = new StreamingContext(serializedBody.length, this.EDGE_FUNCTION_URL);
+      ctx = new StreamingContext(serializedBody.length, this.STREAM_API_URL);
 
-      await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal, ctx);
+      await this.streamFromEdgeFunction(this.STREAM_API_URL, requestBody, callbacks, signal, ctx);
     } catch (caughtError) {
       let error = caughtError;
       ctx?.markError();
@@ -430,7 +430,7 @@ class ChatService {
 
         let isNetworkErr = ChatService.isNetworkError(error);
 
-        // Retry with ?force-h2=1: the edge function responds with Alt-Svc: clear,
+        // Retry with ?force-h2=1: the server responds with Alt-Svc: clear,
         // telling the browser to stop using H3 for this origin. This retry itself
         // may still use H3 (browser caches connections), but subsequent requests
         // will fall back to H2. The retry also helps with transient QUIC failures
@@ -456,13 +456,13 @@ class ChatService {
           // Retry with HTTP/2 fallback
           const retryCtx = new StreamingContext(
             serializedBody.length,
-            this.EDGE_FUNCTION_URL + '?force-h2=1'
+            this.STREAM_API_URL + '?force-h2=1'
           );
           retryCtx.retryAttempt = 1;
 
           try {
             await this.streamFromEdgeFunction(
-              this.EDGE_FUNCTION_URL + '?force-h2=1',
+              this.STREAM_API_URL + '?force-h2=1',
               requestBody,
               callbacks,
               signal,
@@ -547,7 +547,7 @@ class ChatService {
   }
 
   async checkApiKey(apiKey: string = ''): Promise<boolean> {
-    // API key is now managed on the backend via edge function
+    // API key is managed server-side
     // This method is kept for backward compatibility but always returns true
     // The actual API key validation will happen on the server side
     return true;

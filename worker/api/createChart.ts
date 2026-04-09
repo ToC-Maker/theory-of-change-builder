@@ -17,9 +17,15 @@ function generateEditToken(): string {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
+  let body: { chartData?: any };
+  try {
+    body = await request.json() as { chartData?: any };
+  } catch {
+    return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+  }
 
   try {
-    const { chartData } = await request.json() as { chartData?: any };
+    const { chartData } = body;
 
     if (!chartData) {
       return Response.json({ error: 'Chart data is required' }, { status: 400 });
@@ -53,7 +59,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     await sql`
       INSERT INTO charts (id, edit_token, chart_data, user_id, chart_title)
-      VALUES (${chartId}, ${editToken}, ${JSON.stringify(chartData)}, ${userId || null}, ${chartTitle})
+      VALUES (${chartId}, ${editToken}, ${JSON.stringify(chartData)}, ${userId}, ${chartTitle})
     `;
 
     if (userId && userEmail) {

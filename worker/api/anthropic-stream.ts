@@ -11,10 +11,12 @@ async function hashIP(ip: string, salt: string): Promise<string> {
 }
 
 /**
- * Wraps an SSE stream with periodic keepalive comments to prevent
- * idle timeout from killing long-running responses. SSE comment lines
- * (`: keepalive`) are ignored by EventSource parsers and the client's
- * manual line parser.
+ * Wraps an SSE stream with periodic keepalive comments to prevent idle
+ * timeouts from killing long-running responses. Originally needed for
+ * Cloudflare's ~60s QUIC max_idle_timeout when proxied via HTTP/3; still
+ * valuable for client-facing H3 connections even when running on Workers.
+ * SSE comment lines (`: keepalive`) are ignored by EventSource parsers
+ * and the client's manual line parser.
  */
 function createKeepaliveStream(
   source: ReadableStream<Uint8Array>,
@@ -52,32 +54,37 @@ function createKeepaliveStream(
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
-  // Detect retry request for HTTP/2 fallback
+  // HTTP/2 fallback: when SSE streaming fails over HTTP/3 (QUIC), the client
+  // retries with ?force-h2=1. The response includes Alt-Svc: clear (RFC 7838)
+  // to tell the browser to stop using H3 for this origin.
   const requestUrl = new URL(request.url);
   const forceH2 = requestUrl.searchParams.get('force-h2') === '1';
+  const altSvcHeaders: Record<string, string> = forceH2 ? { 'Alt-Svc': 'clear' } : {};
 
   const apiKey = env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({ error: 'API key not configured on server' }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(forceH2 ? { 'Alt-Svc': 'clear' } : {}),
-        }
-      }
+    return Response.json(
+      { error: 'API key not configured on server' },
+      { status: 500, headers: altSvcHeaders }
+    );
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json() as Record<string, unknown>;
+  } catch {
+    return Response.json(
+      { error: 'Invalid JSON in request body' },
+      { status: 400, headers: altSvcHeaders }
     );
   }
 
   try {
-    const body = await request.json() as Record<string, unknown>;
-
-    // Set metadata.user_id server-side (never trust client-provided value)
-    // Note: JWT is decoded but not signature-verified here. Full JWKS verification
-    // would add ~100-200ms latency per request. This is only used for Anthropic's
-    // abuse tracking metadata, not for authorization.
+    // Set metadata.user_id server-side (never trust client-provided value).
+    // JWT is decoded but not signature-verified; full JWKS verification adds
+    // ~100-200ms on cold starts (near-zero when the JWKS cache is warm, but
+    // this endpoint doesn't need verified identity). Only used for Anthropic's
+    // per-user abuse tracking metadata, not for authorization.
     let userId: string | null = null;
     const authHeader = request.headers.get('authorization');
     if (authHeader?.startsWith('Bearer ')) {
@@ -92,12 +99,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
     if (!userId) {
       try {
-        const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+        // cf-connecting-ip is authoritative and unforgeable on Cloudflare Workers;
+        // x-forwarded-for and x-real-ip are client-spoofable fallbacks.
+        const ip = request.headers.get('cf-connecting-ip')
+          || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
           || request.headers.get('x-real-ip')
-          || request.headers.get('cf-connecting-ip')
           || 'unknown';
         userId = `anon-${await hashIP(ip, env.IP_HASH_SALT)}`;
-      } catch {
+      } catch (e) {
+        console.error('Failed to hash IP for anonymous user tracking:', e);
         userId = 'anon-unknown';
       }
     }
@@ -129,11 +139,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       console.error('Anthropic API error:', errorText);
       return new Response(errorText, {
         status: response.status,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(forceH2 ? { 'Alt-Svc': 'clear' } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...altSvcHeaders },
       });
+    }
+
+    if (!response.body) {
+      return Response.json(
+        { error: 'AI service returned empty response' },
+        { status: 502, headers: altSvcHeaders }
+      );
     }
 
     // Stream the response back to the client
@@ -141,28 +155,20 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'X-Accel-Buffering': 'no',
+      ...altSvcHeaders,
     };
-    if (forceH2) {
-      responseHeaders['Alt-Svc'] = 'clear';
-    }
 
-    return new Response(createKeepaliveStream(response.body!, request.signal), {
+    return new Response(createKeepaliveStream(response.body, request.signal), {
       status: response.status,
       headers: responseHeaders,
     });
   } catch (error) {
-    return new Response(
-      JSON.stringify({
+    return Response.json(
+      {
         error: 'Failed to process request',
         details: error instanceof Error ? error.message : 'Unknown error'
-      }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(forceH2 ? { 'Alt-Svc': 'clear' } : {}),
-        }
-      }
+      },
+      { status: 500, headers: altSvcHeaders }
     );
   }
 };

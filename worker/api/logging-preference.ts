@@ -24,9 +24,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'Invalid token' }, { status: 401 });
   }
 
-  const sql = getDb(env);
-
   try {
+    const sql = getDb(env);
+
     if (method === 'GET') {
       const result = await sql`
         SELECT opted_out FROM logging_preferences WHERE user_id = ${user_id}
@@ -38,29 +38,26 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       });
     }
 
-    if (method === 'POST') {
-      let parsed: { opted_out: boolean };
-      try {
-        parsed = await request.json() as { opted_out: boolean };
-      } catch {
-        return Response.json({ error: 'Invalid JSON' }, { status: 400 });
-      }
-
-      if (typeof parsed.opted_out !== 'boolean') {
-        return Response.json({ error: 'opted_out must be a boolean' }, { status: 400 });
-      }
-
-      await sql`
-        INSERT INTO logging_preferences (user_id, opted_out, updated_at)
-        VALUES (${user_id}, ${parsed.opted_out}, NOW())
-        ON CONFLICT (user_id) DO UPDATE
-        SET opted_out = ${parsed.opted_out}, updated_at = NOW()
-      `;
-
-      return Response.json({ opted_out: parsed.opted_out });
+    // POST
+    let parsed: { opted_out: boolean };
+    try {
+      parsed = await request.json() as { opted_out: boolean };
+    } catch {
+      return Response.json({ error: 'Invalid JSON' }, { status: 400 });
     }
 
-    return Response.json({ error: 'Method Not Allowed' }, { status: 405 });
+    if (typeof parsed.opted_out !== 'boolean') {
+      return Response.json({ error: 'opted_out must be a boolean' }, { status: 400 });
+    }
+
+    await sql`
+      INSERT INTO logging_preferences (user_id, opted_out, updated_at)
+      VALUES (${user_id}, ${parsed.opted_out}, NOW())
+      ON CONFLICT (user_id) DO UPDATE
+      SET opted_out = ${parsed.opted_out}, updated_at = NOW()
+    `;
+
+    return Response.json({ opted_out: parsed.opted_out });
   } catch (error) {
     console.error('[logging-preference] Error:', error);
     return Response.json({ error: 'Failed to process preference' }, { status: 500 });
