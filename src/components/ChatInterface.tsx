@@ -438,7 +438,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // Track token usage in database
           if (usage?.input_tokens && params.editToken) {
             const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            fetch('/.netlify/functions/updateTokenUsage', {
+            fetch('/api/updateTokenUsage', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
@@ -706,7 +706,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           // Track token usage in database
           if (usage?.input_tokens && params.editToken) {
             const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            fetch('/.netlify/functions/updateTokenUsage', {
+            fetch('/api/updateTokenUsage', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })

@@ -1,7 +1,7 @@
 import { ToCData } from '../types';
 import { EditInstruction } from '../utils/graphEdits';
 
-const API_BASE = '/.netlify/functions';
+const API_BASE = '/api';
 
 export interface SaveSnapshotParams {
   session_id: string;

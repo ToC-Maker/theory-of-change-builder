@@ -11,24 +11,29 @@ Theory of Change Graph Builder - Interactive web app for creating Theory of Chan
 ```bash
 # Install and start
 npm install
-npm run dev              # Vite dev server (port 5173)
-netlify dev              # With serverless functions (port 8888) - use this for testing AI features
+npm run dev              # Build + wrangler dev (full stack on :8787)
+npm run dev:vite         # Vite only with HMR (:5173, proxy /api to :8787)
 
-# Build and lint
-npm run build
+# Build and deploy
+npm run build            # Vite build only
+npm run deploy           # Build + deploy to Cloudflare Workers
 npm run lint
 
 # Storybook
 npm run storybook        # Component development (port 6006)
 ```
 
+For full-stack dev with HMR: run `npm run dev` in one terminal (Worker + API),
+then `npm run dev:vite` in another (Vite HMR, proxies `/api` to Worker).
+
 ## Stack
 
 - **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS + React Router 7
-- **Backend**: Netlify Functions (Node.js) + Edge Functions (Deno)
+- **Backend**: Cloudflare Workers (with Static Assets)
 - **Database**: Neon PostgreSQL (serverless)
-- **Auth**: Auth0 (JWT validation server-side)
-- **AI**: Anthropic Claude API via `/api/anthropic-stream` edge function
+- **Auth**: Auth0 (JWT validation server-side via `jose`)
+- **AI**: Anthropic Claude API via `/api/anthropic-stream` Worker route
+- **Hosting**: Cloudflare Workers (static assets + API in one Worker)
 
 ## Critical Architecture Notes
 
@@ -83,16 +88,23 @@ If you encounter 401/403 errors, check: token validity, permission status, link 
 
 ## Environment Variables
 
-Required in `.env.local` and Netlify:
+Set in Cloudflare Pages dashboard (or `.dev.vars` for local dev):
 
 ```bash
+# Secrets (wrangler pages secret put)
 DATABASE_URL=postgresql://...              # Neon connection string
-VITE_AUTH0_DOMAIN=your-domain.auth0.com   # Public (VITE_ prefix exposed to client)
+ANTHROPIC_API_KEY=sk-ant-...              # Server-side only
+IP_HASH_SALT=...                          # HMAC salt for anonymous user IP hashing
+
+# Variables (dashboard or wrangler.toml)
+VITE_AUTH0_DOMAIN=your-domain.auth0.com   # Public (VITE_ prefix exposed to client at build time)
 VITE_AUTH0_CLIENT_ID=your-client-id       # Public
-ANTHROPIC_API_KEY=sk-ant-...              # Server-side only (edge function)
+SITE_URL=https://theoryofchangebuilder.com  # For constructing chart URLs
 ```
 
 **Never** commit API keys. `VITE_*` variables are client-exposed by design (Auth0 public credentials).
+
+For local development, create `.dev.vars` (gitignored) with the same variables.
 
 ## Database Schema
 
@@ -115,7 +127,7 @@ Connections use `offsetLeft`/`offsetTop` for position calculations (immune to CS
 ### Auth Token Issues
 Auth0 tokens refresh automatically, but invalid tokens silently fall back to anonymous mode. If permission checks fail unexpectedly, verify:
 - Token in Authorization header: `Bearer <token>`
-- Token validated in backend via `verifyToken()` in `netlify/functions/utils/auth.ts`
+- Token validated in backend via `verifyToken()` in `functions/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
 
 ### PDF Parsing
@@ -125,12 +137,10 @@ PDF parsing uses `pdfjs-dist` with web worker. If PDFs fail to parse:
 - Check browser console for worker errors
 
 ### Local Development with Functions
-Use `netlify dev` (not `npm run dev`) when testing:
-- AI features (requires edge function `/api/anthropic-stream`)
-- Database operations (requires serverless functions)
-- Auth flows (requires proper callback URLs)
+Run `npm run dev` in one terminal (Worker on :8787), then `npm run dev:vite` in another
+(Vite HMR on :5173, proxies `/api/*` to the Worker). This gives HMR for frontend + live API.
 
-`npm run dev` alone won't proxy requests to functions correctly.
+For quick full-stack testing without HMR, `npm run dev` alone serves everything on :8787.
 
 ## Key Files
 
@@ -139,12 +149,14 @@ Use `netlify dev` (not `npm run dev`) when testing:
 - `src/components/ChatInterface.tsx` - AI assistant UI
 - `src/services/chartService.ts` - API client for CRUD operations
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
-- `netlify/functions/` - Serverless functions (getChart, updateChart, etc.)
-- `netlify/edge-functions/anthropic-stream.ts` - AI streaming proxy
+- `worker/index.ts` - Worker entry point (router, CORS, security headers)
+- `worker/api/` - API route handlers (getChart, updateChart, etc.)
+- `worker/api/anthropic-stream.ts` - AI streaming proxy
+- `worker/_shared/auth.ts` - Auth0 JWT verification (jose)
 
 For complex graph editing logic or connection rendering issues, see `ConnectionsComponent.tsx` and `graphEdits.ts`.
 
-For Auth0 integration details or permission system changes, see the Auth0 configuration in `netlify/functions/utils/auth.ts`.
+For Auth0 integration details or permission system changes, see `worker/_shared/auth.ts`.
 
 ## Testing
 
@@ -153,6 +165,6 @@ No formal test suite currently. Manual testing workflow:
 
 ## Deployment
 
-Netlify auto-deploys on push to `main`. Build: `npm run build` → `dist/`.
+Manual deploy: `npm run deploy` (builds + deploys to Cloudflare Workers).
 
-Preview deploys created for PRs automatically.
+Configuration: `wrangler.toml` (entry point, compatibility flags, static assets config).

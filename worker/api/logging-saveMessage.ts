@@ -1,0 +1,87 @@
+import type { Env } from '../_shared/types';
+import { getDb } from '../_shared/db';
+import { verifyToken, extractToken } from '../_shared/auth';
+import { isUserOptedOut } from '../_shared/logging-optout';
+
+interface SaveMessageRequest {
+  session_id: string;
+  message_id: string;
+  chart_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  usage_input_tokens?: number;
+  usage_output_tokens?: number;
+  usage_total_tokens?: number;
+}
+
+export async function handler(request: Request, env: Env): Promise<Response> {
+
+  // Reject oversized payloads (content max 100KB + overhead)
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > 200_000) {
+    return Response.json({ error: 'Payload too large' }, { status: 413 });
+  }
+
+  let data: SaveMessageRequest;
+  try {
+    data = JSON.parse(text) as SaveMessageRequest;
+  } catch {
+    return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  try {
+    if (!data.session_id || !data.message_id || !data.chart_id || !data.role || !data.content) {
+      return Response.json({ error: 'Missing required fields' }, { status: 400 });
+    }
+
+    const validRoles = ['user', 'assistant'];
+    if (!validRoles.includes(data.role)) {
+      return Response.json({ error: 'Invalid role. Must be "user" or "assistant"' }, { status: 400 });
+    }
+
+    if (new TextEncoder().encode(data.content).length > 100_000) {
+      return Response.json({ error: 'content exceeds 100KB limit' }, { status: 413 });
+    }
+
+    const token = extractToken(request.headers.get('authorization'));
+    let user_id = null;
+
+    if (token) {
+      try {
+        const decoded = await verifyToken(token, env);
+        user_id = decoded.sub;
+      } catch (err) {
+        console.error('[logging-saveMessage] Token verification failed:', err);
+        return Response.json({ error: 'Token verification failed' }, { status: 401 });
+      }
+    }
+
+    const sql = getDb(env);
+
+    if (await isUserOptedOut(sql, user_id)) {
+      return Response.json({ opted_out: true });
+    }
+
+    const result = await sql`
+      INSERT INTO logging_messages (
+        session_id, message_id, chart_id, role, content,
+        usage_input_tokens, usage_output_tokens, usage_total_tokens,
+        user_id
+      )
+      VALUES (
+        ${data.session_id}, ${data.message_id}, ${data.chart_id},
+        ${data.role}, ${data.content},
+        ${data.usage_input_tokens ?? null}, ${data.usage_output_tokens ?? null},
+        ${data.usage_total_tokens ?? null},
+        ${user_id}
+      )
+      ON CONFLICT (message_id) DO NOTHING
+      RETURNING message_id
+    `;
+
+    return Response.json(result[0] || { message: 'Message already exists' });
+  } catch (error) {
+    console.error('Error saving message:', error);
+    return Response.json({ error: 'Failed to save message' }, { status: 500 });
+  }
+};

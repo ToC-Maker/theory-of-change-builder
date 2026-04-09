@@ -21,7 +21,7 @@ A Theory of Change maps the causal chain from your activities to your intended i
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
-- [Netlify CLI](https://docs.netlify.com/cli/get-started/) (for local development with backend functions)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (for local development with backend functions)
 - A [Neon](https://neon.tech) PostgreSQL database
 - An [Auth0](https://auth0.com) application (for authentication)
 - An [Anthropic API key](https://console.anthropic.com/) (for AI features)
@@ -36,7 +36,7 @@ npm install
 
 ### Environment Variables
 
-Create a `.env.local` file:
+Create a `.dev.vars` file (for Wrangler local dev):
 
 ```env
 DATABASE_URL=postgresql://...              # Neon connection string
@@ -56,13 +56,15 @@ IP_HASH_SALT=your-random-salt              # Salt for IP hashing (server-side on
 
 ```bash
 # Full-stack development (recommended: includes backend functions and AI features)
-netlify dev
+npm run dev
 
 # Frontend only (no backend functions)
-npm run dev
+npm run dev:vite
 ```
 
-The app will be available at `http://localhost:8888` (Netlify Dev) or `http://localhost:5173` (Vite only).
+The app will be available at `http://localhost:8787` (Wrangler dev) or `http://localhost:5173` (Vite only).
+
+For full-stack dev with hot reloading: run `npm run dev` in one terminal, then `npm run dev:vite` in another (proxies `/api` calls to the Worker).
 
 ## Usage
 
@@ -80,7 +82,7 @@ The app will be available at `http://localhost:8888` (Netlify Dev) or `http://lo
 ## Tech Stack
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router 7
-- **Backend**: Netlify Functions (Node.js) + Edge Functions (Deno)
+- **Backend**: Cloudflare Pages Functions (Workers runtime)
 - **Database**: Neon PostgreSQL (serverless)
 - **Auth**: Auth0
 - **AI**: Anthropic Claude API

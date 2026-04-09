@@ -9,10 +9,12 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite build && wrangler dev",
+    "dev:vite": "vite",
     "build": "vite build",
+    "preview": "vite build && wrangler dev",
+    "deploy": "vite build && wrangler deploy",
     "lint": "eslint .",
-    "preview": "vite preview",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },
@@ -21,10 +23,7 @@
     "@heroicons/react": "^2.1.5",
     "@mdxeditor/editor": "^3.46.1",
     "@neondatabase/serverless": "^1.0.1",
-    "@netlify/functions": "^4.2.5",
     "clsx": "^2.1.1",
-    "jsonwebtoken": "^9.0.2",
-    "jwks-rsa": "^3.2.0",
     "pdfjs-dist": "^5.4.296",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -34,6 +33,7 @@
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^1.6.1",
+    "@cloudflare/workers-types": "^4.20260409.1",
     "@eslint/js": "^9.9.0",
     "@storybook/addon-essentials": "^8.2.9",
     "@storybook/addon-interactions": "^8.2.9",
@@ -52,13 +52,15 @@
     "eslint-plugin-react-refresh": "^0.4.9",
     "eslint-plugin-storybook": "^0.8.0",
     "globals": "^15.9.0",
+    "jose": "^6.2.2",
     "postcss": "^8.4.41",
     "prettier": "3.3.3",
     "storybook": "^8.2.9",
     "tailwindcss": "^3.4.10",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
-    "vite": "^5.4.1"
+    "vite": "^5.4.1",
+    "wrangler": "^4.81.0"
   },
   "eslintConfig": {
     "extends": [

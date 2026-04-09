@@ -1,6 +1,6 @@
 import { ToCData } from '../types';
 
-const API_BASE = '/.netlify/functions';
+const API_BASE = '/api';
 
 export interface CreateChartResponse {
   chartId: string;
