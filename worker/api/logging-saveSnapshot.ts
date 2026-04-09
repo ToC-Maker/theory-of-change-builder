@@ -15,7 +15,6 @@ interface SaveSnapshotRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   // Reject oversized payloads (graph_data max 1MB + overhead)
   const text = await request.text();
   if (new TextEncoder().encode(text).length > 1_500_000) {
@@ -56,13 +55,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const token = extractToken(request.headers.get('authorization'));
     let user_id = null;
-    let is_authenticated = false;
 
     if (token) {
       try {
         const decoded = await verifyToken(token, env);
         user_id = decoded.sub;
-        is_authenticated = true;
       } catch (err) {
         if (err instanceof JWKSFetchError) {
           return Response.json({ error: 'Authentication service unavailable' }, { status: 502 });
@@ -98,18 +95,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         ${data.edit_type}, ${data.triggered_by_message_id || null},
         ${data.edit_instructions ? JSON.stringify(data.edit_instructions) : null}::jsonb,
         ${data.edit_success !== false}, ${data.error_message || null},
-        ${user_id}, ${is_authenticated}
+        ${user_id}, ${user_id !== null}
       FROM next_seq
       RETURNING id, sequence_number
     `;
 
     return Response.json(result[0]);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Error saving snapshot:', errorMessage);
-    if (error instanceof Error && error.stack) {
-      console.error('Stack:', error.stack);
-    }
+    console.error('Error saving snapshot:', error);
     return Response.json({ error: 'Failed to save snapshot' }, { status: 500 });
   }
 };

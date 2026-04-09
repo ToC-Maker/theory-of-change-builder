@@ -3,7 +3,6 @@ import { getDb } from '../_shared/db';
 import { tryMigrateUser } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   try {
     const url = new URL(request.url);
     const userId = url.searchParams.get('userId');

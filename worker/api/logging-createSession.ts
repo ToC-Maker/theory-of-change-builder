@@ -10,7 +10,6 @@ interface CreateSessionRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   // Reject oversized payloads
   const text = await request.text();
   if (new TextEncoder().encode(text).length > 10_000) {
