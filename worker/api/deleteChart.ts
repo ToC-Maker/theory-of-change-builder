@@ -3,9 +3,15 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
+  let body: { chartId?: string };
+  try {
+    body = await request.json() as { chartId?: string };
+  } catch {
+    return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+  }
 
   try {
-    const { chartId } = await request.json() as { chartId?: string };
+    const { chartId } = body;
 
     if (!chartId) {
       return Response.json({ error: 'Chart ID is required' }, { status: 400 });

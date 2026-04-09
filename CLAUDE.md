@@ -88,10 +88,10 @@ If you encounter 401/403 errors, check: token validity, permission status, link 
 
 ## Environment Variables
 
-Set in Cloudflare Pages dashboard (or `.dev.vars` for local dev):
+Set in Cloudflare Workers dashboard (or `.dev.vars` for local dev):
 
 ```bash
-# Secrets (wrangler pages secret put)
+# Secrets (wrangler secret put)
 DATABASE_URL=postgresql://...              # Neon connection string
 ANTHROPIC_API_KEY=sk-ant-...              # Server-side only
 IP_HASH_SALT=...                          # HMAC salt for anonymous user IP hashing
@@ -127,7 +127,7 @@ Connections use `offsetLeft`/`offsetTop` for position calculations (immune to CS
 ### Auth Token Issues
 Auth0 tokens refresh automatically, but invalid tokens silently fall back to anonymous mode. If permission checks fail unexpectedly, verify:
 - Token in Authorization header: `Bearer <token>`
-- Token validated in backend via `verifyToken()` in `functions/_shared/auth.ts`
+- Token validated in backend via `verifyToken()` in `worker/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
 
 ### PDF Parsing

@@ -16,11 +16,12 @@ import { handler as loggingSaveSnapshot } from './api/logging-saveSnapshot';
 import { handler as loggingReportError } from './api/logging-reportError';
 import { handler as loggingPreference } from './api/logging-preference';
 
-type Handler = (request: Request, env: Env) => Promise<Response>;
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
+type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
 
 // Route table: [method, path, handler]
 // method '*' matches any method (handler checks internally)
-const routes: [string, string, Handler][] = [
+const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/anthropic-stream', anthropicStream],
   ['POST', '/api/createChart', createChart],
   ['GET', '/api/getChart', getChart],
@@ -53,7 +54,7 @@ const securityHeaders: Record<string, string> = {
 const blockedPaths = ['/wp-admin/', '/wordpress/', '/xmlrpc.php', '/wp-includes/', '/wp-content/'];
 
 function isBlocked(pathname: string): boolean {
-  return blockedPaths.some(p => pathname.startsWith(p) || pathname.includes(p));
+  return blockedPaths.some(p => pathname.startsWith(p));
 }
 
 function addHeaders(response: Response, headers: Record<string, string>): Response {
@@ -65,7 +66,7 @@ function addHeaders(response: Response, headers: Record<string, string>): Respon
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // Block WordPress probes
@@ -84,7 +85,7 @@ export default {
       for (const [method, path, handler] of routes) {
         if (url.pathname === path && (method === '*' || method === request.method)) {
           try {
-            const response = await handler(request, env);
+            const response = await handler(request, env, ctx);
             return addHeaders(response, corsHeaders);
           } catch (err) {
             console.error(`Error in ${request.method} ${path}:`, err);
@@ -112,7 +113,12 @@ export default {
     }
 
     // Static assets (served by Workers Static Assets with SPA fallback)
-    const response = await env.ASSETS.fetch(request);
-    return addHeaders(response, securityHeaders);
+    try {
+      const response = await env.ASSETS.fetch(request);
+      return addHeaders(response, securityHeaders);
+    } catch (err) {
+      console.error('Static asset serving error:', err);
+      return new Response('Internal Server Error', { status: 500, headers: securityHeaders });
+    }
   },
 } satisfies ExportedHandler<Env>;
