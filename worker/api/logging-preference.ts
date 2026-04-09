@@ -1,6 +1,6 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { verifyToken, extractToken } from '../_shared/auth';
+import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 
 // Multi-method handler: GET + POST
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -20,7 +20,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   try {
     const decoded = await verifyToken(token, env);
     user_id = decoded.sub;
-  } catch {
+  } catch (err) {
+    if (err instanceof JWKSFetchError) {
+      return Response.json({ error: 'Authentication service unavailable' }, { status: 502 });
+    }
+    console.error('[logging-preference] Token verification failed:', err);
     return Response.json({ error: 'Invalid token' }, { status: 401 });
   }
 

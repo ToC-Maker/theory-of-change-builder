@@ -1,5 +1,8 @@
 import { jwtVerify, createRemoteJWKSet } from 'jose';
-import { JWKSTimeout, JWKSInvalid } from 'jose/errors';
+import {
+  JWTClaimValidationFailed, JWTExpired, JWTInvalid,
+  JWSInvalid, JWSSignatureVerificationFailed, JWKSNoMatchingKey,
+} from 'jose/errors';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { Env } from './types';
 
@@ -51,8 +54,17 @@ export async function verifyToken(
       algorithms: ['RS256'],
     }));
   } catch (err) {
-    // Distinguish infrastructure errors from token validation errors
-    if (err instanceof JWKSTimeout || err instanceof JWKSInvalid || err instanceof TypeError) {
+    // Distinguish token validation errors from infrastructure errors.
+    // Known token errors mean the JWT itself is bad; everything else
+    // (JWKS timeout, DNS failure, non-200 JWKS response, etc.) is an
+    // infrastructure problem where the token may actually be valid.
+    const isTokenError = err instanceof JWTClaimValidationFailed
+      || err instanceof JWTExpired
+      || err instanceof JWTInvalid
+      || err instanceof JWSInvalid
+      || err instanceof JWSSignatureVerificationFailed
+      || err instanceof JWKSNoMatchingKey;
+    if (!isTokenError) {
       throw new JWKSFetchError(err);
     }
     throw err;

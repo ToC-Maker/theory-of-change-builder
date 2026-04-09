@@ -1,6 +1,6 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { verifyToken, extractToken } from '../_shared/auth';
+import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { isUserOptedOut } from '../_shared/logging-optout';
 
 interface SaveSnapshotRequest {
@@ -64,6 +64,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         user_id = decoded.sub;
         is_authenticated = true;
       } catch (err) {
+        if (err instanceof JWKSFetchError) {
+          return Response.json({ error: 'Authentication service unavailable' }, { status: 502 });
+        }
         console.error('[logging-saveSnapshot] Token verification failed:', err);
         return Response.json({ error: 'Token verification failed' }, { status: 401 });
       }

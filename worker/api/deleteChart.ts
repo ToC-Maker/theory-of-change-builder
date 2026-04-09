@@ -1,6 +1,6 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { verifyToken, extractToken } from '../_shared/auth';
+import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   let body: { chartId?: string };
@@ -45,6 +45,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     try {
       decodedToken = await verifyToken(token, env);
     } catch (err) {
+      if (err instanceof JWKSFetchError) {
+        return Response.json({ error: 'Authentication service unavailable' }, { status: 502 });
+      }
       return Response.json({ error: 'Invalid or expired token' }, { status: 401 });
     }
 

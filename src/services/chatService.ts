@@ -144,7 +144,7 @@ class ChatService {
     this.authToken = token;
   }
 
-  private async streamFromEdgeFunction(
+  private async streamFromApi(
     url: string,
     requestBody: any,
     callbacks: {
@@ -411,7 +411,7 @@ class ChatService {
       serializedBody = JSON.stringify(requestBody);
       ctx = new StreamingContext(serializedBody.length, this.STREAM_API_URL);
 
-      await this.streamFromEdgeFunction(this.STREAM_API_URL, requestBody, callbacks, signal, ctx);
+      await this.streamFromApi(this.STREAM_API_URL, requestBody, callbacks, signal, ctx);
     } catch (caughtError) {
       let error = caughtError;
       ctx?.markError();
@@ -461,7 +461,7 @@ class ChatService {
           retryCtx.retryAttempt = 1;
 
           try {
-            await this.streamFromEdgeFunction(
+            await this.streamFromApi(
               this.STREAM_API_URL + '?force-h2=1',
               requestBody,
               callbacks,

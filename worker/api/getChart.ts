@@ -1,6 +1,6 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { verifyToken, extractToken, tryMigrateDecoded } from '../_shared/auth';
+import { verifyToken, extractToken, tryMigrateDecoded, JWKSFetchError } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
 
@@ -44,6 +44,12 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         try {
           decodedToken = await verifyToken(token, env);
         } catch (err) {
+          if (err instanceof JWKSFetchError) {
+            return Response.json(
+              { error: 'Authentication service unavailable. Please try again later.' },
+              { status: 502 }
+            );
+          }
           return Response.json(
             { error: 'Invalid or expired authentication. Please log in again.' },
             { status: 401 }
