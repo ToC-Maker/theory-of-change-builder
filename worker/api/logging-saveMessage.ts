@@ -15,7 +15,6 @@ interface SaveMessageRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   // Reject oversized payloads (content max 100KB + overhead)
   const text = await request.text();
   if (new TextEncoder().encode(text).length > 200_000) {
@@ -34,8 +33,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const validRoles = ['user', 'assistant'];
-    if (!validRoles.includes(data.role)) {
+    if (data.role !== 'user' && data.role !== 'assistant') {
       return Response.json({ error: 'Invalid role. Must be "user" or "assistant"' }, { status: 400 });
     }
 

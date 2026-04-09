@@ -4,7 +4,6 @@ import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { isUserOptedOut } from '../_shared/logging-optout';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   const text = await request.text();
   if (new TextEncoder().encode(text).length > 10_000) {
     return Response.json({ error: 'Payload too large' }, { status: 413 });

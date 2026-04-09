@@ -2,6 +2,22 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 
+async function requireOwner(
+  sql: ReturnType<typeof getDb>,
+  chartId: string,
+  userId: string,
+  action: string
+): Promise<Response | null> {
+  const ownerCheck = await sql`
+    SELECT permission_level FROM chart_permissions
+    WHERE chart_id = ${chartId} AND user_id = ${userId}
+  `;
+  if (!ownerCheck.length || ownerCheck[0].permission_level !== 'owner') {
+    return Response.json({ error: `Only the owner can ${action}` }, { status: 403 });
+  }
+  return null;
+}
+
 // Multi-method handler: GET, PATCH, PUT, DELETE
 export async function handler(request: Request, env: Env): Promise<Response> {
   const method = request.method;
@@ -39,14 +55,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         return Response.json({ error: 'Chart ID is required' }, { status: 400 });
       }
 
-      const ownerCheck = await sql`
-        SELECT permission_level FROM chart_permissions
-        WHERE chart_id = ${chartId} AND user_id = ${authenticatedUserId}
-      `;
-
-      if (!ownerCheck.length || ownerCheck[0].permission_level !== 'owner') {
-        return Response.json({ error: 'Only the owner can view permissions' }, { status: 403 });
-      }
+      const denied = await requireOwner(sql, chartId, authenticatedUserId, 'view permissions');
+      if (denied) return denied;
 
       const permissions = await sql`
         SELECT user_id, user_email, permission_level, status, granted_at, granted_by
@@ -80,14 +90,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         return Response.json({ error: 'Chart ID and target user ID are required' }, { status: 400 });
       }
 
-      const ownerCheck = await sql`
-        SELECT permission_level FROM chart_permissions
-        WHERE chart_id = ${chartId} AND user_id = ${authenticatedUserId}
-      `;
-
-      if (!ownerCheck.length || ownerCheck[0].permission_level !== 'owner') {
-        return Response.json({ error: 'Only the owner can manage permissions' }, { status: 403 });
-      }
+      const denied = await requireOwner(sql, chartId, authenticatedUserId, 'manage permissions');
+      if (denied) return denied;
 
       if (action === 'approve' || action === 'reject') {
         const newStatus = action === 'approve' ? 'approved' : 'rejected';
@@ -149,14 +153,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         return Response.json({ error: 'Link sharing level must be "restricted", "viewer", or "editor"' }, { status: 400 });
       }
 
-      const ownerCheck = await sql`
-        SELECT permission_level FROM chart_permissions
-        WHERE chart_id = ${chartId} AND user_id = ${authenticatedUserId}
-      `;
-
-      if (!ownerCheck.length || ownerCheck[0].permission_level !== 'owner') {
-        return Response.json({ error: 'Only the owner can change link sharing settings' }, { status: 403 });
-      }
+      const denied = await requireOwner(sql, chartId, authenticatedUserId, 'change link sharing settings');
+      if (denied) return denied;
 
       const result = await sql`
         UPDATE charts SET link_sharing_level = ${linkSharingLevel}
@@ -182,14 +180,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         return Response.json({ error: 'Chart ID and target user ID are required' }, { status: 400 });
       }
 
-      const ownerCheck = await sql`
-        SELECT permission_level FROM chart_permissions
-        WHERE chart_id = ${chartId} AND user_id = ${authenticatedUserId}
-      `;
-
-      if (!ownerCheck.length || ownerCheck[0].permission_level !== 'owner') {
-        return Response.json({ error: 'Only the owner can remove permissions' }, { status: 403 });
-      }
+      const denied = await requireOwner(sql, chartId, authenticatedUserId, 'remove permissions');
+      if (denied) return denied;
 
       const targetPermission = await sql`
         SELECT permission_level FROM chart_permissions
@@ -213,8 +205,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ success: true, message: 'Permission removed successfully' });
     }
 
-    // Unreachable: method guard at top rejects non-GET/PATCH/PUT/DELETE
-    return Response.json({ error: 'Method not allowed' }, { status: 405 });
+    // Unreachable: method guard at top rejects anything else
+    throw new Error(`Unexpected method: ${method}`);
   } catch (error) {
     console.error('Error managing permissions:', error);
     return Response.json({ error: 'Failed to manage permissions' }, { status: 500 });

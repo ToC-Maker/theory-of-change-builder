@@ -2,15 +2,8 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, tryMigrateUser } from '../_shared/auth';
 
-function generateChartId(): string {
-  const bytes = new Uint8Array(6);
-  crypto.getRandomValues(bytes);
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function generateEditToken(): string {
-  const bytes = new Uint8Array(24);
+function randomBase64Url(byteCount: number): string {
+  const bytes = new Uint8Array(byteCount);
   crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -31,18 +24,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ error: 'Chart data is required' }, { status: 400 });
     }
 
-    const chartId = generateChartId();
-    const editToken = generateEditToken();
+    const chartId = randomBase64Url(6);
+    const editToken = randomBase64Url(24);
     const sql = getDb(env);
 
     // Migrate user data if they logged in with a new Auth0 tenant
     const authHeader = request.headers.get('authorization');
     await tryMigrateUser(sql, authHeader, 'createChart', env);
 
-    // Extract chart title from chart data
     const chartTitle = chartData.title || 'Theory of Change';
-
-    // Check if user is authenticated
     let userId = null;
     let userEmail = null;
     const token = extractToken(authHeader);

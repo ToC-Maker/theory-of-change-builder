@@ -15,7 +15,6 @@ interface ReportErrorRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   // Reject oversized payloads
   const text = await request.text();
   if (new TextEncoder().encode(text).length > 50_000) {
@@ -38,9 +37,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
 
     // Server-side field truncation (defense-in-depth)
+    data.error_name = data.error_name.slice(0, 200);
     data.error_message = data.error_message.slice(0, 8192);
     if (data.stack_trace) data.stack_trace = data.stack_trace.slice(0, 4096);
-    if (data.error_name) data.error_name = data.error_name.slice(0, 200);
 
     // Extract user_id from auth token (optional, don't reject anonymous)
     const token = extractToken(request.headers.get('authorization'));

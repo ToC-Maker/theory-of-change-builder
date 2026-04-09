@@ -3,7 +3,6 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-
   try {
     const token = extractToken(request.headers.get('authorization'));
     if (!token) {
