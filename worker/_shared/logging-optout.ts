@@ -1,4 +1,4 @@
-import { NeonQueryFunction } from '@neondatabase/serverless';
+import type { NeonQueryFunction } from '@neondatabase/serverless';
 
 /**
  * Check if a user has opted out of logging server-side.

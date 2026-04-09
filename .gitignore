@@ -31,8 +31,9 @@ dist-ssr
 # Test files with sensitive data
 test-database.js
 
-# Netlify
-.netlify/
+# Cloudflare
+.wrangler/
+.dev.vars
 
 # Claude Code local settings
 .claude/settings.local.json

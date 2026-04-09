@@ -1,50 +1,35 @@
-import jwt from 'jsonwebtoken';
-import jwksClient from 'jwks-rsa';
-import type { NeonQueryFunction } from '@neondatabase/serverless';
+import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { neon, NeonQueryFunction } from '@neondatabase/serverless';
+import type { Env } from './types';
 
-// JWKS client to fetch Auth0 public keys
-const client = jwksClient({
-  jwksUri: `https://${process.env.VITE_AUTH0_DOMAIN}/.well-known/jwks.json`,
-  cache: true,
-  rateLimit: true,
-});
+// jose caches JWKS keys internally; module-level variable persists across
+// warm invocations within the same Workers isolate.
+let cachedJWKS: ReturnType<typeof createRemoteJWKSet>;
+let cachedDomain: string;
 
-// Get the signing key from Auth0
-function getKey(header: any, callback: any) {
-  client.getSigningKey(header.kid, (err, key) => {
-    if (err) {
-      callback(err);
-      return;
-    }
-    const signingKey = key?.getPublicKey();
-    callback(null, signingKey);
-  });
-}
-
-// Verify Auth0 JWT token
-export async function verifyToken(token: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    jwt.verify(
-      token,
-      getKey,
-      {
-        audience: process.env.VITE_AUTH0_CLIENT_ID,
-        issuer: `https://${process.env.VITE_AUTH0_DOMAIN}/`,
-        algorithms: ['RS256'],
-      },
-      (err, decoded) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(decoded);
-        }
-      }
+function getJWKS(domain: string) {
+  if (!cachedJWKS || cachedDomain !== domain) {
+    cachedJWKS = createRemoteJWKSet(
+      new URL(`https://${domain}/.well-known/jwks.json`)
     );
-  });
+    cachedDomain = domain;
+  }
+  return cachedJWKS;
 }
 
-// Extract token from Authorization header
-export function extractToken(authHeader: string | undefined): string | null {
+export async function verifyToken(
+  token: string,
+  env: Env
+): Promise<{ sub: string; email?: string; name?: string; [key: string]: unknown }> {
+  const { payload } = await jwtVerify(token, getJWKS(env.VITE_AUTH0_DOMAIN), {
+    audience: env.VITE_AUTH0_CLIENT_ID,
+    issuer: `https://${env.VITE_AUTH0_DOMAIN}/`,
+    algorithms: ['RS256'],
+  });
+  return payload as { sub: string; email?: string; name?: string; [key: string]: unknown };
+}
+
+export function extractToken(authHeader: string | null): string | null {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
   }
@@ -72,15 +57,16 @@ export async function tryMigrateDecoded(
 // Failures are logged and swallowed — migration is never required for the request to succeed.
 export async function tryMigrateUser(
   sql: NeonQueryFunction<false, false>,
-  authHeader: string | undefined,
-  logPrefix: string
+  authHeader: string | null,
+  logPrefix: string,
+  env: Env
 ): Promise<void> {
   const token = extractToken(authHeader);
   if (!token) return;
 
   let decodedToken;
   try {
-    decodedToken = await verifyToken(token);
+    decodedToken = await verifyToken(token, env);
   } catch {
     console.log(`[${logPrefix}] Token verification failed, skipping migration check`);
     return;
@@ -93,8 +79,11 @@ export async function tryMigrateUser(
 // This handles tenant migrations where sub values change but emails stay the same.
 // No-op after the first post-migration login: once old user_id rows are updated,
 // the lookup query returns no results.
-// Requires email to be a verified email address, not a display name.
-async function migrateUserIfNeeded(sql: NeonQueryFunction<false, false>, newUserId: string, email: string) {
+async function migrateUserIfNeeded(
+  sql: NeonQueryFunction<false, false>,
+  newUserId: string,
+  email: string
+) {
   const old = await sql`
     SELECT DISTINCT user_id FROM chart_permissions
     WHERE user_email = ${email} AND user_id != ${newUserId}
@@ -123,4 +112,3 @@ async function migrateUserIfNeeded(sql: NeonQueryFunction<false, false>, newUser
     sql`DELETE FROM user_token_usage WHERE user_id = ${oldUserId}`,
   ]);
 }
-
