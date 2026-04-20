@@ -1,14 +1,20 @@
-# Copy to .dev.vars (gitignored) and fill in real values for local dev.
-# These are also the variables needed as Cloudflare Workers secrets/vars in production.
+# Template for local development. Copy to .dev.vars (gitignored) and fill in.
+# Read by `wrangler dev` at runtime. See CLAUDE.md → Environment Variables for
+# the full picture of secret vs build-time vs runtime.
 
-# Secrets (set via `wrangler secret put` or dashboard → Variables and Secrets)
+# -- Secrets (runtime only) -----------------------------------------------------
+# In production: Dashboard → Variables and Secrets (type: Secret)
 DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
 ANTHROPIC_API_KEY="sk-ant-api03-..."
 IP_HASH_SALT="any-long-random-string"
 
-# Public vars (already set in wrangler.toml [vars] for production; override here for local dev)
+# -- Public vars (runtime only) -------------------------------------------------
+# In production: wrangler.toml [vars] (already committed; override here locally)
+# VITE_AUTH0_DOMAIN and VITE_AUTH0_CLIENT_ID are ALSO build-time — committed in
+# .env.production so Vite picks them up during `npm run build`. If you need
+# different Auth0 values for local Vite, set them in .env.local instead.
 VITE_AUTH0_DOMAIN="your-tenant.us.auth0.com"
 VITE_AUTH0_CLIENT_ID="your-auth0-client-id"
 
-# Optional: used to build chart share URLs. Falls back to request origin if unset.
+# Optional. Falls back to request origin if unset.
 SITE_URL="http://localhost:8787"

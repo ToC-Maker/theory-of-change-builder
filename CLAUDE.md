@@ -88,23 +88,28 @@ If you encounter 401/403 errors, check: token validity, permission status, link 
 
 ## Environment Variables
 
-Set in Cloudflare Workers dashboard (or `.dev.vars` for local dev):
+There are three distinct "where it's needed" categories. Some variables are needed in more than one place.
 
-```bash
-# Secrets (wrangler secret put)
-DATABASE_URL=postgresql://...              # Neon connection string
-ANTHROPIC_API_KEY=sk-ant-...              # Server-side only
-IP_HASH_SALT=...                          # HMAC salt for anonymous user IP hashing
+| Variable | Sensitive? | Build-time (Vite inlines) | Runtime (Worker reads) | Set where |
+|---|---|---|---|---|
+| `DATABASE_URL` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
+| `ANTHROPIC_API_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
+| `IP_HASH_SALT` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
+| `VITE_AUTH0_DOMAIN` | no (public) | **yes** | yes | `wrangler.toml` `[vars]` + committed `.env.production` |
+| `VITE_AUTH0_CLIENT_ID` | no (public) | **yes** | yes | `wrangler.toml` `[vars]` + committed `.env.production` |
+| `SITE_URL` | no (public) | no | optional | `wrangler.toml` `[vars]` (falls back to request origin if unset) |
 
-# Variables (dashboard or wrangler.toml)
-VITE_AUTH0_DOMAIN=your-domain.auth0.com   # Public (VITE_ prefix exposed to client at build time)
-VITE_AUTH0_CLIENT_ID=your-client-id       # Public
-SITE_URL=https://theoryofchangebuilder.com  # For constructing chart URLs
-```
+**Three locations, three purposes:**
 
-**Never** commit API keys. `VITE_*` variables are client-exposed by design (Auth0 public credentials).
+1. **Dashboard → Variables and Secrets**: Runtime values. Secrets are encrypted; plaintext vars are visible. Equivalent to `wrangler secret put` / `wrangler.toml [vars]`.
+2. **`wrangler.toml [vars]`**: Runtime values for non-secrets, version-controlled. Appears in the dashboard as plaintext after deploy.
+3. **`.env.production` (committed) or `.env` (gitignored)**: Build-time values. Vite reads these at `npm run build` and inlines `import.meta.env.VITE_*` into the frontend bundle. Cloudflare's build pipeline does **not** automatically propagate `wrangler.toml [vars]` to the build environment.
 
-For local development, create `.dev.vars` (gitignored) with the same variables.
+**The `VITE_*` trap**: `VITE_*` variables are inlined by Vite at build time AND read by the Worker at runtime. Setting them only in `wrangler.toml [vars]` makes them available to the Worker but leaves the frontend bundle with `undefined` values — `src/main.tsx` throws at startup in that case. You need them in both `wrangler.toml [vars]` (runtime) AND `.env.production` or build-env-vars (build-time).
+
+**Never commit secrets.** `VITE_AUTH0_*` are client-exposed by design (Auth0 public SPA credentials), so committing them in `.env.production` is fine.
+
+For local development, copy `.dev.vars.example` to `.dev.vars` (gitignored) and fill in values. Wrangler's `wrangler dev` reads `.dev.vars`; Vite reads `.env.local` or `.env.development` — create those too if you need frontend-side vars for local Vite builds.
 
 ## Database Schema
 
