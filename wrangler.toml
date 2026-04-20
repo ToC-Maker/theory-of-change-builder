@@ -2,8 +2,17 @@ name = "theory-of-change-builder"
 main = "worker/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = true
 
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+
+# Public Auth0 config (intended to be client-exposed — ends up in the Vite bundle).
+# Also accessed at runtime by worker/_shared/auth.ts for JWT verification.
+# SITE_URL is optional; handlers fall back to request origin if unset.
+[vars]
+VITE_AUTH0_DOMAIN = "dev-zy7obc7gqpztqadk.us.auth0.com"
+VITE_AUTH0_CLIENT_ID = "eGHWLKnz44EPGWfmCdcVvYY5SBSMX01B"
