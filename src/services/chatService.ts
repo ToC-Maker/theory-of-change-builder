@@ -263,6 +263,17 @@ class ChatService {
                 usage = { ...usage, ...event.usage };
               } else if (event.type === 'message_stop') {
                 ctx?.markComplete();
+                if (ctx) {
+                  const meta = ctx.toMetadata().streaming;
+                  console.log(
+                    `[ChatService] Stream complete:` +
+                    ` duration=${meta.durationMs}ms` +
+                    ` ttfb=${meta.ttfbMs}ms` +
+                    ` chunks=${meta.chunkCount}` +
+                    ` bytes=${meta.bytesReceived}` +
+                    ` protocol=${meta.protocol ?? '?'}`
+                  );
+                }
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
                 // Separate try so callback bugs aren't reported as streaming failures
