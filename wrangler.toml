@@ -10,6 +10,10 @@ directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 # Public Auth0 config (intended to be client-exposed — ends up in the Vite bundle).
 # Also accessed at runtime by worker/_shared/auth.ts for JWT verification.
 # SITE_URL is optional; handlers fall back to request origin if unset.
