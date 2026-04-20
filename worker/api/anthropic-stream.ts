@@ -12,11 +12,12 @@ async function hashIP(ip: string, salt: string): Promise<string> {
 
 /**
  * Wraps an SSE stream with periodic keepalive comments to prevent idle
- * timeouts from killing long-running responses. Originally needed for
- * Cloudflare's ~60s QUIC max_idle_timeout when proxied via HTTP/3; still
- * valuable for client-facing H3 connections even when running on Workers.
- * SSE comment lines (`: keepalive`) are ignored by EventSource parsers
- * and the client's manual line parser.
+ * timeouts from killing long-running responses. During extended-thinking
+ * pauses Claude may emit no data for tens of seconds; a 25s heartbeat
+ * keeps the connection above any intermediate idle threshold (proxies,
+ * QUIC idle timers, client-side watchdogs). SSE comment lines
+ * (`: keepalive`) are ignored by EventSource parsers and the client's
+ * manual line parser.
  */
 function createKeepaliveStream(
   source: ReadableStream<Uint8Array>,
