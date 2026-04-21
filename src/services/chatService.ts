@@ -106,6 +106,35 @@ export interface StreamCallbacks {
   onCostError?: (error: CostError) => void;
 }
 
+/**
+ * Options for streamMessage. Single options-object instead of long positional
+ * list — simpler to evolve, and callers (ChatInterface) can import and share
+ * this type rather than tracking argument order.
+ *
+ * turnstileToken is NOT listed: Turnstile is cookie-based after the first
+ * verification; the browser auto-sends `tocb_anon` and the Worker reads it.
+ *
+ * userAnthropicKey is kept in the interface for completeness but is normally
+ * undefined — the Worker loads stored BYOK keys from `user_byok_keys` server-side.
+ */
+export type StreamMessageOptions = {
+  messages: ChatMessage[];
+  currentGraphData: unknown;
+  mode: 'chat' | 'generate';
+  callbacks?: StreamCallbacks;
+  signal?: AbortSignal;
+  model?: string;
+  webSearchEnabled?: boolean;
+  customSystemPrompt?: string;
+  highlightedNodes?: Set<string> | string[];
+  extendedThinkingEnabled?: boolean;
+  attachedFileIds?: string[];
+  idempotencyKey?: string;
+  userAnthropicKey?: string;
+  chartId?: string;
+  loggingMessageId?: string;
+};
+
 /** HTTP status + error.type combinations that map to a CostError and skip retry/fallthrough. */
 const COST_ERROR_MAP: Record<number, CostErrorType[]> = {
   401: ['turnstile_required', 'turnstile_failed', 'invalid_token', 'email_verification_required', 'authentication_service_unavailable'],
@@ -461,27 +490,30 @@ class ChatService {
     }
   }
 
-  async streamMessage(
-    messages: ChatMessage[],
-    currentGraphData: any,
-    mode: 'chat' | 'generate',
-    apiKey: string = '', // API key parameter kept for backward compatibility but not used
-    callbacks: StreamCallbacks = {},
-    signal?: AbortSignal,
-    model: string = "claude-opus-4-7",
-    webSearchEnabled: boolean = false,
-    customSystemPrompt?: string,
-    highlightedNodes?: Set<string>,
-    extendedThinkingEnabled: boolean = false,
-    attachedFileIds: string[] = [],
-    idempotencyKey?: string,
-    turnstileToken?: string,
-    userAnthropicKey?: string
-  ): Promise<void> {
-    void apiKey; // suppress unused-parameter warning while keeping positional compat
+  async streamMessage(options: StreamMessageOptions): Promise<void> {
+    const {
+      messages,
+      currentGraphData,
+      mode,
+      callbacks = {},
+      signal,
+      model = 'claude-opus-4-7',
+      webSearchEnabled = false,
+      customSystemPrompt,
+      highlightedNodes,
+      extendedThinkingEnabled = false,
+      attachedFileIds = [],
+      idempotencyKey,
+      userAnthropicKey,
+      chartId,
+      loggingMessageId,
+    } = options;
+
     let ctx: StreamingContext | undefined;
     let requestBody: any;
-    let serializedBody: string;
+    // Initialize to empty string so TS can prove it's assigned before use in
+    // the catch-block retry guard. The real value is set before streamFromApi.
+    let serializedBody = '';
     let retriedWithH2 = false;
     // Captured in the try-block so the H3->H2 retry can reuse most headers.
     let capturedExtraHeaders: Record<string, string> | undefined;
@@ -490,10 +522,19 @@ class ChatService {
       const processedMessages = [...messages];
       const lastIndex = messages.length - 1;
 
+      // Normalize highlightedNodes (options type accepts Set or string[]) into
+      // a Set for O(1) membership checks below.
+      const highlightedSet: Set<string> | undefined = highlightedNodes
+        ? (highlightedNodes instanceof Set ? highlightedNodes : new Set(highlightedNodes))
+        : undefined;
+
       if (processedMessages[lastIndex].role === 'user') {
-        // Add graph data - create a copy to avoid modifying the original message
+        // Add graph data - create a copy to avoid modifying the original message.
+        // Shape is intentionally loose here (options.currentGraphData is `unknown`
+        // per the public interface); inner access is typed as `any` because the
+        // real shape lives in utils/addNodePaths and graph components.
         if (currentGraphData) {
-          const dataWithPaths = addNodePaths(currentGraphData);
+          const dataWithPaths = addNodePaths(currentGraphData as any);
           processedMessages[lastIndex] = {
             ...processedMessages[lastIndex],
             content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
@@ -501,13 +542,14 @@ class ChatService {
         }
 
         // Add selected nodes data after graph data
-        if (highlightedNodes && highlightedNodes.size > 0 && currentGraphData) {
+        if (highlightedSet && highlightedSet.size > 0 && currentGraphData) {
           const selectedNodesJson: any[] = []
+          const graph = currentGraphData as any;
 
-          currentGraphData.sections?.forEach((section: any, sectionIndex: number) => {
+          graph.sections?.forEach((section: any, sectionIndex: number) => {
             section.columns?.forEach((column: any, columnIndex: number) => {
               column.nodes?.forEach((node: any, nodeIndex: number) => {
-                if (highlightedNodes.has(node.id)) {
+                if (highlightedSet.has(node.id)) {
                   // Create a copy with path added
                   const nodeWithPath = {
                     ...node,
