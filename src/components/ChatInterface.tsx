@@ -238,6 +238,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Running cost for the in-flight assistant turn (updated via onCostUpdate).
   const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
 
+  // Composer-side cost estimate (input-only lower bound). Debounced so
+  // typing doesn't recompute on each keystroke.
+  const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
+
   // Inline error banner shown under the last user message when the server
   // rejects the request on cost/quota grounds (429/402). Persists the chat
   // history (decision 8).
@@ -476,6 +480,71 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     void refreshUsage();
   }, [refreshUsage]);
 
+  // Classify a streaming error string into a cost/quota category if it
+  // matches one of U9's error payloads, or `null` if it's a generic error
+  // to render normally. Keyword-based detection is a stopgap until U10
+  // threads a structured `onCostError` callback through chatService.
+  const classifyCostError = useCallback(
+    (message: string): { kind: 'lifetime_cap' | 'global_budget' | 'turnstile' | 'body_too_large' | 'service_unavailable'; message: string } | null => {
+      const lower = message.toLowerCase();
+      if (lower.includes('lifetime_cap_reached') || lower.includes('free quota')) {
+        return {
+          kind: 'lifetime_cap',
+          message: "You've reached the free quota. Keep going with your own Anthropic key, or donate to refill the shared pool.",
+        };
+      }
+      if (lower.includes('global_budget_exhausted') || lower.includes('shared budget')) {
+        return {
+          kind: 'global_budget',
+          message: 'Our shared monthly budget is exhausted. Keep going with your own key, or donate to refill the pool.',
+        };
+      }
+      if (lower.includes('turnstile_required') || lower.includes('turnstile_failed')) {
+        return {
+          kind: 'turnstile',
+          message: 'Please complete the challenge before sending.',
+        };
+      }
+      if (lower.includes('body_too_large') || lower.includes('payload too large')) {
+        return {
+          kind: 'body_too_large',
+          message: 'Your message is too large. Try a shorter message or fewer attachments.',
+        };
+      }
+      if (lower.includes('database_unavailable') || lower.includes('authentication_service_unavailable')) {
+        return {
+          kind: 'service_unavailable',
+          message: 'Service temporarily unavailable. Please try again shortly.',
+        };
+      }
+      if (lower.includes('idempotent_replay')) {
+        // Silent — user probably double-clicked; nothing to show.
+        return null;
+      }
+      return null;
+    },
+    [],
+  );
+
+  // Debounced cost estimate: recomputes 300ms after the last keystroke or
+  // attachment change. Includes inline text file content since those bytes
+  // also hit the input-token count.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      const attachedChars = chatAttachedFiles
+        .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
+        .reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
+      const totalChars = inputValue.length + attachedChars;
+      if (totalChars === 0) {
+        setComposerEstimateUsd(0);
+        return;
+      }
+      const tokens = roughInputTokensFromChars(totalChars, selectedModel);
+      setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [inputValue, chatAttachedFiles, selectedModel]);
+
   const handleStopStreaming = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -686,17 +755,26 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           }
         },
         onError: (error: string) => {
-          const errorMessage: ChatMessage = {
-            id: assistantMessageId,
-            role: 'assistant',
-            content: `Error: ${error}`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, errorMessage]);
+          const classified = classifyCostError(error);
+          if (classified) {
+            // Surface as inline banner, don't pollute chat history
+            // (decision 8: preserve chat history on quota/cost failures so
+            // BYOK-recovered retries re-use the same messages array).
+            setCostErrorBanner(classified);
+          } else {
+            const errorMessage: ChatMessage = {
+              id: assistantMessageId,
+              role: 'assistant',
+              content: `Error: ${error}`,
+              timestamp: new Date()
+            };
+            setMessages(prev => [...prev, errorMessage]);
+          }
           setIsStreaming(false);
           setStreamingContent('');
           setIsSearching(false);
           setIsThinking(false);
+          setRunningCostUsd(null);
           streamingMessageRef.current = null;
         }
       },
@@ -708,17 +786,24 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       true // extendedThinkingEnabled — always on for Opus 4.7
       );
     } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your request.',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
+      const classified = classifyCostError(message);
+      if (classified) {
+        setCostErrorBanner(classified);
+      } else {
+        const errorMessage: ChatMessage = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your request.',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      }
       setIsStreaming(false);
       setStreamingContent('');
       setIsSearching(false);
       setIsThinking(false);
+      setRunningCostUsd(null);
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
@@ -735,12 +820,32 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
   const clearChat = () => {
     setMessages([]);
+    setChatAttachedFiles([]);
+    setCostErrorBanner(null);
     // Clear chat history from localStorage
     try {
       const storageKey = getStorageKey();
       localStorage.removeItem(storageKey);
     } catch (error) {
       console.error('Failed to clear chat history from localStorage:', error);
+    }
+
+    // Fire-and-forget: purge server-side Files API uploads tied to this
+    // chart so we don't leak Anthropic storage. The user-visible response
+    // doesn't wait on this — they've already moved on.
+    const chartIdForCleanup = params.chartId ?? params.editToken;
+    if (chartIdForCleanup) {
+      void (async () => {
+        try {
+          const headers = await getAuthHeaders();
+          await fetch(`/api/chart-files?chart_id=${encodeURIComponent(chartIdForCleanup)}`, {
+            method: 'DELETE',
+            headers,
+          });
+        } catch (err) {
+          console.warn('[ChatInterface] chart-files cleanup failed:', err);
+        }
+      })();
     }
   };
 
@@ -1103,15 +1208,22 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           }
         },
         onError: (error: string) => {
-          const errorMessage: ChatMessage = {
-            id: generationAssistantId,
-            role: 'assistant',
-            content: `Error: ${error}`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, errorMessage]);
+          const classified = classifyCostError(error);
+          if (classified) {
+            setCostErrorBanner(classified);
+          } else {
+            const errorMessage: ChatMessage = {
+              id: generationAssistantId,
+              role: 'assistant',
+              content: `Error: ${error}`,
+              timestamp: new Date()
+            };
+            setMessages(prev => [...prev, errorMessage]);
+          }
           setIsStreaming(false);
           setStreamingContent('');
+          setIsThinking(false);
+          setRunningCostUsd(null);
           streamingMessageRef.current = null;
         }
       },
@@ -1123,16 +1235,23 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       true // extendedThinkingEnabled — always on for Opus 4.7
       );
     } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: generationAssistantId,
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your request.',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
+      const classified = classifyCostError(message);
+      if (classified) {
+        setCostErrorBanner(classified);
+      } else {
+        const errorMessage: ChatMessage = {
+          id: generationAssistantId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your request.',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      }
       setIsStreaming(false);
       setStreamingContent('');
       setIsThinking(false);
+      setRunningCostUsd(null);
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
@@ -1492,24 +1611,61 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   />
                 </div>
 
-                {/* Generate Button */}
-                <button
-                  onClick={startGeneration}
-                  disabled={files.filter(f => f.status === 'ready').length === 0 || isLoading}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isLoading ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Generating...
-                    </>
-                  ) : (
-                    <>
-                      <DocumentPlusIcon className="w-4 h-4" />
-                      Generate Theory of Change
-                    </>
-                  )}
-                </button>
+                {/* Generate gate: require a verified BYOK key. Rationale
+                    (plan §Subtask 2 + decision 7): generation is expensive
+                    and we don't subsidize it from the shared pool. If the
+                    user doesn't have a key yet, surface the inline
+                    ByokPanel with a cost estimate instead of the button.
+                    Files and instructions remain visible above so context
+                    is preserved across the key-entry step. */}
+                {hasKey && verified ? (
+                  <button
+                    onClick={startGeneration}
+                    disabled={files.filter(f => f.status === 'ready').length === 0 || isLoading}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isLoading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <DocumentPlusIcon className="w-4 h-4" />
+                        Generate Theory of Change
+                      </>
+                    )}
+                  </button>
+                ) : files.filter((f) => f.status === 'ready').length > 0 ? (
+                  <ByokPanel
+                    mode="generate"
+                    costEstimate={(() => {
+                      const promptChars =
+                        files
+                          .filter((f) => f.status === 'ready')
+                          .reduce((sum, f) => sum + (f.content?.length ?? 0), 0) +
+                        additionalInstructions.length +
+                        // Rough constant for the generate-mode prompt scaffolding.
+                        generateModePromptContent.length;
+                      const low = estimateCostLowBound(
+                        roughInputTokensFromChars(promptChars, selectedModel),
+                        selectedModel,
+                      );
+                      const remaining = usage
+                        ? Math.max(0, usage.limit_usd - usage.used_usd)
+                        : undefined;
+                      return { low_usd: low, remaining_usd: remaining };
+                    })()}
+                    onSubmitted={() => {
+                      void refreshUsage();
+                      void startGeneration();
+                    }}
+                  />
+                ) : (
+                  <div className="text-xs text-gray-500 text-center">
+                    Upload at least one document to continue.
+                  </div>
+                )}
               </div>
             ) : currentMode === 'search' ? (
               <div className="space-y-4">
@@ -1603,10 +1759,59 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         <div className="flex items-center gap-1">
                           <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
                           <span>Streaming...</span>
+                          {runningCostUsd != null && (
+                            <span className="ml-2 text-gray-600">
+                              · {formatCostUsd(runningCostUsd)} so far
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Cost-error banner: rendered under the last user message
+                    in lieu of toast-style popups, so we preserve chat
+                    history across quota/cap failures (plan decision 8). */}
+                {costErrorBanner && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[85%] p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-900">
+                      <div className="mb-2">{costErrorBanner.message}</div>
+                      {(costErrorBanner.kind === 'lifetime_cap' ||
+                        costErrorBanner.kind === 'global_budget') && (
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                            onClick={() => setByokPanelMode('cap_reached')}
+                          >
+                            Bring your own key
+                          </button>
+                          <a
+                            href="#donate"
+                            className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Donate
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Inline BYOK panel for cap_reached / voluntary flows */}
+                {byokPanelMode && byokPanelMode !== 'generate' && (
+                  <ByokPanel
+                    mode={byokPanelMode}
+                    onSubmitted={() => {
+                      setByokPanelMode(null);
+                      setCostErrorBanner(null);
+                      void refreshUsage();
+                      // In cap_reached mode, let the user hit send again;
+                      // we don't auto-retry since the chat composer still
+                      // holds their last message context.
+                    }}
+                  />
                 )}
 
                 {isLoading && !isStreaming && !isSearching && (
@@ -1708,6 +1913,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       target.style.height = newHeight + 'px';
                     }}
                   />
+                  {composerEstimateUsd > 0 && (
+                    <div className="text-xs text-gray-500">
+                      Est. {formatCostUsd(composerEstimateUsd)} (input only)
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1">
                       <button
