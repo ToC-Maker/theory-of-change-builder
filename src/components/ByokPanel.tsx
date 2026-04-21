@@ -110,8 +110,7 @@ export function ByokPanel({
           Sign in first to add a BYOK key
         </h3>
         <p className="mt-2 text-sm text-gray-600">
-          Your Anthropic API key is tied to your account so it syncs across devices and stays
-          encrypted server-side. Please sign in, then come back to add a key.
+          Encrypted on our servers, scoped to your account. Please sign in, then come back to add a key.
         </p>
       </section>
     );
@@ -236,8 +235,8 @@ export function ByokPanel({
           )}
 
           <p id={disclosureId} className="text-xs text-gray-500">
-            Your key is encrypted server-side with your user ID as binding data. You can delete it
-            anytime from the settings menu.
+            Encrypted on our servers, scoped to your account. You can delete it anytime from the
+            settings menu.
           </p>
         </form>
       )}
