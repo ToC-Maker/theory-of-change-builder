@@ -622,12 +622,19 @@ class ChatService {
           cache_control: { type: "ephemeral" }
         }],
         messages: outgoingMessages,
-        // Top-level automatic caching across the full request in addition to
-        // the explicit system-block cache_control (which caches the system
-        // prompt alone). Both are kept per the integration contract.
-        cache_control: { type: "ephemeral" },
         stream: true
       };
+
+      // Mode-conditional top-level cache_control (per v2 spec, Subtask 5):
+      // - Chat: top-level automatic caching of the growing conversation PLUS
+      //   the explicit system-block breakpoint above. Uses 2 of 4 breakpoint
+      //   slots; history hits at 0.1× input rate after the first turn.
+      // - Generate: explicit system-block only. Top-level would write 1.25×
+      //   the full mutating payload (PDFs, graph, edit instructions) on every
+      //   one-shot call — cost outweighs benefit when there's no repeat turn.
+      if (mode === 'chat') {
+        requestBody.cache_control = { type: 'ephemeral' };
+      }
 
       // Opus 4.7 accepts an output_config with effort levels; other models
       // reject the field, so it's only set for claude-opus-4-7.
