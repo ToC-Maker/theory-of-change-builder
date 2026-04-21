@@ -32,6 +32,22 @@ interface StreamingMetadata {
   };
 }
 
+export interface StreamCallbacks {
+  onContent?: (chunk: string, fullContent: string) => void;
+  onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
+  onError?: (error: string) => void;
+  onSearchStart?: () => void;
+  onSearchComplete?: (results?: any[]) => void;
+}
+
+/** Fresh idempotency key; uses crypto.randomUUID when available, else a timestamp+random fallback. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 /**
  * Captures timing, protocol, and network metadata during an SSE streaming
  * request. On error, toMetadata() is merged into the loggingService error
@@ -147,21 +163,21 @@ class ChatService {
   private async streamFromApi(
     url: string,
     requestBody: any,
-    callbacks: {
-      onContent?: (chunk: string, fullContent: string) => void;
-      onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
-      onError?: (error: string) => void;
-      onSearchStart?: () => void;
-      onSearchComplete?: (results?: any[]) => void;
-    },
+    callbacks: StreamCallbacks,
     signal?: AbortSignal,
-    ctx?: StreamingContext
+    ctx?: StreamingContext,
+    extraHeaders?: Record<string, string>
   ): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
     if (this.authToken) {
       headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+    if (extraHeaders) {
+      for (const [k, v] of Object.entries(extraHeaders)) {
+        headers[k] = v;
+      }
     }
 
     const response = await fetch(url, {
@@ -313,24 +329,25 @@ class ChatService {
     currentGraphData: any,
     mode: 'chat' | 'generate',
     apiKey: string = '', // API key parameter kept for backward compatibility but not used
-    callbacks: {
-      onContent?: (chunk: string, fullContent: string) => void;
-      onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
-      onError?: (error: string) => void;
-      onSearchStart?: () => void;
-      onSearchComplete?: (results?: any[]) => void;
-    } = {},
+    callbacks: StreamCallbacks = {},
     signal?: AbortSignal,
     model: string = "claude-opus-4-7",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
-    extendedThinkingEnabled: boolean = false
+    extendedThinkingEnabled: boolean = false,
+    attachedFileIds: string[] = [],
+    idempotencyKey?: string,
+    turnstileToken?: string,
+    userAnthropicKey?: string
   ): Promise<void> {
+    void apiKey; // suppress unused-parameter warning while keeping positional compat
     let ctx: StreamingContext | undefined;
     let requestBody: any;
     let serializedBody: string;
     let retriedWithH2 = false;
+    // Captured in the try-block so the H3->H2 retry can reuse most headers.
+    let capturedExtraHeaders: Record<string, string> | undefined;
     try {
       // Process the last user message
       const processedMessages = [...messages];
@@ -388,6 +405,34 @@ class ChatService {
         ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
         : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
+      // Build messages: prior turns stay as strings (Anthropic accepts both
+      // shapes; keeping strings minimizes diff and leaves history stable).
+      // The current (last) user turn becomes an array of content blocks so we
+      // can prepend document blocks for attached files ahead of the text.
+      const outgoingMessages = processedMessages.map((msg, i) => {
+        if (
+          i === lastIndex &&
+          msg.role === 'user' &&
+          attachedFileIds.length > 0
+        ) {
+          const docBlocks = attachedFileIds.map(file_id => ({
+            type: 'document',
+            source: { type: 'file', file_id },
+          }));
+          return {
+            role: msg.role as 'user' | 'assistant',
+            content: [
+              ...docBlocks,
+              { type: 'text', text: msg.content },
+            ],
+          };
+        }
+        return {
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        };
+      });
+
       // Create request body for streaming API
       requestBody = {
         model,
@@ -397,10 +442,7 @@ class ChatService {
           text: systemPrompt,
           cache_control: { type: "ephemeral" }
         }],
-        messages: processedMessages.map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content
-        })),
+        messages: outgoingMessages,
         // Top-level automatic caching across the full request in addition to
         // the explicit system-block cache_control (which caches the system
         // prompt alone). Both are kept per the integration contract.
@@ -435,7 +477,25 @@ class ChatService {
       serializedBody = JSON.stringify(requestBody);
       ctx = new StreamingContext(serializedBody.length, this.STREAM_API_URL);
 
-      await this.streamFromApi(this.STREAM_API_URL, requestBody, callbacks, signal, ctx);
+      // Idempotency-Key guards against browser-level double-sends (reload,
+      // accidental double-click) within the worker's 60s dedup window. The
+      // caller can supply a stable key (e.g. message UUID) for guaranteed
+      // replay-safety; otherwise we mint a fresh one per attempt.
+      const extraHeaders: Record<string, string> = {
+        'X-Idempotency-Key': idempotencyKey ?? newIdempotencyKey(),
+      };
+      if (turnstileToken) extraHeaders['X-Turnstile-Token'] = turnstileToken;
+      if (userAnthropicKey) extraHeaders['X-User-Anthropic-Key'] = userAnthropicKey;
+      capturedExtraHeaders = extraHeaders;
+
+      await this.streamFromApi(
+        this.STREAM_API_URL,
+        requestBody,
+        callbacks,
+        signal,
+        ctx,
+        extraHeaders
+      );
     } catch (caughtError) {
       let error = caughtError;
       ctx?.markError();
@@ -459,6 +519,15 @@ class ChatService {
         // may still use H3 (browser caches connections), but subsequent requests
         // will fall back to H2. The retry also helps with transient QUIC failures
         // that succeed on a fresh connection attempt.
+        //
+        // Idempotency trade-off: we mint a FRESH X-Idempotency-Key for the retry.
+        // Reusing the original key would collide with the worker's 60s dedup
+        // window and return 409 idempotent_replay. The downside is that if both
+        // the original request AND the retry actually reached Anthropic (rare:
+        // would require the failure to occur between Anthropic acknowledging the
+        // request and us seeing the SSE stream), both would bill. The 60s window
+        // primarily protects against browser-level double-sends; H3->H2 retry
+        // is rare enough that occasional double-billing is acceptable.
         if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== undefined) {
           retriedWithH2 = true;
 
@@ -484,13 +553,20 @@ class ChatService {
           );
           retryCtx.retryAttempt = 1;
 
+          // Fresh idempotency key for retry (see comment above).
+          const retryHeaders: Record<string, string> = {
+            ...(capturedExtraHeaders ?? {}),
+            'X-Idempotency-Key': newIdempotencyKey(),
+          };
+
           try {
             await this.streamFromApi(
               this.STREAM_API_URL + '?force-h2=1',
               requestBody,
               callbacks,
               signal,
-              retryCtx
+              retryCtx,
+              retryHeaders
             );
             return; // Retry succeeded, callbacks already fired
           } catch (retryError) {
