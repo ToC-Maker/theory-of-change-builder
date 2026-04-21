@@ -330,6 +330,18 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     [generateAttachedChips],
   );
 
+  // First-upload privacy notice. Persisted across sessions via localStorage
+  // so a returning user doesn't see it again after dismissing. We render
+  // the banner above the chip area on the first upload of either mode and
+  // hide it once the user clicks "Got it".
+  const [showFileUploadNotice, setShowFileUploadNotice] = useState<boolean>(
+    () => localStorage.getItem('tocb_file_upload_notice_shown') !== 'true',
+  );
+  const dismissFileUploadNotice = useCallback(() => {
+    localStorage.setItem('tocb_file_upload_notice_shown', 'true');
+    setShowFileUploadNotice(false);
+  }, []);
+
   // Search mode state
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -1854,6 +1866,26 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </p>
                 </div>
 
+                {/* First-upload privacy notice. Rendered above the file list
+                    on the first file pick in either mode; persists across
+                    sessions via the localStorage flag. */}
+                {showFileUploadNotice &&
+                  (files.length > 0 || generateAttachedChips.length > 0) && (
+                    <div className="flex items-start gap-2 p-2 rounded-md border border-blue-200 bg-blue-50 text-xs text-blue-900">
+                      <div className="flex-1">
+                        Files are uploaded to Anthropic and kept until you remove them or delete
+                        the chart. Not used to train AI models.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={dismissFileUploadNotice}
+                        className="ml-2 inline-flex items-center px-2 py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+                      >
+                        Got it
+                      </button>
+                    </div>
+                  )}
+
                 {/* Generate-mode PDF chips (Files API uploads). */}
                 {generateAttachedChips.length > 0 && (
                   <AttachedFilesBar
@@ -2206,6 +2238,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                     </div>
                   ) : null}
+                  {/* First-upload privacy notice. Shown on the first chip
+                      attachment in either mode; dismissed for good via the
+                      localStorage flag. */}
+                  {showFileUploadNotice && chatAttachedFiles.length > 0 && (
+                    <div className="flex items-start gap-2 p-2 rounded-md border border-blue-200 bg-blue-50 text-xs text-blue-900">
+                      <div className="flex-1">
+                        Files are uploaded to Anthropic and kept until you remove them or delete
+                        the chart. Not used to train AI models.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={dismissFileUploadNotice}
+                        className="ml-2 inline-flex items-center px-2 py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+                      >
+                        Got it
+                      </button>
+                    </div>
+                  )}
                   {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
                   <AttachedFilesBar
