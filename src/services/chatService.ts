@@ -35,6 +35,9 @@ interface StreamingMetadata {
     network: { effectiveType: string; rtt: number; downlink: number } | null;
     retryAttempt: number;
   };
+  // Index signature lets callers spread metadata into a Record<string, unknown>
+  // context (loggingService request_metadata) without a cast.
+  [key: string]: unknown;
 }
 
 /**
@@ -105,6 +108,35 @@ export interface StreamCallbacks {
    */
   onCostError?: (error: CostError) => void;
 }
+
+/**
+ * Options for streamMessage. Single options-object instead of long positional
+ * list — simpler to evolve, and callers (ChatInterface) can import and share
+ * this type rather than tracking argument order.
+ *
+ * turnstileToken is NOT listed: Turnstile is cookie-based after the first
+ * verification; the browser auto-sends `tocb_anon` and the Worker reads it.
+ *
+ * userAnthropicKey is kept in the interface for completeness but is normally
+ * undefined — the Worker loads stored BYOK keys from `user_byok_keys` server-side.
+ */
+export type StreamMessageOptions = {
+  messages: ChatMessage[];
+  currentGraphData: unknown;
+  mode: 'chat' | 'generate';
+  callbacks?: StreamCallbacks;
+  signal?: AbortSignal;
+  model?: string;
+  webSearchEnabled?: boolean;
+  customSystemPrompt?: string;
+  highlightedNodes?: Set<string> | string[];
+  extendedThinkingEnabled?: boolean;
+  attachedFileIds?: string[];
+  idempotencyKey?: string;
+  userAnthropicKey?: string;
+  chartId?: string;
+  loggingMessageId?: string;
+};
 
 /** HTTP status + error.type combinations that map to a CostError and skip retry/fallthrough. */
 const COST_ERROR_MAP: Record<number, CostErrorType[]> = {
@@ -261,6 +293,10 @@ class ChatService {
       headers,
       body: JSON.stringify(requestBody),
       signal,
+      // Include same-origin cookies so the Turnstile `tocb_anon` cookie
+      // reaches the Worker. Same-origin defaults to 'same-origin' already,
+      // but being explicit avoids Safari/cross-origin surprises.
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -461,27 +497,30 @@ class ChatService {
     }
   }
 
-  async streamMessage(
-    messages: ChatMessage[],
-    currentGraphData: any,
-    mode: 'chat' | 'generate',
-    apiKey: string = '', // API key parameter kept for backward compatibility but not used
-    callbacks: StreamCallbacks = {},
-    signal?: AbortSignal,
-    model: string = "claude-opus-4-7",
-    webSearchEnabled: boolean = false,
-    customSystemPrompt?: string,
-    highlightedNodes?: Set<string>,
-    extendedThinkingEnabled: boolean = false,
-    attachedFileIds: string[] = [],
-    idempotencyKey?: string,
-    turnstileToken?: string,
-    userAnthropicKey?: string
-  ): Promise<void> {
-    void apiKey; // suppress unused-parameter warning while keeping positional compat
+  async streamMessage(options: StreamMessageOptions): Promise<void> {
+    const {
+      messages,
+      currentGraphData,
+      mode,
+      callbacks = {},
+      signal,
+      model = 'claude-opus-4-7',
+      webSearchEnabled = false,
+      customSystemPrompt,
+      highlightedNodes,
+      extendedThinkingEnabled = false,
+      attachedFileIds = [],
+      idempotencyKey,
+      userAnthropicKey,
+      chartId,
+      loggingMessageId,
+    } = options;
+
     let ctx: StreamingContext | undefined;
     let requestBody: any;
-    let serializedBody: string;
+    // Initialize to empty string so TS can prove it's assigned before use in
+    // the catch-block retry guard. The real value is set before streamFromApi.
+    let serializedBody = '';
     let retriedWithH2 = false;
     // Captured in the try-block so the H3->H2 retry can reuse most headers.
     let capturedExtraHeaders: Record<string, string> | undefined;
@@ -490,10 +529,19 @@ class ChatService {
       const processedMessages = [...messages];
       const lastIndex = messages.length - 1;
 
+      // Normalize highlightedNodes (options type accepts Set or string[]) into
+      // a Set for O(1) membership checks below.
+      const highlightedSet: Set<string> | undefined = highlightedNodes
+        ? (highlightedNodes instanceof Set ? highlightedNodes : new Set(highlightedNodes))
+        : undefined;
+
       if (processedMessages[lastIndex].role === 'user') {
-        // Add graph data - create a copy to avoid modifying the original message
+        // Add graph data - create a copy to avoid modifying the original message.
+        // Shape is intentionally loose here (options.currentGraphData is `unknown`
+        // per the public interface); inner access is typed as `any` because the
+        // real shape lives in utils/addNodePaths and graph components.
         if (currentGraphData) {
-          const dataWithPaths = addNodePaths(currentGraphData);
+          const dataWithPaths = addNodePaths(currentGraphData as any);
           processedMessages[lastIndex] = {
             ...processedMessages[lastIndex],
             content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
@@ -501,13 +549,14 @@ class ChatService {
         }
 
         // Add selected nodes data after graph data
-        if (highlightedNodes && highlightedNodes.size > 0 && currentGraphData) {
+        if (highlightedSet && highlightedSet.size > 0 && currentGraphData) {
           const selectedNodesJson: any[] = []
+          const graph = currentGraphData as any;
 
-          currentGraphData.sections?.forEach((section: any, sectionIndex: number) => {
+          graph.sections?.forEach((section: any, sectionIndex: number) => {
             section.columns?.forEach((column: any, columnIndex: number) => {
               column.nodes?.forEach((node: any, nodeIndex: number) => {
-                if (highlightedNodes.has(node.id)) {
+                if (highlightedSet.has(node.id)) {
                   // Create a copy with path added
                   const nodeWithPath = {
                     ...node,
@@ -580,12 +629,19 @@ class ChatService {
           cache_control: { type: "ephemeral" }
         }],
         messages: outgoingMessages,
-        // Top-level automatic caching across the full request in addition to
-        // the explicit system-block cache_control (which caches the system
-        // prompt alone). Both are kept per the integration contract.
-        cache_control: { type: "ephemeral" },
         stream: true
       };
+
+      // Mode-conditional top-level cache_control (per v2 spec, Subtask 5):
+      // - Chat: top-level automatic caching of the growing conversation PLUS
+      //   the explicit system-block breakpoint above. Uses 2 of 4 breakpoint
+      //   slots; history hits at 0.1× input rate after the first turn.
+      // - Generate: explicit system-block only. Top-level would write 1.25×
+      //   the full mutating payload (PDFs, graph, edit instructions) on every
+      //   one-shot call — cost outweighs benefit when there's no repeat turn.
+      if (mode === 'chat') {
+        requestBody.cache_control = { type: 'ephemeral' };
+      }
 
       // Opus 4.7 accepts an output_config with effort levels; other models
       // reject the field, so it's only set for claude-opus-4-7.
@@ -618,11 +674,19 @@ class ChatService {
       // accidental double-click) within the worker's 60s dedup window. The
       // caller can supply a stable key (e.g. message UUID) for guaranteed
       // replay-safety; otherwise we mint a fresh one per attempt.
+      //
+      // Turnstile is NOT threaded per-request: after the first successful
+      // /api/verify-turnstile call the Worker sets an httpOnly `tocb_anon`
+      // cookie, which the browser auto-sends on every subsequent request.
+      // This streamMessage call passes `credentials: 'include'` (via
+      // streamFromApi) to ensure same-origin cookies ride along (Safari is
+      // picky — being explicit avoids surprises).
       const extraHeaders: Record<string, string> = {
         'X-Idempotency-Key': idempotencyKey ?? newIdempotencyKey(),
       };
-      if (turnstileToken) extraHeaders['X-Turnstile-Token'] = turnstileToken;
       if (userAnthropicKey) extraHeaders['X-User-Anthropic-Key'] = userAnthropicKey;
+      if (chartId) extraHeaders['X-Chart-Id'] = chartId;
+      if (loggingMessageId) extraHeaders['X-Logging-Message-Id'] = loggingMessageId;
       capturedExtraHeaders = extraHeaders;
 
       await this.streamFromApi(
@@ -634,8 +698,13 @@ class ChatService {
         extraHeaders,
         model
       );
-    } catch (caughtError) {
-      let error = caughtError;
+    } catch (caughtError: unknown) {
+      // Narrow caughtError once. Non-Error throws (strings, plain objects) are
+      // wrapped so downstream code can rely on .name/.message/.stack. The
+      // original value is preserved when it's already an Error.
+      let err: Error = caughtError instanceof Error ? caughtError : new Error(String(caughtError));
+      const wasNonError = !(caughtError instanceof Error);
+
       ctx?.markError();
       let streamingMeta: Record<string, unknown> = {};
       try {
@@ -644,18 +713,18 @@ class ChatService {
         console.warn('[ChatService] Failed to collect streaming metadata:', metaErr);
       }
 
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') return;
+      if (!wasNonError) {
+        if (err.name === 'AbortError') return;
 
         // Cost/policy errors were already surfaced via onCostError inside
         // streamFromApi. Do NOT retry and do NOT invoke the generic onError —
         // the caller (ChatInterface) renders a dedicated prompt per type.
-        if (isCostError(error)) return;
+        if (isCostError(err)) return;
 
-        let httpStatus = (error as any).httpStatus as number | undefined;
-        let isSSEProcessingError = (error as any).isSSEProcessingError === true;
+        let httpStatus = (err as { httpStatus?: number }).httpStatus;
+        let isSSEProcessingError = (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
 
-        let isNetworkErr = ChatService.isNetworkError(error);
+        let isNetworkErr = ChatService.isNetworkError(err);
 
         // Retry with ?force-h2=1: the server responds with Alt-Svc: clear,
         // telling the browser to stop using H3 for this origin. This retry itself
@@ -671,15 +740,15 @@ class ChatService {
         // request and us seeing the SSE stream), both would bill. The 60s window
         // primarily protects against browser-level double-sends; H3->H2 retry
         // is rare enough that occasional double-billing is acceptable.
-        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== undefined) {
+        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== '') {
           retriedWithH2 = true;
 
           // Log the first failure for observability
           loggingService.reportError({
             error_name: 'NetworkErrorRetrying',
-            error_message: error.message,
+            error_message: err.message,
             http_status: httpStatus,
-            stack_trace: error.stack,
+            stack_trace: err.stack,
             request_metadata: {
               model, mode, messageCount: messages.length,
               webSearchEnabled, extendedThinkingEnabled,
@@ -713,7 +782,7 @@ class ChatService {
               model
             );
             return; // Retry succeeded, callbacks already fired
-          } catch (retryError) {
+          } catch (retryError: unknown) {
             // If user aborted during retry, exit cleanly
             if (retryError instanceof DOMException && retryError.name === 'AbortError') return;
             if (signal?.aborted) return;
@@ -723,45 +792,46 @@ class ChatService {
             // Retry also failed — update context for error reporting below
             retryCtx.markError();
             try { streamingMeta = retryCtx.toMetadata(); } catch { /* ignore */ }
-            // Re-assign error for the reporting below
-            error = retryError instanceof Error ? retryError : new Error(String(retryError));
+            // Re-assign err for the reporting below (narrow unknown → Error).
+            err = retryError instanceof Error ? retryError : new Error(String(retryError));
             // Recompute flags for the retry error
-            httpStatus = (error as any).httpStatus as number | undefined;
-            isSSEProcessingError = (error as any).isSSEProcessingError === true;
-            isNetworkErr = ChatService.isNetworkError(error);
+            httpStatus = (err as { httpStatus?: number }).httpStatus;
+            isSSEProcessingError = (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
+            isNetworkErr = ChatService.isNetworkError(err);
             // Fall through to normal error handling
           }
         }
 
-        const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
-                           error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
-                           error.message.includes('insufficient_quota') ? "Insufficient API quota." :
+        const errorMessage = err.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
+                           err.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
+                           err.message.includes('insufficient_quota') ? "Insufficient API quota." :
                            isSSEProcessingError ? "Failed to process the AI response. Please try again." :
                            isNetworkErr ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
         // One-liner for quick scanning in text logs; structured object below for DevTools drill-down
+        const streamMeta = (streamingMeta as { streaming?: Record<string, unknown> }).streaming;
         console.error(
-          `[ChatService] Request failed: ${error.name}: ${error.message}` +
-          ` | phase=${(streamingMeta as any)?.streaming?.phase ?? 'unknown'}` +
-          ` protocol=${(streamingMeta as any)?.streaming?.protocol ?? 'unknown'}` +
-          ` duration=${(streamingMeta as any)?.streaming?.durationMs ?? '?'}ms` +
-          ` chunks=${(streamingMeta as any)?.streaming?.chunkCount ?? '?'}` +
+          `[ChatService] Request failed: ${err.name}: ${err.message}` +
+          ` | phase=${streamMeta?.phase ?? 'unknown'}` +
+          ` protocol=${streamMeta?.protocol ?? 'unknown'}` +
+          ` duration=${streamMeta?.durationMs ?? '?'}ms` +
+          ` chunks=${streamMeta?.chunkCount ?? '?'}` +
           ` http=${httpStatus ?? 'none'}`
         );
         console.error('[ChatService] Request details:', {
-          errorName: error.name,
-          originalMessage: error.message,
-          httpStatus: (error as any).httpStatus ?? httpStatus,
+          errorName: err.name,
+          originalMessage: err.message,
+          httpStatus: (err as { httpStatus?: number }).httpStatus ?? httpStatus,
           userFacingMessage: errorMessage,
-          stack: error.stack,
+          stack: err.stack,
         });
 
         loggingService.reportError({
-          error_name: error.name,
-          error_message: error.message,
-          http_status: (error as any).httpStatus ?? httpStatus,
-          stack_trace: error.stack,
+          error_name: err.name,
+          error_message: err.message,
+          http_status: (err as { httpStatus?: number }).httpStatus ?? httpStatus,
+          stack_trace: err.stack,
           request_metadata: {
             model,
             mode,
@@ -774,10 +844,12 @@ class ChatService {
 
         callbacks.onError?.(errorMessage);
       } else {
-        console.error('[ChatService] Non-Error thrown:', error);
+        // Non-Error was thrown (string, plain object, etc.). We wrapped it
+        // above for type safety, but report the raw form for observability.
+        console.error('[ChatService] Non-Error thrown:', caughtError);
         loggingService.reportError({
           error_name: 'NonErrorThrown',
-          error_message: String(error),
+          error_message: String(caughtError),
           request_metadata: {
             model,
             mode,
@@ -792,10 +864,10 @@ class ChatService {
     }
   }
 
-  async checkApiKey(apiKey: string = ''): Promise<boolean> {
-    // API key is managed server-side
-    // This method is kept for backward compatibility but always returns true
-    // The actual API key validation will happen on the server side
+  async checkApiKey(): Promise<boolean> {
+    // API key is managed server-side. This method is kept for backward
+    // compatibility but always returns true; the actual key validation
+    // happens in the Worker on each /api/anthropic-stream request.
     return true;
   }
 }
