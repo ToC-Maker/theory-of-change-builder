@@ -57,7 +57,7 @@ async function handlePost(request: Request, env: Env): Promise<Response> {
   }
 
   const sql = getDb(env);
-  // Best-effort tenant-migration before storing, mirroring getUserTokenUsage etc.
+  // Best-effort tenant-migration before storing, mirroring other auth'd routes.
   await tryMigrateDecoded(sql, decodedToken, 'byok-key');
 
   try {

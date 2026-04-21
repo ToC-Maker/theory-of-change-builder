@@ -6,7 +6,6 @@ import { handler as getChart } from './api/getChart';
 import { handler as updateChart } from './api/updateChart';
 import { handler as deleteChart } from './api/deleteChart';
 import { handler as getUserCharts } from './api/getUserCharts';
-import { handler as getUserTokenUsage } from './api/getUserTokenUsage';
 import { handler as managePermissions } from './api/managePermissions';
 import { handler as loggingCreateSession } from './api/logging-createSession';
 import { handler as loggingEndSession } from './api/logging-endSession';
@@ -16,10 +15,10 @@ import { handler as loggingReportError } from './api/logging-reportError';
 import { handler as loggingPreference } from './api/logging-preference';
 import { handler as usage } from './api/usage';
 import { handler as byokKey } from './api/byok-key';
-import { handler as validateByok } from './api/validate-byok';
 import { handler as uploadFile } from './api/upload-file';
-import { handler as deleteFile } from './api/delete-file';
 import { handler as chartFiles } from './api/chart-files';
+import { handler as verifyTurnstile } from './api/verify-turnstile';
+import { handler as countTokensEstimate } from './api/count-tokens-estimate';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
 type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
@@ -36,7 +35,6 @@ const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/updateChart', updateChart],
   ['DELETE', '/api/deleteChart', deleteChart],
   ['GET', '/api/getUserCharts', getUserCharts],
-  ['GET', '/api/getUserTokenUsage', getUserTokenUsage],
   ['*', '/api/managePermissions', managePermissions],
   ['POST', '/api/logging-createSession', loggingCreateSession],
   ['POST', '/api/logging-endSession', loggingEndSession],
@@ -46,11 +44,11 @@ const routes: [HttpMethod, string, Handler][] = [
   ['*', '/api/logging-preference', loggingPreference],
   ['GET', '/api/usage', usage],
   ['*', '/api/byok-key', byokKey],
-  ['POST', '/api/validate-byok', validateByok],
   ['POST', '/api/upload-file', uploadFile],
-  ['DELETE', '/api/files/*', deleteFile],
   ['GET', '/api/files/*', chartFiles],
   ['DELETE', '/api/chart-files', chartFiles],
+  ['POST', '/api/verify-turnstile', verifyTurnstile],
+  ['POST', '/api/count-tokens-estimate', countTokensEstimate],
 ];
 
 function routeMatches(routePath: string, pathname: string): boolean {
