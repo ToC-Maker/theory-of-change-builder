@@ -1,32 +1,12 @@
 import type { Env } from '../_shared/types';
 import { signTurnstileCookie } from '../_shared/turnstile-cookie';
+import { hashIP, extractIP } from '../_shared/anon-id';
 
 // POST /api/verify-turnstile — validates a Turnstile response token against
 // Cloudflare's siteverify API, then issues an HMAC-signed session cookie bound
 // to the caller's anon_id (hmac(cf-connecting-ip, IP_HASH_SALT)). The cookie
 // is later checked by /api/anthropic-stream to satisfy the anon-tier bot gate
 // without re-challenging Turnstile on every streamed request.
-
-async function hashIP(ip: string, salt: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(salt),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ip));
-  return Array.from(new Uint8Array(sig))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function extractIP(request: Request): string {
-  return request.headers.get('cf-connecting-ip')
-    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown';
-}
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   if (!env.TURNSTILE_SECRET_KEY) {
