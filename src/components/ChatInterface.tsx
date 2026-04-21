@@ -290,7 +290,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Turnstile challenge token for anonymous requests. Re-issued on each
   // successful challenge; cleared after send (or on expiry/error). Wired
   // to streamMessage once U10 accepts the `turnstileToken` param.
-  const [, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
   // BYOK panel state for 429/402 recovery and voluntary key entry.
   const [byokPanelMode, setByokPanelMode] = useState<'generate' | 'cap_reached' | 'voluntary' | null>(null);
@@ -632,12 +632,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // first text delta arrives.
     setIsThinking(true);
 
-    // TODO(U10 integration): forward `idempotencyKey`, `attachedFileIds`,
-    // `turnstileToken`, and `hasKey && useForChat ? userAnthropicKey : undefined`
-    // to chatService.streamMessage once U10 exposes the new params. Until
-    // then the server derives these from the request (or falls back).
-    void idempotencyKey;
-    void attachedFileIds;
+    // NOTE: `userAnthropicKey` is not passed from the client in the
+    // server-stored BYOK flow — the client never retains the raw key after
+    // it's been submitted to /api/byok-key. Server-side transparent BYOK
+    // decrypt-and-forward in anthropic-stream is a follow-up; until then,
+    // explicit per-request BYOK requires the user to re-enter the key.
 
     // Log user message (fire and forget)
     loggingService.logUserMessage({
@@ -792,7 +791,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      true // extendedThinkingEnabled — always on for Opus 4.7
+      true, // extendedThinkingEnabled — always on for Opus 4.7
+      attachedFileIds,
+      idempotencyKey,
+      turnstileToken ?? undefined,
+      undefined // userAnthropicKey: server-stored BYOK; raw key not held client-side
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
@@ -1236,7 +1239,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      true // extendedThinkingEnabled — always on for Opus 4.7
+      true, // extendedThinkingEnabled — always on for Opus 4.7
+      [], // attachedFileIds — Generate-mode uses inline text for now; Files API upload in Generate is a follow-up
+      crypto.randomUUID(), // idempotencyKey: dedup browser reload / double-click
+      turnstileToken ?? undefined,
+      undefined // userAnthropicKey: server-stored BYOK; raw key not held client-side
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
