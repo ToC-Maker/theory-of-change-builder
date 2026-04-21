@@ -657,12 +657,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     abortControllerRef.current = new AbortController();
 
     try {
-      await chatService.streamMessage(
-        [...messages, userMessage],
-        graphData,
-        'chat',
-        '', // apiKey param kept for back-compat; BYOK flows through the worker
-        {
+      await chatService.streamMessage({
+        messages: [...messages, userMessage],
+        currentGraphData: graphData,
+        mode: 'chat',
+        callbacks: {
           onSearchStart: () => {
             setIsSearching(true);
           },
@@ -678,7 +677,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               })));
             }
           },
-          onContent: (chunk: string, fullContent: string) => {
+          onContent: (_chunk: string, fullContent: string) => {
             // Clear thinking state when content starts streaming
             if (isThinking) {
               setIsThinking(false);
@@ -784,19 +783,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
-        }
+        },
       },
-      abortControllerRef.current?.signal, // signal parameter
-      selectedModel,
+      signal: abortControllerRef.current?.signal,
+      model: selectedModel,
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      true, // extendedThinkingEnabled — always on for Opus 4.7
+      extendedThinkingEnabled: true,
       attachedFileIds,
       idempotencyKey,
-      turnstileToken ?? undefined,
-      undefined // userAnthropicKey: server-stored BYOK; raw key not held client-side
-      );
+      chartId: params.chartId ?? params.editToken,
+      loggingMessageId: userMessageId,
+      // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
+    });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
       const classified = classifyCostError(message);
@@ -1135,13 +1135,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     abortControllerRef.current = new AbortController();
 
     try {
-      await chatService.streamMessage(
-        [generationMessage],
-        graphData,
-        'generate',
-        '', // apiKey param kept for back-compat; BYOK flows through the worker
-        {
-          onContent: (chunk: string, fullContent: string) => {
+      await chatService.streamMessage({
+        messages: [generationMessage],
+        currentGraphData: graphData,
+        mode: 'generate',
+        callbacks: {
+          onContent: (_chunk: string, fullContent: string) => {
             // Clear thinking state when content starts streaming
             if (isThinking) {
               setIsThinking(false);
@@ -1232,19 +1231,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
-        }
+        },
       },
-      abortControllerRef.current?.signal, // signal parameter
-      selectedModel,
+      signal: abortControllerRef.current?.signal,
+      model: selectedModel,
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      true, // extendedThinkingEnabled — always on for Opus 4.7
-      [], // attachedFileIds — Generate-mode uses inline text for now; Files API upload in Generate is a follow-up
-      crypto.randomUUID(), // idempotencyKey: dedup browser reload / double-click
-      turnstileToken ?? undefined,
-      undefined // userAnthropicKey: server-stored BYOK; raw key not held client-side
-      );
+      extendedThinkingEnabled: true,
+      attachedFileIds: [], // Generate-mode PDF uploads via the Files API land in a follow-up commit.
+      idempotencyKey: crypto.randomUUID(), // fresh per send: dedupes browser reload / double-click
+      chartId: params.chartId ?? params.editToken,
+      loggingMessageId: userMessageId,
+      // userAnthropicKey: server-stored BYOK; raw key not held client-side.
+    });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
       const classified = classifyCostError(message);
