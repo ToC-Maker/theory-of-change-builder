@@ -7,7 +7,6 @@ import { handler as updateChart } from './api/updateChart';
 import { handler as deleteChart } from './api/deleteChart';
 import { handler as getUserCharts } from './api/getUserCharts';
 import { handler as getUserTokenUsage } from './api/getUserTokenUsage';
-import { handler as updateTokenUsage } from './api/updateTokenUsage';
 import { handler as managePermissions } from './api/managePermissions';
 import { handler as loggingCreateSession } from './api/logging-createSession';
 import { handler as loggingEndSession } from './api/logging-endSession';
@@ -38,7 +37,6 @@ const routes: [HttpMethod, string, Handler][] = [
   ['DELETE', '/api/deleteChart', deleteChart],
   ['GET', '/api/getUserCharts', getUserCharts],
   ['GET', '/api/getUserTokenUsage', getUserTokenUsage],
-  ['POST', '/api/updateTokenUsage', updateTokenUsage],
   ['*', '/api/managePermissions', managePermissions],
   ['POST', '/api/logging-createSession', loggingCreateSession],
   ['POST', '/api/logging-endSession', loggingEndSession],
