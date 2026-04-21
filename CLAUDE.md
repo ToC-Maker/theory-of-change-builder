@@ -95,17 +95,20 @@ There are three distinct "where it's needed" categories. Some variables are need
 | `DATABASE_URL` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
 | `ANTHROPIC_API_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
 | `IP_HASH_SALT` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
-| `VITE_AUTH0_DOMAIN` | no (public) | **yes** | yes | `wrangler.toml` `[vars]` + committed `.env.production` |
-| `VITE_AUTH0_CLIENT_ID` | no (public) | **yes** | yes | `wrangler.toml` `[vars]` + committed `.env.production` |
-| `SITE_URL` | no (public) | no | optional | `wrangler.toml` `[vars]` (falls back to request origin if unset) |
+| `BYOK_ENCRYPTION_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret). Must be 32 bytes, base64-encoded. Used by `worker/_shared/byok-crypto.ts` to wrap per-user Anthropic keys with AES-GCM. |
+| `TURNSTILE_SECRET_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret). Used by `worker/api/anthropic-stream.ts` to verify the Cloudflare Turnstile challenge on anonymous requests. |
+| `VITE_AUTH0_DOMAIN` | no (public) | **yes** | yes | `wrangler.jsonc` `vars` + committed `.env.production` |
+| `VITE_AUTH0_CLIENT_ID` | no (public) | **yes** | yes | `wrangler.jsonc` `vars` + committed `.env.production` |
+| `VITE_TURNSTILE_SITE_KEY` | no (public) | **yes** | yes | `wrangler.jsonc` `vars` + committed `.env.production`. Read by the client-side Turnstile widget. |
+| `SITE_URL` | no (public) | no | optional | `wrangler.jsonc` `vars` (falls back to request origin if unset) |
 
 **Three locations, three purposes:**
 
-1. **Dashboard → Variables and Secrets**: Runtime values. Secrets are encrypted; plaintext vars are visible. Equivalent to `wrangler secret put` / `wrangler.toml [vars]`.
-2. **`wrangler.toml [vars]`**: Runtime values for non-secrets, version-controlled. Appears in the dashboard as plaintext after deploy.
-3. **`.env.production` (committed) or `.env` (gitignored)**: Build-time values. Vite reads these at `npm run build` and inlines `import.meta.env.VITE_*` into the frontend bundle. Cloudflare's build pipeline does **not** automatically propagate `wrangler.toml [vars]` to the build environment.
+1. **Dashboard → Variables and Secrets**: Runtime values. Secrets are encrypted; plaintext vars are visible. Equivalent to `wrangler secret put` / `wrangler.jsonc vars`.
+2. **`wrangler.jsonc` `vars`**: Runtime values for non-secrets, version-controlled. Appears in the dashboard as plaintext after deploy.
+3. **`.env.production` (committed) or `.env` (gitignored)**: Build-time values. Vite reads these at `npm run build` and inlines `import.meta.env.VITE_*` into the frontend bundle. Cloudflare's build pipeline does **not** automatically propagate `wrangler.jsonc` `vars` to the build environment.
 
-**The `VITE_*` trap**: `VITE_*` variables are inlined by Vite at build time AND read by the Worker at runtime. Setting them only in `wrangler.toml [vars]` makes them available to the Worker but leaves the frontend bundle with `undefined` values — `src/main.tsx` throws at startup in that case. You need them in both `wrangler.toml [vars]` (runtime) AND `.env.production` or build-env-vars (build-time).
+**The `VITE_*` trap**: `VITE_*` variables are inlined by Vite at build time AND read by the Worker at runtime. Setting them only in `wrangler.jsonc` `vars` makes them available to the Worker but leaves the frontend bundle with `undefined` values — `src/main.tsx` throws at startup in that case. You need them in both `wrangler.jsonc` `vars` (runtime) AND `.env.production` or build-env-vars (build-time).
 
 **Never commit secrets.** `VITE_AUTH0_*` are client-exposed by design (Auth0 public SPA credentials), so committing them in `.env.production` is fine.
 
@@ -117,9 +120,33 @@ See `database/schema.sql` for full schema. Key tables:
 
 - **charts**: Stores graph data (JSONB), edit tokens, view counts, AI token usage
 - **chart_permissions**: User access control with approval workflow
-- **user_token_usage**: Per-user AI token tracking
+- **user_api_usage**: Per-user cumulative AI spend, in micro-USD (see Cost accounting below). Replaces the legacy `user_token_usage` table.
+- **global_monthly_usage**: Observability-only table tracking aggregate monthly spend. Enforcement is via the Anthropic Console customer-set cap, not this table.
+- **logging_messages**: AI improvement logs. `cost_micro_usd` column stores per-message cost.
+- **user_byok_keys**: Encrypted blobs of user-supplied Anthropic API keys (column `encrypted_key` as `BYTEA`).
+- **chart_files**: Metadata for files uploaded to Anthropic's Files API (`file_id`, `chart_id` FK, original filename, timestamp). `ON DELETE CASCADE` on the FK so chart deletion removes the rows.
 
 For migrations, see `database/migrations/`. Always test on staging first.
+
+## Cost Accounting
+
+All server-side cost accounting uses **micro-USD** (1_000_000 µUSD = $1) as the integer unit. Rate tables live in `worker/_shared/cost.ts`. Per-user cumulative spend is stored in `user_api_usage`; global monthly spend in `global_monthly_usage` (observability only — enforcement is the Anthropic Console customer-set cap). Per-message cost lands in `logging_messages.cost_micro_usd`. Tier caps and infra limits are constants in `worker/_shared/tiers.ts`.
+
+The legacy `POST /api/updateTokenUsage` endpoint and `user_token_usage` table have been replaced by server-side SSE parsing in `worker/api/anthropic-stream.ts`. The client no longer reports token usage; the Worker observes it from Anthropic's `message_delta.usage` events and UPSERTs into `user_api_usage` via `ctx.waitUntil()`.
+
+## BYOK (Bring Your Own Key)
+
+Users can supply their own Anthropic API key via the settings panel. Keys are validated via `POST /v1/messages/count_tokens`, encrypted with AES-GCM using `env.BYOK_ENCRYPTION_KEY` and the user's `user_id` as AAD, then stored in `user_byok_keys` (column `encrypted_key` as `BYTEA`). BYOK requests bypass the per-user lifetime cap; the Anthropic Console cap still applies globally. Users can delete their key via `DELETE /api/byok-key`, which zeros and removes the encrypted blob.
+
+## Files API
+
+PDFs and other files attached in Chat are uploaded to Anthropic's Files API (`https://api.anthropic.com/v1/files`) with beta header `anthropic-beta: files-api-2025-04-14`. The resulting `file_id` is stored in the local `chart_files` table, keyed to the chart via `chart_id` FK. File deletion triggers:
+
+- **Chart delete** — CASCADE on the FK removes the rows; a follow-up job DELETEs at Anthropic.
+- **Clear Chat button** — `DELETE /api/chart-files?chart_id=X` clears both the local rows and the Anthropic-side files.
+- **GDPR erasure** — manual admin script walks the user's charts and deletes.
+
+Files are not subject to Anthropic's 7-day message retention; they persist at Anthropic until an explicit DELETE. Privacy policy discloses this (see `privacy-policy.md § 2E` and the retention table).
 
 ## Common Issues
 
@@ -172,4 +199,4 @@ No formal test suite currently. Manual testing workflow:
 
 Manual deploy: `npm run deploy` (builds + deploys to Cloudflare Workers).
 
-Configuration: `wrangler.toml` (entry point, compatibility flags, static assets config).
+Configuration: `wrangler.jsonc` (entry point, compatibility flags, static assets config).
