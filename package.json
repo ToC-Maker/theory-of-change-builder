@@ -15,6 +15,9 @@
     "preview": "vite build && wrangler dev",
     "deploy": "vite build && wrangler deploy",
     "lint": "eslint .",
+    "pretest": "mkdir -p dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },
@@ -32,6 +35,7 @@
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^1.6.1",
+    "@cloudflare/vitest-pool-workers": "^0.14.8",
     "@cloudflare/workers-types": "^4.20260409.1",
     "@eslint/js": "^9.9.0",
     "@storybook/addon-essentials": "^8.2.9",
@@ -59,11 +63,17 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",
     "vite": "^6.4.2",
+    "vitest": "^4.1.5",
     "wrangler": "^4.81.0"
   },
   "eslintConfig": {
     "extends": [
       "plugin:storybook/recommended"
     ]
+  },
+  "overrides": {
+    "@vitest/expect": "4.1.5",
+    "@vitest/spy": "4.1.5",
+    "@vitest/utils": "4.1.5"
   }
 }
