@@ -4,14 +4,14 @@
  * Text-like files (txt, md, csv, json, xml, html, yaml, log, rtf) are read
  * client-side and the extracted text is passed to the model inline.
  *
- * PDFs are NOT parsed client-side. We perform a lightweight header validation
- * (size + page count) and return an upload-intent signal; the caller is
- * responsible for POSTing the binary to Anthropic's Files API and passing
- * the resulting file_id as a `document` content block.
+ * PDFs are NOT parsed client-side. We peek at the file header to extract
+ * lightweight metadata (size + page count) for display purposes and return
+ * an upload-intent signal; the caller is responsible for POSTing the binary
+ * to Anthropic's Files API and passing the resulting file_id as a `document`
+ * content block. Anthropic enforces its own ceilings (500 MB per file,
+ * 100 pages per document block), so we don't preempt those here.
  */
 
-const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB
-const MAX_PDF_PAGES = 100;
 const PDF_HEADER_SCAN_BYTES = 500 * 1024; // 500 KB — enough to find the root /Pages tree in most PDFs
 
 export type ParsedFile =
@@ -91,25 +91,19 @@ export async function parseFile(file: File): Promise<ParsedFile> {
 }
 
 /**
- * Lightweight PDF validation without loading a PDF parser library.
+ * Lightweight PDF metadata parser (no PDF library required).
  *
- * Enforces size and page-count caps by reading only the first ~500 KB of the
- * file and scanning for the root pages tree's `/Count` entry. This is a
+ * Reads only the first ~500 KB of the file and scans for the root pages
+ * tree's `/Count` entry to infer page count. Page-count detection is a
  * heuristic (PDFs can have nested page trees, linearization dictionaries,
- * etc.), but it's good enough for an upfront sanity check — Anthropic's
- * Files API enforces its own ceilings as a backstop.
- *
- * Throws on: oversize file, or >MAX_PDF_PAGES pages detected.
+ * etc.) — the extracted value is useful for display, but this function does
+ * NOT validate or reject uploads. Anthropic's Files API enforces its own
+ * size and page-count ceilings at upload time.
  */
 export async function validatePdf(
   file: File,
 ): Promise<{ pageCount: number; sizeBytes: number }> {
   const sizeBytes = file.size;
-  if (sizeBytes > MAX_PDF_BYTES) {
-    throw new Error(
-      `PDF too large: ${(sizeBytes / 1024 / 1024).toFixed(1)} MB (max ${MAX_PDF_BYTES / 1024 / 1024} MB)`,
-    );
-  }
 
   const chunk = await file.slice(0, PDF_HEADER_SCAN_BYTES).arrayBuffer();
   // latin1 decodes each byte 1:1 so binary regions don't throw; we only look
@@ -118,18 +112,11 @@ export async function validatePdf(
 
   // Prefer the page-tree root: /Type /Pages ... /Count N. Fall back to
   // counting individual /Type /Page markers within the scanned region, which
-  // is a LOWER bound only (we're looking at the head of the file) — better
-  // than rejecting a valid PDF outright; the Files API enforces real limits.
+  // is a LOWER bound only (we're only looking at the head of the file).
   const countMatch = text.match(/\/Type\s*\/Pages[^]*?\/Count\s+(\d+)/);
   const pageCount = countMatch
     ? parseInt(countMatch[1], 10)
     : (text.match(/\/Type\s*\/Page\b/g)?.length ?? 0);
-
-  if (pageCount > MAX_PDF_PAGES) {
-    throw new Error(
-      `PDF has ${pageCount} pages; maximum is ${MAX_PDF_PAGES}. Split into chapters.`,
-    );
-  }
 
   return { pageCount, sizeBytes };
 }
