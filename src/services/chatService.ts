@@ -290,6 +290,10 @@ class ChatService {
       headers,
       body: JSON.stringify(requestBody),
       signal,
+      // Include same-origin cookies so the Turnstile `tocb_anon` cookie
+      // reaches the Worker. Same-origin defaults to 'same-origin' already,
+      // but being explicit avoids Safari/cross-origin surprises.
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -667,11 +671,19 @@ class ChatService {
       // accidental double-click) within the worker's 60s dedup window. The
       // caller can supply a stable key (e.g. message UUID) for guaranteed
       // replay-safety; otherwise we mint a fresh one per attempt.
+      //
+      // Turnstile is NOT threaded per-request: after the first successful
+      // /api/verify-turnstile call the Worker sets an httpOnly `tocb_anon`
+      // cookie, which the browser auto-sends on every subsequent request.
+      // This streamMessage call passes `credentials: 'include'` (via
+      // streamFromApi) to ensure same-origin cookies ride along (Safari is
+      // picky — being explicit avoids surprises).
       const extraHeaders: Record<string, string> = {
         'X-Idempotency-Key': idempotencyKey ?? newIdempotencyKey(),
       };
-      if (turnstileToken) extraHeaders['X-Turnstile-Token'] = turnstileToken;
       if (userAnthropicKey) extraHeaders['X-User-Anthropic-Key'] = userAnthropicKey;
+      if (chartId) extraHeaders['X-Chart-Id'] = chartId;
+      if (loggingMessageId) extraHeaders['X-Logging-Message-Id'] = loggingMessageId;
       capturedExtraHeaders = extraHeaders;
 
       await this.streamFromApi(
