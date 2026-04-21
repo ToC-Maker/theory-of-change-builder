@@ -35,6 +35,9 @@ interface StreamingMetadata {
     network: { effectiveType: string; rtt: number; downlink: number } | null;
     retryAttempt: number;
   };
+  // Index signature lets callers spread metadata into a Record<string, unknown>
+  // context (loggingService request_metadata) without a cast.
+  [key: string]: unknown;
 }
 
 /**
@@ -695,8 +698,13 @@ class ChatService {
         extraHeaders,
         model
       );
-    } catch (caughtError) {
-      let error = caughtError;
+    } catch (caughtError: unknown) {
+      // Narrow caughtError once. Non-Error throws (strings, plain objects) are
+      // wrapped so downstream code can rely on .name/.message/.stack. The
+      // original value is preserved when it's already an Error.
+      let err: Error = caughtError instanceof Error ? caughtError : new Error(String(caughtError));
+      const wasNonError = !(caughtError instanceof Error);
+
       ctx?.markError();
       let streamingMeta: Record<string, unknown> = {};
       try {
@@ -705,18 +713,18 @@ class ChatService {
         console.warn('[ChatService] Failed to collect streaming metadata:', metaErr);
       }
 
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') return;
+      if (!wasNonError) {
+        if (err.name === 'AbortError') return;
 
         // Cost/policy errors were already surfaced via onCostError inside
         // streamFromApi. Do NOT retry and do NOT invoke the generic onError —
         // the caller (ChatInterface) renders a dedicated prompt per type.
-        if (isCostError(error)) return;
+        if (isCostError(err)) return;
 
-        let httpStatus = (error as any).httpStatus as number | undefined;
-        let isSSEProcessingError = (error as any).isSSEProcessingError === true;
+        let httpStatus = (err as { httpStatus?: number }).httpStatus;
+        let isSSEProcessingError = (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
 
-        let isNetworkErr = ChatService.isNetworkError(error);
+        let isNetworkErr = ChatService.isNetworkError(err);
 
         // Retry with ?force-h2=1: the server responds with Alt-Svc: clear,
         // telling the browser to stop using H3 for this origin. This retry itself
@@ -732,15 +740,15 @@ class ChatService {
         // request and us seeing the SSE stream), both would bill. The 60s window
         // primarily protects against browser-level double-sends; H3->H2 retry
         // is rare enough that occasional double-billing is acceptable.
-        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== undefined) {
+        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== '') {
           retriedWithH2 = true;
 
           // Log the first failure for observability
           loggingService.reportError({
             error_name: 'NetworkErrorRetrying',
-            error_message: error.message,
+            error_message: err.message,
             http_status: httpStatus,
-            stack_trace: error.stack,
+            stack_trace: err.stack,
             request_metadata: {
               model, mode, messageCount: messages.length,
               webSearchEnabled, extendedThinkingEnabled,
@@ -774,7 +782,7 @@ class ChatService {
               model
             );
             return; // Retry succeeded, callbacks already fired
-          } catch (retryError) {
+          } catch (retryError: unknown) {
             // If user aborted during retry, exit cleanly
             if (retryError instanceof DOMException && retryError.name === 'AbortError') return;
             if (signal?.aborted) return;
@@ -784,45 +792,46 @@ class ChatService {
             // Retry also failed — update context for error reporting below
             retryCtx.markError();
             try { streamingMeta = retryCtx.toMetadata(); } catch { /* ignore */ }
-            // Re-assign error for the reporting below
-            error = retryError instanceof Error ? retryError : new Error(String(retryError));
+            // Re-assign err for the reporting below (narrow unknown → Error).
+            err = retryError instanceof Error ? retryError : new Error(String(retryError));
             // Recompute flags for the retry error
-            httpStatus = (error as any).httpStatus as number | undefined;
-            isSSEProcessingError = (error as any).isSSEProcessingError === true;
-            isNetworkErr = ChatService.isNetworkError(error);
+            httpStatus = (err as { httpStatus?: number }).httpStatus;
+            isSSEProcessingError = (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
+            isNetworkErr = ChatService.isNetworkError(err);
             // Fall through to normal error handling
           }
         }
 
-        const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
-                           error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
-                           error.message.includes('insufficient_quota') ? "Insufficient API quota." :
+        const errorMessage = err.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
+                           err.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
+                           err.message.includes('insufficient_quota') ? "Insufficient API quota." :
                            isSSEProcessingError ? "Failed to process the AI response. Please try again." :
                            isNetworkErr ? "Network error. Please check your connection." :
                            "An error occurred. Please try again.";
 
         // One-liner for quick scanning in text logs; structured object below for DevTools drill-down
+        const streamMeta = (streamingMeta as { streaming?: Record<string, unknown> }).streaming;
         console.error(
-          `[ChatService] Request failed: ${error.name}: ${error.message}` +
-          ` | phase=${(streamingMeta as any)?.streaming?.phase ?? 'unknown'}` +
-          ` protocol=${(streamingMeta as any)?.streaming?.protocol ?? 'unknown'}` +
-          ` duration=${(streamingMeta as any)?.streaming?.durationMs ?? '?'}ms` +
-          ` chunks=${(streamingMeta as any)?.streaming?.chunkCount ?? '?'}` +
+          `[ChatService] Request failed: ${err.name}: ${err.message}` +
+          ` | phase=${streamMeta?.phase ?? 'unknown'}` +
+          ` protocol=${streamMeta?.protocol ?? 'unknown'}` +
+          ` duration=${streamMeta?.durationMs ?? '?'}ms` +
+          ` chunks=${streamMeta?.chunkCount ?? '?'}` +
           ` http=${httpStatus ?? 'none'}`
         );
         console.error('[ChatService] Request details:', {
-          errorName: error.name,
-          originalMessage: error.message,
-          httpStatus: (error as any).httpStatus ?? httpStatus,
+          errorName: err.name,
+          originalMessage: err.message,
+          httpStatus: (err as { httpStatus?: number }).httpStatus ?? httpStatus,
           userFacingMessage: errorMessage,
-          stack: error.stack,
+          stack: err.stack,
         });
 
         loggingService.reportError({
-          error_name: error.name,
-          error_message: error.message,
-          http_status: (error as any).httpStatus ?? httpStatus,
-          stack_trace: error.stack,
+          error_name: err.name,
+          error_message: err.message,
+          http_status: (err as { httpStatus?: number }).httpStatus ?? httpStatus,
+          stack_trace: err.stack,
           request_metadata: {
             model,
             mode,
@@ -835,10 +844,12 @@ class ChatService {
 
         callbacks.onError?.(errorMessage);
       } else {
-        console.error('[ChatService] Non-Error thrown:', error);
+        // Non-Error was thrown (string, plain object, etc.). We wrapped it
+        // above for type safety, but report the raw form for observability.
+        console.error('[ChatService] Non-Error thrown:', caughtError);
         loggingService.reportError({
           error_name: 'NonErrorThrown',
-          error_message: String(error),
+          error_message: String(caughtError),
           request_metadata: {
             model,
             mode,
@@ -853,10 +864,10 @@ class ChatService {
     }
   }
 
-  async checkApiKey(apiKey: string = ''): Promise<boolean> {
-    // API key is managed server-side
-    // This method is kept for backward compatibility but always returns true
-    // The actual API key validation will happen on the server side
+  async checkApiKey(): Promise<boolean> {
+    // API key is managed server-side. This method is kept for backward
+    // compatibility but always returns true; the actual key validation
+    // happens in the Worker on each /api/anthropic-stream request.
     return true;
   }
 }
