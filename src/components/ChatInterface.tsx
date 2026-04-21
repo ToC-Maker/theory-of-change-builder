@@ -76,6 +76,45 @@ const TURNSTILE_SCRIPT_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
 
+// Keyword table for classifyCostError(). Order matters: first match wins.
+// Tuple: [category-kind, matchable lowercase substrings, user-facing copy].
+type CostErrorKind =
+  | 'lifetime_cap'
+  | 'global_budget'
+  | 'turnstile'
+  | 'body_too_large'
+  | 'service_unavailable';
+
+const COST_ERROR_CATEGORIES: ReadonlyArray<
+  readonly [CostErrorKind, readonly string[], string]
+> = [
+  [
+    'lifetime_cap',
+    ['lifetime_cap_reached', 'free quota'],
+    "You've reached the free quota. Keep going with your own Anthropic key, or donate to refill the shared pool.",
+  ],
+  [
+    'global_budget',
+    ['global_budget_exhausted', 'shared budget'],
+    'Our shared monthly budget is exhausted. Keep going with your own key, or donate to refill the pool.',
+  ],
+  [
+    'turnstile',
+    ['turnstile_required', 'turnstile_failed'],
+    'Please complete the challenge before sending.',
+  ],
+  [
+    'body_too_large',
+    ['body_too_large', 'payload too large'],
+    'Your message is too large. Try a shorter message or fewer attachments.',
+  ],
+  [
+    'service_unavailable',
+    ['database_unavailable', 'authentication_service_unavailable'],
+    'Service temporarily unavailable. Please try again shortly.',
+  ],
+];
+
 // Global reference to Cloudflare's injected helper. We attach it via the
 // raw <script> element because we don't ship @marsidev/react-turnstile in
 // the bundle.
@@ -245,8 +284,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // rejects the request on cost/quota grounds (429/402). Persists the chat
   // history (decision 8).
   const [costErrorBanner, setCostErrorBanner] = useState<
-    | { kind: 'lifetime_cap' | 'global_budget' | 'turnstile' | 'body_too_large' | 'service_unavailable' | 'other'; message: string }
-    | null
+    { kind: CostErrorKind; message: string } | null
   >(null);
 
   // Turnstile challenge token for anonymous requests. Re-issued on each
@@ -480,45 +518,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [refreshUsage]);
 
   // Classify a streaming error string into a cost/quota category if it
-  // matches one of U9's error payloads, or `null` if it's a generic error
-  // to render normally. Keyword-based detection is a stopgap until U10
-  // threads a structured `onCostError` callback through chatService.
+  // matches one of U9's error payloads. Keyword-based detection is a
+  // stopgap until U10 threads a structured `onCostError` callback through
+  // chatService. Returns `null` for generic errors (render normally) and
+  // for silent cases like `idempotent_replay` (user double-click).
   const classifyCostError = useCallback(
-    (message: string): { kind: 'lifetime_cap' | 'global_budget' | 'turnstile' | 'body_too_large' | 'service_unavailable'; message: string } | null => {
+    (message: string) => {
       const lower = message.toLowerCase();
-      if (lower.includes('lifetime_cap_reached') || lower.includes('free quota')) {
-        return {
-          kind: 'lifetime_cap',
-          message: "You've reached the free quota. Keep going with your own Anthropic key, or donate to refill the shared pool.",
-        };
-      }
-      if (lower.includes('global_budget_exhausted') || lower.includes('shared budget')) {
-        return {
-          kind: 'global_budget',
-          message: 'Our shared monthly budget is exhausted. Keep going with your own key, or donate to refill the pool.',
-        };
-      }
-      if (lower.includes('turnstile_required') || lower.includes('turnstile_failed')) {
-        return {
-          kind: 'turnstile',
-          message: 'Please complete the challenge before sending.',
-        };
-      }
-      if (lower.includes('body_too_large') || lower.includes('payload too large')) {
-        return {
-          kind: 'body_too_large',
-          message: 'Your message is too large. Try a shorter message or fewer attachments.',
-        };
-      }
-      if (lower.includes('database_unavailable') || lower.includes('authentication_service_unavailable')) {
-        return {
-          kind: 'service_unavailable',
-          message: 'Service temporarily unavailable. Please try again shortly.',
-        };
-      }
-      if (lower.includes('idempotent_replay')) {
-        // Silent — user probably double-clicked; nothing to show.
-        return null;
+      for (const [kind, keywords, userMessage] of COST_ERROR_CATEGORIES) {
+        if (keywords.some((k) => lower.includes(k))) {
+          return { kind, message: userMessage };
+        }
       }
       return null;
     },
@@ -899,6 +909,21 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // file without a clear).
   const chatFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Upsert a chip into the chat attachment tray, preserving its visual
+  // position on retries: if an entry with the same id already exists we
+  // replace it in place; otherwise we append. Previously we filtered + re-
+  // appended which reordered chips on retry.
+  type ChatChip = (typeof chatAttachedFiles)[number];
+  const upsertChip = useCallback((id: string, next: ChatChip) => {
+    setChatAttachedFiles((prev) => {
+      const idx = prev.findIndex((f) => f.id === id);
+      if (idx === -1) return [...prev, next];
+      const copy = prev.slice();
+      copy[idx] = next;
+      return copy;
+    });
+  }, []);
+
   // Upload a single file into the chat attachment tray. Text files are
   // inlined (carries `content`); PDFs are pushed to /api/upload-file and
   // the returned `file_id` is stored for the next message. On error the
@@ -906,45 +931,32 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const uploadChatFile = useCallback(
     async (file: File, existingId?: string) => {
       const id = existingId ?? crypto.randomUUID();
-
       const parsed = await parseFile(file);
 
       if (parsed.kind === 'error' || parsed.success === false) {
-        setChatAttachedFiles((prev) => {
-          const next = prev.filter((f) => f.id !== id);
-          return [
-            ...next,
-            {
-              id,
-              filename: file.name,
-              mimeType: file.type || 'application/octet-stream',
-              sizeBytes: file.size,
-              status: 'error',
-              error: parsed.kind === 'error' ? parsed.error : 'Failed to parse file',
-              kind: 'text',
-              raw: file,
-            },
-          ];
+        upsertChip(id, {
+          id,
+          filename: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          sizeBytes: file.size,
+          status: 'error',
+          error: parsed.kind === 'error' ? parsed.error : 'Failed to parse file',
+          kind: 'text',
+          raw: file,
         });
         return;
       }
 
       if (parsed.kind === 'text') {
-        setChatAttachedFiles((prev) => {
-          const next = prev.filter((f) => f.id !== id);
-          return [
-            ...next,
-            {
-              id,
-              filename: parsed.filename,
-              mimeType: file.type || 'text/plain',
-              sizeBytes: parsed.sizeBytes,
-              status: 'ready',
-              kind: 'text',
-              content: parsed.content,
-              raw: file,
-            },
-          ];
+        upsertChip(id, {
+          id,
+          filename: parsed.filename,
+          mimeType: file.type || 'text/plain',
+          sizeBytes: parsed.sizeBytes,
+          status: 'ready',
+          kind: 'text',
+          content: parsed.content,
+          raw: file,
         });
         return;
       }
@@ -952,20 +964,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       // kind === 'upload' — PDF flow via the Anthropic Files API proxy.
       // Chip starts in 'uploading', flips to 'ready' once the worker
       // returns a file_id, or 'error' on failure.
-      setChatAttachedFiles((prev) => {
-        const next = prev.filter((f) => f.id !== id);
-        return [
-          ...next,
-          {
-            id,
-            filename: parsed.filename,
-            mimeType: parsed.mimeType,
-            sizeBytes: parsed.sizeBytes,
-            status: 'uploading',
-            kind: 'upload',
-            raw: file,
-          },
-        ];
+      upsertChip(id, {
+        id,
+        filename: parsed.filename,
+        mimeType: parsed.mimeType,
+        sizeBytes: parsed.sizeBytes,
+        status: 'uploading',
+        kind: 'upload',
+        raw: file,
       });
 
       try {
@@ -981,8 +987,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         // `chart_id` in the upload endpoint is the chart's chart_id (not
         // the edit token). Prefer chartId; fall back to edit token (the
         // worker resolves either in U4).
-        const chartIdForUpload = params.chartId ?? params.editToken ?? '';
-        formData.append('chart_id', chartIdForUpload);
+        formData.append('chart_id', params.chartId ?? params.editToken ?? '');
 
         const headers = await getAuthHeaders();
         const response = await fetch('/api/upload-file', {
@@ -1020,7 +1025,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         );
       }
     },
-    [getAuthHeaders, params.chartId, params.editToken],
+    [getAuthHeaders, params.chartId, params.editToken, upsertChip],
   );
 
   const handleChatFileSelect = useCallback(
