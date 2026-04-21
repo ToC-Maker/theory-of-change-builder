@@ -55,13 +55,13 @@ interface ChatInterfaceProps {
 
 const MODELS = {
   'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-  'claude-opus-4-6': 'Claude Opus 4.6',
+  'claude-opus-4-7': 'Claude Opus 4.7',
 } as const;
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
   const { apiKey, setApiKey, isConfigured } = useApiKey();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
-  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-6');
+  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
 
   // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
@@ -113,7 +113,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [showApiKey, setShowApiKey] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [extendedThinkingEnabled, setExtendedThinkingEnabled] = useState(true);
+  // Extended thinking is always enabled on Opus 4.7; the server defaults to
+  // adaptive thinking when extendedThinkingEnabled is omitted/true.
 
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -356,10 +357,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
 
-    // Set thinking state if extended thinking is enabled
-    if (extendedThinkingEnabled) {
-      setIsThinking(true);
-    }
+    // Extended thinking is always on; show the thinking indicator until the
+    // first text delta arrives.
+    setIsThinking(true);
 
     // Log user message (fire and forget)
     loggingService.logUserMessage({
@@ -435,9 +435,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
           });
 
-          // Token-usage accounting is now handled server-side in anthropic-stream.ts
-          // via SSE `message_delta.usage` parsing. The client no longer reports
-          // usage; see /api/usage for the authoritative read.
+          // Cost + usage tallies are tracked server-side in anthropic-stream.ts
+          // via SSE `message_delta.usage` parsing.
 
           // Handle edit instructions if present
           if (editInstructions && onGraphUpdate && graphData) {
@@ -502,7 +501,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      extendedThinkingEnabled
+      true // extendedThinkingEnabled — always on for Opus 4.7
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -614,10 +613,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setStreamingContent('');
     setConversationStarted(true);
 
-    // Set thinking state if extended thinking is enabled
-    if (extendedThinkingEnabled) {
-      setIsThinking(true);
-    }
+    // Extended thinking is always on.
+    setIsThinking(true);
 
     // Combine all file contents
     const documentContent = files
@@ -697,7 +694,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setFullConversation(finalMessage);
           streamingMessageRef.current = null;
 
-          // Token-usage accounting is handled server-side (see anthropic-stream.ts).
+          // Cost + usage tallies are tracked server-side (see anthropic-stream.ts).
 
           // Check for generated graph JSON and store it
           if (hasGeneratedGraph(finalMessage)) {
@@ -758,7 +755,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      extendedThinkingEnabled
+      true // extendedThinkingEnabled — always on for Opus 4.7
       );
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -1237,17 +1234,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         title={webSearchEnabled ? "Web search enabled" : "Enable web search"}
                       >
                         <MagnifyingGlassIcon className="w-5 h-5" />
-                      </button>
-                      <button
-                        onClick={() => setExtendedThinkingEnabled(!extendedThinkingEnabled)}
-                        className={`p-2 rounded-lg transition-colors ${
-                          extendedThinkingEnabled
-                            ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                        }`}
-                        title={extendedThinkingEnabled ? "Extended thinking enabled" : "Enable extended thinking for complex tasks"}
-                      >
-                        <SparklesIcon className="w-5 h-5" />
                       </button>
                     </div>
                     <div className="flex items-center gap-2">
