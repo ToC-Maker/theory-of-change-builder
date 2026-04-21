@@ -1,16 +1,24 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
+import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage } from '../services/chatService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
-import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
+import { useApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
+import { ByokPanel } from './ByokPanel';
+import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
+import {
+  formatCostUsd,
+  estimateCostLowBound,
+  roughInputTokensFromChars,
+} from '../utils/cost';
 import {
   ChevronLeftIcon,
   Cog6ToothIcon,
@@ -59,7 +67,8 @@ const MODELS = {
 } as const;
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
-  const { apiKey, setApiKey, isConfigured } = useApiKey();
+  const { hasKey, keyLast4, verified, useForChat, setUseForChat, clearKey } = useApiKey();
+  const { isAuthenticated, getIdTokenClaims } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
 
@@ -108,13 +117,52 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [apiKeyError, setApiKeyError] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   // Extended thinking is always enabled on Opus 4.7; the server defaults to
   // adaptive thinking when extendedThinkingEnabled is omitted/true.
+
+  // Usage / progress bar state populated from /api/usage. `tier` is 'anon' |
+  // 'authenticated' | 'byok' | 'unlimited'; null until the first fetch returns.
+  const [usage, setUsage] = useState<{
+    used_usd: number;
+    limit_usd: number;
+    tier: string;
+    global?: { used_usd: number; limit_usd: number };
+  } | null>(null);
+
+  // Running cost for the in-flight assistant turn (updated via onCostUpdate).
+  const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
+
+  // Inline error banner shown under the last user message when the server
+  // rejects the request on cost/quota grounds (429/402). Persists the chat
+  // history (decision 8).
+  const [costErrorBanner, setCostErrorBanner] = useState<
+    | { kind: 'lifetime_cap' | 'global_budget' | 'turnstile' | 'body_too_large' | 'service_unavailable' | 'other'; message: string }
+    | null
+  >(null);
+
+  // Turnstile challenge token for anonymous requests. Re-issued on each
+  // successful challenge; cleared after use.
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileWidgetId, setTurnstileWidgetId] = useState<string | null>(null);
+
+  // BYOK panel state for 429/402 recovery and voluntary key entry.
+  const [byokPanelMode, setByokPanelMode] = useState<'generate' | 'cap_reached' | 'voluntary' | null>(null);
+  const [byokMenuOpen, setByokMenuOpen] = useState(false);
+
+  // Files attached in Chat mode (separate from Generate-mode `files`). These
+  // can be inline text (content in-memory) or Anthropic Files API uploads
+  // (stored as file_id). Only `fileId` is sent to the worker on submit.
+  const [chatAttachedFiles, setChatAttachedFiles] = useState<
+    Array<AttachedFile & {
+      // discriminated: text files carry inline content; upload files carry fileId
+      kind: 'text' | 'upload';
+      content?: string; // text files only
+      fileId?: string; // upload files only
+      raw?: File; // retained for retry
+    }>
+  >([]);
 
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -266,11 +314,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, [isCollapsed]);
 
-  useEffect(() => {
-    // Initialize API key input with current value
-    setApiKeyInput(apiKey);
-  }, [apiKey]);
-
   // Save custom system prompt to localStorage when it changes
   useEffect(() => {
     if (customSystemPrompt) {
@@ -294,24 +337,40 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, [showModelDropdown]);
 
-  const handleSaveApiKey = () => {
-    const validation = validateApiKey(apiKeyInput);
-    
-    if (!validation.isValid) {
-      setApiKeyError(validation.error || 'Invalid API key');
-      return;
+  // Auth header helper shared by /api/usage and file-upload callers. Returns
+  // an empty object for anonymous visitors; those requests hit the worker
+  // anonymously and rely on the Turnstile token for quota attribution.
+  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    if (!isAuthenticated) return {};
+    try {
+      const claims = await getIdTokenClaims();
+      const idToken = claims?.__raw;
+      return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+    } catch (err) {
+      console.error('[ChatInterface] Failed to read ID token:', err);
+      return {};
     }
+  }, [isAuthenticated, getIdTokenClaims]);
 
-    setApiKey(apiKeyInput);
-    setApiKeyError('');
-  };
-
-  const handleApiKeyKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSaveApiKey();
+  // Poll /api/usage on mount and after each stream completion. The worker
+  // tallies cost/usage server-side (U9); we just render the progress bar.
+  const refreshUsage = useCallback(async () => {
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch('/api/usage', { headers });
+      if (!response.ok) return; // transient errors: keep prior state
+      const data = await response.json();
+      setUsage(data);
+    } catch (err) {
+      // Silently swallow — a missing progress bar is acceptable; the
+      // authoritative enforcement lives server-side.
+      console.warn('[ChatInterface] refreshUsage failed:', err);
     }
-  };
+  }, [getAuthHeaders]);
+
+  useEffect(() => {
+    void refreshUsage();
+  }, [refreshUsage]);
 
   const handleStopStreaming = () => {
     if (abortControllerRef.current) {
@@ -384,7 +443,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         [...messages, userMessage],
         graphData,
         'chat',
-        apiKey,
+        '', // apiKey param kept for back-compat; BYOK flows through the worker
         {
           onSearchStart: () => {
             setIsSearching(true);
@@ -425,7 +484,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setIsStreaming(false);
           setStreamingContent('');
           setIsThinking(false);
+          setRunningCostUsd(null);
           streamingMessageRef.current = null;
+
+          // Refresh the usage progress bar after the server-side tally lands.
+          void refreshUsage();
 
           // Log assistant message (fire and forget)
           loggingService.logUserMessage({
@@ -665,7 +728,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         [generationMessage],
         graphData,
         'generate',
-        apiKey,
+        '', // apiKey param kept for back-compat; BYOK flows through the worker
         {
           onContent: (chunk: string, fullContent: string) => {
             // Clear thinking state when content starts streaming
@@ -692,9 +755,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setStreamingContent('');
           setIsThinking(false);
           setFullConversation(finalMessage);
+          setRunningCostUsd(null);
           streamingMessageRef.current = null;
 
-          // Cost + usage tallies are tracked server-side (see anthropic-stream.ts).
+          // Cost + usage tallies are tracked server-side; refresh the
+          // progress bar now that the tally has landed.
+          void refreshUsage();
 
           // Check for generated graph JSON and store it
           if (hasGeneratedGraph(finalMessage)) {
@@ -882,6 +948,98 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 <span>Search Results</span>
               </button>
             </div>
+
+            {/* Usage / quota indicator. BYOK users see a pill instead of a
+                progress bar (no shared pool is consumed). Unlimited-tier
+                users (e.g. admin grants) also skip the progress bar. */}
+            {usage && usage.tier !== 'unlimited' && (
+              <div className="mt-2">
+                {usage.tier === 'byok' ? (
+                  <div className="relative flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1 text-xs text-gray-700">
+                      <span aria-hidden>🔑</span>
+                      <span>BYOK{keyLast4 ? ` · ...${keyLast4}` : ''}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setByokMenuOpen((v) => !v)}
+                      className="text-xs text-gray-500 hover:text-gray-700 px-1 rounded"
+                      title="BYOK options"
+                    >
+                      Options
+                    </button>
+                    {byokMenuOpen && (
+                      <div className="absolute right-0 top-6 z-40 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 space-y-1 text-xs">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setByokMenuOpen(false);
+                            await clearKey();
+                            await refreshUsage();
+                          }}
+                          className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700"
+                        >
+                          Clear key
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setByokMenuOpen(false);
+                            setByokPanelMode('voluntary');
+                          }}
+                          className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700"
+                        >
+                          Change key
+                        </button>
+                        <label className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700 cursor-pointer">
+                          <span>Use for Chat too</span>
+                          <input
+                            type="checkbox"
+                            checked={useForChat}
+                            onChange={(e) => setUseForChat(e.target.checked)}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div
+                      className="w-full h-1 bg-gray-200 rounded overflow-hidden"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={usage.limit_usd}
+                      aria-valuenow={usage.used_usd}
+                      aria-label={`AI budget usage: ${formatCostUsd(usage.used_usd)} of ${formatCostUsd(usage.limit_usd)}`}
+                    >
+                      <div
+                        className={`h-full rounded transition-all ${
+                          usage.used_usd >= usage.limit_usd
+                            ? 'bg-red-500'
+                            : usage.used_usd / Math.max(usage.limit_usd, 0.01) > 0.75
+                            ? 'bg-amber-500'
+                            : 'bg-blue-500'
+                        }`}
+                        style={{
+                          width: `${Math.min(100, (usage.used_usd / Math.max(usage.limit_usd, 0.01)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
+                      <span>
+                        Used {formatCostUsd(usage.used_usd)} of {formatCostUsd(usage.limit_usd)}
+                      </span>
+                      {hasKey && (
+                        <span className="inline-flex items-center gap-0.5 text-gray-600">
+                          <span aria-hidden>🔑</span>
+                          <span>Key ready</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
           </div>
           </div>
