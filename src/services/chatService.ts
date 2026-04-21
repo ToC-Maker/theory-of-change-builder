@@ -321,7 +321,7 @@ class ChatService {
       onSearchComplete?: (results?: any[]) => void;
     } = {},
     signal?: AbortSignal,
-    model: string = "claude-opus-4-6",
+    model: string = "claude-opus-4-7",
     webSearchEnabled: boolean = false,
     customSystemPrompt?: string,
     highlightedNodes?: Set<string>,
@@ -391,7 +391,7 @@ class ChatService {
       // Create request body for streaming API
       requestBody = {
         model,
-        max_tokens: 64000,
+        max_tokens: 128000,
         system: [{
           type: "text",
           text: systemPrompt,
@@ -401,8 +401,18 @@ class ChatService {
           role: msg.role as 'user' | 'assistant',
           content: msg.content
         })),
+        // Top-level automatic caching across the full request in addition to
+        // the explicit system-block cache_control (which caches the system
+        // prompt alone). Both are kept per the integration contract.
+        cache_control: { type: "ephemeral" },
         stream: true
       };
+
+      // Opus 4.7 accepts an output_config with effort levels; other models
+      // reject the field, so it's only set for claude-opus-4-7.
+      if (model === 'claude-opus-4-7') {
+        requestBody.output_config = { effort: 'xhigh' };
+      }
 
       // Add web search with dynamic filtering (auto-injects code_execution)
       if (webSearchEnabled) {
@@ -412,10 +422,13 @@ class ChatService {
         }];
       }
 
-      // Add adaptive thinking if enabled (Claude decides how much to think)
+      // Add adaptive thinking if enabled (Claude decides how much to think).
+      // display: 'summarized' requests summarized thinking blocks so the UI
+      // can render a compact progress indicator rather than raw reasoning.
       if (extendedThinkingEnabled) {
         requestBody.thinking = {
-          type: "adaptive"
+          type: "adaptive",
+          display: "summarized"
         };
       }
 
