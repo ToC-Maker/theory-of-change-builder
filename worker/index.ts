@@ -18,12 +18,18 @@ import { handler as loggingPreference } from './api/logging-preference';
 import { handler as usage } from './api/usage';
 import { handler as byokKey } from './api/byok-key';
 import { handler as validateByok } from './api/validate-byok';
+import { handler as uploadFile } from './api/upload-file';
+import { handler as deleteFile } from './api/delete-file';
+import { handler as chartFiles } from './api/chart-files';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
 type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
 
 // Route table: [method, path, handler]
 // method '*' matches any method (handler checks internally)
+// path: exact match by default. A trailing '*' means prefix match (e.g.
+// '/api/files/*' matches '/api/files/anything'); the handler parses the
+// tail segment itself.
 const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/anthropic-stream', anthropicStream],
   ['POST', '/api/createChart', createChart],
@@ -43,11 +49,23 @@ const routes: [HttpMethod, string, Handler][] = [
   ['GET', '/api/usage', usage],
   ['*', '/api/byok-key', byokKey],
   ['POST', '/api/validate-byok', validateByok],
+  ['POST', '/api/upload-file', uploadFile],
+  ['DELETE', '/api/files/*', deleteFile],
+  ['GET', '/api/files/*', chartFiles],
+  ['DELETE', '/api/chart-files', chartFiles],
 ];
+
+function routeMatches(routePath: string, pathname: string): boolean {
+  if (routePath.endsWith('/*')) {
+    const prefix = routePath.slice(0, -1); // keeps trailing slash
+    return pathname.startsWith(prefix) && pathname.length > prefix.length;
+  }
+  return pathname === routePath;
+}
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-User-Anthropic-Key',
   'Access-Control-Allow-Methods': 'DELETE, GET, PATCH, POST, PUT, OPTIONS',
 };
 
@@ -89,7 +107,7 @@ export default {
 
       // Match route
       for (const [method, path, handler] of routes) {
-        if (url.pathname === path && (method === '*' || method === request.method)) {
+        if (routeMatches(path, url.pathname) && (method === '*' || method === request.method)) {
           try {
             const response = await handler(request, env, ctx);
             return addHeaders(response, corsHeaders);
@@ -104,7 +122,7 @@ export default {
       }
 
       // Path exists but wrong method
-      const pathExists = routes.some(([, path]) => path === url.pathname);
+      const pathExists = routes.some(([, path]) => routeMatches(path, url.pathname));
       if (pathExists) {
         return addHeaders(
           Response.json({ error: 'Method not allowed' }, { status: 405 }),
