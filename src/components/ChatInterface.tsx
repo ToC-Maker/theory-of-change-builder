@@ -66,6 +66,109 @@ const MODELS = {
   'claude-opus-4-7': 'Claude Opus 4.7',
 } as const;
 
+// Cloudflare Turnstile site key for anonymous rate-limit enforcement.
+// Public (surfaced in the bundle by Vite). Unset in dev = widget skipped,
+// mirroring the server-side behavior (U9 skips verification when its
+// secret is absent).
+const TURNSTILE_SITE_KEY: string = (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ?? '';
+
+const TURNSTILE_SCRIPT_SRC =
+  'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
+
+// Global reference to Cloudflare's injected helper. We attach it via the
+// raw <script> element because we don't ship @marsidev/react-turnstile in
+// the bundle.
+interface TurnstileGlobal {
+  render: (
+    container: HTMLElement,
+    options: {
+      sitekey: string;
+      callback: (token: string) => void;
+      'error-callback'?: (err: unknown) => void;
+      'expired-callback'?: () => void;
+    },
+  ) => string;
+  reset: (widgetId?: string) => void;
+  remove: (widgetId?: string) => void;
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileGlobal;
+  }
+}
+
+/**
+ * Renders a Cloudflare Turnstile challenge widget. Loads the CF script
+ * lazily, renders into a div we control, and surfaces the verification
+ * token via `onToken`. `null` is emitted when the token expires or errors
+ * so the caller can disable the send button until re-challenged.
+ *
+ * Noop when `siteKey` is empty. U9's server-side verification is also
+ * skipped when the corresponding secret is unset, so empty-key deployments
+ * stay functional anonymously.
+ */
+function TurnstileWidget({
+  siteKey,
+  onToken,
+}: {
+  siteKey: string;
+  onToken: (token: string | null) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!siteKey) return;
+
+    let cancelled = false;
+
+    const renderWidget = () => {
+      if (cancelled || !containerRef.current || !window.turnstile) return;
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        callback: (token: string) => onToken(token),
+        'expired-callback': () => onToken(null),
+        'error-callback': () => onToken(null),
+      });
+    };
+
+    // The explicit render mode requires the script to be loaded once; we
+    // reuse the same <script> element across mounts to avoid re-fetching.
+    const existing = document.getElementById(TURNSTILE_SCRIPT_ID);
+    if (window.turnstile) {
+      renderWidget();
+    } else if (existing) {
+      existing.addEventListener('load', renderWidget, { once: true });
+    } else {
+      const script = document.createElement('script');
+      script.id = TURNSTILE_SCRIPT_ID;
+      script.src = TURNSTILE_SCRIPT_SRC;
+      script.async = true;
+      script.defer = true;
+      script.addEventListener('load', renderWidget, { once: true });
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      const widgetId = widgetIdRef.current;
+      widgetIdRef.current = null;
+      // `remove` is idempotent; guard only because `turnstile` may be gone
+      // on hot reload.
+      try {
+        if (widgetId && window.turnstile) window.turnstile.remove(widgetId);
+      } catch {
+        // widget already removed
+      }
+    };
+  }, [siteKey, onToken]);
+
+  if (!siteKey) return null;
+  return <div ref={containerRef} className="cf-turnstile" />;
+}
+
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
   const { hasKey, keyLast4, verified, useForChat, setUseForChat, clearKey } = useApiKey();
   const { isAuthenticated, getIdTokenClaims } = useAuth0();
@@ -1353,6 +1456,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       {selectedNodes.length === 1 ? '1 node selected' : `${selectedNodes.length} nodes selected`}
                     </div>
                   )}
+                  {/* Turnstile challenge: anonymous visitors only. With a site
+                      key configured, the widget is rendered until verified;
+                      without one, we skip (matches server-side U9 skip). In
+                      DEV, surface a hint so developers know why sends are
+                      unchallenged. */}
+                  {!isAuthenticated && TURNSTILE_SITE_KEY ? (
+                    <div className="flex flex-col gap-1">
+                      <TurnstileWidget
+                        siteKey={TURNSTILE_SITE_KEY}
+                        onToken={setTurnstileToken}
+                      />
+                    </div>
+                  ) : null}
+                  {!isAuthenticated && !TURNSTILE_SITE_KEY && import.meta.env.DEV ? (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                      Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
+                    </div>
+                  ) : null}
                   <textarea
                     ref={inputRef}
                     value={inputValue}
