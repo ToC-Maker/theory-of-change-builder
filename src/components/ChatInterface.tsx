@@ -2,7 +2,7 @@ import React, { useCallback, useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
-import { chatService, ChatMessage } from '../services/chatService';
+import { chatService, ChatMessage, type CostError } from '../services/chatService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
@@ -76,8 +76,9 @@ const TURNSTILE_SCRIPT_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
 
-// Keyword table for classifyCostError(). Order matters: first match wins.
-// Tuple: [category-kind, matchable lowercase substrings, user-facing copy].
+// User-facing copy for each cost-error category. Reused by both the legacy
+// keyword classifier (classifyCostError) and the structured handler
+// (handleCostError), so copy stays consistent between the two paths.
 type CostErrorKind =
   | 'lifetime_cap'
   | 'global_budget'
@@ -85,34 +86,26 @@ type CostErrorKind =
   | 'body_too_large'
   | 'service_unavailable';
 
-const COST_ERROR_CATEGORIES: ReadonlyArray<
-  readonly [CostErrorKind, readonly string[], string]
-> = [
-  [
-    'lifetime_cap',
-    ['lifetime_cap_reached', 'free quota'],
+const COST_ERROR_COPY: Record<CostErrorKind, string> = {
+  lifetime_cap:
     "You've reached the free quota. Keep going with your own Anthropic key, or donate to refill the shared pool.",
-  ],
-  [
-    'global_budget',
-    ['global_budget_exhausted', 'shared budget'],
+  global_budget:
     'Our shared monthly budget is exhausted. Keep going with your own key, or donate to refill the pool.',
-  ],
-  [
-    'turnstile',
-    ['turnstile_required', 'turnstile_failed'],
-    'Please complete the challenge before sending.',
-  ],
-  [
-    'body_too_large',
-    ['body_too_large', 'payload too large'],
+  turnstile: 'Please complete the challenge before sending.',
+  body_too_large:
     'Your message is too large. Try a shorter message or fewer attachments.',
-  ],
-  [
-    'service_unavailable',
-    ['database_unavailable', 'authentication_service_unavailable'],
-    'Service temporarily unavailable. Please try again shortly.',
-  ],
+  service_unavailable: 'Service temporarily unavailable. Please try again shortly.',
+};
+
+// Keyword table for classifyCostError(). Order matters: first match wins.
+const COST_ERROR_CATEGORIES: ReadonlyArray<
+  readonly [CostErrorKind, readonly string[]]
+> = [
+  ['lifetime_cap', ['lifetime_cap_reached', 'free quota']],
+  ['global_budget', ['global_budget_exhausted', 'shared budget']],
+  ['turnstile', ['turnstile_required', 'turnstile_failed']],
+  ['body_too_large', ['body_too_large', 'payload too large']],
+  ['service_unavailable', ['database_unavailable', 'authentication_service_unavailable']],
 ];
 
 // Global reference to Cloudflare's injected helper. We attach it via the
@@ -525,22 +518,85 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [refreshUsage]);
 
   // Classify a streaming error string into a cost/quota category if it
-  // matches one of U9's error payloads. Keyword-based detection is a
-  // stopgap until U10 threads a structured `onCostError` callback through
-  // chatService. Returns `null` for generic errors (render normally) and
-  // for silent cases like `idempotent_replay` (user double-click).
+  // matches one of U9's error payloads. Keyword-based detection covers the
+  // legacy error-string path; structured errors from `onCostError` skip this
+  // classifier and go through `handleCostError` below.
   const classifyCostError = useCallback(
     (message: string) => {
       const lower = message.toLowerCase();
-      for (const [kind, keywords, userMessage] of COST_ERROR_CATEGORIES) {
+      for (const [kind, keywords] of COST_ERROR_CATEGORIES) {
         if (keywords.some((k) => lower.includes(k))) {
-          return { kind, message: userMessage };
+          return { kind, message: COST_ERROR_COPY[kind] };
         }
       }
       return null;
     },
     [],
   );
+
+  // Structured cost-error handler. Maps CostErrorType → UI state transition
+  // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
+  // under the last user message so BYOK retries can reuse the same messages
+  // array — plan v2 decision 8).
+  const handleCostError = useCallback((error: CostError) => {
+    switch (error.type) {
+      case 'turnstile_required':
+        // Cookie expired or IP changed mid-flow. Bring the widget back so
+        // the user can re-solve, and clear any stale error copy.
+        setHasTurnstileSession(false);
+        setTurnstileError(null);
+        return;
+      case 'turnstile_failed':
+        // Siteverify rejected. Keep the widget visible, surface the error.
+        setHasTurnstileSession(false);
+        setTurnstileError('Challenge failed — please try again.');
+        return;
+      case 'idempotent_replay':
+        // Silent: the user double-clicked or the browser replayed. The
+        // original request is already in flight or completed on the server;
+        // surfacing an error would confuse them.
+        return;
+      case 'lifetime_cap_reached':
+        setCostErrorBanner({ kind: 'lifetime_cap', message: COST_ERROR_COPY.lifetime_cap });
+        return;
+      case 'global_budget_exhausted':
+        setCostErrorBanner({ kind: 'global_budget', message: COST_ERROR_COPY.global_budget });
+        return;
+      case 'request_cost_ceiling_exceeded':
+        // Re-use the cap-reached copy + BYOK remedy; the cause is different
+        // (per-request ceiling rather than lifetime cap) but the user action
+        // is identical: pay with your own key or shorten the prompt.
+        setCostErrorBanner({
+          kind: 'lifetime_cap',
+          message:
+            'This request would exceed the per-request cost ceiling. Try a shorter prompt or use your own key.',
+        });
+        return;
+      case 'body_too_large':
+        setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
+        return;
+      case 'chart_deleted':
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message: 'This chart was deleted in another tab. Reload the page to continue.',
+        });
+        return;
+      case 'file_unavailable':
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message: 'A file referenced by this chat is no longer available. Remove it and retry.',
+        });
+        return;
+      default:
+        // database_unavailable / authentication_service_unavailable /
+        // invalid_token / email_verification_required all fall through to a
+        // generic service banner.
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message: COST_ERROR_COPY.service_unavailable,
+        });
+    }
+  }, []);
 
   // Turnstile: exchange the raw token for an httpOnly session cookie. After a
   // successful verify the widget is hidden (hasTurnstileSession=true) and the
@@ -808,6 +864,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           }
         },
         onError: (error: string) => {
+          // Legacy keyword-based classifier for generic error strings. New
+          // shapes (turnstile_required, idempotent_replay, body_too_large, …)
+          // arrive via onCostError below with structured data; we don't rely
+          // on the error-string path for them.
           const classified = classifyCostError(error);
           if (classified) {
             // Surface as inline banner, don't pollute chat history
@@ -823,6 +883,18 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             };
             setMessages(prev => [...prev, errorMessage]);
           }
+          setIsStreaming(false);
+          setStreamingContent('');
+          setIsSearching(false);
+          setIsThinking(false);
+          setRunningCostUsd(null);
+          streamingMessageRef.current = null;
+        },
+        onCostUpdate: (runningUsd: number) => {
+          setRunningCostUsd(runningUsd);
+        },
+        onCostError: (error) => {
+          handleCostError(error);
           setIsStreaming(false);
           setStreamingContent('');
           setIsSearching(false);
@@ -1262,6 +1334,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           }
         },
         onError: (error: string) => {
+          // See chat-site commentary: keyword classifier is the legacy
+          // fallback for generic error strings; structured shapes arrive via
+          // onCostError below.
           const classified = classifyCostError(error);
           if (classified) {
             setCostErrorBanner(classified);
@@ -1274,6 +1349,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             };
             setMessages(prev => [...prev, errorMessage]);
           }
+          setIsStreaming(false);
+          setStreamingContent('');
+          setIsThinking(false);
+          setRunningCostUsd(null);
+          streamingMessageRef.current = null;
+        },
+        onCostUpdate: (runningUsd: number) => {
+          setRunningCostUsd(runningUsd);
+        },
+        onCostError: (error) => {
+          handleCostError(error);
           setIsStreaming(false);
           setStreamingContent('');
           setIsThinking(false);
