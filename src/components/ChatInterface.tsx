@@ -287,10 +287,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     { kind: CostErrorKind; message: string } | null
   >(null);
 
-  // Turnstile challenge token for anonymous requests. Re-issued on each
-  // successful challenge; cleared after send (or on expiry/error). Wired
-  // to streamMessage once U10 accepts the `turnstileToken` param.
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
+  // succeeds; the Worker sets an httpOnly `tocb_anon` cookie that rides along
+  // automatically on subsequent same-origin fetches. We don't carry the raw
+  // token around — it's single-use and irrelevant after verification.
+  // Reset to `false` whenever the Worker returns `turnstile_required` mid-flow
+  // (cookie expired / IP changed) so the widget re-renders for a fresh solve.
+  const [hasTurnstileSession, setHasTurnstileSession] = useState<boolean>(false);
+  // Inline error copy shown adjacent to the Turnstile widget after a failed
+  // verification, so the user knows to retry the challenge rather than just
+  // seeing a silent re-render.
+  const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
   // BYOK panel state for 429/402 recovery and voluntary key entry.
   const [byokPanelMode, setByokPanelMode] = useState<'generate' | 'cap_reached' | 'voluntary' | null>(null);
@@ -502,7 +509,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const refreshUsage = useCallback(async () => {
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch('/api/usage', { headers });
+      const response = await fetch('/api/usage', { headers, credentials: 'include' });
       if (!response.ok) return; // transient errors: keep prior state
       const data = await response.json();
       setUsage(data);
@@ -534,6 +541,46 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     },
     [],
   );
+
+  // Turnstile: exchange the raw token for an httpOnly session cookie. After a
+  // successful verify the widget is hidden (hasTurnstileSession=true) and the
+  // browser rides the cookie on subsequent /api/anthropic-stream requests.
+  // Failures keep the widget visible with an inline error. Called by the
+  // TurnstileWidget on solve, expiry, or error (null payload).
+  const handleTurnstileToken = useCallback(async (token: string | null) => {
+    if (!token) {
+      // Widget reports expiry or error — force a re-render with a prompt.
+      setHasTurnstileSession(false);
+      return;
+    }
+    try {
+      const response = await fetch('/api/verify-turnstile', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (response.ok) {
+        setHasTurnstileSession(true);
+        setTurnstileError(null);
+        return;
+      }
+      // Treat 401 turnstile_failed the same as any other non-200: keep the
+      // widget visible, show an error. Other statuses (5xx, 501) also fall
+      // through — the user can re-solve to retry.
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      const message =
+        body.error === 'turnstile_failed'
+          ? 'Challenge failed — please try again.'
+          : 'Verification failed — please try again.';
+      setHasTurnstileSession(false);
+      setTurnstileError(message);
+    } catch (err) {
+      console.warn('[ChatInterface] verify-turnstile failed:', err);
+      setHasTurnstileSession(false);
+      setTurnstileError('Network error while verifying — please try again.');
+    }
+  }, []);
 
   // Debounced cost estimate: recomputes 300ms after the last keystroke or
   // attachment change. Includes inline text file content since those bytes
@@ -622,8 +669,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
-    // Consume the turnstile token: the next send needs a new challenge.
-    setTurnstileToken(null);
     setCostErrorBanner(null);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
@@ -853,6 +898,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           const headers = await getAuthHeaders();
           await fetch(`/api/chart-files?chart_id=${encodeURIComponent(chartIdForCleanup)}`, {
             method: 'DELETE',
+            credentials: 'include',
             headers,
           });
         } catch (err) {
@@ -996,6 +1042,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         const headers = await getAuthHeaders();
         const response = await fetch('/api/upload-file', {
           method: 'POST',
+          credentials: 'include',
           headers, // let the browser set multipart boundary
           body: formData,
         });
@@ -1870,16 +1917,28 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   )}
                   {/* Turnstile challenge: anonymous visitors only. With a site
-                      key configured, the widget is rendered until verified;
-                      without one, we skip (matches server-side U9 skip). In
-                      DEV, surface a hint so developers know why sends are
-                      unchallenged. */}
-                  {!isAuthenticated && TURNSTILE_SITE_KEY ? (
+                      key configured, the widget is rendered until a solve is
+                      exchanged for a session cookie. The Worker sets an
+                      httpOnly `tocb_anon` cookie on successful verify, so the
+                      raw token isn't used after this step. If the Worker
+                      later returns `turnstile_required` (cookie expired or
+                      IP changed), `handleCostError` flips us back to this
+                      branch so the widget re-renders.
+
+                      Without a site key, we skip (matches server-side U9
+                      skip). In DEV, surface a hint so developers know why
+                      sends are unchallenged. */}
+                  {!isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
                     <div className="flex flex-col gap-1">
                       <TurnstileWidget
                         siteKey={TURNSTILE_SITE_KEY}
-                        onToken={setTurnstileToken}
+                        onToken={handleTurnstileToken}
                       />
+                      {turnstileError && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                          {turnstileError}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {!isAuthenticated && !TURNSTILE_SITE_KEY && import.meta.env.DEV ? (
