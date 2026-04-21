@@ -435,15 +435,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
           });
 
-          // Track token usage in database
-          if (usage?.input_tokens && params.editToken) {
-            const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            fetch('/api/updateTokenUsage', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
-            }).catch(err => console.error('Failed to update token usage:', err));
-          }
+          // Token-usage accounting is now handled server-side in anthropic-stream.ts
+          // via SSE `message_delta.usage` parsing. The client no longer reports
+          // usage; see /api/usage for the authoritative read.
 
           // Handle edit instructions if present
           if (editInstructions && onGraphUpdate && graphData) {
@@ -703,15 +697,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setFullConversation(finalMessage);
           streamingMessageRef.current = null;
 
-          // Track token usage in database
-          if (usage?.input_tokens && params.editToken) {
-            const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            fetch('/api/updateTokenUsage', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
-            }).catch(err => console.error('Failed to update token usage:', err));
-          }
+          // Token-usage accounting is handled server-side (see anthropic-stream.ts).
 
           // Check for generated graph JSON and store it
           if (hasGeneratedGraph(finalMessage)) {
