@@ -25,6 +25,7 @@ import {
   MagnifyingGlassIcon,
   ChevronDownIcon,
   PaperAirplaneIcon,
+  PaperClipIcon,
   CloudArrowUpIcon,
   XMarkIcon,
   DocumentPlusIcon,
@@ -500,28 +501,65 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isStreaming) return;
 
+    // Reject sends while any chip is still uploading. The server would accept
+    // the request but the files wouldn't be attached; better to fail loud
+    // client-side.
+    if (chatAttachedFiles.some((f) => f.status === 'uploading')) return;
+
     // Generate UUIDs for message logging
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
+    // Idempotency key binds the user-perceived turn to a specific worker
+    // request; on network retry the worker returns the cached response
+    // instead of re-billing Anthropic. Forwarded once U10's chatService
+    // accepts the param.
+    const idempotencyKey = crypto.randomUUID();
+
+    // Fold attached text-file contents into the user message so the model
+    // sees them inline. File-API uploads (PDFs) are referenced by file_id
+    // only — see `attachedFileIds`.
+    const inlineFileSections = chatAttachedFiles
+      .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
+      .map((f) => `=== ${f.filename} ===\n${f.content}`);
+    const attachedFileIds = chatAttachedFiles
+      .filter((f) => f.kind === 'upload' && f.status === 'ready' && f.fileId)
+      .map((f) => f.fileId!) as string[];
+
+    const userMessageBody =
+      inlineFileSections.length > 0
+        ? `${inputValue.trim()}\n\n${inlineFileSections.join('\n\n')}`
+        : inputValue.trim();
 
     const userMessage: ChatMessage = {
       id: userMessageId,
       role: 'user',
-      content: inputValue.trim(),
+      content: userMessageBody,
       timestamp: new Date()
     };
 
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
+    // Clear the chip tray now that the files are in-flight with the message.
+    setChatAttachedFiles([]);
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
+    // Consume the turnstile token: the next send needs a new challenge.
+    setTurnstileToken(null);
+    setCostErrorBanner(null);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
 
     // Extended thinking is always on; show the thinking indicator until the
     // first text delta arrives.
     setIsThinking(true);
+
+    // TODO(U10 integration): forward `idempotencyKey`, `attachedFileIds`,
+    // `turnstileToken`, and `hasKey && useForChat ? userAnthropicKey : undefined`
+    // to chatService.streamMessage once U10 exposes the new params. Until
+    // then the server derives these from the request (or falls back).
+    void idempotencyKey;
+    void attachedFileIds;
 
     // Log user message (fire and forget)
     loggingService.logUserMessage({
@@ -751,6 +789,164 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const removeFile = (fileToRemove: File) => {
     setFiles(prev => prev.filter(f => f.file !== fileToRemove));
   };
+
+  // File inputs for the Chat-mode paperclip. Separate ref so we can reset
+  // the input value after each pick (browsers ignore re-picking the same
+  // file without a clear).
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Upload a single file into the chat attachment tray. Text files are
+  // inlined (carries `content`); PDFs are pushed to /api/upload-file and
+  // the returned `file_id` is stored for the next message. On error the
+  // chip flips to an error state with a Retry affordance.
+  const uploadChatFile = useCallback(
+    async (file: File, existingId?: string) => {
+      const id = existingId ?? crypto.randomUUID();
+
+      const parsed = await parseFile(file);
+
+      if (parsed.kind === 'error' || parsed.success === false) {
+        setChatAttachedFiles((prev) => {
+          const next = prev.filter((f) => f.id !== id);
+          return [
+            ...next,
+            {
+              id,
+              filename: file.name,
+              mimeType: file.type || 'application/octet-stream',
+              sizeBytes: file.size,
+              status: 'error',
+              error: parsed.kind === 'error' ? parsed.error : 'Failed to parse file',
+              kind: 'text',
+              raw: file,
+            },
+          ];
+        });
+        return;
+      }
+
+      if (parsed.kind === 'text') {
+        setChatAttachedFiles((prev) => {
+          const next = prev.filter((f) => f.id !== id);
+          return [
+            ...next,
+            {
+              id,
+              filename: parsed.filename,
+              mimeType: file.type || 'text/plain',
+              sizeBytes: parsed.sizeBytes,
+              status: 'ready',
+              kind: 'text',
+              content: parsed.content,
+              raw: file,
+            },
+          ];
+        });
+        return;
+      }
+
+      // kind === 'upload' — PDF flow via the Anthropic Files API proxy.
+      // Chip starts in 'uploading', flips to 'ready' once the worker
+      // returns a file_id, or 'error' on failure.
+      setChatAttachedFiles((prev) => {
+        const next = prev.filter((f) => f.id !== id);
+        return [
+          ...next,
+          {
+            id,
+            filename: parsed.filename,
+            mimeType: parsed.mimeType,
+            sizeBytes: parsed.sizeBytes,
+            status: 'uploading',
+            kind: 'upload',
+            raw: file,
+          },
+        ];
+      });
+
+      try {
+        if (!params.chartId && !params.editToken) {
+          // The worker requires a chart_id so the file can be associated
+          // with a specific chart (and cleaned up via chart-files DELETE).
+          // Without one (e.g. on the root / create page pre-save), we'd
+          // strand the uploaded file. Reject upfront with a clear message.
+          throw new Error('Save the chart before attaching files');
+        }
+        const formData = new FormData();
+        formData.append('file', file);
+        // `chart_id` in the upload endpoint is the chart's chart_id (not
+        // the edit token). Prefer chartId; fall back to edit token (the
+        // worker resolves either in U4).
+        const chartIdForUpload = params.chartId ?? params.editToken ?? '';
+        formData.append('chart_id', chartIdForUpload);
+
+        const headers = await getAuthHeaders();
+        const response = await fetch('/api/upload-file', {
+          method: 'POST',
+          headers, // let the browser set multipart boundary
+          body: formData,
+        });
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          throw new Error(errorBody?.error ?? `Upload failed (${response.status})`);
+        }
+        const data: { file_id: string; filename: string; size_bytes: number; mime_type: string } =
+          await response.json();
+
+        setChatAttachedFiles((prev) =>
+          prev.map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  status: 'ready',
+                  fileId: data.file_id,
+                  filename: data.filename,
+                  mimeType: data.mime_type,
+                  sizeBytes: data.size_bytes,
+                }
+              : f,
+          ),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Upload failed';
+        setChatAttachedFiles((prev) =>
+          prev.map((f) =>
+            f.id === id ? { ...f, status: 'error', error: message } : f,
+          ),
+        );
+      }
+    },
+    [getAuthHeaders, params.chartId, params.editToken],
+  );
+
+  const handleChatFileSelect = useCallback(
+    (selected: FileList | File[]) => {
+      const list = Array.from(selected);
+      for (const file of list) {
+        void uploadChatFile(file);
+      }
+    },
+    [uploadChatFile],
+  );
+
+  const handleChatFileRemove = useCallback((id: string) => {
+    setChatAttachedFiles((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
+  const handleChatFileRetry = useCallback(
+    (id: string) => {
+      setChatAttachedFiles((prev) => {
+        const target = prev.find((f) => f.id === id);
+        if (target?.raw) {
+          // Re-kick the upload; the existing id is reused so the chip
+          // remains in place and flips back to 'uploading'.
+          void uploadChatFile(target.raw, id);
+        }
+        return prev;
+      });
+    },
+    [uploadChatFile],
+  );
 
   const loadGeneratedGraph = () => {
     if (generatedGraphData && onGraphUpdate) {
@@ -1474,6 +1670,26 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                     </div>
                   ) : null}
+                  {/* File attachment tray + drop target. Stays mounted so
+                      files dropped on the composer area land here. */}
+                  <AttachedFilesBar
+                    files={chatAttachedFiles}
+                    onRemove={handleChatFileRemove}
+                    onRetry={handleChatFileRetry}
+                    onDropFiles={handleChatFileSelect}
+                  />
+                  <input
+                    ref={chatFileInputRef}
+                    type="file"
+                    multiple
+                    accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
+                    onChange={(e) => {
+                      if (e.target.files) handleChatFileSelect(e.target.files);
+                      // Clear the input so re-picking the same file fires onChange again.
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
                   <textarea
                     ref={inputRef}
                     value={inputValue}
@@ -1502,6 +1718,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         title="Settings"
                       >
                         <Cog6ToothIcon className="w-5 h-5" />
+                      </button>
+                      <button
+                        onClick={() => chatFileInputRef.current?.click()}
+                        className="p-2 rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                        title="Attach a file"
+                        aria-label="Attach a file"
+                      >
+                        <PaperClipIcon className="w-5 h-5" />
                       </button>
                       <button
                         onClick={() => setWebSearchEnabled(!webSearchEnabled)}
