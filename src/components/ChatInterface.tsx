@@ -2,7 +2,7 @@ import React, { useCallback, useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
-import { chatService, ChatMessage } from '../services/chatService';
+import { chatService, ChatMessage, type CostError } from '../services/chatService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
@@ -76,8 +76,9 @@ const TURNSTILE_SCRIPT_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
 
-// Keyword table for classifyCostError(). Order matters: first match wins.
-// Tuple: [category-kind, matchable lowercase substrings, user-facing copy].
+// User-facing copy for each cost-error category. Reused by both the legacy
+// keyword classifier (classifyCostError) and the structured handler
+// (handleCostError), so copy stays consistent between the two paths.
 type CostErrorKind =
   | 'lifetime_cap'
   | 'global_budget'
@@ -85,34 +86,26 @@ type CostErrorKind =
   | 'body_too_large'
   | 'service_unavailable';
 
-const COST_ERROR_CATEGORIES: ReadonlyArray<
-  readonly [CostErrorKind, readonly string[], string]
-> = [
-  [
-    'lifetime_cap',
-    ['lifetime_cap_reached', 'free quota'],
+const COST_ERROR_COPY: Record<CostErrorKind, string> = {
+  lifetime_cap:
     "You've reached the free quota. Keep going with your own Anthropic key, or donate to refill the shared pool.",
-  ],
-  [
-    'global_budget',
-    ['global_budget_exhausted', 'shared budget'],
+  global_budget:
     'Our shared monthly budget is exhausted. Keep going with your own key, or donate to refill the pool.',
-  ],
-  [
-    'turnstile',
-    ['turnstile_required', 'turnstile_failed'],
-    'Please complete the challenge before sending.',
-  ],
-  [
-    'body_too_large',
-    ['body_too_large', 'payload too large'],
+  turnstile: 'Please complete the challenge before sending.',
+  body_too_large:
     'Your message is too large. Try a shorter message or fewer attachments.',
-  ],
-  [
-    'service_unavailable',
-    ['database_unavailable', 'authentication_service_unavailable'],
-    'Service temporarily unavailable. Please try again shortly.',
-  ],
+  service_unavailable: 'Service temporarily unavailable. Please try again shortly.',
+};
+
+// Keyword table for classifyCostError(). Order matters: first match wins.
+const COST_ERROR_CATEGORIES: ReadonlyArray<
+  readonly [CostErrorKind, readonly string[]]
+> = [
+  ['lifetime_cap', ['lifetime_cap_reached', 'free quota']],
+  ['global_budget', ['global_budget_exhausted', 'shared budget']],
+  ['turnstile', ['turnstile_required', 'turnstile_failed']],
+  ['body_too_large', ['body_too_large', 'payload too large']],
+  ['service_unavailable', ['database_unavailable', 'authentication_service_unavailable']],
 ];
 
 // Global reference to Cloudflare's injected helper. We attach it via the
@@ -287,10 +280,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     { kind: CostErrorKind; message: string } | null
   >(null);
 
-  // Turnstile challenge token for anonymous requests. Re-issued on each
-  // successful challenge; cleared after send (or on expiry/error). Wired
-  // to streamMessage once U10 accepts the `turnstileToken` param.
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
+  // succeeds; the Worker sets an httpOnly `tocb_anon` cookie that rides along
+  // automatically on subsequent same-origin fetches. We don't carry the raw
+  // token around — it's single-use and irrelevant after verification.
+  // Reset to `false` whenever the Worker returns `turnstile_required` mid-flow
+  // (cookie expired / IP changed) so the widget re-renders for a fresh solve.
+  const [hasTurnstileSession, setHasTurnstileSession] = useState<boolean>(false);
+  // Inline error copy shown adjacent to the Turnstile widget after a failed
+  // verification, so the user knows to retry the challenge rather than just
+  // seeing a silent re-render.
+  const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
   // BYOK panel state for 429/402 recovery and voluntary key entry.
   const [byokPanelMode, setByokPanelMode] = useState<'generate' | 'cap_reached' | 'voluntary' | null>(null);
@@ -315,6 +315,32 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [conversationStarted, setConversationStarted] = useState(false);
   const [fullConversation, setFullConversation] = useState('');
   const [generatedGraphData, setGeneratedGraphData] = useState<any>(null);
+  // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
+  // list of {id, file_id} chips so the chip area can render them with the
+  // same AttachedFilesBar as Chat mode. Text/markdown files continue to be
+  // inlined via the existing `files` state.
+  const [generateAttachedChips, setGenerateAttachedChips] = useState<
+    Array<AttachedFile & { fileId?: string; raw?: File }>
+  >([]);
+  const generateAttachedFileIds = React.useMemo(
+    () =>
+      generateAttachedChips
+        .filter((f) => f.status === 'ready' && f.fileId)
+        .map((f) => f.fileId!) as string[],
+    [generateAttachedChips],
+  );
+
+  // First-upload privacy notice. Persisted across sessions via localStorage
+  // so a returning user doesn't see it again after dismissing. We render
+  // the banner above the chip area on the first upload of either mode and
+  // hide it once the user clicks "Got it".
+  const [showFileUploadNotice, setShowFileUploadNotice] = useState<boolean>(
+    () => localStorage.getItem('tocb_file_upload_notice_shown') !== 'true',
+  );
+  const dismissFileUploadNotice = useCallback(() => {
+    localStorage.setItem('tocb_file_upload_notice_shown', 'true');
+    setShowFileUploadNotice(false);
+  }, []);
 
   // Search mode state
   const [searchQuery, setSearchQuery] = useState('');
@@ -502,7 +528,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const refreshUsage = useCallback(async () => {
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch('/api/usage', { headers });
+      const response = await fetch('/api/usage', { headers, credentials: 'include' });
       if (!response.ok) return; // transient errors: keep prior state
       const data = await response.json();
       setUsage(data);
@@ -518,16 +544,15 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [refreshUsage]);
 
   // Classify a streaming error string into a cost/quota category if it
-  // matches one of U9's error payloads. Keyword-based detection is a
-  // stopgap until U10 threads a structured `onCostError` callback through
-  // chatService. Returns `null` for generic errors (render normally) and
-  // for silent cases like `idempotent_replay` (user double-click).
+  // matches one of U9's error payloads. Keyword-based detection covers the
+  // legacy error-string path; structured errors from `onCostError` skip this
+  // classifier and go through `handleCostError` below.
   const classifyCostError = useCallback(
     (message: string) => {
       const lower = message.toLowerCase();
-      for (const [kind, keywords, userMessage] of COST_ERROR_CATEGORIES) {
+      for (const [kind, keywords] of COST_ERROR_CATEGORIES) {
         if (keywords.some((k) => lower.includes(k))) {
-          return { kind, message: userMessage };
+          return { kind, message: COST_ERROR_COPY[kind] };
         }
       }
       return null;
@@ -535,10 +560,119 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     [],
   );
 
+  // Structured cost-error handler. Maps CostErrorType → UI state transition
+  // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
+  // under the last user message so BYOK retries can reuse the same messages
+  // array — plan v2 decision 8).
+  const handleCostError = useCallback((error: CostError) => {
+    switch (error.type) {
+      case 'turnstile_required':
+        // Cookie expired or IP changed mid-flow. Bring the widget back so
+        // the user can re-solve, and clear any stale error copy.
+        setHasTurnstileSession(false);
+        setTurnstileError(null);
+        return;
+      case 'turnstile_failed':
+        // Siteverify rejected. Keep the widget visible, surface the error.
+        setHasTurnstileSession(false);
+        setTurnstileError('Challenge failed — please try again.');
+        return;
+      case 'idempotent_replay':
+        // Silent: the user double-clicked or the browser replayed. The
+        // original request is already in flight or completed on the server;
+        // surfacing an error would confuse them.
+        return;
+      case 'lifetime_cap_reached':
+        setCostErrorBanner({ kind: 'lifetime_cap', message: COST_ERROR_COPY.lifetime_cap });
+        return;
+      case 'global_budget_exhausted':
+        setCostErrorBanner({ kind: 'global_budget', message: COST_ERROR_COPY.global_budget });
+        return;
+      case 'request_cost_ceiling_exceeded':
+        // Re-use the cap-reached copy + BYOK remedy; the cause is different
+        // (per-request ceiling rather than lifetime cap) but the user action
+        // is identical: pay with your own key or shorten the prompt.
+        setCostErrorBanner({
+          kind: 'lifetime_cap',
+          message:
+            'This request would exceed the per-request cost ceiling. Try a shorter prompt or use your own key.',
+        });
+        return;
+      case 'body_too_large':
+        setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
+        return;
+      case 'chart_deleted':
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message: 'This chart was deleted in another tab. Reload the page to continue.',
+        });
+        return;
+      case 'file_unavailable':
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message: 'A file referenced by this chat is no longer available. Remove it and retry.',
+        });
+        return;
+      default:
+        // database_unavailable / authentication_service_unavailable /
+        // invalid_token / email_verification_required all fall through to a
+        // generic service banner.
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message: COST_ERROR_COPY.service_unavailable,
+        });
+    }
+  }, []);
+
+  // Turnstile: exchange the raw token for an httpOnly session cookie. After a
+  // successful verify the widget is hidden (hasTurnstileSession=true) and the
+  // browser rides the cookie on subsequent /api/anthropic-stream requests.
+  // Failures keep the widget visible with an inline error. Called by the
+  // TurnstileWidget on solve, expiry, or error (null payload).
+  const handleTurnstileToken = useCallback(async (token: string | null) => {
+    if (!token) {
+      // Widget reports expiry or error — force a re-render with a prompt.
+      setHasTurnstileSession(false);
+      return;
+    }
+    try {
+      const response = await fetch('/api/verify-turnstile', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (response.ok) {
+        setHasTurnstileSession(true);
+        setTurnstileError(null);
+        return;
+      }
+      // Treat 401 turnstile_failed the same as any other non-200: keep the
+      // widget visible, show an error. Other statuses (5xx, 501) also fall
+      // through — the user can re-solve to retry.
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      const message =
+        body.error === 'turnstile_failed'
+          ? 'Challenge failed — please try again.'
+          : 'Verification failed — please try again.';
+      setHasTurnstileSession(false);
+      setTurnstileError(message);
+    } catch (err) {
+      console.warn('[ChatInterface] verify-turnstile failed:', err);
+      setHasTurnstileSession(false);
+      setTurnstileError('Network error while verifying — please try again.');
+    }
+  }, []);
+
   // Debounced cost estimate: recomputes 300ms after the last keystroke or
-  // attachment change. Includes inline text file content since those bytes
-  // also hit the input-token count.
+  // attachment change. Prefer the server-side /api/count-tokens-estimate
+  // (free pass-through to Anthropic's count_tokens endpoint), falling back
+  // to a rough char-based heuristic if the network or server is down. The
+  // server estimate uses the model's real tokenizer, which is ~35% off for
+  // Opus 4.7 versus the char-based heuristic.
   useEffect(() => {
+    // Cancel any in-flight estimate when dependencies change.
+    const controller = new AbortController();
     const timeout = setTimeout(() => {
       const attachedChars = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
@@ -548,10 +682,53 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         setComposerEstimateUsd(0);
         return;
       }
-      const tokens = roughInputTokensFromChars(totalChars, selectedModel);
-      setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+
+      // Inline text-file content so the server-side count matches what
+      // streamMessage will actually send. Attached PDFs (file_id) aren't
+      // folded in here — count_tokens counts documents only when we pass
+      // the file via the actual request shape; a preflight without their
+      // bytes gives a conservative under-estimate, which is acceptable for
+      // composer-side display.
+      const inlineSections = chatAttachedFiles
+        .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
+        .map((f) => `=== ${f.filename} ===\n${f.content}`);
+      const userBody =
+        inlineSections.length > 0
+          ? `${inputValue}\n\n${inlineSections.join('\n\n')}`
+          : inputValue;
+
+      void (async () => {
+        try {
+          const response = await fetch('/api/count-tokens-estimate', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: selectedModel,
+              messages: [{ role: 'user', content: userBody }],
+            }),
+          });
+          if (!response.ok) throw new Error(`status ${response.status}`);
+          const data = (await response.json()) as { estimated_cost_usd?: number };
+          if (typeof data.estimated_cost_usd === 'number') {
+            setComposerEstimateUsd(data.estimated_cost_usd);
+            return;
+          }
+          throw new Error('no cost in response');
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          // Fall back to the char-based heuristic so the UI still shows
+          // something reasonable offline or when the server is down.
+          const tokens = roughInputTokensFromChars(totalChars, selectedModel);
+          setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+        }
+      })();
     }, 300);
-    return () => clearTimeout(timeout);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
   }, [inputValue, chatAttachedFiles, selectedModel]);
 
   const handleStopStreaming = () => {
@@ -622,8 +799,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
-    // Consume the turnstile token: the next send needs a new challenge.
-    setTurnstileToken(null);
     setCostErrorBanner(null);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
@@ -657,12 +832,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     abortControllerRef.current = new AbortController();
 
     try {
-      await chatService.streamMessage(
-        [...messages, userMessage],
-        graphData,
-        'chat',
-        '', // apiKey param kept for back-compat; BYOK flows through the worker
-        {
+      await chatService.streamMessage({
+        messages: [...messages, userMessage],
+        currentGraphData: graphData,
+        mode: 'chat',
+        callbacks: {
           onSearchStart: () => {
             setIsSearching(true);
           },
@@ -678,7 +852,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               })));
             }
           },
-          onContent: (chunk: string, fullContent: string) => {
+          onContent: (_chunk: string, fullContent: string) => {
             // Clear thinking state when content starts streaming
             if (isThinking) {
               setIsThinking(false);
@@ -764,6 +938,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           }
         },
         onError: (error: string) => {
+          // Legacy keyword-based classifier for generic error strings. New
+          // shapes (turnstile_required, idempotent_replay, body_too_large, …)
+          // arrive via onCostError below with structured data; we don't rely
+          // on the error-string path for them.
           const classified = classifyCostError(error);
           if (classified) {
             // Surface as inline banner, don't pollute chat history
@@ -785,19 +963,32 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
-        }
+        },
+        onCostUpdate: (runningUsd: number) => {
+          setRunningCostUsd(runningUsd);
+        },
+        onCostError: (error) => {
+          handleCostError(error);
+          setIsStreaming(false);
+          setStreamingContent('');
+          setIsSearching(false);
+          setIsThinking(false);
+          setRunningCostUsd(null);
+          streamingMessageRef.current = null;
+        },
       },
-      abortControllerRef.current?.signal, // signal parameter
-      selectedModel,
+      signal: abortControllerRef.current?.signal,
+      model: selectedModel,
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      true, // extendedThinkingEnabled — always on for Opus 4.7
+      extendedThinkingEnabled: true,
       attachedFileIds,
       idempotencyKey,
-      turnstileToken ?? undefined,
-      undefined // userAnthropicKey: server-stored BYOK; raw key not held client-side
-      );
+      chartId: params.chartId ?? params.editToken,
+      loggingMessageId: userMessageId,
+      // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
+    });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
       const classified = classifyCostError(message);
@@ -853,6 +1044,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           const headers = await getAuthHeaders();
           await fetch(`/api/chart-files?chart_id=${encodeURIComponent(chartIdForCleanup)}`, {
             method: 'DELETE',
+            credentials: 'include',
             headers,
           });
         } catch (err) {
@@ -863,46 +1055,162 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   };
 
 
-  const handleFileUpload = async (selectedFiles: FileList) => {
-    const newFiles: UploadedFile[] = [];
-
-    for (let i = 0; i < selectedFiles.length; i++) {
-      const file = selectedFiles[i];
-      const uploadedFile: UploadedFile = {
-        file,
-        content: '',
-        status: 'reading'
-      };
-      newFiles.push(uploadedFile);
-    }
-
-    setFiles(prev => [...prev, ...newFiles]);
-
-    // Parse file contents using our new parser
-    for (let i = 0; i < newFiles.length; i++) {
-      const uploadedFile = newFiles[i];
-      try {
-        const result = await parseFile(uploadedFile.file);
-
-        if (result.success) {
-          uploadedFile.content = result.content;
-          uploadedFile.status = 'ready';
-        } else {
-          console.error('Error parsing file:', result.error);
-          uploadedFile.content = '';
-          uploadedFile.status = 'error';
-          uploadedFile.errorMessage = result.error;
-        }
-      } catch (error) {
-        console.error('Error reading file:', error);
-        uploadedFile.status = 'error';
+  // Upload a single PDF to the Files API. Returns the new file_id or throws.
+  // Shared by Chat and Generate modes: Chat tracks chips in chatAttachedFiles,
+  // Generate tracks them in generateAttachedChips. Returns early with an error
+  // message if the chart hasn't been saved yet (the worker requires chart_id).
+  const uploadPdfToFilesApi = useCallback(
+    async (
+      file: File,
+    ): Promise<{ file_id: string; filename: string; size_bytes: number; mime_type: string }> => {
+      if (!params.chartId && !params.editToken) {
+        throw new Error('Save the chart before attaching files');
       }
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('chart_id', params.chartId ?? params.editToken ?? '');
 
-      setFiles(prev => prev.map(f =>
-        f.file === uploadedFile.file ? uploadedFile : f
-      ));
-    }
-  };
+      const headers = await getAuthHeaders();
+      const response = await fetch('/api/upload-file', {
+        method: 'POST',
+        credentials: 'include',
+        headers, // multipart boundary set by the browser
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error ?? `Upload failed (${response.status})`);
+      }
+      return response.json();
+    },
+    [getAuthHeaders, params.chartId, params.editToken],
+  );
+
+  // Generate-mode file handler. Text files continue to be inlined via the
+  // existing `files` state (parseText-decoded on pick). PDFs route through
+  // the Files API: a chip in `generateAttachedChips` tracks the upload;
+  // `generateAttachedFileIds` is the list forwarded to streamMessage as
+  // document blocks, matching Chat mode.
+  const handleFileUpload = useCallback(
+    async (selectedFiles: FileList | File[]) => {
+      const list = Array.from(selectedFiles);
+      if (list.length === 0) return;
+
+      for (const file of list) {
+        const isPdf =
+          file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+        if (isPdf) {
+          const id = crypto.randomUUID();
+          setGenerateAttachedChips((prev) => [
+            ...prev,
+            {
+              id,
+              filename: file.name,
+              mimeType: file.type || 'application/pdf',
+              sizeBytes: file.size,
+              status: 'uploading',
+              raw: file,
+            },
+          ]);
+          try {
+            const data = await uploadPdfToFilesApi(file);
+            setGenerateAttachedChips((prev) =>
+              prev.map((f) =>
+                f.id === id
+                  ? {
+                      ...f,
+                      status: 'ready',
+                      fileId: data.file_id,
+                      filename: data.filename,
+                      mimeType: data.mime_type,
+                      sizeBytes: data.size_bytes,
+                    }
+                  : f,
+              ),
+            );
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Upload failed';
+            setGenerateAttachedChips((prev) =>
+              prev.map((f) =>
+                f.id === id ? { ...f, status: 'error', error: message } : f,
+              ),
+            );
+          }
+          continue;
+        }
+
+        // Text-like file: keep the legacy inline flow.
+        const uploadedFile: UploadedFile = { file, content: '', status: 'reading' };
+        setFiles((prev) => [...prev, uploadedFile]);
+        try {
+          const result = await parseFile(file);
+          if (result.success && result.kind === 'text') {
+            uploadedFile.content = result.content;
+            uploadedFile.status = 'ready';
+          } else if (result.kind === 'error') {
+            console.error('Error parsing file:', result.error);
+            uploadedFile.content = '';
+            uploadedFile.status = 'error';
+            uploadedFile.errorMessage = result.error;
+          }
+        } catch (error) {
+          console.error('Error reading file:', error);
+          uploadedFile.status = 'error';
+        }
+        setFiles((prev) => prev.map((f) => (f.file === uploadedFile.file ? uploadedFile : f)));
+      }
+    },
+    [uploadPdfToFilesApi],
+  );
+
+  // Retry a failed Generate-mode PDF upload in place.
+  const handleGenerateFileRetry = useCallback(
+    (id: string) => {
+      // Snapshot the raw File and flip the chip back to 'uploading' before
+      // kicking the async upload. Doing the mutation + read in two steps
+      // keeps the state updater pure.
+      let file: File | undefined;
+      setGenerateAttachedChips((prev) => {
+        file = prev.find((f) => f.id === id)?.raw;
+        if (!file) return prev;
+        return prev.map((f) =>
+          f.id === id ? { ...f, status: 'uploading', error: undefined } : f,
+        );
+      });
+      if (!file) return;
+
+      void (async () => {
+        try {
+          const data = await uploadPdfToFilesApi(file);
+          setGenerateAttachedChips((cur) =>
+            cur.map((f) =>
+              f.id === id
+                ? {
+                    ...f,
+                    status: 'ready',
+                    fileId: data.file_id,
+                    filename: data.filename,
+                    mimeType: data.mime_type,
+                    sizeBytes: data.size_bytes,
+                  }
+                : f,
+            ),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Upload failed';
+          setGenerateAttachedChips((cur) =>
+            cur.map((f) => (f.id === id ? { ...f, status: 'error', error: message } : f)),
+          );
+        }
+      })();
+    },
+    [uploadPdfToFilesApi],
+  );
+
+  const handleGenerateFileRemove = useCallback((id: string) => {
+    setGenerateAttachedChips((prev) => prev.filter((f) => f.id !== id));
+  }, []);
 
   const removeFile = (fileToRemove: File) => {
     setFiles(prev => prev.filter(f => f.file !== fileToRemove));
@@ -937,14 +1245,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const id = existingId ?? crypto.randomUUID();
       const parsed = await parseFile(file);
 
-      if (parsed.kind === 'error' || parsed.success === false) {
+      if (parsed.kind === 'error') {
         upsertChip(id, {
           id,
           filename: file.name,
           mimeType: file.type || 'application/octet-stream',
           sizeBytes: file.size,
           status: 'error',
-          error: parsed.kind === 'error' ? parsed.error : 'Failed to parse file',
+          error: parsed.error,
           kind: 'text',
           raw: file,
         });
@@ -979,33 +1287,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       });
 
       try {
-        if (!params.chartId && !params.editToken) {
-          // The worker requires a chart_id so the file can be associated
-          // with a specific chart (and cleaned up via chart-files DELETE).
-          // Without one (e.g. on the root / create page pre-save), we'd
-          // strand the uploaded file. Reject upfront with a clear message.
-          throw new Error('Save the chart before attaching files');
-        }
-        const formData = new FormData();
-        formData.append('file', file);
-        // `chart_id` in the upload endpoint is the chart's chart_id (not
-        // the edit token). Prefer chartId; fall back to edit token (the
-        // worker resolves either in U4).
-        formData.append('chart_id', params.chartId ?? params.editToken ?? '');
-
-        const headers = await getAuthHeaders();
-        const response = await fetch('/api/upload-file', {
-          method: 'POST',
-          headers, // let the browser set multipart boundary
-          body: formData,
-        });
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          throw new Error(errorBody?.error ?? `Upload failed (${response.status})`);
-        }
-        const data: { file_id: string; filename: string; size_bytes: number; mime_type: string } =
-          await response.json();
-
+        const data = await uploadPdfToFilesApi(file);
         setChatAttachedFiles((prev) =>
           prev.map((f) =>
             f.id === id
@@ -1029,7 +1311,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         );
       }
     },
-    [getAuthHeaders, params.chartId, params.editToken, upsertChip],
+    [uploadPdfToFilesApi, upsertChip],
   );
 
   const handleChatFileSelect = useCallback(
@@ -1079,7 +1361,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   };
 
   const startGeneration = async () => {
-    if (files.filter(f => f.status === 'ready').length === 0) {
+    const readyTextFiles = files.filter((f) => f.status === 'ready').length;
+    const readyPdfFiles = generateAttachedFileIds.length;
+    if (readyTextFiles + readyPdfFiles === 0) {
+      return;
+    }
+    // Block on in-flight PDF uploads so the request doesn't race the file_id.
+    if (generateAttachedChips.some((f) => f.status === 'uploading')) {
       return;
     }
 
@@ -1136,13 +1424,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     abortControllerRef.current = new AbortController();
 
     try {
-      await chatService.streamMessage(
-        [generationMessage],
-        graphData,
-        'generate',
-        '', // apiKey param kept for back-compat; BYOK flows through the worker
-        {
-          onContent: (chunk: string, fullContent: string) => {
+      await chatService.streamMessage({
+        messages: [generationMessage],
+        currentGraphData: graphData,
+        mode: 'generate',
+        callbacks: {
+          onContent: (_chunk: string, fullContent: string) => {
             // Clear thinking state when content starts streaming
             if (isThinking) {
               setIsThinking(false);
@@ -1216,6 +1503,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           }
         },
         onError: (error: string) => {
+          // See chat-site commentary: keyword classifier is the legacy
+          // fallback for generic error strings; structured shapes arrive via
+          // onCostError below.
           const classified = classifyCostError(error);
           if (classified) {
             setCostErrorBanner(classified);
@@ -1233,19 +1523,31 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
-        }
+        },
+        onCostUpdate: (runningUsd: number) => {
+          setRunningCostUsd(runningUsd);
+        },
+        onCostError: (error) => {
+          handleCostError(error);
+          setIsStreaming(false);
+          setStreamingContent('');
+          setIsThinking(false);
+          setRunningCostUsd(null);
+          streamingMessageRef.current = null;
+        },
       },
-      abortControllerRef.current?.signal, // signal parameter
-      selectedModel,
+      signal: abortControllerRef.current?.signal,
+      model: selectedModel,
       webSearchEnabled,
       customSystemPrompt,
       highlightedNodes,
-      true, // extendedThinkingEnabled — always on for Opus 4.7
-      [], // attachedFileIds — Generate-mode uses inline text for now; Files API upload in Generate is a follow-up
-      crypto.randomUUID(), // idempotencyKey: dedup browser reload / double-click
-      turnstileToken ?? undefined,
-      undefined // userAnthropicKey: server-stored BYOK; raw key not held client-side
-      );
+      extendedThinkingEnabled: true,
+      attachedFileIds: generateAttachedFileIds,
+      idempotencyKey: crypto.randomUUID(), // fresh per send: dedupes browser reload / double-click
+      chartId: params.chartId ?? params.editToken,
+      loggingMessageId: userMessageId,
+      // userAnthropicKey: server-stored BYOK; raw key not held client-side.
+    });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sorry, there was an error processing your request.';
       const classified = classifyCostError(message);
@@ -1564,6 +1866,35 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </p>
                 </div>
 
+                {/* First-upload privacy notice. Rendered above the file list
+                    on the first file pick in either mode; persists across
+                    sessions via the localStorage flag. */}
+                {showFileUploadNotice &&
+                  (files.length > 0 || generateAttachedChips.length > 0) && (
+                    <div className="flex items-start gap-2 p-2 rounded-md border border-blue-200 bg-blue-50 text-xs text-blue-900">
+                      <div className="flex-1">
+                        Files are uploaded to Anthropic and kept until you remove them or delete
+                        the chart. Not used to train AI models.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={dismissFileUploadNotice}
+                        className="ml-2 inline-flex items-center px-2 py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+                      >
+                        Got it
+                      </button>
+                    </div>
+                  )}
+
+                {/* Generate-mode PDF chips (Files API uploads). */}
+                {generateAttachedChips.length > 0 && (
+                  <AttachedFilesBar
+                    files={generateAttachedChips}
+                    onRemove={handleGenerateFileRemove}
+                    onRetry={handleGenerateFileRetry}
+                  />
+                )}
+
                 {/* Uploaded Files */}
                 {files.length > 0 && (
                   <div className="space-y-2">
@@ -1633,7 +1964,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 {hasKey && verified ? (
                   <button
                     onClick={startGeneration}
-                    disabled={files.filter(f => f.status === 'ready').length === 0 || isLoading}
+                    disabled={
+                      files.filter((f) => f.status === 'ready').length +
+                        generateAttachedFileIds.length ===
+                        0 ||
+                      generateAttachedChips.some((f) => f.status === 'uploading') ||
+                      isLoading
+                    }
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {isLoading ? (
@@ -1648,7 +1985,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </>
                     )}
                   </button>
-                ) : files.filter((f) => f.status === 'ready').length > 0 ? (
+                ) : files.filter((f) => f.status === 'ready').length +
+                    generateAttachedFileIds.length >
+                  0 ? (
                   <ByokPanel
                     mode="generate"
                     costEstimate={(() => {
@@ -1870,16 +2209,28 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   )}
                   {/* Turnstile challenge: anonymous visitors only. With a site
-                      key configured, the widget is rendered until verified;
-                      without one, we skip (matches server-side U9 skip). In
-                      DEV, surface a hint so developers know why sends are
-                      unchallenged. */}
-                  {!isAuthenticated && TURNSTILE_SITE_KEY ? (
+                      key configured, the widget is rendered until a solve is
+                      exchanged for a session cookie. The Worker sets an
+                      httpOnly `tocb_anon` cookie on successful verify, so the
+                      raw token isn't used after this step. If the Worker
+                      later returns `turnstile_required` (cookie expired or
+                      IP changed), `handleCostError` flips us back to this
+                      branch so the widget re-renders.
+
+                      Without a site key, we skip (matches server-side U9
+                      skip). In DEV, surface a hint so developers know why
+                      sends are unchallenged. */}
+                  {!isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
                     <div className="flex flex-col gap-1">
                       <TurnstileWidget
                         siteKey={TURNSTILE_SITE_KEY}
-                        onToken={setTurnstileToken}
+                        onToken={handleTurnstileToken}
                       />
+                      {turnstileError && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                          {turnstileError}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {!isAuthenticated && !TURNSTILE_SITE_KEY && import.meta.env.DEV ? (
@@ -1887,6 +2238,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                     </div>
                   ) : null}
+                  {/* First-upload privacy notice. Shown on the first chip
+                      attachment in either mode; dismissed for good via the
+                      localStorage flag. */}
+                  {showFileUploadNotice && chatAttachedFiles.length > 0 && (
+                    <div className="flex items-start gap-2 p-2 rounded-md border border-blue-200 bg-blue-50 text-xs text-blue-900">
+                      <div className="flex-1">
+                        Files are uploaded to Anthropic and kept until you remove them or delete
+                        the chart. Not used to train AI models.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={dismissFileUploadNotice}
+                        className="ml-2 inline-flex items-center px-2 py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+                      >
+                        Got it
+                      </button>
+                    </div>
+                  )}
                   {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
                   <AttachedFilesBar

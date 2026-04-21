@@ -349,28 +349,4 @@ export class ChartService {
       throw new Error(error.error || 'Failed to delete chart');
     }
   }
-
-  // Get user's total token usage
-  static async getUserTokenUsage(): Promise<{
-    totalTokensUsed: number;
-    lastUpdatedAt: string | null;
-    createdAt: string | null;
-  }> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
-    const response = await fetch(`${API_BASE}/getUserTokenUsage`, {
-      headers: {
-        'Authorization': `Bearer ${this.authToken}`
-      }
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch token usage');
-    }
-
-    return response.json();
-  }
 }
