@@ -1,6 +1,8 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
+import { decryptByokKey } from '../_shared/byok-crypto';
+import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
 import {
   computeCostMicroUsd,
   RATES_MICRO_USD_PER_TOKEN,
@@ -9,7 +11,6 @@ import {
 import {
   LIFETIME_CAP_USD,
   LIFETIME_CAP_MICRO_USD,
-  PER_REQUEST_CAP_MICRO_USD,
   BODY_SIZE_LIMIT_BYTES,
   tierFor,
   isCapped,
@@ -22,29 +23,35 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
  * HTTP streaming proxy for Anthropic's /v1/messages endpoint with server-side
  * cost enforcement. The pipeline, in order:
  *
- *   1. Body-size clamp (reject 413 if > BODY_SIZE_LIMIT_BYTES).
+ *   1. Body-size clamp (reject 413 if > BODY_SIZE_LIMIT_BYTES, currently 32 MB).
  *   2. JWT verify (if Authorization header present) → actor_id = sub or anon-<hmac(ip)>.
- *   3. Tier classification (anon / free / byok).
- *   4. Turnstile check for anon (skipped if TURNSTILE_SECRET_KEY unset).
+ *   3. Tier classification (anon / free / byok). Authenticated users with a row in
+ *      user_byok_keys are promoted to the byok tier; header `X-User-Anthropic-Key`
+ *      (legacy) still wins if present.
+ *   4. Turnstile session cookie check for anon (skipped if TURNSTILE_SECRET_KEY unset).
+ *      Cookie is issued by POST /api/verify-turnstile and bound to the caller's
+ *      cf-connecting-ip-derived anon_id via HMAC.
  *   5. Idempotency de-dup via idempotency_keys table (60s window).
  *   6. Pre-flight cost estimate via /v1/messages/count_tokens.
  *   7. Atomic reservation against user_api_usage (skipped for BYOK).
- *   8. Upstream fetch; detect Anthropic billing-error → 402 global_budget_exhausted.
+ *   8. Upstream fetch with x-api-key = BYOK key if the caller has one, else our
+ *      ANTHROPIC_API_KEY. For BYOK: `body.metadata` is stripped entirely so we
+ *      don't pollute the user's Anthropic dashboard with our internal user_ids.
+ *      Detect Anthropic billing-error → 402 global_budget_exhausted.
  *   9. Stream through a TransformStream that parses SSE usage events and enforces
- *      the mid-stream kill switch (abort when cumulative > min(reservation × 1.2,
- *      PER_REQUEST_CAP_MICRO_USD × 1.2)).
+ *      the mid-stream kill switch: cumulative actual cost > remaining_cap (the
+ *      portion of the lifetime cap that was available BEFORE this request's
+ *      reservation was deducted). Also intercepts Anthropic `not_found_error`
+ *      events and synthesizes `chart_deleted` / `file_unavailable` SSE errors
+ *      so the client can react instead of seeing a truncated stream.
  *  10. Post-stream reconcile: adjust user_api_usage + global_monthly_usage for
- *      actual vs projected cost.
+ *      actual vs projected cost. If the client supplied X-Logging-Message-Id,
+ *      writes the actual cost to logging_messages.cost_micro_usd for per-chart
+ *      attribution queries.
  *
  * On upstream error after reservation, the reservation is reverted in
- * ctx.waitUntil. BYOK requests bypass steps 7 / 9 / 10's reconcile writes.
- *
- * FOLLOW-UPS (explicitly deferred):
- *  - File-not-found interception (chart_deleted / file_unavailable synthesized events):
- *    requires threading chart_id into the request — the API body has no canonical
- *    slot for it today. Do as a follow-up once the client passes chart_id.
- *  - logging_messages.cost_micro_usd reconciliation: requires message_id coordination
- *    between anthropic-stream and the logging API. Follow-up unit.
+ * ctx.waitUntil. BYOK requests bypass steps 7, 9's kill-switch, and 10's
+ * reconcile writes.
  */
 
 // --- Constants ----------------------------------------------------------
@@ -54,12 +61,6 @@ const ANTHROPIC_COUNT_URL = 'https://api.anthropic.com/v1/messages/count_tokens'
 const ANTHROPIC_VERSION = '2023-06-01';
 const ANTHROPIC_BETA = 'files-api-2025-04-14';
 const DEFAULT_MODEL = 'claude-opus-4-7';
-
-// Max kill-switch threshold regardless of how small the projected reservation is.
-// Keeps the cap from starving legitimate bursts while still protecting against
-// a runaway stream that is orders-of-magnitude over the pre-flight estimate.
-const KILL_MULTIPLIER_NUM = 12n;
-const KILL_MULTIPLIER_DEN = 10n;
 
 // --- Helpers: IP / JSON / HTTP ------------------------------------------
 
@@ -149,7 +150,9 @@ async function readBodyWithSizeClamp(
     chunks.push(value);
   }
 
-  // Concatenate in one pass — small sizes (<256KB), not worth a TransformStream.
+  // Concatenate in one pass. Worst case is BODY_SIZE_LIMIT_BYTES (currently
+  // 32 MB per Anthropic's Messages API ceiling); a TransformStream wouldn't
+  // save allocations since we need the whole JSON to parse before forwarding.
   const merged = new Uint8Array(total);
   let offset = 0;
   for (const c of chunks) {
@@ -211,39 +214,43 @@ async function resolveActor(
   return { ok: true, actorId, emailVerified: false, authenticated: false };
 }
 
-// --- Turnstile ----------------------------------------------------------
+// --- Turnstile session cookie ------------------------------------------
 
-async function verifyTurnstile(
+type TurnstileResult = 'ok' | 'missing' | 'expired' | 'ip_mismatch' | 'invalid' | 'not-configured';
+
+/**
+ * Verify the Turnstile session cookie issued by POST /api/verify-turnstile.
+ *
+ * The cookie carries the anon_id (hmac(cf-connecting-ip, IP_HASH_SALT)) it was
+ * minted for. On every anon request here we re-derive the caller's anon_id from
+ * the current cf-connecting-ip and require it to match — moving IPs
+ * invalidates the cookie so a single solved challenge can't be replayed across
+ * IPs. TTL is enforced by the `exp` field inside the signed payload.
+ *
+ * When TURNSTILE_SECRET_KEY is unset (local dev / pre-launch), skip the check
+ * entirely so the anon path still works.
+ */
+async function verifyTurnstileFromCookie(
   request: Request,
   env: Env,
-): Promise<'ok' | 'missing' | 'failed' | 'not-configured'> {
-  const secret = env.TURNSTILE_SECRET_KEY;
-  if (!secret) {
-    console.warn('Turnstile not configured; skipping anon bot check');
+): Promise<TurnstileResult> {
+  if (!env.TURNSTILE_SECRET_KEY) {
+    console.warn('Turnstile not configured; skipping anon session-cookie check');
     return 'not-configured';
   }
-  const turnstileToken = request.headers.get('x-turnstile-token');
-  if (!turnstileToken) return 'missing';
 
+  const cookieValue = extractTurnstileCookie(request.headers.get('cookie'));
+  if (!cookieValue) return 'missing';
+
+  let expectedAnonId: string;
   try {
-    const form = new URLSearchParams();
-    form.set('secret', secret);
-    form.set('response', turnstileToken);
-    const ip = extractIP(request);
-    if (ip && ip !== 'unknown') form.set('remoteip', ip);
-
-    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
-    });
-    if (!r.ok) return 'failed';
-    const data = await r.json() as { success?: boolean };
-    return data.success === true ? 'ok' : 'failed';
+    expectedAnonId = await hashIP(extractIP(request), env.IP_HASH_SALT);
   } catch (e) {
-    console.error('Turnstile verification error:', e);
-    return 'failed';
+    console.error('Turnstile cookie: failed to derive expected anon_id', e);
+    return 'invalid';
   }
+
+  return verifyTurnstileCookie(cookieValue, expectedAnonId, env.IP_HASH_SALT);
 }
 
 // --- Idempotency --------------------------------------------------------
@@ -359,7 +366,7 @@ async function estimateProjectedCost(
 }
 
 type ReserveResult =
-  | { ok: true }
+  | { ok: true; postReservationUsage: bigint }
   | { ok: false; response: Response };
 
 /**
@@ -367,6 +374,11 @@ type ReserveResult =
  *   - updates an existing row (cap-respecting guard in WHERE),
  *   - inserts a new row on first use,
  *   - or reports the user is already at/over the cap (429).
+ *
+ * On success returns the post-reservation cost_micro_usd so the caller can
+ * derive `pre_reservation_usage = post - projected` and, from that,
+ * `remaining_cap_before_reservation = LIFETIME_CAP - pre_reservation_usage`
+ * for the mid-stream kill switch.
  */
 async function reserveCost(
   sql: NeonQueryFunction<false, false>,
@@ -393,7 +405,9 @@ async function reserveCost(
     return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
   }
 
-  if (updateRows.length > 0) return { ok: true };
+  if (updateRows.length > 0) {
+    return { ok: true, postReservationUsage: toBigInt(updateRows[0].cost_micro_usd) };
+  }
 
   // Either no row exists, or the row would exceed the cap. Disambiguate by
   // attempting to create the row. ON CONFLICT DO NOTHING means: if the row
@@ -411,7 +425,9 @@ async function reserveCost(
     return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
   }
 
-  if (insertRows.length > 0) return { ok: true };
+  if (insertRows.length > 0) {
+    return { ok: true, postReservationUsage: toBigInt(insertRows[0].cost_micro_usd) };
+  }
 
   // Cap is actually exceeded — read current cost to produce a useful error body.
   let usedMicro: bigint = 0n;
@@ -543,29 +559,50 @@ function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void
 
 type SseTeeContext = {
   accumulator: UsageAccumulator;
-  killThresholdMicro: bigint;
+  /**
+   * Mid-stream kill threshold in µUSD. When cumulative actual cost exceeds this,
+   * the tee synthesizes a `request_cost_ceiling_exceeded` SSE error and aborts.
+   *
+   * For free/anon tiers this is the remaining_cap measured BEFORE this
+   * request's reservation was deducted (i.e. the lifetime cap minus the user's
+   * prior usage). Since the reservation was already written, `remaining_cap`
+   * bounds what the stream can spend before the cap is truly violated.
+   *
+   * For BYOK this is null — no cap applies to a self-funded request.
+   */
+  killThresholdMicro: bigint | null;
   model: string;
   abortController: AbortController;
   /** Set to true when we fire the kill switch so downstream short-circuits. */
   killed: { v: boolean };
+  /**
+   * Chart id passed via X-Chart-Id header, if any. Used to disambiguate
+   * `chart_deleted` vs `file_unavailable` when Anthropic returns
+   * `not_found_error`.
+   */
+  chartId: string | null;
+  /** Neon handle for the chart-existence lookup during file-not-found interception. */
+  sql: NeonQueryFunction<false, false>;
 };
 
 /**
  * Pipes the upstream SSE stream through a TransformStream that:
  *  - forwards every byte verbatim,
  *  - parses `data: {...}` frames as they complete,
- *  - accumulates usage,
- *  - fires the kill switch by enqueueing a synthesized error event and
- *    aborting the upstream fetch.
+ *  - accumulates usage and fires the cap kill-switch when cumulative cost
+ *    exceeds the remaining_cap bound,
+ *  - intercepts Anthropic `not_found_error` events, classifies them as
+ *    `chart_deleted` or `file_unavailable`, and synthesizes a clean SSE error
+ *    for the client.
  *
  * The SSE frame parser keeps a tail buffer for partial frames; Anthropic's
  * stream can split a single frame across chunks (especially with cache/Worker
  * buffering). We split on the canonical frame separator `\n\n`.
  *
  * Returns both the transformed stream AND a `done` Promise that resolves
- * when the stream completes (naturally or via kill-switch). The caller uses
- * `done` to synchronize post-stream reconcile without racing against
- * incomplete accumulator state.
+ * when the stream completes (naturally, via kill-switch, or intercepted
+ * file-not-found error). The caller uses `done` to synchronize post-stream
+ * reconcile without racing against incomplete accumulator state.
  */
 function createCostTrackingStream(
   source: ReadableStream<Uint8Array>,
@@ -577,10 +614,64 @@ function createCostTrackingStream(
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => { resolveDone = resolve; });
 
-  function parseFrame(
+  /**
+   * Detect Anthropic `not_found_error` inside an SSE `error` frame and, if so,
+   * synthesize a typed `chart_deleted` / `file_unavailable` event. This lets
+   * the client distinguish "your chart was deleted mid-request" from a generic
+   * stream truncation. Returns true if the frame was intercepted; the caller
+   * should stop forwarding the original frame in that case.
+   */
+  async function maybeInterceptNotFound(
+    parsed: Record<string, unknown>,
+    controller: TransformStreamDefaultController<Uint8Array>,
+  ): Promise<boolean> {
+    if (parsed.type !== 'error') return false;
+    const err = parsed.error;
+    if (!err || typeof err !== 'object') return false;
+    const errType = (err as Record<string, unknown>).type;
+    if (errType !== 'not_found_error') return false;
+
+    // Decide which synthesized event to send: if no chart id, we can't be
+    // specific about a file. If we have a chart id, check whether it still
+    // exists; if not, this is chart_deleted, otherwise it's a file within the
+    // chart that was garbage-collected.
+    let kind: 'chart_deleted' | 'file_unavailable' = 'file_unavailable';
+    if (teeCtx.chartId) {
+      try {
+        const rows = await teeCtx.sql`SELECT 1 FROM charts WHERE id = ${teeCtx.chartId} LIMIT 1`;
+        if (rows.length === 0) kind = 'chart_deleted';
+      } catch (e) {
+        console.error('chart existence lookup failed during not_found interception:', e);
+        // Leave as file_unavailable; we can't prove chart_deleted.
+      }
+    }
+
+    const payload = kind === 'chart_deleted'
+      ? { type: 'chart_deleted' }
+      : {
+          type: 'file_unavailable',
+          message: 'A file referenced by this chat is no longer available.',
+        };
+    const frame = encoder.encode(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
+    try { controller.enqueue(frame); } catch (e) {
+      console.warn('not-found synthesized enqueue failed (controller closed):', e);
+    }
+    teeCtx.killed.v = true;
+    try { controller.terminate(); } catch { /* ignore */ }
+    try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+    resolveDone();
+    return true;
+  }
+
+  /**
+   * Parse a completed SSE frame for usage/error content. Returns true if the
+   * caller should swallow the raw frame (not forward to the client) — this
+   * happens when we synthesize a typed `not_found` error in its place.
+   */
+  async function parseFrame(
     frame: string,
     controller: TransformStreamDefaultController<Uint8Array>,
-  ): void {
+  ): Promise<boolean> {
     // An SSE frame is one or more `field: value` lines. We only care about
     // the `data:` field; the semantic type duplicates inside the JSON data
     // (`type` property), which is more reliable than parsing `event:`.
@@ -592,14 +683,19 @@ function createCostTrackingStream(
         break;
       }
     }
-    if (!dataJson || dataJson === '[DONE]') return;
+    if (!dataJson || dataJson === '[DONE]') return false;
 
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(dataJson) as Record<string, unknown>;
     } catch {
-      return;
+      return false;
     }
+
+    // File-not-found interception takes priority: we replace the raw
+    // `not_found_error` frame with a typed `chart_deleted` / `file_unavailable`
+    // event, so the caller must NOT forward the original.
+    if (await maybeInterceptNotFound(parsed, controller)) return true;
 
     const eventType = typeof parsed.type === 'string' ? parsed.type : '';
 
@@ -620,11 +716,14 @@ function createCostTrackingStream(
         usageObj = u as Record<string, unknown>;
       }
     }
-    if (!usageObj) return;
+    if (!usageObj) return false;
 
     mergeUsage(teeCtx.accumulator, usageObj);
 
-    // Kill-switch check.
+    // Kill-switch only runs for capped tiers. BYOK passes teeCtx.killThresholdMicro
+    // as null — the user is paying, no bound applies on our side.
+    if (teeCtx.killThresholdMicro === null) return false;
+
     let cumulativeMicro: bigint;
     try {
       cumulativeMicro = computeCostMicroUsd(
@@ -633,7 +732,7 @@ function createCostTrackingStream(
       );
     } catch (e) {
       console.error('cost compute failed (non-fatal, continuing):', e);
-      return;
+      return false;
     }
 
     if (cumulativeMicro > teeCtx.killThresholdMicro) {
@@ -657,31 +756,60 @@ function createCostTrackingStream(
       // terminate() doesn't run flush(); resolve done directly so reconcile
       // doesn't hang waiting for a flush that never comes.
       resolveDone();
+      // The caller loop checks teeCtx.killed.v and returns without forwarding
+      // the triggering frame — client sees [earlier frames] + synthesized kill.
+      return false;
+    }
+    return false;
+  }
+
+  /**
+   * Forward a completed SSE frame verbatim plus its trailing `\n\n` separator.
+   * Called from the TransformStream only after `maybeInterceptNotFound` has
+   * had a chance to swallow the frame — so the client never sees Anthropic's
+   * raw `not_found_error` followed by our synthesized variant.
+   */
+  function forwardFrame(frame: string, controller: TransformStreamDefaultController<Uint8Array>): void {
+    if (frame.length === 0) return;
+    try {
+      controller.enqueue(encoder.encode(frame + '\n\n'));
+    } catch (e) {
+      console.warn('frame forward failed (controller closed):', e);
     }
   }
 
   const transform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
+    async transform(chunk, controller) {
       if (teeCtx.killed.v) {
         try { controller.terminate(); } catch { /* ignore */ }
         return;
       }
-      controller.enqueue(chunk);
 
       sseBuffer += decoder.decode(chunk, { stream: true });
       let idx: number;
       while ((idx = sseBuffer.indexOf('\n\n')) !== -1) {
         const frame = sseBuffer.slice(0, idx);
         sseBuffer = sseBuffer.slice(idx + 2);
-        parseFrame(frame, controller);
+
+        // parseFrame may swallow a not_found_error frame; in that case it sets
+        // killed.v and we must NOT forward the raw Anthropic error too.
+        const intercepted = await parseFrame(frame, controller);
         if (teeCtx.killed.v) {
-          // resolveDone is called in flush(); terminate() triggers that.
+          // resolveDone was called by parseFrame.
           return;
+        }
+        if (!intercepted) {
+          forwardFrame(frame, controller);
         }
       }
     },
-    flush() {
-      // Any remaining buffered frame is incomplete — ignore.
+    flush(controller) {
+      // If there are any trailing bytes after the last `\n\n`, pass them
+      // through as-is. Anthropic always terminates frames with `\n\n`, so this
+      // is empty in the success path; covers truncation / unexpected endings.
+      if (sseBuffer.length > 0) {
+        try { controller.enqueue(encoder.encode(sseBuffer)); } catch { /* ignore */ }
+      }
       resolveDone();
     },
     cancel() {
@@ -709,6 +837,26 @@ function looksLikeBillingError(status: number, errorBody: unknown): boolean {
   return false;
 }
 
+/**
+ * Classify an Anthropic `not_found_error` (seen as SSE error event or HTTP
+ * 404) into `chart_deleted` vs `file_unavailable`. Without a chart_id we can
+ * only assume the specific file is gone; with one we can prove the chart
+ * itself was deleted.
+ */
+async function classifyNotFound(
+  sql: NeonQueryFunction<false, false>,
+  chartId: string | null,
+): Promise<'chart_deleted' | 'file_unavailable'> {
+  if (!chartId) return 'file_unavailable';
+  try {
+    const rows = await sql`SELECT 1 FROM charts WHERE id = ${chartId} LIMIT 1`;
+    return rows.length === 0 ? 'chart_deleted' : 'file_unavailable';
+  } catch (e) {
+    console.error('classifyNotFound: charts lookup failed', e);
+    return 'file_unavailable';
+  }
+}
+
 // --- Main handler -------------------------------------------------------
 
 export async function handler(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -733,24 +881,73 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   if (!bodyResult.ok) return bodyResult.response;
   const body = bodyResult.body;
 
-  // Step 2 + 3: actor + tier.
+  // Optional client context headers (safe to read before auth).
+  const chartId = request.headers.get('x-chart-id');
+  const loggingMessageId = request.headers.get('x-logging-message-id');
+
+  // Step 2: actor.
   const actor = await resolveActor(request, env, altSvcHeaders);
   if (!actor.ok) return actor.response;
   const actorId = actor.actorId;
 
-  const byokKey = request.headers.get('x-user-anthropic-key');
-  const hasByok = !!byokKey;
-  const tier = tierFor(actorId, hasByok);
+  const sql = getDb(env);
 
-  // Step 4: turnstile for anon.
-  if (needTurnstile(tier)) {
-    const result = await verifyTurnstile(request, env);
-    if (result === 'missing') return jsonError({ error: 'turnstile_required' }, 401, altSvcHeaders);
-    if (result === 'failed') return jsonError({ error: 'turnstile_failed' }, 401, altSvcHeaders);
-    // 'ok' or 'not-configured' → proceed.
+  // Step 3: BYOK resolution.
+  //
+  // Priority order for the x-api-key forwarded upstream:
+  //   1. `X-User-Anthropic-Key` header — legacy path for an explicit per-request
+  //      override (a user testing a different key without re-saving it).
+  //   2. Server-stored `user_byok_keys` row for authenticated users — the
+  //      Round-2 design: key is stored once, encrypted, and loaded here.
+  //   3. Our `ANTHROPIC_API_KEY` fallback for the free/anon tier.
+  //
+  // Anonymous actors cannot BYOK — they have no user_id to key the row on.
+  const byokHeaderKey = request.headers.get('x-user-anthropic-key');
+  let byokKey: string | null = byokHeaderKey;
+  let hasByok = !!byokKey;
+
+  if (!hasByok && actor.authenticated) {
+    let encryptedKey: Uint8Array | ArrayBuffer | null = null;
+    try {
+      const rows = await sql`
+        SELECT encrypted_key FROM user_byok_keys WHERE user_id = ${actorId} LIMIT 1
+      ` as { encrypted_key: Uint8Array | ArrayBuffer | null }[];
+      encryptedKey = rows[0]?.encrypted_key ?? null;
+    } catch (e) {
+      console.error('[anthropic-stream] BYOK lookup Neon error', e);
+      return jsonError({ error: 'db_unavailable' }, 503, altSvcHeaders);
+    }
+
+    if (encryptedKey) {
+      if (!env.BYOK_ENCRYPTION_KEY) {
+        // Row exists but we can't decrypt. Fail closed — silently falling back
+        // to our server key would bill us for a BYOK user.
+        return jsonError({ error: 'byok_not_configured' }, 503, altSvcHeaders);
+      }
+      try {
+        const stored = encryptedKey instanceof Uint8Array
+          ? encryptedKey
+          : new Uint8Array(encryptedKey);
+        byokKey = await decryptByokKey(stored, actorId, env.BYOK_ENCRYPTION_KEY);
+        hasByok = true;
+      } catch (e) {
+        console.error('[anthropic-stream] BYOK decrypt failed', e);
+        return jsonError({ error: 'byok_not_configured' }, 503, altSvcHeaders);
+      }
+    }
   }
 
-  const sql = getDb(env);
+  const tier = tierFor(actorId, hasByok);
+
+  // Step 4: turnstile session cookie for anon.
+  // missing / expired / ip_mismatch / invalid all map to the same client UX:
+  // solve a fresh challenge and retry.
+  if (needTurnstile(tier)) {
+    const result = await verifyTurnstileFromCookie(request, env);
+    if (result !== 'ok' && result !== 'not-configured') {
+      return jsonError({ error: 'turnstile_required' }, 401, altSvcHeaders);
+    }
+  }
 
   // Step 5: idempotency.
   const idempotencyKey = request.headers.get('x-idempotency-key');
@@ -764,6 +961,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   // Step 6 + 7: estimate + reserve (skipped for BYOK).
   let projected: bigint = 0n;
   let model = typeof body.model === 'string' ? body.model : DEFAULT_MODEL;
+  let postReservationUsage: bigint = 0n;
   if (isCapped(tier)) {
     const est = await estimateProjectedCost(body, env, altSvcHeaders);
     if (!est.ok) return est.response;
@@ -772,6 +970,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
 
     const reserve = await reserveCost(sql, actorId, projected, tier, altSvcHeaders);
     if (!reserve.ok) return reserve.response;
+    postReservationUsage = reserve.postReservationUsage;
   } else {
     // BYOK — still validate the model so computeCostMicroUsd won't throw later
     // (not that we call it in BYOK reconcile, but stay defensive).
@@ -791,8 +990,15 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     }));
   });
 
-  // Step 8: upstream fetch. We add metadata.user_id here (never trust client).
-  body.metadata = { user_id: actorId };
+  // Step 8: upstream fetch. For our metered path we set metadata.user_id so
+  // Anthropic abuse-detection can attribute. For BYOK we strip `body.metadata`
+  // entirely — otherwise our internal user_ids pollute the BYOK user's own
+  // Anthropic account dashboard.
+  if (hasByok) {
+    delete body.metadata;
+  } else {
+    body.metadata = { user_id: actorId };
+  }
 
   const abortController = new AbortController();
   let upstream: Response;
@@ -840,6 +1046,16 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
       );
     }
 
+    // HTTP-level 404 on a file reference also goes through the chart-deleted /
+    // file-unavailable synthesis path, so the client doesn't see a raw 404.
+    if (upstream.status === 404) {
+      const kind = await classifyNotFound(sql, chartId);
+      const payload = kind === 'chart_deleted'
+        ? { error: 'chart_deleted' }
+        : { error: 'file_unavailable', message: 'A file referenced by this chat is no longer available.' };
+      return jsonError(payload, 404, altSvcHeaders);
+    }
+
     return new Response(errorText, {
       status: upstream.status,
       headers: { 'Content-Type': 'application/json', ...altSvcHeaders },
@@ -855,13 +1071,13 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   const accumulator = newAccumulator();
   const killed = { v: false };
 
-  // Threshold is min(projected × 1.2, PER_REQUEST_CAP × 1.2). For BYOK, use
-  // just the flat cap — we didn't reserve so there's no "projected" to scale.
-  const projectedThreshold = isCapped(tier)
-    ? (projected * KILL_MULTIPLIER_NUM) / KILL_MULTIPLIER_DEN
-    : (PER_REQUEST_CAP_MICRO_USD * KILL_MULTIPLIER_NUM) / KILL_MULTIPLIER_DEN;
-  const flatThreshold = (PER_REQUEST_CAP_MICRO_USD * KILL_MULTIPLIER_NUM) / KILL_MULTIPLIER_DEN;
-  const killThresholdMicro = projectedThreshold < flatThreshold ? projectedThreshold : flatThreshold;
+  // Kill threshold: cumulative actual cost must not exceed remaining_cap measured
+  // BEFORE this request's reservation was deducted. Since the reservation has
+  // already been debited, that's LIFETIME_CAP - (post_reservation - projected).
+  // For BYOK the cap doesn't apply — null disables the check in the tee.
+  const killThresholdMicro: bigint | null = isCapped(tier)
+    ? (LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected))
+    : null;
 
   const teeCtx: SseTeeContext = {
     accumulator,
@@ -869,6 +1085,8 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     model,
     abortController,
     killed,
+    chartId,
+    sql,
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
@@ -876,15 +1094,26 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
 
   // Step 10: post-stream reconcile. ctx.waitUntil extends the Worker lifetime
   // past the Response being fully flushed so we still get the DB write. Skip
-  // for BYOK — we didn't reserve anything to reconcile.
-  if (isCapped(tier)) {
-    ctx.waitUntil((async () => {
-      // Wait for the SSE stream to finish (natural end, kill-switch, or
-      // client-cancel). Once `tracked.done` resolves, the accumulator is
-      // stable — no further transform() callbacks will mutate it.
-      await tracked.done;
+  // user_api_usage / global_monthly_usage updates for BYOK (no reservation to
+  // reconcile), but always try to write logging_messages.cost_micro_usd when
+  // a message_id was supplied — it's the per-chart attribution key and is
+  // independent of tier.
+  ctx.waitUntil((async () => {
+    // Wait for the SSE stream to finish (natural end, kill-switch, or
+    // client-cancel). Once `tracked.done` resolves, the accumulator is
+    // stable — no further transform() callbacks will mutate it.
+    await tracked.done;
+
+    let actualMicro: bigint;
+    try {
+      actualMicro = computeCostMicroUsd(model, accumulatorToUsage(accumulator));
+    } catch (e) {
+      console.error('Post-stream cost computation failed:', e);
+      return;
+    }
+
+    if (isCapped(tier)) {
       try {
-        const actualMicro = computeCostMicroUsd(model, accumulatorToUsage(accumulator));
         const deltaMicro = actualMicro - projected;
         await sql`
           UPDATE user_api_usage
@@ -906,8 +1135,23 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
       } catch (e) {
         console.error('Post-stream reconcile failed:', e);
       }
-    })());
-  }
+    }
+
+    // Per-message attribution: populate logging_messages.cost_micro_usd so
+    // per-chart cost queries can JOIN + SUM without a separate aggregate. Only
+    // runs if the client passed X-Logging-Message-Id. Fire-and-forget.
+    if (loggingMessageId && actualMicro > 0n) {
+      try {
+        await sql`
+          UPDATE logging_messages
+          SET cost_micro_usd = ${actualMicro.toString()}::bigint
+          WHERE message_id = ${loggingMessageId}
+        `;
+      } catch (e) {
+        console.error('logging_messages cost update failed (non-fatal):', e);
+      }
+    }
+  })());
 
   return new Response(keepaliveStream, {
     status: 200,
