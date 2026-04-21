@@ -15,6 +15,9 @@ import { handler as loggingSaveMessage } from './api/logging-saveMessage';
 import { handler as loggingSaveSnapshot } from './api/logging-saveSnapshot';
 import { handler as loggingReportError } from './api/logging-reportError';
 import { handler as loggingPreference } from './api/logging-preference';
+import { handler as usage } from './api/usage';
+import { handler as byokKey } from './api/byok-key';
+import { handler as validateByok } from './api/validate-byok';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
 type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
@@ -37,6 +40,9 @@ const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/logging-saveSnapshot', loggingSaveSnapshot],
   ['POST', '/api/logging-reportError', loggingReportError],
   ['*', '/api/logging-preference', loggingPreference],
+  ['GET', '/api/usage', usage],
+  ['*', '/api/byok-key', byokKey],
+  ['POST', '/api/validate-byok', validateByok],
 ];
 
 const corsHeaders: Record<string, string> = {
