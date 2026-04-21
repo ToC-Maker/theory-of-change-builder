@@ -7,8 +7,7 @@ import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 //   DELETE /api/chart-files?chart_id=X  -> bulk delete for Clear Chat
 //
 // The router dispatches by url.pathname + method; we split on the same axis
-// here. A third shape (DELETE /api/files/:file_id) lives in delete-file.ts
-// since the ownership rules differ.
+// here. Single-file deletion is handled inline (see deleteChart cascade).
 
 function extractFileIdFromFilesPath(pathname: string): string | null {
   const prefix = '/api/files/';
