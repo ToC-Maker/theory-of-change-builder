@@ -69,11 +69,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // own request-body ceiling (100 MB on standard plans), but checking here
   // returns a structured error payload instead of a transport-layer failure.
   //
-  // NOTE: the 100-page PDF ceiling (PDF_PAGE_LIMIT) is NOT enforced here.
-  // Server-side pdfjs parsing in a Worker is memory-bounded and fragile on
-  // corrupted inputs. The plan defers page-count validation to client-side
-  // fileParser.ts (U8). Anthropic itself also caps pages, so we're covered
-  // defense-in-depth.
+  // NOTE: per-PDF page count is NOT enforced here. Server-side pdfjs parsing
+  // in a Worker is memory-bounded and fragile on corrupted inputs; Anthropic
+  // itself caps pages upstream, which is sufficient.
   if (file.size > FILE_UPLOAD_LIMIT_BYTES) {
     return Response.json(
       { error: 'file_too_large', limit_bytes: FILE_UPLOAD_LIMIT_BYTES },

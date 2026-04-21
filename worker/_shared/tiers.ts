@@ -27,21 +27,13 @@ export const GLOBAL_MONTHLY_CAP_MICRO_USD = 100_000_000n;
 // letting a runaway stream blow through the per-user cap.
 export const KILL_SWITCH_MULTIPLIER = 1.2;
 
-// Request-body size limit (256 KB). Covers chat + graph JSON + context; anything
-// larger is almost certainly a misuse (whole-file paste, loop, etc.).
-export const BODY_SIZE_LIMIT_BYTES = 262_144;
+// Request-body size limit (32 MB). Matches Anthropic Messages API ceiling.
+// Enforced via streaming byte counter on the request body (not Content-Length),
+// so we stop reading as soon as we cross the threshold.
+export const BODY_SIZE_LIMIT_BYTES = 33_554_432;
 
 // Anthropic Files API upload ceiling (500 MB per file).
 export const FILE_UPLOAD_LIMIT_BYTES = 524_288_000;
-
-// Per-PDF page limit (Anthropic's documented cap on PDF vision).
-export const PDF_PAGE_LIMIT = 100;
-
-// Max concurrent PDFs attached to a single chat.
-export const PDFS_PER_CHAT_LIMIT = 5;
-
-// Aggregate file-attachment budget per chat (50 MB total across all files).
-export const TOTAL_CHAT_FILE_BYTES_LIMIT = 52_428_800;
 
 // Idempotency window for de-duplicating retried requests (seconds).
 export const IDEMPOTENCY_WINDOW_SECONDS = 60;
