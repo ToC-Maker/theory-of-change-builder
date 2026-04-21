@@ -162,11 +162,11 @@ Auth0 tokens refresh automatically, but invalid tokens silently fall back to ano
 - Token validated in backend via `verifyToken()` in `worker/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
 
-### PDF Parsing
-PDF parsing uses `pdfjs-dist` with web worker. If PDFs fail to parse:
-- Check worker path configured in `src/utils/fileParser.ts` (must use Vite `?url` import)
-- Verify PDF is not password-protected or corrupted
-- Check browser console for worker errors
+### PDF Handling
+PDFs are not parsed client-side. `src/utils/fileParser.ts` runs a lightweight
+header validation (size <=20 MB, pages <=100 via a `/Count` scan of the first
+500 KB) and returns an upload-intent signal. The caller uploads the binary to
+Anthropic's Files API and references it via a `document` content block.
 
 ### Local Development with Functions
 Run `npm run dev` in one terminal (Worker on :8787), then `npm run dev:vite` in another
