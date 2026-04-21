@@ -150,11 +150,25 @@ async function migrateUserIfNeeded(
     sql`UPDATE chart_permissions SET user_id = ${newUserId} WHERE user_id = ${oldUserId}`,
     sql`UPDATE chart_permissions SET granted_by = ${newUserId} WHERE granted_by = ${oldUserId}`,
 
-    // Merge token usage (PK on user_id) — add old total to new, then delete old row
-    sql`INSERT INTO user_token_usage (user_id, total_tokens_used)
-        SELECT ${newUserId}, total_tokens_used FROM user_token_usage WHERE user_id = ${oldUserId}
+    // Merge API usage (PK on user_id) — fold old row into new, then delete old row.
+    // Reads/writes user_api_usage; the legacy user_token_usage table is frozen
+    // (see freeze-user-token-usage.sql).
+    sql`INSERT INTO user_api_usage (user_id, input_tokens, output_tokens, cache_create_tokens,
+                                    cache_read_tokens, web_search_uses, cost_micro_usd,
+                                    first_activity_at, last_activity_at)
+        SELECT ${newUserId}, input_tokens, output_tokens, cache_create_tokens,
+               cache_read_tokens, web_search_uses, cost_micro_usd,
+               first_activity_at, last_activity_at
+        FROM user_api_usage WHERE user_id = ${oldUserId}
         ON CONFLICT (user_id) DO UPDATE SET
-          total_tokens_used = user_token_usage.total_tokens_used + EXCLUDED.total_tokens_used`,
-    sql`DELETE FROM user_token_usage WHERE user_id = ${oldUserId}`,
+          input_tokens        = user_api_usage.input_tokens + EXCLUDED.input_tokens,
+          output_tokens       = user_api_usage.output_tokens + EXCLUDED.output_tokens,
+          cache_create_tokens = user_api_usage.cache_create_tokens + EXCLUDED.cache_create_tokens,
+          cache_read_tokens   = user_api_usage.cache_read_tokens + EXCLUDED.cache_read_tokens,
+          web_search_uses     = user_api_usage.web_search_uses + EXCLUDED.web_search_uses,
+          cost_micro_usd      = user_api_usage.cost_micro_usd + EXCLUDED.cost_micro_usd,
+          first_activity_at   = LEAST(user_api_usage.first_activity_at, EXCLUDED.first_activity_at),
+          last_activity_at    = GREATEST(user_api_usage.last_activity_at, EXCLUDED.last_activity_at)`,
+    sql`DELETE FROM user_api_usage WHERE user_id = ${oldUserId}`,
   ]);
 }
