@@ -192,7 +192,11 @@ For Auth0 integration details or permission system changes, see `worker/_shared/
 
 ## Testing
 
-No formal test suite currently. Manual testing workflow:
+Run all worker-side unit tests: `npm test`. Tests live under `tests/worker/` and use vitest + `@cloudflare/vitest-pool-workers` to execute in a real Workers runtime. Watch mode: `npm run test:watch`.
+
+Current coverage: `computeCostMicroUsd`, tier predicates, AES-GCM BYOK key round-trip, Turnstile session-cookie HMAC. Add tests for new Worker helpers alongside the code.
+
+Manual testing is still needed for end-to-end flows (graph editing, permissions, AI streaming):
 1. Create chart → 2. Edit nodes/connections → 3. Share with different users → 4. Test permission flows
 
 ## Deployment
