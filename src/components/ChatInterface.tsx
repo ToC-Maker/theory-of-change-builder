@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
@@ -8,7 +8,6 @@ import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
-import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
@@ -251,9 +250,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   >(null);
 
   // Turnstile challenge token for anonymous requests. Re-issued on each
-  // successful challenge; cleared after use.
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  const [turnstileWidgetId, setTurnstileWidgetId] = useState<string | null>(null);
+  // successful challenge; cleared after send (or on expiry/error). Wired
+  // to streamMessage once U10 accepts the `turnstileToken` param.
+  const [, setTurnstileToken] = useState<string | null>(null);
 
   // BYOK panel state for 429/402 recovery and voluntary key entry.
   const [byokPanelMode, setByokPanelMode] = useState<'generate' | 'cap_reached' | 'voluntary' | null>(null);
