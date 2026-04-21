@@ -315,6 +315,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [conversationStarted, setConversationStarted] = useState(false);
   const [fullConversation, setFullConversation] = useState('');
   const [generatedGraphData, setGeneratedGraphData] = useState<any>(null);
+  // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
+  // list of {id, file_id} chips so the chip area can render them with the
+  // same AttachedFilesBar as Chat mode. Text/markdown files continue to be
+  // inlined via the existing `files` state.
+  const [generateAttachedChips, setGenerateAttachedChips] = useState<
+    Array<AttachedFile & { fileId?: string; raw?: File }>
+  >([]);
+  const generateAttachedFileIds = React.useMemo(
+    () =>
+      generateAttachedChips
+        .filter((f) => f.status === 'ready' && f.fileId)
+        .map((f) => f.fileId!) as string[],
+    [generateAttachedChips],
+  );
 
   // Search mode state
   const [searchQuery, setSearchQuery] = useState('');
@@ -1028,46 +1042,162 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   };
 
 
-  const handleFileUpload = async (selectedFiles: FileList) => {
-    const newFiles: UploadedFile[] = [];
-
-    for (let i = 0; i < selectedFiles.length; i++) {
-      const file = selectedFiles[i];
-      const uploadedFile: UploadedFile = {
-        file,
-        content: '',
-        status: 'reading'
-      };
-      newFiles.push(uploadedFile);
-    }
-
-    setFiles(prev => [...prev, ...newFiles]);
-
-    // Parse file contents using our new parser
-    for (let i = 0; i < newFiles.length; i++) {
-      const uploadedFile = newFiles[i];
-      try {
-        const result = await parseFile(uploadedFile.file);
-
-        if (result.success) {
-          uploadedFile.content = result.content;
-          uploadedFile.status = 'ready';
-        } else {
-          console.error('Error parsing file:', result.error);
-          uploadedFile.content = '';
-          uploadedFile.status = 'error';
-          uploadedFile.errorMessage = result.error;
-        }
-      } catch (error) {
-        console.error('Error reading file:', error);
-        uploadedFile.status = 'error';
+  // Upload a single PDF to the Files API. Returns the new file_id or throws.
+  // Shared by Chat and Generate modes: Chat tracks chips in chatAttachedFiles,
+  // Generate tracks them in generateAttachedChips. Returns early with an error
+  // message if the chart hasn't been saved yet (the worker requires chart_id).
+  const uploadPdfToFilesApi = useCallback(
+    async (
+      file: File,
+    ): Promise<{ file_id: string; filename: string; size_bytes: number; mime_type: string }> => {
+      if (!params.chartId && !params.editToken) {
+        throw new Error('Save the chart before attaching files');
       }
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('chart_id', params.chartId ?? params.editToken ?? '');
 
-      setFiles(prev => prev.map(f =>
-        f.file === uploadedFile.file ? uploadedFile : f
-      ));
-    }
-  };
+      const headers = await getAuthHeaders();
+      const response = await fetch('/api/upload-file', {
+        method: 'POST',
+        credentials: 'include',
+        headers, // multipart boundary set by the browser
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error ?? `Upload failed (${response.status})`);
+      }
+      return response.json();
+    },
+    [getAuthHeaders, params.chartId, params.editToken],
+  );
+
+  // Generate-mode file handler. Text files continue to be inlined via the
+  // existing `files` state (parseText-decoded on pick). PDFs route through
+  // the Files API: a chip in `generateAttachedChips` tracks the upload;
+  // `generateAttachedFileIds` is the list forwarded to streamMessage as
+  // document blocks, matching Chat mode.
+  const handleFileUpload = useCallback(
+    async (selectedFiles: FileList | File[]) => {
+      const list = Array.from(selectedFiles);
+      if (list.length === 0) return;
+
+      for (const file of list) {
+        const isPdf =
+          file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+        if (isPdf) {
+          const id = crypto.randomUUID();
+          setGenerateAttachedChips((prev) => [
+            ...prev,
+            {
+              id,
+              filename: file.name,
+              mimeType: file.type || 'application/pdf',
+              sizeBytes: file.size,
+              status: 'uploading',
+              raw: file,
+            },
+          ]);
+          try {
+            const data = await uploadPdfToFilesApi(file);
+            setGenerateAttachedChips((prev) =>
+              prev.map((f) =>
+                f.id === id
+                  ? {
+                      ...f,
+                      status: 'ready',
+                      fileId: data.file_id,
+                      filename: data.filename,
+                      mimeType: data.mime_type,
+                      sizeBytes: data.size_bytes,
+                    }
+                  : f,
+              ),
+            );
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Upload failed';
+            setGenerateAttachedChips((prev) =>
+              prev.map((f) =>
+                f.id === id ? { ...f, status: 'error', error: message } : f,
+              ),
+            );
+          }
+          continue;
+        }
+
+        // Text-like file: keep the legacy inline flow.
+        const uploadedFile: UploadedFile = { file, content: '', status: 'reading' };
+        setFiles((prev) => [...prev, uploadedFile]);
+        try {
+          const result = await parseFile(file);
+          if (result.success && result.kind === 'text') {
+            uploadedFile.content = result.content;
+            uploadedFile.status = 'ready';
+          } else if (result.kind === 'error') {
+            console.error('Error parsing file:', result.error);
+            uploadedFile.content = '';
+            uploadedFile.status = 'error';
+            uploadedFile.errorMessage = result.error;
+          }
+        } catch (error) {
+          console.error('Error reading file:', error);
+          uploadedFile.status = 'error';
+        }
+        setFiles((prev) => prev.map((f) => (f.file === uploadedFile.file ? uploadedFile : f)));
+      }
+    },
+    [uploadPdfToFilesApi],
+  );
+
+  // Retry a failed Generate-mode PDF upload in place.
+  const handleGenerateFileRetry = useCallback(
+    (id: string) => {
+      // Snapshot the raw File and flip the chip back to 'uploading' before
+      // kicking the async upload. Doing the mutation + read in two steps
+      // keeps the state updater pure.
+      let file: File | undefined;
+      setGenerateAttachedChips((prev) => {
+        file = prev.find((f) => f.id === id)?.raw;
+        if (!file) return prev;
+        return prev.map((f) =>
+          f.id === id ? { ...f, status: 'uploading', error: undefined } : f,
+        );
+      });
+      if (!file) return;
+
+      void (async () => {
+        try {
+          const data = await uploadPdfToFilesApi(file);
+          setGenerateAttachedChips((cur) =>
+            cur.map((f) =>
+              f.id === id
+                ? {
+                    ...f,
+                    status: 'ready',
+                    fileId: data.file_id,
+                    filename: data.filename,
+                    mimeType: data.mime_type,
+                    sizeBytes: data.size_bytes,
+                  }
+                : f,
+            ),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Upload failed';
+          setGenerateAttachedChips((cur) =>
+            cur.map((f) => (f.id === id ? { ...f, status: 'error', error: message } : f)),
+          );
+        }
+      })();
+    },
+    [uploadPdfToFilesApi],
+  );
+
+  const handleGenerateFileRemove = useCallback((id: string) => {
+    setGenerateAttachedChips((prev) => prev.filter((f) => f.id !== id));
+  }, []);
 
   const removeFile = (fileToRemove: File) => {
     setFiles(prev => prev.filter(f => f.file !== fileToRemove));
@@ -1102,14 +1232,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const id = existingId ?? crypto.randomUUID();
       const parsed = await parseFile(file);
 
-      if (parsed.kind === 'error' || parsed.success === false) {
+      if (parsed.kind === 'error') {
         upsertChip(id, {
           id,
           filename: file.name,
           mimeType: file.type || 'application/octet-stream',
           sizeBytes: file.size,
           status: 'error',
-          error: parsed.kind === 'error' ? parsed.error : 'Failed to parse file',
+          error: parsed.error,
           kind: 'text',
           raw: file,
         });
@@ -1144,34 +1274,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       });
 
       try {
-        if (!params.chartId && !params.editToken) {
-          // The worker requires a chart_id so the file can be associated
-          // with a specific chart (and cleaned up via chart-files DELETE).
-          // Without one (e.g. on the root / create page pre-save), we'd
-          // strand the uploaded file. Reject upfront with a clear message.
-          throw new Error('Save the chart before attaching files');
-        }
-        const formData = new FormData();
-        formData.append('file', file);
-        // `chart_id` in the upload endpoint is the chart's chart_id (not
-        // the edit token). Prefer chartId; fall back to edit token (the
-        // worker resolves either in U4).
-        formData.append('chart_id', params.chartId ?? params.editToken ?? '');
-
-        const headers = await getAuthHeaders();
-        const response = await fetch('/api/upload-file', {
-          method: 'POST',
-          credentials: 'include',
-          headers, // let the browser set multipart boundary
-          body: formData,
-        });
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          throw new Error(errorBody?.error ?? `Upload failed (${response.status})`);
-        }
-        const data: { file_id: string; filename: string; size_bytes: number; mime_type: string } =
-          await response.json();
-
+        const data = await uploadPdfToFilesApi(file);
         setChatAttachedFiles((prev) =>
           prev.map((f) =>
             f.id === id
@@ -1195,7 +1298,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         );
       }
     },
-    [getAuthHeaders, params.chartId, params.editToken, upsertChip],
+    [uploadPdfToFilesApi, upsertChip],
   );
 
   const handleChatFileSelect = useCallback(
@@ -1245,7 +1348,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   };
 
   const startGeneration = async () => {
-    if (files.filter(f => f.status === 'ready').length === 0) {
+    const readyTextFiles = files.filter((f) => f.status === 'ready').length;
+    const readyPdfFiles = generateAttachedFileIds.length;
+    if (readyTextFiles + readyPdfFiles === 0) {
+      return;
+    }
+    // Block on in-flight PDF uploads so the request doesn't race the file_id.
+    if (generateAttachedChips.some((f) => f.status === 'uploading')) {
       return;
     }
 
@@ -1420,7 +1529,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       customSystemPrompt,
       highlightedNodes,
       extendedThinkingEnabled: true,
-      attachedFileIds: [], // Generate-mode PDF uploads via the Files API land in a follow-up commit.
+      attachedFileIds: generateAttachedFileIds,
       idempotencyKey: crypto.randomUUID(), // fresh per send: dedupes browser reload / double-click
       chartId: params.chartId ?? params.editToken,
       loggingMessageId: userMessageId,
@@ -1744,6 +1853,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </p>
                 </div>
 
+                {/* Generate-mode PDF chips (Files API uploads). */}
+                {generateAttachedChips.length > 0 && (
+                  <AttachedFilesBar
+                    files={generateAttachedChips}
+                    onRemove={handleGenerateFileRemove}
+                    onRetry={handleGenerateFileRetry}
+                  />
+                )}
+
                 {/* Uploaded Files */}
                 {files.length > 0 && (
                   <div className="space-y-2">
@@ -1813,7 +1931,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 {hasKey && verified ? (
                   <button
                     onClick={startGeneration}
-                    disabled={files.filter(f => f.status === 'ready').length === 0 || isLoading}
+                    disabled={
+                      files.filter((f) => f.status === 'ready').length +
+                        generateAttachedFileIds.length ===
+                        0 ||
+                      generateAttachedChips.some((f) => f.status === 'uploading') ||
+                      isLoading
+                    }
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {isLoading ? (
@@ -1828,7 +1952,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </>
                     )}
                   </button>
-                ) : files.filter((f) => f.status === 'ready').length > 0 ? (
+                ) : files.filter((f) => f.status === 'ready').length +
+                    generateAttachedFileIds.length >
+                  0 ? (
                   <ByokPanel
                     mode="generate"
                     costEstimate={(() => {
