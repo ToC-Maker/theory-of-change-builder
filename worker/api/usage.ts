@@ -2,16 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { LIFETIME_CAP_USD, GLOBAL_MONTHLY_CAP_USD, tierFor } from '../_shared/tiers';
-
-async function hashIP(ip: string, salt: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(salt), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ip));
-  return Array.from(new Uint8Array(sig))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+import { hashIP } from '../_shared/anon-id';
 
 function microToUsd(micro: bigint | number | null | undefined): number {
   if (micro === null || micro === undefined) return 0;

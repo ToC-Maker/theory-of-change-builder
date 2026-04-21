@@ -3,6 +3,7 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
+import { hashIP, extractIP } from '../_shared/anon-id';
 import {
   computeCostMicroUsd,
   RATES_MICRO_USD_PER_TOKEN,
@@ -62,24 +63,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const ANTHROPIC_BETA = 'files-api-2025-04-14';
 const DEFAULT_MODEL = 'claude-opus-4-7';
 
-// --- Helpers: IP / JSON / HTTP ------------------------------------------
-
-async function hashIP(ip: string, salt: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(salt), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ip));
-  return Array.from(new Uint8Array(sig))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function extractIP(request: Request): string {
-  return request.headers.get('cf-connecting-ip')
-    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown';
-}
+// --- Helpers: JSON / HTTP -----------------------------------------------
 
 function jsonError(
   body: Record<string, unknown>,

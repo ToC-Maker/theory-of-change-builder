@@ -2,14 +2,10 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
+import { anonIdFor } from '../_shared/anon-id';
 
-// Compute an actor-id for the user_id column. Auth0 sub if present,
-// otherwise `anon-<hmac(cfConnectingIp, IP_HASH_SALT)>` — same shape used by
-// anthropic-stream.ts. Anon IDs are stable per IP (hashed) for join/cleanup.
-async function resolveActorId(
-  request: Request,
-  env: Env
-): Promise<string> {
+// Auth0 sub if the token verifies, otherwise the shared anon-id shape.
+async function resolveActorId(request: Request, env: Env): Promise<string> {
   const token = extractToken(request.headers.get('authorization'));
   if (token) {
     try {
@@ -23,23 +19,8 @@ async function resolveActorId(
     }
   }
 
-  const ip = request.headers.get('cf-connecting-ip')
-    || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown';
   try {
-    const key = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(env.IP_HASH_SALT),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
-    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ip));
-    const hex = Array.from(new Uint8Array(sig))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    return `anon-${hex}`;
+    return await anonIdFor(request, env.IP_HASH_SALT);
   } catch (err) {
     console.error('[upload-file] Failed to hash IP:', err);
     return 'anon-unknown';
