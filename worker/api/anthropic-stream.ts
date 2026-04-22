@@ -300,11 +300,20 @@ async function estimateProjectedCost(
     };
   }
 
-  // count_tokens rejects streaming-only fields; strip them. Everything else
-  // (messages, system, tools, etc.) is accepted verbatim.
-  const countBody: Record<string, unknown> = { ...body };
-  delete countBody.stream;
-  delete countBody.metadata;
+  // count_tokens only accepts a narrow subset of /v1/messages fields
+  // (messages, model, system, tools, tool_choice, thinking, output_config,
+  // cache_control — per the API reference). Anything else (notably
+  // `max_tokens`, `stream`, `metadata`, `temperature`, `top_p`, `top_k`,
+  // `stop_sequences`) returns 400. Whitelist instead of blacklist so we
+  // don't silently break whenever the client adds a new field.
+  const COUNT_TOKENS_ALLOWED = new Set([
+    'messages', 'model', 'system', 'tools', 'tool_choice',
+    'thinking', 'output_config', 'cache_control',
+  ]);
+  const countBody: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (COUNT_TOKENS_ALLOWED.has(k)) countBody[k] = v;
+  }
 
   let resp: Response;
   try {
