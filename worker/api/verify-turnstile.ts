@@ -61,7 +61,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'turnstile_failed' }, { status: 401 });
   }
 
-  const anonId = `anon-${await hashIP(ip, env.IP_HASH_SALT)}`;
+  // Bind the cookie to the raw IP-hash. `anthropic-stream.ts` recomputes
+  // the same raw hash (no `anon-` prefix) and checks equality; adding a
+  // prefix here would fail every verify and re-challenge the widget on
+  // each request.
+  const anonId = await hashIP(ip, env.IP_HASH_SALT);
   const cookieValue = await signTurnstileCookie(anonId, env.IP_HASH_SALT, 86400);
 
   const headers = new Headers({ 'content-type': 'application/json' });
