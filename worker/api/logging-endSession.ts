@@ -2,10 +2,11 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { isUserOptedOut } from '../_shared/logging-optout';
+import { ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES } from '../../shared/anthropic-limits';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   const text = await request.text();
-  if (new TextEncoder().encode(text).length > 10_000) {
+  if (new TextEncoder().encode(text).length > ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES) {
     return Response.json({ error: 'Payload too large' }, { status: 413 });
   }
 

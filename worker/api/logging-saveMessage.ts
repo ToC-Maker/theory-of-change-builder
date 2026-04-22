@@ -2,6 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { isUserOptedOut } from '../_shared/logging-optout';
+import { ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES } from '../../shared/anthropic-limits';
 
 interface SaveMessageRequest {
   session_id: string;
@@ -15,11 +16,10 @@ interface SaveMessageRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  // Reject oversized payloads (content max 1MB + overhead — matches the
-  // snapshot payload ceiling). If Claude accepted a user paste via
-  // anthropic-stream, we should be able to log it too.
+  // Single payload ceiling matches Anthropic's Messages API request cap
+  // (32 MB). If anthropic-stream accepted it, we log it.
   const text = await request.text();
-  if (new TextEncoder().encode(text).length > 1_100_000) {
+  if (new TextEncoder().encode(text).length > ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES) {
     return Response.json({ error: 'Payload too large' }, { status: 413 });
   }
 
@@ -46,10 +46,6 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // rejecting loudly rather than recording as an empty row.
     if (typeof data.content !== 'string' || data.content.length === 0) {
       return Response.json({ error: 'content must be a non-empty string' }, { status: 400 });
-    }
-
-    if (new TextEncoder().encode(data.content).length > 1_000_000) {
-      return Response.json({ error: 'content exceeds 1MB limit' }, { status: 413 });
     }
 
     const token = extractToken(request.headers.get('authorization'));

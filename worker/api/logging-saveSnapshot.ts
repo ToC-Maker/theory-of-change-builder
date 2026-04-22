@@ -2,6 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { isUserOptedOut } from '../_shared/logging-optout';
+import { ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES } from '../../shared/anthropic-limits';
 
 interface SaveSnapshotRequest {
   session_id: string;
@@ -15,9 +16,9 @@ interface SaveSnapshotRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  // Reject oversized payloads (graph_data max 1MB + overhead)
+  // Single payload ceiling matches Anthropic's Messages API request cap.
   const text = await request.text();
-  if (new TextEncoder().encode(text).length > 1_500_000) {
+  if (new TextEncoder().encode(text).length > ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES) {
     return Response.json({ error: 'Payload too large' }, { status: 413 });
   }
 
@@ -36,21 +37,6 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     const validEditTypes = ['ai_edit', 'manual_edit', 'undo', 'redo', 'initial'];
     if (!validEditTypes.includes(data.edit_type)) {
       return Response.json({ error: 'Invalid edit_type' }, { status: 400 });
-    }
-
-    const encoder = new TextEncoder();
-    if (encoder.encode(JSON.stringify(data.graph_data)).length > 1_000_000) {
-      return Response.json({ error: 'graph_data exceeds 1MB limit' }, { status: 413 });
-    }
-
-    if (data.edit_instructions) {
-      if (encoder.encode(JSON.stringify(data.edit_instructions)).length > 100_000) {
-        return Response.json({ error: 'edit_instructions exceeds 100KB limit' }, { status: 413 });
-      }
-    }
-
-    if (data.error_message && encoder.encode(data.error_message).length > 10_000) {
-      return Response.json({ error: 'error_message exceeds 10KB limit' }, { status: 413 });
     }
 
     const token = extractToken(request.headers.get('authorization'));

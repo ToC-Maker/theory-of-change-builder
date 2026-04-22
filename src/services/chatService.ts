@@ -9,6 +9,7 @@ import {
   MODEL_OUTPUT_RATES_USD_PER_MTOK,
   WEB_SEARCH_USD_PER_USE,
 } from '../utils/cost';
+import { MODEL_CAPABILITIES } from '../../shared/pricing';
 
 export interface ChatMessage {
   id: string;
@@ -639,10 +640,13 @@ class ChatService {
         };
       });
 
-      // Create request body for streaming API
+      // Create request body for streaming API. max_tokens is per-model
+      // (Opus 128K, Sonnet/Haiku 64K) — sourced from shared/pricing.ts so
+      // it stays in sync with the models-overview docs.
+      const maxOutputTokens = MODEL_CAPABILITIES[model]?.max_output_tokens ?? 64_000;
       requestBody = {
         model,
-        max_tokens: 128000,
+        max_tokens: maxOutputTokens,
         system: [{
           type: "text",
           text: systemPrompt,
@@ -663,9 +667,10 @@ class ChatService {
         requestBody.cache_control = { type: 'ephemeral' };
       }
 
-      // Opus 4.7 accepts an output_config with effort levels; other models
-      // reject the field, so it's only set for claude-opus-4-7.
-      if (model === 'claude-opus-4-7') {
+      // Some models accept an output_config.effort; others reject the field.
+      // Capability flag lives in shared/pricing.ts so it stays in sync with
+      // the models-overview docs.
+      if (MODEL_CAPABILITIES[model]?.supports_output_config_effort) {
         requestBody.output_config = { effort: 'xhigh' };
       }
 

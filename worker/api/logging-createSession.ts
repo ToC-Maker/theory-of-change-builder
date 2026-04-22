@@ -2,6 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { isUserOptedOut } from '../_shared/logging-optout';
+import { ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES } from '../../shared/anthropic-limits';
 
 interface CreateSessionRequest {
   session_id: string;
@@ -10,9 +11,9 @@ interface CreateSessionRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  // Reject oversized payloads
+  // Single payload ceiling matches Anthropic's Messages API request cap.
   const text = await request.text();
-  if (new TextEncoder().encode(text).length > 10_000) {
+  if (new TextEncoder().encode(text).length > ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES) {
     return Response.json({ error: 'Payload too large' }, { status: 413 });
   }
 
@@ -28,10 +29,6 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     if (!session_id || !chart_id) {
       return Response.json({ error: 'session_id and chart_id required' }, { status: 400 });
-    }
-
-    if (user_agent && new TextEncoder().encode(user_agent).length > 1_024) {
-      return Response.json({ error: 'user_agent exceeds 1KB limit' }, { status: 413 });
     }
 
     const token = extractToken(request.headers.get('authorization'));
