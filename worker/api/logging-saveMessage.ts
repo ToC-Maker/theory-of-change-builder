@@ -12,6 +12,11 @@ interface SaveMessageRequest {
   usage_input_tokens?: number;
   usage_output_tokens?: number;
   usage_total_tokens?: number;
+  // Client signal for legitimate empty-after-cleaning assistant content.
+  // Current single value 'edit_instructions' = the model replied with only
+  // an [EDIT_INSTRUCTIONS] block that cleanResponseContent stripped. Add
+  // new values (e.g. tool_use) as other content-stripping cases appear.
+  content_strip_reason?: 'edit_instructions';
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -29,12 +34,33 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    if (!data.session_id || !data.message_id || !data.chart_id || !data.role || !data.content) {
+    if (!data.session_id || !data.message_id || !data.chart_id || !data.role) {
       return Response.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
     if (data.role !== 'user' && data.role !== 'assistant') {
       return Response.json({ error: 'Invalid role. Must be "user" or "assistant"' }, { status: 400 });
+    }
+
+    // Content must be a string. Empty strings are rejected UNLESS it's an
+    // assistant message whose raw reply was stripped to "" for a declared
+    // reason (currently only 'edit_instructions' — model replied with only
+    // an [EDIT_INSTRUCTIONS] block). The row is kept so
+    // logging_snapshots.triggered_by_message_id FKs resolve; the edit
+    // payload lives in logging_snapshots.edit_instructions, not here.
+    if (typeof data.content !== 'string') {
+      return Response.json({ error: 'content must be a string' }, { status: 400 });
+    }
+    if (data.content.length === 0) {
+      if (data.role === 'user') {
+        return Response.json({ error: 'user messages require non-empty content' }, { status: 400 });
+      }
+      if (data.content_strip_reason !== 'edit_instructions') {
+        return Response.json(
+          { error: 'empty assistant content requires content_strip_reason' },
+          { status: 400 },
+        );
+      }
     }
 
     if (new TextEncoder().encode(data.content).length > 100_000) {

@@ -548,15 +548,14 @@ class LoggingServiceClass {
     usage_input_tokens?: number;
     usage_output_tokens?: number;
     usage_total_tokens?: number;
+    content_strip_reason?: 'edit_instructions';
   }): Promise<void> {
     if (!this.isLoggingEnabled()) return;
 
-    // Server rejects empty content with a generic 400 (line 32: `!data.content`
-    // is true for empty strings). Skip client-side so the circuit breaker
-    // doesn't count a cosmetic failure. Callers hitting this are usually
-    // assistant messages that finished with zero streamed content after an
-    // upstream error.
-    if (!data.content) return;
+    // Empty content is legal for assistant messages — the model may reply
+    // with only an [EDIT_INSTRUCTIONS] block that cleanResponseContent
+    // strips. Those rows still matter for the audit trail and for the
+    // logging_snapshots.triggered_by_message_id FK.
 
     // If a session initialization is in flight (typical on first load —
     // initializeSession is fired from App.tsx but not awaited), wait for
@@ -603,6 +602,10 @@ class LoggingServiceClass {
     content: string;
     chartId?: string;
     tokenUsage?: { input_tokens?: number; output_tokens?: number };
+    /** Set when an assistant reply cleaned to "" because only an
+     * [EDIT_INSTRUCTIONS] block was emitted; required by the server
+     * to accept empty assistant content. */
+    contentStripReason?: 'edit_instructions';
   }): void {
     const chartId = params.chartId ?? this.currentChartId ?? this.initializingChartId;
     if (!chartId) return;
@@ -612,6 +615,7 @@ class LoggingServiceClass {
       chart_id: chartId,
       role: params.role,
       content: params.content,
+      content_strip_reason: params.contentStripReason,
       usage_input_tokens: params.tokenUsage?.input_tokens,
       usage_output_tokens: params.tokenUsage?.output_tokens,
       usage_total_tokens: params.tokenUsage

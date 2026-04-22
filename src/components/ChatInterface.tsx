@@ -1051,7 +1051,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }
             setStreamingContent(fullContent);
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any, rawMessage?: string) => {
+          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
           const assistantMessage: ChatMessage = {
             id: assistantMessageId,
             role: 'assistant',
@@ -1078,15 +1078,18 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // Refresh the usage progress bar after the server-side tally lands.
           void refreshUsage();
 
-          // Log assistant message (fire and forget). Use the raw streamed
-          // content rather than the cleaned one — cleanResponseContent()
-          // strips [EDIT_INSTRUCTIONS] blocks, and an edit-only response
-          // would otherwise log as empty (server 400s on that), breaking
-          // the FK that saveSnapshot.triggered_by_message_id relies on.
+          // Log assistant message (fire and forget). Content may be empty
+          // when the model replied with only an [EDIT_INSTRUCTIONS] block;
+          // declare contentStripReason so the server keeps the row (needed
+          // for logging_snapshots.triggered_by_message_id FK). Edit
+          // payload lives in logging_snapshots.edit_instructions, not here.
+          const hasEditsStrip =
+            finalMessage.length === 0 && !!editInstructions && editInstructions.length > 0;
           loggingService.logUserMessage({
             messageId: assistantMessageId,
             role: 'assistant',
-            content: rawMessage ?? finalMessage,
+            content: finalMessage,
+            contentStripReason: hasEditsStrip ? 'edit_instructions' : undefined,
             tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
           });
 
