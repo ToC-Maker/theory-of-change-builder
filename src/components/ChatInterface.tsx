@@ -322,6 +322,28 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Running cost for the in-flight assistant turn (updated via onCostUpdate).
   const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
 
+  // Derived cap-gate flags, computed from the cached usage snapshot +
+  // latest composer estimate. Two distinct cases:
+  //
+  //   capAlreadyReached: the user's prior cumulative usage is already at
+  //     or over the free-tier cap. Nothing they can send will succeed;
+  //     only BYOK unlocks new turns.
+  //
+  //   wouldExceedCap: prior usage is under the cap but the projected cost
+  //     of the in-flight draft would push it over. Sending this specific
+  //     message would fail the server's reservation; we block client-side
+  //     to avoid the round-trip (and the confusing Turnstile-before-cap
+  //     ordering on the server).
+  //
+  // BYOK tier skips both — they're self-funded. 'unlimited' likewise.
+  const capped = usage != null && usage.tier !== 'byok' && usage.tier !== 'unlimited';
+  const capAlreadyReached = capped && usage.used_usd >= usage.limit_usd;
+  const wouldExceedCap =
+    capped &&
+    !capAlreadyReached &&
+    composerEstimateUsd > 0 &&
+    usage.used_usd + composerEstimateUsd > usage.limit_usd;
+
 
   // Pre-send cost estimates (input-only lower bound from count_tokens).
   // Separate slots so the Chat composer estimate and the Generate panel
@@ -1026,6 +1048,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // the request but the files wouldn't be attached; better to fail loud
     // client-side.
     if (chatAttachedFiles.some((f) => f.status === 'uploading')) return;
+
+    // Block client-side when we already know the send will fail the
+    // server's reservation. Avoids the round-trip, and more importantly
+    // avoids the Turnstile-checks-first race where the user sees a
+    // Turnstile re-challenge instead of the BYOK path they actually need.
+    // UI already renders a warning + BYOK panel in this state; the send
+    // button is also disabled, this is a defense-in-depth guard.
+    if (capAlreadyReached || wouldExceedCap) return;
 
     // Generate UUIDs for message logging
     const userMessageId = crypto.randomUUID();
@@ -2524,6 +2554,48 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                     </div>
                   ) : null}
+                  {/* Blocking cap warning. Two distinct cases:
+                        - capAlreadyReached: prior cumulative usage already at
+                          or over the cap; no sends possible without BYOK.
+                        - wouldExceedCap: under cap but this draft's estimate
+                          would push over. Message-specific framing so users
+                          understand "this one is too big" vs "you're out."
+                      Composer and send button stay visible but disabled; the
+                      inline BYOK panel is the unblock path. */}
+                  {capAlreadyReached ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                        You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}.
+                        Add your Anthropic API key to keep going.
+                      </div>
+                      <ByokPanel
+                        mode="cap_reached"
+                        onSubmitted={() => {
+                          setCostErrorBanner(null);
+                          void refreshUsage();
+                        }}
+                      />
+                    </div>
+                  ) : wouldExceedCap ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                        This message (estimated{' '}
+                        <strong>{formatCostUsd(composerEstimateUsd)}</strong> input) would
+                        take you over the free quota of{' '}
+                        <strong>{formatCostUsd(usage!.limit_usd)}</strong> —{' '}
+                        {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}{' '}
+                        left. Add your Anthropic API key to send it, or shorten it below
+                        the remaining budget.
+                      </div>
+                      <ByokPanel
+                        mode="cap_reached"
+                        onSubmitted={() => {
+                          setCostErrorBanner(null);
+                          void refreshUsage();
+                        }}
+                      />
+                    </div>
+                  ) : null}
                   {/* First-upload privacy notice. Shown on the first chip
                       attachment in either mode; dismissed for good via the
                       localStorage flag. */}
@@ -2687,7 +2759,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           // paste, inputValue.trim() would allocate a full
                           // copy of the string on every render. Whitespace-
                           // only input still gets rejected at send-time.
-                          disabled={inputValue.length === 0 || isLoading}
+                          // capAlreadyReached / wouldExceedCap disable here
+                          // as a visual cue; handleSendMessage also early-
+                          // returns on both.
+                          disabled={inputValue.length === 0 || isLoading || capAlreadyReached || wouldExceedCap}
                           className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           title="Send message"
                         >
