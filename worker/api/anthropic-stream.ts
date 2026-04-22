@@ -3,7 +3,7 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
-import { hashIP, extractIP } from '../_shared/anon-id';
+import { resolveAnonActor } from '../_shared/anon-id';
 import {
   computeCostMicroUsd,
   RATES_MICRO_USD_PER_TOKEN,
@@ -159,7 +159,7 @@ async function readBodyWithSizeClamp(
 // --- Actor / tier resolution --------------------------------------------
 
 type ActorResult =
-  | { ok: true; actorId: string; authenticated: boolean }
+  | { ok: true; actorId: string; authenticated: boolean; anonSetCookie?: string }
   | { ok: false; response: Response };
 
 // Email verification is enforced upstream in Auth0 via a Post-Login Action
@@ -186,16 +186,22 @@ async function resolveActor(
     return { ok: true, actorId: decoded.sub, authenticated: true };
   }
 
-  // Anonymous path: hash the CF-attested IP under our salt.
-  let actorId: string;
+  // Anonymous path: cookie-first identity (stable UUID), IP-hash fallback
+  // on first visit so cookie-blocking clients still get rate-limit coherence.
+  // If resolveAnonActor returns a Set-Cookie header, surface it so the final
+  // response persists the UUID going forward.
   try {
-    const ip = extractIP(request);
-    actorId = `anon-${await hashIP(ip, env.IP_HASH_SALT)}`;
+    const resolved = await resolveAnonActor(request, env);
+    return {
+      ok: true,
+      actorId: resolved.userId,
+      authenticated: false,
+      anonSetCookie: resolved.setCookieHeader,
+    };
   } catch (e) {
-    console.error('Failed to hash IP for anonymous actor:', e);
-    actorId = 'anon-unknown';
+    console.error('Failed to resolve anonymous actor:', e);
+    return { ok: true, actorId: 'anon-unknown', authenticated: false };
   }
-  return { ok: true, actorId, authenticated: false };
 }
 
 // --- Turnstile session cookie ------------------------------------------
@@ -205,18 +211,19 @@ type TurnstileResult = 'ok' | 'missing' | 'expired' | 'ip_mismatch' | 'invalid' 
 /**
  * Verify the Turnstile session cookie issued by POST /api/verify-turnstile.
  *
- * The cookie carries the anon_id (hmac(cf-connecting-ip, IP_HASH_SALT)) it was
- * minted for. On every anon request here we re-derive the caller's anon_id from
- * the current cf-connecting-ip and require it to match — moving IPs
- * invalidates the cookie so a single solved challenge can't be replayed across
- * IPs. TTL is enforced by the `exp` field inside the signed payload.
+ * The cookie carries the anon_id the session was minted for. Identity is
+ * now cookie-pinned (UUID) rather than IP-hash, so IP changes no longer
+ * invalidate the cookie — binding moves with the actor rather than with
+ * the network. TTL is enforced by the `exp` field inside the signed
+ * payload; cookie-cleared clients get a fresh identity + fresh challenge.
  *
- * When TURNSTILE_SECRET_KEY is unset (local dev / pre-launch), skip the check
- * entirely so the anon path still works.
+ * When TURNSTILE_SECRET_KEY is unset (local dev / pre-launch), skip the
+ * check entirely so the anon path still works.
  */
 async function verifyTurnstileFromCookie(
   request: Request,
   env: Env,
+  actorId: string,
 ): Promise<TurnstileResult> {
   if (!env.TURNSTILE_SECRET_KEY) {
     console.warn('Turnstile not configured; skipping anon session-cookie check');
@@ -226,14 +233,10 @@ async function verifyTurnstileFromCookie(
   const cookieValue = extractTurnstileCookie(request.headers.get('cookie'));
   if (!cookieValue) return 'missing';
 
-  let expectedAnonId: string;
-  try {
-    expectedAnonId = await hashIP(extractIP(request), env.IP_HASH_SALT);
-  } catch (e) {
-    console.error('Turnstile cookie: failed to derive expected anon_id', e);
-    return 'invalid';
-  }
-
+  // Strip the 'anon-' prefix — Turnstile cookie payload binds to the raw
+  // identity value (matches verify-turnstile.ts:signTurnstileCookie's
+  // input).
+  const expectedAnonId = actorId.startsWith('anon-') ? actorId.slice(5) : actorId;
   return verifyTurnstileCookie(cookieValue, expectedAnonId, env.IP_HASH_SALT);
 }
 
@@ -917,6 +920,13 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   const actor = await resolveActor(request, env, altSvcHeaders);
   if (!actor.ok) return actor.response;
   const actorId = actor.actorId;
+  // If this was a first-visit anon user, pin them with a stable actor-id
+  // cookie so IP changes don't rotate their identity or their Turnstile
+  // session. Applied to every outbound response path below via
+  // altSvcHeaders (which feeds the final headers).
+  if (actor.anonSetCookie) {
+    altSvcHeaders['Set-Cookie'] = actor.anonSetCookie;
+  }
 
   const sql = getDb(env);
 
@@ -971,7 +981,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   // missing / expired / ip_mismatch / invalid all map to the same client UX:
   // solve a fresh challenge and retry.
   if (needTurnstile(tier)) {
-    const result = await verifyTurnstileFromCookie(request, env);
+    const result = await verifyTurnstileFromCookie(request, env, actorId);
     if (result !== 'ok' && result !== 'not-configured') {
       return jsonError({ error: 'turnstile_required' }, 401, altSvcHeaders);
     }

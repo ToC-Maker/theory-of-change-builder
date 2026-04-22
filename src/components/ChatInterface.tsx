@@ -768,6 +768,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       if (response.ok) {
         setHasTurnstileSession(true);
         setTurnstileError(null);
+        // Actor identity may have changed at the same time (IP flip or
+        // cookie renewal), which would mean a different row in
+        // user_api_usage. Refresh so the UI's usage bar + wouldExceedCap
+        // gate reflect the current identity, not the stale one.
+        void refreshUsage();
         return;
       }
       // Treat 401 turnstile_failed the same as any other non-200: keep the

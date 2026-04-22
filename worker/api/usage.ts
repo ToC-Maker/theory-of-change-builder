@@ -2,7 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { LIFETIME_CAP_USD, tierFor } from '../_shared/tiers';
-import { hashIP } from '../_shared/anon-id';
+import { resolveAnonActor } from '../_shared/anon-id';
 
 function microToUsd(micro: bigint | number | null | undefined): number {
   if (micro === null || micro === undefined) return 0;
@@ -32,16 +32,17 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     }
 
+    // Cookie-first anon identity resolution. Returns a setCookieHeader when
+    // this is the first visit for the browser — capture it so the response
+    // pins the UUID identity going forward.
+    let anonSetCookie: string | undefined;
     if (!userId) {
       try {
-        // cf-connecting-ip is authoritative on Cloudflare; fall back to spoofable headers.
-        const ip = request.headers.get('cf-connecting-ip')
-          || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-          || request.headers.get('x-real-ip')
-          || 'unknown';
-        userId = `anon-${await hashIP(ip, env.IP_HASH_SALT)}`;
+        const resolved = await resolveAnonActor(request, env);
+        userId = resolved.userId;
+        anonSetCookie = resolved.setCookieHeader;
       } catch (e) {
-        console.error('Failed to hash IP for anonymous usage lookup:', e);
+        console.error('Failed to resolve anonymous actor for usage lookup:', e);
         userId = 'anon-unknown';
       }
     }
@@ -68,11 +69,16 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // can't act on it, and the Anthropic Console cap is the authoritative hard
     // stop. Clients learn about exhaustion via the 402 `global_budget_exhausted`
     // response when a stream fails upstream.
-    return Response.json({
-      used_usd: microToUsd(userMicro),
-      limit_usd: LIFETIME_CAP_USD,
-      tier: tierFor(userId, hasByok),
-    });
+    const headers = new Headers({ 'content-type': 'application/json' });
+    if (anonSetCookie) headers.append('Set-Cookie', anonSetCookie);
+    return new Response(
+      JSON.stringify({
+        used_usd: microToUsd(userMicro),
+        limit_usd: LIFETIME_CAP_USD,
+        tier: tierFor(userId, hasByok),
+      }),
+      { status: 200, headers },
+    );
   } catch (error) {
     console.error('Error fetching usage:', error);
     return Response.json({ error: 'Failed to fetch usage' }, { status: 500 });

@@ -2,15 +2,20 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
-import { anonIdFor } from '../_shared/anon-id';
+import { resolveAnonActor } from '../_shared/anon-id';
 
-// Auth0 sub if the token verifies, otherwise the shared anon-id shape.
-async function resolveActorId(request: Request, env: Env): Promise<string> {
+// Auth0 sub if the token verifies, otherwise the cookie-pinned anon UUID
+// (with IP-hash fallback on first visit). setCookie is the Set-Cookie
+// header value to echo on the response if a fresh actor cookie was minted.
+async function resolveActorId(
+  request: Request,
+  env: Env,
+): Promise<{ userId: string; setCookie?: string }> {
   const token = extractToken(request.headers.get('authorization'));
   if (token) {
     try {
       const decoded = await verifyToken(token, env);
-      return decoded.sub;
+      return { userId: decoded.sub };
     } catch (err) {
       // Invalid token — fall through to anon. anthropic-stream.ts takes the
       // same posture: a bad token silently drops us into anon tracking, rather
@@ -20,10 +25,11 @@ async function resolveActorId(request: Request, env: Env): Promise<string> {
   }
 
   try {
-    return await anonIdFor(request, env.IP_HASH_SALT);
+    const resolved = await resolveAnonActor(request, env);
+    return { userId: resolved.userId, setCookie: resolved.setCookieHeader };
   } catch (err) {
-    console.error('[upload-file] Failed to hash IP:', err);
-    return 'anon-unknown';
+    console.error('[upload-file] Failed to resolve anon actor:', err);
+    return { userId: 'anon-unknown' };
   }
 }
 
@@ -69,7 +75,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'API key not configured' }, { status: 500 });
   }
 
-  const userId = await resolveActorId(request, env);
+  const { userId, setCookie: anonSetCookie } = await resolveActorId(request, env);
 
   // Forward the file to Anthropic. We rebuild the FormData rather than piping
   // the original — Workers' FormData instance is single-use (consumed above)
@@ -158,10 +164,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  return Response.json({
-    file_id: fileId,
-    filename,
-    size_bytes: sizeBytes,
-    mime_type: mimeType,
-  });
+  const headers = new Headers({ 'content-type': 'application/json' });
+  if (anonSetCookie) headers.append('Set-Cookie', anonSetCookie);
+  return new Response(
+    JSON.stringify({
+      file_id: fileId,
+      filename,
+      size_bytes: sizeBytes,
+      mime_type: mimeType,
+    }),
+    { status: 200, headers },
+  );
 }
