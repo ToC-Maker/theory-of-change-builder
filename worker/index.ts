@@ -47,7 +47,7 @@ const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/upload-file', uploadFile],
   ['GET', '/api/files/*', chartFiles],
   ['DELETE', '/api/chart-files', chartFiles],
-  ['POST', '/api/verify-turnstile', verifyTurnstile],
+  ['*', '/api/verify-turnstile', verifyTurnstile],
   ['POST', '/api/count-tokens-estimate', countTokensEstimate],
 ];
 

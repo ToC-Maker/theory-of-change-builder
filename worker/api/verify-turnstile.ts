@@ -1,5 +1,9 @@
 import type { Env } from '../_shared/types';
-import { signTurnstileCookie } from '../_shared/turnstile-cookie';
+import {
+  signTurnstileCookie,
+  verifyTurnstileCookie,
+  extractTurnstileCookie,
+} from '../_shared/turnstile-cookie';
 import { hashIP, extractIP } from '../_shared/anon-id';
 
 // POST /api/verify-turnstile — validates a Turnstile response token against
@@ -7,10 +11,28 @@ import { hashIP, extractIP } from '../_shared/anon-id';
 // to the caller's anon_id (hmac(cf-connecting-ip, IP_HASH_SALT)). The cookie
 // is later checked by /api/anthropic-stream to satisfy the anon-tier bot gate
 // without re-challenging Turnstile on every streamed request.
+//
+// GET /api/verify-turnstile — returns {valid: boolean} based on whether the
+// caller's existing tocb_anon cookie still verifies against the current IP.
+// Used by the client on mount so a returning visitor with a still-valid cookie
+// doesn't have to re-solve the widget.
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   if (!env.TURNSTILE_SECRET_KEY) {
     return Response.json({ error: 'turnstile_not_configured' }, { status: 501 });
+  }
+
+  if (request.method === 'GET') {
+    const cookieValue = extractTurnstileCookie(request.headers.get('cookie'));
+    if (!cookieValue) return Response.json({ valid: false });
+    try {
+      const expectedAnonId = await hashIP(extractIP(request), env.IP_HASH_SALT);
+      const status = await verifyTurnstileCookie(cookieValue, expectedAnonId, env.IP_HASH_SALT);
+      return Response.json({ valid: status === 'ok' });
+    } catch (err) {
+      console.error('[verify-turnstile] status check failed:', err);
+      return Response.json({ valid: false });
+    }
   }
 
   let body: { token?: unknown };

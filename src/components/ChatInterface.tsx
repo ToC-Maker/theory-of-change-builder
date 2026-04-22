@@ -633,6 +633,30 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, []);
 
+  // Page-load probe: ask the worker whether an existing tocb_anon cookie is
+  // still valid for this caller. The cookie is httpOnly so the client can't
+  // read it directly; this lets a returning anon visitor skip the widget for
+  // the remaining 24h window instead of re-solving on every refresh.
+  useEffect(() => {
+    if (isAuthenticated || !TURNSTILE_SITE_KEY) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch('/api/verify-turnstile', {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as { valid?: boolean };
+        if (data.valid) setHasTurnstileSession(true);
+      } catch {
+        // Fail-open: widget stays visible, user solves normally.
+      }
+    })();
+    return () => controller.abort();
+  }, [isAuthenticated]);
+
   // Turnstile: exchange the raw token for an httpOnly session cookie. After a
   // successful verify the widget is hidden (hasTurnstileSession=true) and the
   // browser rides the cookie on subsequent /api/anthropic-stream requests.
