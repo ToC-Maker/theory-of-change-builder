@@ -170,6 +170,7 @@ async function resolveActor(
   request: Request,
   env: Env,
   altSvcHeaders: Record<string, string>,
+  sql: ReturnType<typeof getDb>,
 ): Promise<ActorResult> {
   const token = extractToken(request.headers.get('authorization'));
 
@@ -186,12 +187,12 @@ async function resolveActor(
     return { ok: true, actorId: decoded.sub, authenticated: true };
   }
 
-  // Anonymous path: cookie-first identity (stable UUID), IP-hash fallback
-  // on first visit so cookie-blocking clients still get rate-limit coherence.
-  // If resolveAnonActor returns a Set-Cookie header, surface it so the final
-  // response persists the UUID going forward.
+  // Anonymous path: cookie-first identity (hmac-of-IP), with on-the-fly
+  // migration when the cookie's hash differs from the current IP hash.
+  // sql is passed so resolveAnonActor can migrate the user_api_usage row
+  // during an IP change instead of losing the cap.
   try {
-    const resolved = await resolveAnonActor(request, env);
+    const resolved = await resolveAnonActor(request, env, sql);
     return {
       ok: true,
       actorId: resolved.userId,
@@ -916,19 +917,18 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   const chartId = request.headers.get('x-chart-id');
   const loggingMessageId = request.headers.get('x-logging-message-id');
 
+  const sql = getDb(env);
+
   // Step 2: actor.
-  const actor = await resolveActor(request, env, altSvcHeaders);
+  const actor = await resolveActor(request, env, altSvcHeaders, sql);
   if (!actor.ok) return actor.response;
   const actorId = actor.actorId;
-  // If this was a first-visit anon user, pin them with a stable actor-id
-  // cookie so IP changes don't rotate their identity or their Turnstile
-  // session. Applied to every outbound response path below via
-  // altSvcHeaders (which feeds the final headers).
+  // If the anon resolver set or rewrote the actor cookie (first visit OR
+  // post-IP-change migration), echo the Set-Cookie on every response path
+  // below via altSvcHeaders.
   if (actor.anonSetCookie) {
     altSvcHeaders['Set-Cookie'] = actor.anonSetCookie;
   }
-
-  const sql = getDb(env);
 
   // Step 3: BYOK resolution.
   //

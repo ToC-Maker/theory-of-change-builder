@@ -4,12 +4,14 @@ import { verifyToken, extractToken } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
 import { resolveAnonActor } from '../_shared/anon-id';
 
-// Auth0 sub if the token verifies, otherwise the cookie-pinned anon UUID
-// (with IP-hash fallback on first visit). setCookie is the Set-Cookie
-// header value to echo on the response if a fresh actor cookie was minted.
+// Auth0 sub if the token verifies, otherwise the cookie-pinned anon id
+// (hmac-of-IP, migrated on IP change). setCookie is the Set-Cookie header
+// value to echo on the response when the resolver minted or rewrote the
+// cookie.
 async function resolveActorId(
   request: Request,
   env: Env,
+  sql: ReturnType<typeof getDb>,
 ): Promise<{ userId: string; setCookie?: string }> {
   const token = extractToken(request.headers.get('authorization'));
   if (token) {
@@ -25,7 +27,7 @@ async function resolveActorId(
   }
 
   try {
-    const resolved = await resolveAnonActor(request, env);
+    const resolved = await resolveAnonActor(request, env, sql);
     return { userId: resolved.userId, setCookie: resolved.setCookieHeader };
   } catch (err) {
     console.error('[upload-file] Failed to resolve anon actor:', err);
@@ -75,7 +77,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'API key not configured' }, { status: 500 });
   }
 
-  const { userId, setCookie: anonSetCookie } = await resolveActorId(request, env);
+  const sql = getDb(env);
+  const { userId, setCookie: anonSetCookie } = await resolveActorId(request, env, sql);
 
   // Forward the file to Anthropic. We rebuild the FormData rather than piping
   // the original — Workers' FormData instance is single-use (consumed above)
@@ -147,7 +150,6 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   const sizeBytes = upstreamJson.size_bytes ?? file.size;
 
   try {
-    const sql = getDb(env);
     await sql`
       INSERT INTO chart_files (file_id, chart_id, user_id, filename, size_bytes, mime_type)
       VALUES (${fileId}, ${chartId}, ${userId}, ${filename}, ${sizeBytes}, ${mimeType})

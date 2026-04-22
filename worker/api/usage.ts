@@ -32,13 +32,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     }
 
-    // Cookie-first anon identity resolution. Returns a setCookieHeader when
-    // this is the first visit for the browser — capture it so the response
-    // pins the UUID identity going forward.
+    const sql = getDb(env);
+
+    // Cookie-first anon identity. setCookieHeader is set when the resolver
+    // minted or rewrote the cookie (first visit or IP-change migration);
+    // surface it on the response.
     let anonSetCookie: string | undefined;
     if (!userId) {
       try {
-        const resolved = await resolveAnonActor(request, env);
+        const resolved = await resolveAnonActor(request, env, sql);
         userId = resolved.userId;
         anonSetCookie = resolved.setCookieHeader;
       } catch (e) {
@@ -46,8 +48,6 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         userId = 'anon-unknown';
       }
     }
-
-    const sql = getDb(env);
 
     const [userRows, byokRows] = await Promise.all([
       sql`
