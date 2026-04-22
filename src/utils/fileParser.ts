@@ -1,30 +1,57 @@
-import * as pdfjsLib from 'pdfjs-dist';
+/**
+ * File handling for chat uploads.
+ *
+ * Text-like files (txt, md, csv, json, xml, html, yaml, log, rtf) are read
+ * client-side and the extracted text is passed to the model inline.
+ *
+ * PDFs are NOT parsed client-side. We peek at the file header to extract
+ * lightweight metadata (size + page count) for display purposes and return
+ * an upload-intent signal; the caller is responsible for POSTing the binary
+ * to Anthropic's Files API and passing the resulting file_id as a `document`
+ * content block. Anthropic enforces its own ceilings (500 MB per file,
+ * 100 pages per document block), so we don't preempt those here.
+ */
 
-// Import the worker as a URL to avoid build issues
-// @ts-ignore
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min?url';
+const PDF_HEADER_SCAN_BYTES = 500 * 1024; // 500 KB — enough to find the root /Pages tree in most PDFs
 
-// Configure worker for pdfjs
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-
-export interface ParsedFile {
-  content: string;
-  success: boolean;
-  error?: string;
-}
+export type ParsedFile =
+  // Text files: content is already extracted and ready to inline into the prompt.
+  | { kind: 'text'; success: true; content: string; filename: string; sizeBytes: number }
+  // PDFs: binary must be uploaded to the Files API by the caller.
+  | {
+      kind: 'upload';
+      success: true;
+      content: '';
+      mimeType: 'application/pdf';
+      filename: string;
+      sizeBytes: number;
+      pageCount: number;
+    }
+  // Any parse/validation failure.
+  | { kind: 'error'; success: false; content: ''; error: string };
 
 /**
- * Parse a file and extract its text content
- * Supports PDF, TXT, MD, CSV and other text formats
+ * Dispatch a file to the right handler based on extension/MIME type.
  */
 export async function parseFile(file: File): Promise<ParsedFile> {
   const fileExtension = file.name.split('.').pop()?.toLowerCase();
+  const isPdf = file.type === 'application/pdf' || fileExtension === 'pdf';
 
   try {
-    switch (fileExtension) {
-      case 'pdf':
-        return await parsePDF(file);
+    if (isPdf) {
+      const { pageCount, sizeBytes } = await validatePdf(file);
+      return {
+        kind: 'upload',
+        success: true,
+        content: '',
+        mimeType: 'application/pdf',
+        filename: file.name,
+        sizeBytes,
+        pageCount,
+      };
+    }
 
+    switch (fileExtension) {
       case 'txt':
       case 'md':
       case 'markdown':
@@ -39,69 +66,59 @@ export async function parseFile(file: File): Promise<ParsedFile> {
       case 'rtf':
         return await parseText(file);
 
-      default:
+      default: {
         // Try to parse as text for unknown formats
         const result = await parseText(file);
         if (result.success && result.content.trim()) {
           return result;
         }
         return {
-          content: '',
+          kind: 'error',
           success: false,
-          error: `Unsupported file format: .${fileExtension}`
+          content: '',
+          error: `Unsupported file format: .${fileExtension}`,
         };
+      }
     }
   } catch (error) {
     return {
-      content: '',
+      kind: 'error',
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to parse file'
+      content: '',
+      error: error instanceof Error ? error.message : 'Failed to parse file',
     };
   }
 }
 
 /**
- * Parse PDF file and extract text content
+ * Lightweight PDF metadata parser (no PDF library required).
+ *
+ * Reads only the first ~500 KB of the file and scans for the root pages
+ * tree's `/Count` entry to infer page count. Page-count detection is a
+ * heuristic (PDFs can have nested page trees, linearization dictionaries,
+ * etc.) — the extracted value is useful for display, but this function does
+ * NOT validate or reject uploads. Anthropic's Files API enforces its own
+ * size and page-count ceilings at upload time.
  */
-async function parsePDF(file: File): Promise<ParsedFile> {
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+export async function validatePdf(
+  file: File,
+): Promise<{ pageCount: number; sizeBytes: number }> {
+  const sizeBytes = file.size;
 
-    let fullText = '';
-    const numPages = pdf.numPages;
+  const chunk = await file.slice(0, PDF_HEADER_SCAN_BYTES).arrayBuffer();
+  // latin1 decodes each byte 1:1 so binary regions don't throw; we only look
+  // for ASCII markers inside PDF dictionary syntax.
+  const text = new TextDecoder('latin1').decode(chunk);
 
-    // Extract text from each page
-    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
+  // Prefer the page-tree root: /Type /Pages ... /Count N. Fall back to
+  // counting individual /Type /Page markers within the scanned region, which
+  // is a LOWER bound only (we're only looking at the head of the file).
+  const countMatch = text.match(/\/Type\s*\/Pages[^]*?\/Count\s+(\d+)/);
+  const pageCount = countMatch
+    ? parseInt(countMatch[1], 10)
+    : (text.match(/\/Type\s*\/Page\b/g)?.length ?? 0);
 
-      // Concatenate text items with proper spacing
-      const pageText = textContent.items
-        .map((item: any) => item.str)
-        .join(' ');
-
-      fullText += pageText + '\n\n';
-    }
-
-    // Clean up excessive whitespace
-    fullText = fullText
-      .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
-      .replace(/\n{3,}/g, '\n\n')  // Replace multiple newlines with double newline
-      .trim();
-
-    return {
-      content: fullText,
-      success: true
-    };
-  } catch (error) {
-    console.error('PDF parsing error:', error);
-    return {
-      content: '',
-      success: false,
-      error: `Failed to parse PDF: ${error instanceof Error ? error.message : 'Unknown error'}`
-    };
-  }
+  return { pageCount, sizeBytes };
 }
 
 /**
@@ -111,36 +128,42 @@ async function parseText(file: File): Promise<ParsedFile> {
   try {
     const content = await file.text();
 
-    // Basic validation to ensure we got readable text
     if (!content || content.length === 0) {
       return {
-        content: '',
+        kind: 'error',
         success: false,
-        error: 'File appears to be empty'
+        content: '',
+        error: 'File appears to be empty',
       };
     }
 
-    // Check if content appears to be binary (high percentage of non-printable characters)
+    // Reject files that look like binary masquerading as text (>10%
+    // non-printable characters).
     const nonPrintableCount = (content.match(/[\x00-\x08\x0E-\x1F\x7F-\x9F]/g) || []).length;
-    const isProbablyBinary = (nonPrintableCount / content.length) > 0.1;
+    const isProbablyBinary = nonPrintableCount / content.length > 0.1;
 
     if (isProbablyBinary) {
       return {
-        content: '',
+        kind: 'error',
         success: false,
-        error: 'File appears to contain binary data and cannot be parsed as text'
+        content: '',
+        error: 'File appears to contain binary data and cannot be parsed as text',
       };
     }
 
     return {
-      content: content,
-      success: true
+      kind: 'text',
+      success: true,
+      content,
+      filename: file.name,
+      sizeBytes: file.size,
     };
   } catch (error) {
     return {
-      content: '',
+      kind: 'error',
       success: false,
-      error: `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`
+      content: '',
+      error: `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`,
     };
   }
 }
@@ -164,7 +187,7 @@ export function getFileTypeDescription(filename: string): string {
     yaml: 'YAML Configuration',
     yml: 'YAML Configuration',
     log: 'Log File',
-    rtf: 'Rich Text Format'
+    rtf: 'Rich Text Format',
   };
 
   return typeMap[extension || ''] || 'Unknown Format';

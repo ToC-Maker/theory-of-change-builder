@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
   "name": "theory-of-change-builder",
+  "account_id": "1264d0222f12a9d8073f6fd606aee8b9",
   "main": "worker/index.ts",
   "compatibility_date": "2025-04-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -20,8 +21,11 @@
   // Public Auth0 config (intended to be client-exposed — ends up in the Vite bundle).
   // Also accessed at runtime by worker/_shared/auth.ts for JWT verification.
   // SITE_URL is optional; handlers fall back to request origin if unset.
+  // VITE_TURNSTILE_SITE_KEY is the public Turnstile site key; the secret
+  // counterpart (TURNSTILE_SECRET_KEY) is a Worker secret via `wrangler secret put`.
   "vars": {
     "VITE_AUTH0_DOMAIN": "dev-zy7obc7gqpztqadk.us.auth0.com",
-    "VITE_AUTH0_CLIENT_ID": "eGHWLKnz44EPGWfmCdcVvYY5SBSMX01B"
+    "VITE_AUTH0_CLIENT_ID": "eGHWLKnz44EPGWfmCdcVvYY5SBSMX01B",
+    "VITE_TURNSTILE_SITE_KEY": "0x4AAAAAADA7hqLrQ0ppcrNW"
   }
 }
