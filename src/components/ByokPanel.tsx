@@ -99,10 +99,10 @@ export function ByokPanel({
           <span>Sign in to use Generate with your Anthropic API key</span>
         </h3>
         <p className="mt-2 text-sm text-gray-700 leading-relaxed">
-          Generate runs a deep, multi-turn analysis of your documents; a single
-          run typically costs more than the free tier covers. To use it, sign in
+          Generate runs a deep analysis of your documents; a single run
+          often costs more than the free tier covers. To use it, sign in
           and add your own Anthropic API key; usage is billed directly to your
-          Anthropic account, not ours.
+          Anthropic account.
         </p>
       </section>
     );
@@ -257,7 +257,7 @@ function renderHeader(
       return {
         title: 'Add your Anthropic API key to use Generate',
         body:
-          'Generate runs a deep, multi-turn analysis of your documents; a single run typically costs more than the free tier covers. Use your own Anthropic API key to run it; usage is billed directly to your Anthropic account.',
+          'Generate runs a deep analysis of your documents; a single run often costs more than the free tier covers. Use your own Anthropic API key to run it; usage is billed directly to your Anthropic account.',
       };
     case 'cap_reached':
       return {
