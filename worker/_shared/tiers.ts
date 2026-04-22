@@ -16,21 +16,16 @@ const usdToMicro = (usd: number): bigint => BigInt(usd) * 1_000_000n;
 export const LIFETIME_CAP_USD = 5;
 export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 
-// Flat per-request ceiling used as the mid-stream kill threshold's upper bound.
-// An individual stream is aborted if cumulative cost exceeds its pre-flight
-// reservation × KILL_SWITCH_MULTIPLIER, OR this flat cap, whichever is lower.
-export const PER_REQUEST_CAP_USD = 5;
-export const PER_REQUEST_CAP_MICRO_USD = usdToMicro(PER_REQUEST_CAP_USD);
-
 // Global observability cap -- matches the Anthropic Console customer-set cap.
 // NOT an enforcement mechanism (Anthropic's cap is the hard stop); this is
 // for near-real-time dashboards instead of waiting on billing emails (~24h lag).
 export const GLOBAL_MONTHLY_CAP_USD = 100;
 export const GLOBAL_MONTHLY_CAP_MICRO_USD = usdToMicro(GLOBAL_MONTHLY_CAP_USD);
 
-// Mid-stream kill switch: abort when cumulative cost > reservation × this.
-// 1.2 leaves 20% headroom for reasonable output-token overruns without
-// letting a runaway stream blow through the per-user cap.
+// Mid-stream kill switch headroom: abort when the stream's cumulative cost
+// would push the user over LIFETIME_CAP_MICRO_USD - (post_reservation_usage -
+// projected). Defined in anthropic-stream.ts where the arithmetic lives;
+// this constant is kept as a semantic anchor for future tuning.
 export const KILL_SWITCH_MULTIPLIER = 1.2;
 
 // Request-body size limit (32 MB). Matches Anthropic Messages API ceiling.
