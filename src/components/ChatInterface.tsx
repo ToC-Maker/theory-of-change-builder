@@ -1,10 +1,10 @@
-import React, { useCallback, useState, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useRef, useEffect, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage, type CostError } from '../services/chatService';
 import { ChartService } from '../services/chartService';
-import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
+import { applyEdits } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
@@ -212,6 +212,69 @@ function TurnstileWidget({
   if (!siteKey) return null;
   return <div ref={containerRef} className="cf-turnstile" />;
 }
+
+/**
+ * Memoized single-message renderer. Extracted + React.memo'd because
+ * otherwise every keystroke in the composer re-parses every historical
+ * assistant message's markdown from scratch (ReactMarkdown is not cheap
+ * on a long conversation), which made pasting large strings freeze the
+ * UI. Each message's identity is stable after append, so the shallow
+ * prop comparison skips re-renders in the common case.
+ *
+ * message.content is already the cleaned (marker-stripped) version —
+ * cleanResponseContent was applied in onComplete before the row landed
+ * in `messages` state; no per-render cleaning needed here.
+ */
+const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
+  return (
+    <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[85%] p-2 rounded-lg text-sm ${
+          message.role === 'user'
+            ? 'bg-blue-500 text-white rounded-br-sm'
+            : 'bg-gray-100 text-gray-800 rounded-bl-sm'
+        }`}
+      >
+        {message.role === 'assistant' ? (
+          <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
+            <ReactMarkdown>{message.content}</ReactMarkdown>
+          </div>
+        ) : (
+          <div className="whitespace-pre-wrap text-left">{message.content}</div>
+        )}
+        <div className={`text-xs mt-1 opacity-70 ${
+          message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
+        }`}>
+          <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+          {message.usage && (() => {
+            // Anthropic splits input across four buckets and only one
+            // ("input_tokens") is tiny new-input. Show the full billed
+            // picture so the cost figure makes sense without cache math.
+            const u = message.usage;
+            const cacheWrite = u.cache_creation_input_tokens ?? 0;
+            const cacheRead = u.cache_read_input_tokens ?? 0;
+            const webSearch = u.web_search_requests ?? 0;
+            const parts: string[] = [
+              `${u.input_tokens} in`,
+              `${u.output_tokens} out`,
+            ];
+            if (cacheWrite > 0) parts.push(`${cacheWrite.toLocaleString()} cache write`);
+            if (cacheRead > 0) parts.push(`${cacheRead.toLocaleString()} cache read`);
+            if (webSearch > 0) parts.push(`${webSearch} web search${webSearch === 1 ? '' : 'es'}`);
+            return (
+              <div className="mt-1">
+                Tokens: {parts.join(', ')}
+                {typeof u.cost_usd === 'number' && u.cost_usd > 0 && (
+                  <> &middot; {formatCostUsd(u.cost_usd)}</>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    </div>
+  );
+});
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set(), onChartCreated }: ChatInterfaceProps) {
   const { hasKey, keyLast4, verified, useForChat, setUseForChat, clearKey } = useApiKey();
@@ -722,6 +785,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, []);
 
+  // Defer inputValue for the estimate effect so React yields to urgent
+  // user-input renders during a paste + rapid typing. Without this, the
+  // 600ms debounce still gets re-scheduled on every keystroke of a fast
+  // paste, and the effect hook's cleanup+schedule adds up when the value
+  // is huge.
+  const deferredInputValue = useDeferredValue(inputValue);
+
   // Refs mirroring values we WANT the estimate to read on fire but NOT
   // to retrigger it. Anthropic's count_tokens is rate-limited (Tier 1:
   // 100 RPM); re-running the estimate every time the user nudges a node
@@ -759,7 +829,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const attachedChars = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
         .reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
-      const draftChars = inputValue.length + attachedChars;
+      const draftChars = deferredInputValue.length + attachedChars;
       if (draftChars === 0 && messages.length === 0) {
         setComposerEstimateUsd(0);
         setEstimatingCost(false);
@@ -771,8 +841,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         .map((f) => `=== ${f.filename} ===\n${f.content}`);
       let draftBody =
         inlineSections.length > 0
-          ? `${inputValue}\n\n${inlineSections.join('\n\n')}`
-          : inputValue;
+          ? `${deferredInputValue}\n\n${inlineSections.join('\n\n')}`
+          : deferredInputValue;
 
       // Mirror chatService.ts:551-557: the last user message gets graph data
       // appended inside [CURRENT_GRAPH_DATA] tags. Read graph via ref so
@@ -864,7 +934,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [inputValue, chatAttachedFiles, selectedModel, messages]);
+  }, [deferredInputValue, chatAttachedFiles, selectedModel, messages]);
 
   // Debounced input-cost estimate for Generate mode. Assembles the same
   // prompt shape startGeneration() builds (system prompt + document
@@ -2041,57 +2111,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 ) : null}
 
                 {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] p-2 rounded-lg text-sm ${
-                        message.role === 'user'
-                          ? 'bg-blue-500 text-white rounded-br-sm'
-                          : 'bg-gray-100 text-gray-800 rounded-bl-sm'
-                      }`}
-                    >
-                      {message.role === 'assistant' ? (
-                        <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-                          <ReactMarkdown>{cleanResponseContent(message.content)}</ReactMarkdown>
-                        </div>
-                      ) : (
-                        <div className="whitespace-pre-wrap text-left">{cleanResponseContent(message.content)}</div>
-                      )}
-                      <div className={`text-xs mt-1 opacity-70 ${
-                        message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
-                      }`}>
-                        <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        {message.usage && (() => {
-                          // Anthropic splits input across four buckets and only
-                          // one of them ("input_tokens") is tiny new-input.
-                          // Show the full billed picture so the cost figure on
-                          // the right makes sense without users having to do
-                          // cache-math in their heads.
-                          const u = message.usage;
-                          const cacheWrite = u.cache_creation_input_tokens ?? 0;
-                          const cacheRead = u.cache_read_input_tokens ?? 0;
-                          const webSearch = u.web_search_requests ?? 0;
-                          const parts: string[] = [
-                            `${u.input_tokens} in`,
-                            `${u.output_tokens} out`,
-                          ];
-                          if (cacheWrite > 0) parts.push(`${cacheWrite.toLocaleString()} cache write`);
-                          if (cacheRead > 0) parts.push(`${cacheRead.toLocaleString()} cache read`);
-                          if (webSearch > 0) parts.push(`${webSearch} web search${webSearch === 1 ? '' : 'es'}`);
-                          return (
-                            <div className="mt-1">
-                              Tokens: {parts.join(', ')}
-                              {typeof u.cost_usd === 'number' && u.cost_usd > 0 && (
-                                <> &middot; {formatCostUsd(u.cost_usd)}</>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                  </div>
+                  <MessageBubble key={message.id} message={message} />
                 ))}
               </>
             ) : currentMode === 'generate' ? (
@@ -2560,10 +2580,22 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     rows={1}
                     style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
                     onInput={(e) => {
-                      // Auto-resize textarea based on content
+                      // Auto-resize textarea based on content. Skip the
+                      // scrollHeight measurement for large values — it forces
+                      // a full text layout (~50-100ms for a 500KB paste) on
+                      // every keystroke, which was the main culprit of the
+                      // "paste huge text → UI freezes" bug. Anything past
+                      // ~2000 chars is guaranteed to hit the 128px cap
+                      // anyway, so just pin the height directly.
                       const target = e.target as HTMLTextAreaElement;
+                      if (target.value.length > 2000) {
+                        if (target.style.height !== '128px') {
+                          target.style.height = '128px';
+                        }
+                        return;
+                      }
                       target.style.height = 'auto';
-                      const newHeight = Math.min(target.scrollHeight, 128); // Max 8rem (128px)
+                      const newHeight = Math.min(target.scrollHeight, 128);
                       target.style.height = newHeight + 'px';
                     }}
                   />
@@ -2658,7 +2690,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       ) : (
                         <button
                           onClick={handleSendMessage}
-                          disabled={!inputValue.trim() || isLoading}
+                          // Use length check rather than trim() — on a huge
+                          // paste, inputValue.trim() would allocate a full
+                          // copy of the string on every render. Whitespace-
+                          // only input still gets rejected at send-time.
+                          disabled={inputValue.length === 0 || isLoading}
                           className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           title="Send message"
                         >
