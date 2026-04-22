@@ -12,6 +12,7 @@ import {
 import {
   LIFETIME_CAP_USD,
   LIFETIME_CAP_MICRO_USD,
+  GLOBAL_MONTHLY_CAP_USD,
   BODY_SIZE_LIMIT_BYTES,
   tierFor,
   isCapped,
@@ -1020,8 +1021,8 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
       return jsonError(
         {
           error: 'global_budget_exhausted',
-          month_budget_usd: 100,
-          used_usd: 100,
+          month_budget_usd: GLOBAL_MONTHLY_CAP_USD,
+          used_usd: GLOBAL_MONTHLY_CAP_USD,
           resets_at: firstOfNextMonthUtcIso(),
           remedies: ['byok', 'donate'],
         },
