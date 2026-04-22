@@ -22,12 +22,6 @@ export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 export const GLOBAL_MONTHLY_CAP_USD = 100;
 export const GLOBAL_MONTHLY_CAP_MICRO_USD = usdToMicro(GLOBAL_MONTHLY_CAP_USD);
 
-// Mid-stream kill switch headroom: abort when the stream's cumulative cost
-// would push the user over LIFETIME_CAP_MICRO_USD - (post_reservation_usage -
-// projected). Defined in anthropic-stream.ts where the arithmetic lives;
-// this constant is kept as a semantic anchor for future tuning.
-export const KILL_SWITCH_MULTIPLIER = 1.2;
-
 // Request-body size limit (32 MB). Matches Anthropic Messages API ceiling.
 // Enforced via streaming byte counter on the request body (not Content-Length),
 // so we stop reading as soon as we cross the threshold.
