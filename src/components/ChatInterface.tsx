@@ -246,30 +246,9 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
           message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
         }`}>
           <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-          {message.usage && (() => {
-            // Anthropic splits input across four buckets and only one
-            // ("input_tokens") is tiny new-input. Show the full billed
-            // picture so the cost figure makes sense without cache math.
-            const u = message.usage;
-            const cacheWrite = u.cache_creation_input_tokens ?? 0;
-            const cacheRead = u.cache_read_input_tokens ?? 0;
-            const webSearch = u.web_search_requests ?? 0;
-            const parts: string[] = [
-              `${u.input_tokens} in`,
-              `${u.output_tokens} out`,
-            ];
-            if (cacheWrite > 0) parts.push(`${cacheWrite.toLocaleString()} cache write`);
-            if (cacheRead > 0) parts.push(`${cacheRead.toLocaleString()} cache read`);
-            if (webSearch > 0) parts.push(`${webSearch} web search${webSearch === 1 ? '' : 'es'}`);
-            return (
-              <div className="mt-1">
-                Tokens: {parts.join(', ')}
-                {typeof u.cost_usd === 'number' && u.cost_usd > 0 && (
-                  <> &middot; {formatCostUsd(u.cost_usd)}</>
-                )}
-              </div>
-            );
-          })()}
+          {message.usage && typeof message.usage.cost_usd === 'number' && message.usage.cost_usd > 0 && (
+            <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
+          )}
         </div>
       </div>
     </div>
@@ -911,8 +890,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
                 )
               : 0;
           const cachedTokens = Math.max(0, totalTokens - draftOnlyTokens);
+          // Warm-cache: prior system+history read at 0.1×. The *new draft*
+          // isn't free either — top-level `cache_control: {ephemeral}`
+          // auto-extends the breakpoint to include the latest turn, so
+          // the draft tokens get written to cache at 1.25× (same write
+          // multiplier as the cold path). Not applying 1.25× to the draft
+          // under-estimated warm-cache turns by the write markup, which
+          // is exactly what we observed on a large paste (estimate $0.85
+          // vs billed $1.10 — the ~20% gap matches the 1/1.25 factor).
           const estimate = cacheWarm
-            ? (draftOnlyTokens * inputRate +
+            ? (draftOnlyTokens * inputRate * CACHE_WRITE_MULTIPLIER +
                 cachedTokens * inputRate * CACHE_READ_MULTIPLIER_VALUE) /
               1_000_000
             : (totalTokens * inputRate * CACHE_WRITE_MULTIPLIER) / 1_000_000;
@@ -2615,7 +2602,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       )}
                       {composerEstimateUsd > 0 ? (
                         <span>
-                          Est. input {formatCostUsd(composerEstimateUsd)}; output
+                          Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output
                           shown live during streaming.
                         </span>
                       ) : (
