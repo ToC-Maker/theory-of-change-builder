@@ -21,6 +21,9 @@ import {
   estimateCostLowBound,
   roughInputTokensFromChars,
   MODEL_INPUT_RATES_USD_PER_MTOK,
+  CACHE_WRITE_MULTIPLIER,
+  CACHE_READ_MULTIPLIER_VALUE,
+  CACHE_TTL_MILLIS,
 } from '../utils/cost';
 import {
   ChevronLeftIcon,
@@ -777,11 +780,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         ? [...historyForEstimate, { role: 'user' as const, content: draftBody }]
         : historyForEstimate;
 
-      // Cache warmth: cached for 5m after the last assistant turn.
+      // Cache warmth: cached for CACHE_TTL_MILLIS after the last assistant
+      // turn (shared constant, default 5m ephemeral TTL from Anthropic).
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
       const cacheWarm =
         !!lastAssistant &&
-        Date.now() - lastAssistant.timestamp.getTime() < 5 * 60 * 1000;
+        Date.now() - lastAssistant.timestamp.getTime() < CACHE_TTL_MILLIS;
 
       setEstimatingCost(true);
       void (async () => {
@@ -822,9 +826,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           const cachedTokens = Math.max(0, totalTokens - draftOnlyTokens);
           const estimate = cacheWarm
             ? (draftOnlyTokens * inputRate +
-                cachedTokens * inputRate * 0.1) /
+                cachedTokens * inputRate * CACHE_READ_MULTIPLIER_VALUE) /
               1_000_000
-            : (totalTokens * inputRate * 1.25) / 1_000_000;
+            : (totalTokens * inputRate * CACHE_WRITE_MULTIPLIER) / 1_000_000;
           setComposerEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
@@ -894,10 +898,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
           // Generate is one-shot with a fresh user turn each click; the
           // system prompt caches across runs but the documents don't, so
-          // the system prompt gets cache-write (1.25×) on first submit.
-          // Simpler approximation: apply 1.25× to whole count, matching
-          // startGeneration's actual behavior on the first click.
-          const estimate = (totalTokens * inputRate * 1.25) / 1_000_000;
+          // the system prompt gets cache-write on first submit. Apply the
+          // write multiplier to the whole count — matches startGeneration's
+          // actual behavior on the first click and is close enough for
+          // consecutive clicks too (output cost shown live dominates).
+          const estimate = (totalTokens * inputRate * CACHE_WRITE_MULTIPLIER) / 1_000_000;
           setGenerateEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
