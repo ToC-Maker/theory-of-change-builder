@@ -322,8 +322,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Running cost for the in-flight assistant turn (updated via onCostUpdate).
   const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
 
+
+  // Pre-send cost estimates (input-only lower bound from count_tokens).
+  // Separate slots so the Chat composer estimate and the Generate panel
+  // estimate can update independently; both are debounced to avoid
+  // hammering /api/count-tokens-estimate on every keystroke.
+  const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
+  const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
+
   // Derived cap-gate flags, computed from the cached usage snapshot +
-  // latest composer estimate. Two distinct cases:
+  // latest composer estimate. Declared AFTER composerEstimateUsd since
+  // wouldExceedCap reads it — moving these earlier would TDZ-error.
   //
   //   capAlreadyReached: the user's prior cumulative usage is already at
   //     or over the free-tier cap. Nothing they can send will succeed;
@@ -343,14 +352,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     !capAlreadyReached &&
     composerEstimateUsd > 0 &&
     usage.used_usd + composerEstimateUsd > usage.limit_usd;
-
-
-  // Pre-send cost estimates (input-only lower bound from count_tokens).
-  // Separate slots so the Chat composer estimate and the Generate panel
-  // estimate can update independently; both are debounced to avoid
-  // hammering /api/count-tokens-estimate on every keystroke.
-  const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
-  const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
   // Loading flag so the composer can show a spinner while the debounced
   // fetch is in flight; avoids displaying a stale number that's about to
   // change, and signals to the user that the field is being updated.
