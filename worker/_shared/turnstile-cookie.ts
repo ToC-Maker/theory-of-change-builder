@@ -23,6 +23,26 @@ function b64urlDecode(str: string): string {
   return atob(str.replace(/-/g, '+').replace(/_/g, '/') + pad);
 }
 
+export const TURNSTILE_COOKIE_NAME = 'tocb_anon';
+
+/**
+ * Parse the Cookie header and extract the `tocb_anon` cookie value if present.
+ * Returns null when the header is absent, the cookie is not set, or its value
+ * is empty. Callers pass the result straight to `verifyTurnstileCookie`.
+ */
+export function extractTurnstileCookie(cookieHeader: string | null): string | null {
+  if (!cookieHeader) return null;
+  const needle = TURNSTILE_COOKIE_NAME + '=';
+  for (const entry of cookieHeader.split(';')) {
+    const trimmed = entry.trimStart();
+    if (trimmed.startsWith(needle)) {
+      const value = trimmed.slice(needle.length).trim();
+      return value || null;
+    }
+  }
+  return null;
+}
+
 export async function signTurnstileCookie(
   anonId: string,
   salt: string,
