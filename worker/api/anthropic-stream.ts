@@ -338,10 +338,23 @@ async function estimateProjectedCost(
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    console.error(`[estimate] count_tokens upstream ${resp.status}: ${text}`);
+    console.error(
+      `[estimate] count_tokens upstream ${resp.status}: ${text} | body keys sent: ${Object.keys(countBody).join(',')}`,
+    );
+    // Surface Anthropic's error message to the client so the next 503
+    // here is diagnosable without tailing Worker logs.
+    let upstreamMessage: string | undefined;
+    try {
+      const parsed = JSON.parse(text) as { error?: { message?: string } };
+      upstreamMessage = parsed?.error?.message;
+    } catch { /* non-JSON body; leave undefined */ }
     return {
       ok: false,
-      response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders),
+      response: jsonError(
+        { error: 'estimation_unavailable', upstream_status: resp.status, upstream_message: upstreamMessage },
+        503,
+        altSvcHeaders,
+      ),
     };
   }
 
