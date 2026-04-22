@@ -237,10 +237,10 @@ export function ByokPanel({
 
           {mode === 'generate' && (
             <p id={disclosureId} className="text-xs text-gray-600">
-              A typical Generate run costs around <strong>$0.50</strong> on your
-              Anthropic account. Exact cost depends on document size and how much
-              the model writes back; you&apos;ll see it live as the response
-              streams.
+              A Generate run usually costs <strong>a few dollars</strong> on your
+              Anthropic account, and can be more for large documents or
+              heavy web searching. The live cost is shown as the response
+              streams so you can stop it if it runs long.
             </p>
           )}
         </form>
