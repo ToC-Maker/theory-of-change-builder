@@ -598,6 +598,13 @@ function createCostTrackingStream(
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => { resolveDone = resolve; });
 
+  // Defensive resolve-on-abort: if the upstream is aborted (either by our
+  // client-disconnect propagation or the kill-switch), a pipeThrough error
+  // can bypass flush()/cancel() so done would otherwise hang. Promise
+  // resolve is idempotent, so double-resolution from the normal path is a
+  // no-op.
+  teeCtx.abortController.signal.addEventListener('abort', () => resolveDone());
+
   /**
    * Detect Anthropic `not_found_error` inside an SSE `error` frame and, if so,
    * synthesize a typed `chart_deleted` / `file_unavailable` event. This lets
@@ -964,16 +971,6 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     }
   }
 
-  // Log client disconnects for transport-layer debugging.
-  request.signal.addEventListener('abort', () => {
-    console.log(JSON.stringify({
-      event: 'client_disconnect',
-      timestamp: new Date().toISOString(),
-      userId: actorId,
-      tier,
-    }));
-  });
-
   // Step 8: upstream fetch. For our metered path we set metadata.user_id so
   // Anthropic abuse-detection can attribute. For BYOK we strip `body.metadata`
   // entirely — otherwise our internal user_ids pollute the BYOK user's own
@@ -985,6 +982,23 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   }
 
   const abortController = new AbortController();
+
+  // Propagate client disconnect to the upstream Anthropic request. Without
+  // this, hitting Stop (or a dropped connection) only closes the browser↔
+  // worker leg; Claude keeps generating tokens the user never sees — which
+  // for BYOK users means they're billed for output after they've stopped
+  // caring. Brief network blips are the stated trade-off, but the response
+  // is already gone from the browser in that case, so aborting is a strict
+  // improvement over keeping the bill running.
+  request.signal.addEventListener('abort', () => {
+    console.log(JSON.stringify({
+      event: 'client_disconnect',
+      timestamp: new Date().toISOString(),
+      userId: actorId,
+      tier,
+    }));
+    try { abortController.abort(); } catch { /* ignore */ }
+  });
   let upstream: Response;
   try {
     upstream = await fetch(ANTHROPIC_API_URL, {
