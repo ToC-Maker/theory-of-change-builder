@@ -548,14 +548,8 @@ class LoggingServiceClass {
     usage_input_tokens?: number;
     usage_output_tokens?: number;
     usage_total_tokens?: number;
-    content_strip_reason?: 'edit_instructions' | 'stripped_other';
   }): Promise<void> {
     if (!this.isLoggingEnabled()) return;
-
-    // Empty content is legal for assistant messages — the model may reply
-    // with only an [EDIT_INSTRUCTIONS] block that cleanResponseContent
-    // strips. Those rows still matter for the audit trail and for the
-    // logging_snapshots.triggered_by_message_id FK.
 
     // If a session initialization is in flight (typical on first load —
     // initializeSession is fired from App.tsx but not awaited), wait for
@@ -602,13 +596,6 @@ class LoggingServiceClass {
     content: string;
     chartId?: string;
     tokenUsage?: { input_tokens?: number; output_tokens?: number };
-    /** Set when an assistant reply cleaned to "". Required by the server
-     * to accept empty assistant content.
-     *   'edit_instructions' — valid EDIT_INSTRUCTIONS block emitted and
-     *     parsed into non-empty edits.
-     *   'stripped_other' — anything else got stripped (malformed block,
-     *     hallucinated [CURRENT_GRAPH_DATA] / [SELECTED_NODES], etc.). */
-    contentStripReason?: 'edit_instructions' | 'stripped_other';
   }): void {
     const chartId = params.chartId ?? this.currentChartId ?? this.initializingChartId;
     if (!chartId) return;
@@ -618,7 +605,6 @@ class LoggingServiceClass {
       chart_id: chartId,
       role: params.role,
       content: params.content,
-      content_strip_reason: params.contentStripReason,
       usage_input_tokens: params.tokenUsage?.input_tokens,
       usage_output_tokens: params.tokenUsage?.output_tokens,
       usage_total_tokens: params.tokenUsage

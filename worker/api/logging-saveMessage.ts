@@ -12,16 +12,6 @@ interface SaveMessageRequest {
   usage_input_tokens?: number;
   usage_output_tokens?: number;
   usage_total_tokens?: number;
-  // Client signal for legitimate empty-after-cleaning assistant content.
-  // Values:
-  //   'edit_instructions' — model emitted a valid [EDIT_INSTRUCTIONS] block
-  //     that parsed to non-empty edits; the block was stripped for display
-  //     but the edits live in logging_snapshots.edit_instructions.
-  //   'stripped_other' — raw reply was non-empty but cleanResponseContent
-  //     stripped everything (e.g. model hallucinated [CURRENT_GRAPH_DATA]
-  //     or [SELECTED_NODES], or emitted a malformed EDIT_INSTRUCTIONS
-  //     block that failed to parse). Row kept so we can audit bad outputs.
-  content_strip_reason?: 'edit_instructions' | 'stripped_other';
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -47,28 +37,13 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ error: 'Invalid role. Must be "user" or "assistant"' }, { status: 400 });
     }
 
-    // Content must be a string. Empty strings are rejected UNLESS it's an
-    // assistant message whose raw reply was stripped to "" for a declared
-    // reason (currently only 'edit_instructions' — model replied with only
-    // an [EDIT_INSTRUCTIONS] block). The row is kept so
-    // logging_snapshots.triggered_by_message_id FKs resolve; the edit
-    // payload lives in logging_snapshots.edit_instructions, not here.
-    if (typeof data.content !== 'string') {
-      return Response.json({ error: 'content must be a string' }, { status: 400 });
-    }
-    if (data.content.length === 0) {
-      if (data.role === 'user') {
-        return Response.json({ error: 'user messages require non-empty content' }, { status: 400 });
-      }
-      if (
-        data.content_strip_reason !== 'edit_instructions' &&
-        data.content_strip_reason !== 'stripped_other'
-      ) {
-        return Response.json(
-          { error: 'empty assistant content requires content_strip_reason' },
-          { status: 400 },
-        );
-      }
+    // Content must be a non-empty string. The client sends the raw
+    // pre-cleaned model output (including any [EDIT_INSTRUCTIONS] or
+    // other markers), so a zero-length body here means the stream
+    // aborted before any content arrived — a failure mode worth
+    // rejecting loudly rather than recording as an empty row.
+    if (typeof data.content !== 'string' || data.content.length === 0) {
+      return Response.json({ error: 'content must be a non-empty string' }, { status: 400 });
     }
 
     if (new TextEncoder().encode(data.content).length > 100_000) {

@@ -107,10 +107,12 @@ export interface StreamCallbacks {
     message: string,
     editInstructions?: EditInstruction[],
     usage?: any,
-    /** true when the raw reply was non-empty but cleanResponseContent
-     *  stripped it to "". Used by the logger to declare
-     *  content_strip_reason so the server keeps the row. */
-    contentWasStripped?: boolean,
+    /** Raw pre-cleaned reply (before cleanResponseContent strips
+     *  [EDIT_INSTRUCTIONS] / [CURRENT_GRAPH_DATA] / [SELECTED_NODES]).
+     *  Use this for logging so the audit trail captures exactly what
+     *  the model produced, including cases where cleaning empties the
+     *  displayed `message`. */
+    rawMessage?: string,
   ) => void;
   onError?: (error: string) => void;
   onSearchStart?: () => void;
@@ -475,11 +477,11 @@ class ChatService {
                 }
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
-                const contentWasStripped =
-                  fullContent.length > 0 && cleanContent.length === 0;
-                // Separate try so callback bugs aren't reported as streaming failures
+                // Pass raw fullContent so loggers capture exactly what
+                // Claude produced. Display uses cleanContent; audit uses
+                // rawMessage.
                 try {
-                  callbacks.onComplete?.(cleanContent, editInstructions, usage, contentWasStripped);
+                  callbacks.onComplete?.(cleanContent, editInstructions, usage, fullContent);
                 } catch (callbackErr) {
                   console.error('[ChatService] onComplete callback error:', callbackErr);
                 }

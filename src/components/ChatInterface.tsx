@@ -1051,7 +1051,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }
             setStreamingContent(fullContent);
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any, contentWasStripped?: boolean) => {
+          onComplete: (finalMessage: string, editInstructions?: any, usage?: any, rawMessage?: string) => {
           const assistantMessage: ChatMessage = {
             id: assistantMessageId,
             role: 'assistant',
@@ -1078,26 +1078,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // Refresh the usage progress bar after the server-side tally lands.
           void refreshUsage();
 
-          // Log assistant message (fire and forget). Content may be empty
-          // after cleanResponseContent strips [EDIT_INSTRUCTIONS],
-          // [CURRENT_GRAPH_DATA], or [SELECTED_NODES] blocks. Declare the
-          // strip reason so the server keeps the row (needed for the
-          // logging_snapshots.triggered_by_message_id FK and for auditing
-          // bad model outputs). 'edit_instructions' is the legitimate
-          // case; 'stripped_other' covers malformed blocks + hallucinated
-          // injection markers so those still get captured for analysis.
-          let stripReason: 'edit_instructions' | 'stripped_other' | undefined;
-          if (finalMessage.length === 0 && contentWasStripped) {
-            stripReason =
-              editInstructions && editInstructions.length > 0
-                ? 'edit_instructions'
-                : 'stripped_other';
-          }
+          // Log the RAW streamed content (pre-clean) so the audit trail
+          // captures exactly what Claude produced, including
+          // [EDIT_INSTRUCTIONS] / [CURRENT_GRAPH_DATA] / [SELECTED_NODES]
+          // blocks. The displayed message above uses the cleaned version;
+          // they're different views of the same event, not duplicates.
+          // Snapshots still carry parsed edit_instructions separately for
+          // structured queries.
           loggingService.logUserMessage({
             messageId: assistantMessageId,
             role: 'assistant',
-            content: finalMessage,
-            contentStripReason: stripReason,
+            content: rawMessage ?? finalMessage,
             tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
           });
 
