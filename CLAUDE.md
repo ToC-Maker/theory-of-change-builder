@@ -128,6 +128,14 @@ See `database/schema.sql` for full schema. Key tables:
 
 For migrations, see `database/migrations/`. Always test on staging first.
 
+## Database migrations & CI preview branches
+
+`.github/workflows/neon-preview.yml` creates a Neon branch per PR, applies every file in `database/migrations/`, runs build/lint/test, posts a schema diff, and tears down on PR close. Uses the Neon GitHub App's `NEON_API_KEY` secret + `NEON_PROJECT_ID` var.
+
+**Migrations must be idempotent.** `create-branch-action@v5` reuses the branch across `synchronize` events, so the same migrations re-apply on every push. Use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT ... ON CONFLICT`. For ADD CONSTRAINT (no `IF NOT EXISTS` in Postgres), wrap in a `DO` block with a `pg_constraint` lookup — see `freeze-user-token-usage.sql`.
+
+For local smoke testing against a preview branch, grab the connection string from the Neon dashboard (Branches → the PR's branch → Connect).
+
 ## Cost Accounting
 
 All server-side cost accounting uses **micro-USD** (1_000_000 µUSD = $1) as the integer unit. Rate tables live in `worker/_shared/cost.ts`. Per-user cumulative spend is stored in `user_api_usage`; global monthly spend in `global_monthly_usage` (observability only — enforcement is the Anthropic Console customer-set cap). Per-message cost lands in `logging_messages.cost_micro_usd`. Tier caps and infra limits are constants in `worker/_shared/tiers.ts`.
@@ -163,10 +171,13 @@ Auth0 tokens refresh automatically, but invalid tokens silently fall back to ano
 - User exists in `chart_permissions` table with `status='approved'`
 
 ### PDF Handling
-PDFs are not parsed client-side. `src/utils/fileParser.ts` runs a lightweight
-header validation (size <=20 MB, pages <=100 via a `/Count` scan of the first
-500 KB) and returns an upload-intent signal. The caller uploads the binary to
-Anthropic's Files API and references it via a `document` content block.
+PDFs are not parsed client-side. `src/utils/fileParser.ts:validatePdf` runs
+a lightweight header scan that extracts `{pageCount, sizeBytes}` from the
+first 500 KB of the file (looking for `/Type /Pages ... /Count N`) and
+returns an upload-intent signal. It does NOT throw on size or page count
+— Anthropic enforces its own 500 MB per file and 100-page per document-block
+limits at upload time. The caller uploads the binary to Anthropic's Files
+API and references it via a `document` content block.
 
 ### Local Development with Functions
 Run `npm run dev` in one terminal (Worker on :8787), then `npm run dev:vite` in another
