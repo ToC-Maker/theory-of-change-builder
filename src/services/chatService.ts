@@ -19,6 +19,14 @@ export interface ChatMessage {
     input_tokens: number;
     output_tokens: number;
     total_tokens: number;
+    // Cache + tool-use fields are optional so older messages (and messages
+    // from streams that didn't report cache hits) still typecheck. They
+    // let the per-message display surface the actual billed breakdown,
+    // not just the tiny "uncached input" number.
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+    web_search_requests?: number;
+    cost_usd?: number;
   };
 }
 

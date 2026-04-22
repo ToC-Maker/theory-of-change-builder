@@ -968,7 +968,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             usage: usage ? {
               input_tokens: usage.input_tokens || 0,
               output_tokens: usage.output_tokens || 0,
-              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
+              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+              cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+              web_search_requests: usage.server_tool_use?.web_search_requests || 0,
+              cost_usd: runningCostUsd ?? undefined,
             } : undefined
           };
 
@@ -1568,7 +1572,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             usage: usage ? {
               input_tokens: usage.input_tokens || 0,
               output_tokens: usage.output_tokens || 0,
-              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
+              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+              cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+              web_search_requests: usage.server_tool_use?.web_search_requests || 0,
+              cost_usd: runningCostUsd ?? undefined,
             } : undefined
           };
 
@@ -1940,11 +1948,32 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
                       }`}>
                         <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        {message.usage && (
-                          <div className="mt-1">
-                            Tokens: {message.usage.input_tokens} in, {message.usage.output_tokens} out ({message.usage.total_tokens} total)
-                          </div>
-                        )}
+                        {message.usage && (() => {
+                          // Anthropic splits input across four buckets and only
+                          // one of them ("input_tokens") is tiny new-input.
+                          // Show the full billed picture so the cost figure on
+                          // the right makes sense without users having to do
+                          // cache-math in their heads.
+                          const u = message.usage;
+                          const cacheWrite = u.cache_creation_input_tokens ?? 0;
+                          const cacheRead = u.cache_read_input_tokens ?? 0;
+                          const webSearch = u.web_search_requests ?? 0;
+                          const parts: string[] = [
+                            `${u.input_tokens} in`,
+                            `${u.output_tokens} out`,
+                          ];
+                          if (cacheWrite > 0) parts.push(`${cacheWrite.toLocaleString()} cache write`);
+                          if (cacheRead > 0) parts.push(`${cacheRead.toLocaleString()} cache read`);
+                          if (webSearch > 0) parts.push(`${webSearch} web search${webSearch === 1 ? '' : 'es'}`);
+                          return (
+                            <div className="mt-1">
+                              Tokens: {parts.join(', ')}
+                              {typeof u.cost_usd === 'number' && u.cost_usd > 0 && (
+                                <> &middot; {formatCostUsd(u.cost_usd)}</>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
