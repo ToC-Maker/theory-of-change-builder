@@ -10,10 +10,22 @@
 
 BEGIN;
 
-ALTER TABLE user_token_usage
-  ADD CONSTRAINT user_token_usage_frozen CHECK (false) NOT VALID;
--- NOT VALID so existing rows are not re-validated. The constraint blocks future
--- INSERT/UPDATE that would produce a row (DELETE is unaffected — useful for GDPR).
+-- Postgres has no `ADD CONSTRAINT IF NOT EXISTS`; guard with a catalog lookup
+-- so re-runs on PR synchronize don't error on the existing constraint.
+-- NOT VALID so existing rows are not re-validated; the constraint blocks
+-- future INSERT/UPDATE that would produce a row (DELETE is unaffected —
+-- useful for GDPR).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'user_token_usage_frozen'
+      AND conrelid = 'user_token_usage'::regclass
+  ) THEN
+    ALTER TABLE user_token_usage
+      ADD CONSTRAINT user_token_usage_frozen CHECK (false) NOT VALID;
+  END IF;
+END $$;
 
 COMMENT ON TABLE user_token_usage IS 'FROZEN 2026-04-21. LEGACY — do not read for cost/usage analysis and do not write. total_tokens_used is underreported: sums only input+output (excludes cache_creation, cache_read, web_search) and mixes models at different prices (Opus 4.6 $5/$25 vs Sonnet 4.6 $3/$15). For current data see user_api_usage. Kept for historical reference only.';
 
