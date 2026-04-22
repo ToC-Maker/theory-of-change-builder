@@ -549,10 +549,19 @@ class LoggingServiceClass {
     usage_output_tokens?: number;
     usage_total_tokens?: number;
   }): Promise<void> {
-    // Skip if user has opted out or no active session
-    if (!this.isLoggingEnabled() || !this.currentSessionId) {
-      return;
+    if (!this.isLoggingEnabled()) return;
+
+    // If a session initialization is in flight (typical on first load —
+    // initializeSession is fired from App.tsx but not awaited), wait for
+    // it before bailing out. Without this the user's first message of the
+    // visit silently skips logging because currentSessionId is still null
+    // when logUserMessage fires.
+    if (!this.currentSessionId && this.initializingPromise) {
+      try {
+        await this.initializingPromise;
+      } catch { /* fall through to the null check below */ }
     }
+    if (!this.currentSessionId) return;
 
     try {
       await this.fetchWithCircuitBreaker(
@@ -578,14 +587,17 @@ class LoggingServiceClass {
 
   /**
    * Log a user or assistant message. Guards on active session internally.
+   * chartId defaults to the service's current chart but can be passed in
+   * so a caller that knows the id can skip the race against session init.
    */
   logUserMessage(params: {
     messageId: string;
     role: 'user' | 'assistant';
     content: string;
+    chartId?: string;
     tokenUsage?: { input_tokens?: number; output_tokens?: number };
   }): void {
-    const chartId = this.currentChartId;
+    const chartId = params.chartId ?? this.currentChartId ?? this.initializingChartId;
     if (!chartId) return;
 
     this.saveMessage({

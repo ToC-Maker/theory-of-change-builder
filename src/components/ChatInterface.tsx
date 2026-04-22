@@ -9,6 +9,7 @@ import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
+import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
@@ -715,31 +716,45 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Debounced input-cost estimate for the Chat composer. Calls our server
   // wrapper around Anthropic's free count_tokens endpoint so the number uses
   // the real tokenizer (char-based heuristic is ~35% off for Opus). Input
-  // only — output cost is shown live during streaming. Falls back to the
-  // char-based heuristic when offline so the UI always shows something.
+  // only — output cost is shown live during streaming. Includes the full
+  // assembled payload the actual stream will send (system prompt, prior
+  // turns, current draft, inlined attachment content) so multi-turn
+  // estimates reflect the growing conversation. Falls back to a char-based
+  // heuristic when the server is unreachable.
   useEffect(() => {
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       const attachedChars = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
         .reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
-      const totalChars = inputValue.length + attachedChars;
-      if (totalChars === 0) {
+      const draftChars = inputValue.length + attachedChars;
+      if (draftChars === 0 && messages.length === 0) {
         setComposerEstimateUsd(0);
         return;
       }
 
-      // Fold inline text-file content so the count matches what
-      // streamMessage will actually send. PDFs (file_id) aren't counted
-      // without their bytes in the request — conservative under-estimate
-      // is acceptable for a composer hint.
       const inlineSections = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
         .map((f) => `=== ${f.filename} ===\n${f.content}`);
-      const userBody =
+      const draftBody =
         inlineSections.length > 0
           ? `${inputValue}\n\n${inlineSections.join('\n\n')}`
           : inputValue;
+
+      // Match the request shape chatService.streamMessage assembles: system
+      // prompt (mirrors chatService.ts:591-600), full message history, and
+      // the current draft appended as the next user turn. PDFs attached by
+      // file_id aren't folded in (count_tokens needs the file reference
+      // shape; acceptable undercount for a composer hint).
+      const baseSystemPrompt = customSystemPrompt?.trim() || systemPromptContent;
+      const systemPrompt = `${baseSystemPrompt}\n\n${chatModePromptContent}`;
+      const historyForEstimate = messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      const messagesForEstimate = draftBody
+        ? [...historyForEstimate, { role: 'user' as const, content: draftBody }]
+        : historyForEstimate;
 
       void (async () => {
         try {
@@ -750,7 +765,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             signal: controller.signal,
             body: JSON.stringify({
               model: selectedModel,
-              messages: [{ role: 'user', content: userBody }],
+              system: [{ type: 'text', text: systemPrompt }],
+              messages: messagesForEstimate,
             }),
           });
           if (!response.ok) throw new Error(`status ${response.status}`);
@@ -762,7 +778,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           throw new Error('no cost in response');
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          const tokens = roughInputTokensFromChars(totalChars, selectedModel);
+          // Fallback heuristic: sum the draft + history as chars.
+          const historyChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+          const tokens = roughInputTokensFromChars(
+            systemPrompt.length + historyChars + draftChars,
+            selectedModel,
+          );
           setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
         }
       })();
@@ -771,7 +792,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [inputValue, chatAttachedFiles, selectedModel]);
+  }, [inputValue, chatAttachedFiles, selectedModel, messages, customSystemPrompt]);
 
   // Debounced input-cost estimate for Generate mode. Assembles the same
   // prompt shape startGeneration() builds (system prompt + document
@@ -796,6 +817,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           : ''
       }`;
 
+      const baseSystemPrompt = customSystemPrompt?.trim() || systemPromptContent;
+      const systemPromptForEstimate = `${baseSystemPrompt}\n\n${generateModePromptContent}`;
+
       void (async () => {
         try {
           const response = await fetch('/api/count-tokens-estimate', {
@@ -805,6 +829,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             signal: controller.signal,
             body: JSON.stringify({
               model: selectedModel,
+              system: [{ type: 'text', text: systemPromptForEstimate }],
               messages: [{ role: 'user', content: assembled }],
             }),
           });
@@ -818,6 +843,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
           const chars =
+            systemPromptForEstimate.length +
             assembled.length +
             readyTextFiles.reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
           const tokens = roughInputTokensFromChars(chars, selectedModel);
@@ -829,7 +855,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [files, additionalInstructions, generateAttachedFileIds, selectedModel]);
+  }, [files, additionalInstructions, generateAttachedFileIds, selectedModel, customSystemPrompt]);
 
   const handleStopStreaming = () => {
     if (abortControllerRef.current) {
