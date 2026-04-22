@@ -1,7 +1,7 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
-import { LIFETIME_CAP_USD, GLOBAL_MONTHLY_CAP_USD, tierFor } from '../_shared/tiers';
+import { LIFETIME_CAP_USD, tierFor } from '../_shared/tiers';
 import { hashIP } from '../_shared/anon-id';
 
 function microToUsd(micro: bigint | number | null | undefined): number {
@@ -12,14 +12,6 @@ function microToUsd(micro: bigint | number | null | undefined): number {
   const whole = asBig / 1_000_000n;
   const frac = Number(asBig % 1_000_000n) / 1_000_000;
   return Number(whole) + frac;
-}
-
-function firstOfNextMonthUtcIso(): string {
-  const now = new Date();
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  // Date.UTC handles month overflow (12 -> next year Jan).
-  return new Date(Date.UTC(y, m + 1, 1, 0, 0, 0, 0)).toISOString();
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -56,16 +48,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const sql = getDb(env);
 
-    const [userRows, globalRows, byokRows] = await Promise.all([
+    const [userRows, byokRows] = await Promise.all([
       sql`
         SELECT cost_micro_usd
         FROM user_api_usage
         WHERE user_id = ${userId}
-      `,
-      sql`
-        SELECT cost_micro_usd
-        FROM global_monthly_usage
-        WHERE month_start = DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date
       `,
       // Only meaningful for authenticated users; anon can never have a BYOK row.
       userId.startsWith('anon-')
@@ -75,17 +62,16 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const hasByok = byokRows.length > 0;
     const userMicro = userRows.length > 0 ? (userRows[0].cost_micro_usd as bigint | number) : 0;
-    const globalMicro = globalRows.length > 0 ? (globalRows[0].cost_micro_usd as bigint | number) : 0;
 
+    // Global monthly spend is observability-only (tracked in `global_monthly_usage`,
+    // written via anthropic-stream's reconcile). It's NOT exposed here — users
+    // can't act on it, and the Anthropic Console cap is the authoritative hard
+    // stop. Clients learn about exhaustion via the 402 `global_budget_exhausted`
+    // response when a stream fails upstream.
     return Response.json({
       used_usd: microToUsd(userMicro),
       limit_usd: LIFETIME_CAP_USD,
       tier: tierFor(userId, hasByok),
-      global: {
-        used_usd: microToUsd(globalMicro),
-        limit_usd: GLOBAL_MONTHLY_CAP_USD,
-        resets_at: firstOfNextMonthUtcIso(),
-      },
     });
   } catch (error) {
     console.error('Error fetching usage:', error);

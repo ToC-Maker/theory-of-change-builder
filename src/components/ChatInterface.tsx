@@ -263,7 +263,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     used_usd: number;
     limit_usd: number;
     tier: string;
-    global?: { used_usd: number; limit_usd: number };
   } | null>(null);
 
   // Running cost for the in-flight assistant turn (updated via onCostUpdate).

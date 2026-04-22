@@ -16,12 +16,6 @@ const usdToMicro = (usd: number): bigint => BigInt(usd) * 1_000_000n;
 export const LIFETIME_CAP_USD = 5;
 export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 
-// Global observability cap -- matches the Anthropic Console customer-set cap.
-// NOT an enforcement mechanism (Anthropic's cap is the hard stop); this is
-// for near-real-time dashboards instead of waiting on billing emails (~24h lag).
-export const GLOBAL_MONTHLY_CAP_USD = 100;
-export const GLOBAL_MONTHLY_CAP_MICRO_USD = usdToMicro(GLOBAL_MONTHLY_CAP_USD);
-
 // Request-body size limit (32 MB). Matches Anthropic Messages API ceiling.
 // Enforced via streaming byte counter on the request body (not Content-Length),
 // so we stop reading as soon as we cross the threshold.
