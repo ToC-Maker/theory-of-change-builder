@@ -315,6 +315,21 @@ async function estimateProjectedCost(
     if (COUNT_TOKENS_ALLOWED.has(k)) countBody[k] = v;
   }
 
+  // Strip server tools (web_search_*, code_execution_*) — count_tokens
+  // rejects them with "Server tools are not supported in the count_tokens
+  // endpoint. Use the /v1/messages endpoint instead." Undocumented but
+  // observed in production. Leave user-defined function tools in place so
+  // their definitions still count. If the filtered array is empty, drop
+  // the field entirely rather than sending [].
+  if (Array.isArray(countBody.tools)) {
+    const filtered = (countBody.tools as Array<Record<string, unknown>>).filter((t) => {
+      const type = typeof t?.type === 'string' ? t.type : '';
+      return !type.startsWith('web_search_') && !type.startsWith('code_execution_');
+    });
+    if (filtered.length > 0) countBody.tools = filtered;
+    else delete countBody.tools;
+  }
+
   let resp: Response;
   try {
     resp = await fetch(ANTHROPIC_COUNT_URL, {
