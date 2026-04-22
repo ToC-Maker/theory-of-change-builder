@@ -1182,8 +1182,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // Cost + usage tallies are tracked server-side in anthropic-stream.ts
           // via SSE `message_delta.usage` parsing.
 
-          // Handle edit instructions if present
-          if (editInstructions && onGraphUpdate && graphData) {
+          // Handle edit instructions if present. Check length — an empty
+          // array is truthy in JS, so omitting this check causes the
+          // whole graph-update + snapshot path to run for every reply
+          // that parsed to zero edits (leading to a 500 on saveSnapshot
+          // when the assistant message wasn't persisted).
+          if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
             console.log('Edit instructions detected in ChatInterface:', editInstructions);
             try {
               const updatedGraph = applyEdits(graphData, editInstructions);
@@ -1808,8 +1812,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             }
           }
 
-          // Handle edit instructions if present (for regular chat mode)
-          if (editInstructions && onGraphUpdate && graphData) {
+          // Handle edit instructions if present (for regular chat mode).
+          // Empty array is truthy; length check avoids triggering the
+          // graph-update + snapshot path when Claude returned no edits.
+          if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
             try {
               const updatedGraph = applyEdits(graphData, editInstructions);
               onGraphUpdate(updatedGraph);

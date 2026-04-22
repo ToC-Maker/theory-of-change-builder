@@ -551,6 +551,14 @@ class LoggingServiceClass {
   }): Promise<void> {
     if (!this.isLoggingEnabled()) return;
 
+    // Skip empty content. Happens when a stream aborted before any text
+    // arrived (stream complete with chunks=2 / bytes=~0 was observed in
+    // prod). The server would 400 anyway and there's no audit value in
+    // logging "". A genuine stripped-to-empty assistant reply would be
+    // caught upstream: we log the raw pre-clean content, which is only
+    // empty if nothing streamed.
+    if (data.content.length === 0) return;
+
     // If a session initialization is in flight (typical on first load —
     // initializeSession is fired from App.tsx but not awaited), wait for
     // it before bailing out. Without this the user's first message of the

@@ -15,9 +15,11 @@ interface SaveMessageRequest {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  // Reject oversized payloads (content max 100KB + overhead)
+  // Reject oversized payloads (content max 1MB + overhead — matches the
+  // snapshot payload ceiling). If Claude accepted a user paste via
+  // anthropic-stream, we should be able to log it too.
   const text = await request.text();
-  if (new TextEncoder().encode(text).length > 200_000) {
+  if (new TextEncoder().encode(text).length > 1_100_000) {
     return Response.json({ error: 'Payload too large' }, { status: 413 });
   }
 
@@ -46,8 +48,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ error: 'content must be a non-empty string' }, { status: 400 });
     }
 
-    if (new TextEncoder().encode(data.content).length > 100_000) {
-      return Response.json({ error: 'content exceeds 100KB limit' }, { status: 413 });
+    if (new TextEncoder().encode(data.content).length > 1_000_000) {
+      return Response.json({ error: 'content exceeds 1MB limit' }, { status: 413 });
     }
 
     const token = extractToken(request.headers.get('authorization'));
