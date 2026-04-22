@@ -5,26 +5,16 @@ import { KeyIcon, EyeIcon, EyeSlashIcon, CheckCircleIcon, ArrowTopRightOnSquareI
 
 export type ByokPanelMode = 'generate' | 'cap_reached' | 'voluntary';
 
-export interface ByokPanelCostEstimate {
-  low_usd: number;
-  remaining_usd?: number;
-}
-
 export interface ByokPanelProps {
   mode: ByokPanelMode;
   onSubmitted?: () => void;
-  costEstimate?: ByokPanelCostEstimate;
   anthropicKeyHelpUrl?: string;
   donateUrl?: string;
   className?: string;
 }
 
-const DEFAULT_HELP_URL = 'https://console.anthropic.com/settings/keys';
+const DEFAULT_HELP_URL = 'https://platform.claude.com/settings/keys';
 const DEFAULT_DONATE_URL = '#donate';
-
-function formatUsd(value: number): string {
-  return `$${value.toFixed(2)}`;
-}
 
 /**
  * Inline panel for Bring-Your-Own-Key (BYOK) Anthropic API key entry.
@@ -45,7 +35,6 @@ function formatUsd(value: number): string {
 export function ByokPanel({
   mode,
   onSubmitted,
-  costEstimate,
   anthropicKeyHelpUrl = DEFAULT_HELP_URL,
   donateUrl = DEFAULT_DONATE_URL,
   className,
@@ -99,18 +88,21 @@ export function ByokPanel({
     .filter(Boolean)
     .join(' ');
 
-  // Anonymous-user fallback: BYOK requires a user account so the encrypted
-  // key can be bound to their auth0 sub. Route them to sign in instead of
-  // showing the input field.
+  // Anonymous-user fallback: we bind the stored key to the user's auth0 sub,
+  // so key entry requires a signed-in account. Explain what Generate needs
+  // and why, rather than a bare "please sign in".
   if (!authLoading && !isAuthenticated) {
     return (
       <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
-        <h3 id={`${inputId}-title`} className="flex items-center gap-2 text-base font-semibold text-gray-900">
-          <KeyIcon className="w-5 h-5 text-gray-500" aria-hidden />
-          Sign in first to add a BYOK key
+        <h3 id={`${inputId}-title`} className="flex items-start gap-2 text-base font-semibold text-gray-900">
+          <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
+          <span>Sign in to use Generate with your Anthropic API key</span>
         </h3>
-        <p className="mt-2 text-sm text-gray-600">
-          Encrypted on our servers, scoped to your account. Please sign in, then come back to add a key.
+        <p className="mt-2 text-sm text-gray-700 leading-relaxed">
+          Generate runs a deep, multi-turn analysis of your documents; a single
+          run typically costs more than the free tier covers. To use it, sign in
+          and add your own Anthropic API key; usage is billed directly to your
+          Anthropic account, not ours.
         </p>
       </section>
     );
@@ -146,6 +138,31 @@ export function ByokPanel({
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="mt-3 space-y-3" noValidate>
+          <ol className="text-sm text-gray-700 space-y-1 list-decimal list-inside">
+            <li>
+              Open{' '}
+              <a
+                href={anthropicKeyHelpUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1"
+              >
+                platform.claude.com/settings/keys
+                <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" aria-hidden />
+              </a>{' '}
+              (sign in if prompted).
+            </li>
+            <li>
+              If you haven&apos;t already, add a payment method under
+              {' '}Billing &rarr; add credit or a card.
+            </li>
+            <li>
+              Click <strong>Create Key</strong>, name it (e.g. &ldquo;Theory of
+              Change&rdquo;), copy the <code className="font-mono">sk-ant-&hellip;</code>{' '}
+              value, and paste it below. The key is only shown once.
+            </li>
+          </ol>
+
           <label htmlFor={inputId} className="sr-only">
             Anthropic API key
           </label>
@@ -208,15 +225,6 @@ export function ByokPanel({
               )}
               {submitting ? 'Verifying…' : 'Verify and continue'}
             </button>
-            <a
-              href={anthropicKeyHelpUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
-            >
-              Get a key
-              <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" aria-hidden />
-            </a>
             {mode === 'cap_reached' && (
               <a
                 href={donateUrl}
@@ -227,17 +235,14 @@ export function ByokPanel({
             )}
           </div>
 
-          {mode === 'generate' && costEstimate && (
-            <p className="text-xs text-gray-600">
-              Est. {formatUsd(costEstimate.low_usd)} (input only; final cost depends on model
-              output).
+          {mode === 'generate' && (
+            <p id={disclosureId} className="text-xs text-gray-600">
+              A typical Generate run costs around <strong>$0.50</strong> on your
+              Anthropic account. Exact cost depends on document size and how much
+              the model writes back; you&apos;ll see it live as the response
+              streams.
             </p>
           )}
-
-          <p id={disclosureId} className="text-xs text-gray-500">
-            Encrypted on our servers, scoped to your account. You can delete it anytime from the
-            settings menu.
-          </p>
         </form>
       )}
     </section>
@@ -250,18 +255,21 @@ function renderHeader(
   switch (mode) {
     case 'generate':
       return {
-        title: 'Bring your own Anthropic key',
-        body: 'Generate uses deep analysis. Please supply your own key to keep this free for others.',
+        title: 'Add your Anthropic API key to use Generate',
+        body:
+          'Generate runs a deep, multi-turn analysis of your documents; a single run typically costs more than the free tier covers. Use your own Anthropic API key to run it; usage is billed directly to your Anthropic account.',
       };
     case 'cap_reached':
       return {
-        title: "You've used the free daily quota",
-        body: 'Keep going with your own Anthropic key, or donate to top up the pool for everyone.',
+        title: "You've used the free lifetime quota",
+        body:
+          'To keep chatting, add your own Anthropic API key; usage is billed directly to your Anthropic account. You can also donate to help us raise the cap and keep this tool sustainable.',
       };
     case 'voluntary':
       return {
         title: 'Add your Anthropic API key',
-        body: null,
+        body:
+          "When a key is set, your messages are billed to your Anthropic account instead of our shared free pool.",
       };
   }
 }

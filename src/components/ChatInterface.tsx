@@ -14,11 +14,7 @@ import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { ByokPanel } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
-import {
-  formatCostUsd,
-  estimateCostLowBound,
-  roughInputTokensFromChars,
-} from '../utils/cost';
+import { formatCostUsd } from '../utils/cost';
 import {
   ChevronLeftIcon,
   Cog6ToothIcon,
@@ -274,9 +270,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Running cost for the in-flight assistant turn (updated via onCostUpdate).
   const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
 
-  // Composer-side cost estimate (input-only lower bound). Debounced so
-  // typing doesn't recompute on each keystroke.
-  const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
 
   // Inline error banner shown under the last user message when the server
   // rejects the request on cost/quota grounds (429/402). Persists the chat
@@ -667,73 +660,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       setTurnstileError('Network error while verifying; please try again.');
     }
   }, []);
-
-  // Debounced cost estimate: recomputes 300ms after the last keystroke or
-  // attachment change. Prefer the server-side /api/count-tokens-estimate
-  // (free pass-through to Anthropic's count_tokens endpoint), falling back
-  // to a rough char-based heuristic if the network or server is down. The
-  // server estimate uses the model's real tokenizer, which is ~35% off for
-  // Opus 4.7 versus the char-based heuristic.
-  useEffect(() => {
-    // Cancel any in-flight estimate when dependencies change.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      const attachedChars = chatAttachedFiles
-        .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
-        .reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
-      const totalChars = inputValue.length + attachedChars;
-      if (totalChars === 0) {
-        setComposerEstimateUsd(0);
-        return;
-      }
-
-      // Inline text-file content so the server-side count matches what
-      // streamMessage will actually send. Attached PDFs (file_id) aren't
-      // folded in here — count_tokens counts documents only when we pass
-      // the file via the actual request shape; a preflight without their
-      // bytes gives a conservative under-estimate, which is acceptable for
-      // composer-side display.
-      const inlineSections = chatAttachedFiles
-        .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
-        .map((f) => `=== ${f.filename} ===\n${f.content}`);
-      const userBody =
-        inlineSections.length > 0
-          ? `${inputValue}\n\n${inlineSections.join('\n\n')}`
-          : inputValue;
-
-      void (async () => {
-        try {
-          const response = await fetch('/api/count-tokens-estimate', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-              model: selectedModel,
-              messages: [{ role: 'user', content: userBody }],
-            }),
-          });
-          if (!response.ok) throw new Error(`status ${response.status}`);
-          const data = (await response.json()) as { estimated_cost_usd?: number };
-          if (typeof data.estimated_cost_usd === 'number') {
-            setComposerEstimateUsd(data.estimated_cost_usd);
-            return;
-          }
-          throw new Error('no cost in response');
-        } catch (err) {
-          if ((err as { name?: string })?.name === 'AbortError') return;
-          // Fall back to the char-based heuristic so the UI still shows
-          // something reasonable offline or when the server is down.
-          const tokens = roughInputTokensFromChars(totalChars, selectedModel);
-          setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
-        }
-      })();
-    }, 300);
-    return () => {
-      clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [inputValue, chatAttachedFiles, selectedModel]);
 
   const handleStopStreaming = () => {
     if (abortControllerRef.current) {
@@ -2300,11 +2226,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       target.style.height = newHeight + 'px';
                     }}
                   />
-                  {composerEstimateUsd > 0 && (
-                    <div className="text-xs text-gray-500">
-                      Est. {formatCostUsd(composerEstimateUsd)} (input only)
-                    </div>
-                  )}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1">
                       <button
