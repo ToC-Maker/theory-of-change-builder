@@ -614,8 +614,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         return;
       default:
         // database_unavailable / authentication_service_unavailable /
-        // invalid_token / email_verification_required all fall through to a
-        // generic service banner.
+        // invalid_token all fall through to a generic service banner.
         setCostErrorBanner({
           kind: 'service_unavailable',
           message: COST_ERROR_COPY.service_unavailable,

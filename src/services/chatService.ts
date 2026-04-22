@@ -53,7 +53,6 @@ export type CostErrorType =
   | 'turnstile_required'
   | 'turnstile_failed'
   | 'invalid_token'
-  | 'email_verification_required'
   | 'idempotent_replay'
   | 'body_too_large'
   | 'database_unavailable'
@@ -140,7 +139,7 @@ export type StreamMessageOptions = {
 
 /** HTTP status + error.type combinations that map to a CostError and skip retry/fallthrough. */
 const COST_ERROR_MAP: Record<number, CostErrorType[]> = {
-  401: ['turnstile_required', 'turnstile_failed', 'invalid_token', 'email_verification_required', 'authentication_service_unavailable'],
+  401: ['turnstile_required', 'turnstile_failed', 'invalid_token', 'authentication_service_unavailable'],
   402: ['global_budget_exhausted'],
   409: ['idempotent_replay'],
   413: ['body_too_large'],

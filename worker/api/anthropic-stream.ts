@@ -159,9 +159,13 @@ async function readBodyWithSizeClamp(
 // --- Actor / tier resolution --------------------------------------------
 
 type ActorResult =
-  | { ok: true; actorId: string; emailVerified: boolean; authenticated: boolean }
+  | { ok: true; actorId: string; authenticated: boolean }
   | { ok: false; response: Response };
 
+// Email verification is enforced upstream in Auth0 via a Post-Login Action
+// that denies login for users with `event.user.email_verified === false`.
+// Auth0 only issues tokens for verified users, so anyone reaching this
+// handler with a valid JWT is implicitly verified — no in-worker check needed.
 async function resolveActor(
   request: Request,
   env: Env,
@@ -179,11 +183,7 @@ async function resolveActor(
       }
       return { ok: false, response: jsonError({ error: 'invalid_token' }, 401, altSvcHeaders) };
     }
-    const emailVerified = decoded.email_verified === true;
-    if (!emailVerified) {
-      return { ok: false, response: jsonError({ error: 'email_verification_required' }, 401, altSvcHeaders) };
-    }
-    return { ok: true, actorId: decoded.sub, emailVerified: true, authenticated: true };
+    return { ok: true, actorId: decoded.sub, authenticated: true };
   }
 
   // Anonymous path: hash the CF-attested IP under our salt.
@@ -195,7 +195,7 @@ async function resolveActor(
     console.error('Failed to hash IP for anonymous actor:', e);
     actorId = 'anon-unknown';
   }
-  return { ok: true, actorId, emailVerified: false, authenticated: false };
+  return { ok: true, actorId, authenticated: false };
 }
 
 // --- Turnstile session cookie ------------------------------------------
