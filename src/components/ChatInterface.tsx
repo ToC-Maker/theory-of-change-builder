@@ -1051,7 +1051,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }
             setStreamingContent(fullContent);
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
+          onComplete: (finalMessage: string, editInstructions?: any, usage?: any, rawMessage?: string) => {
           const assistantMessage: ChatMessage = {
             id: assistantMessageId,
             role: 'assistant',
@@ -1078,11 +1078,15 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // Refresh the usage progress bar after the server-side tally lands.
           void refreshUsage();
 
-          // Log assistant message (fire and forget)
+          // Log assistant message (fire and forget). Use the raw streamed
+          // content rather than the cleaned one — cleanResponseContent()
+          // strips [EDIT_INSTRUCTIONS] blocks, and an edit-only response
+          // would otherwise log as empty (server 400s on that), breaking
+          // the FK that saveSnapshot.triggered_by_message_id relies on.
           loggingService.logUserMessage({
             messageId: assistantMessageId,
             role: 'assistant',
-            content: finalMessage,
+            content: rawMessage ?? finalMessage,
             tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
           });
 

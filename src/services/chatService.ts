@@ -103,7 +103,12 @@ function newIdempotencyKey(): string {
 
 export interface StreamCallbacks {
   onContent?: (chunk: string, fullContent: string) => void;
-  onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
+  onComplete?: (
+    message: string,
+    editInstructions?: EditInstruction[],
+    usage?: any,
+    rawMessage?: string,
+  ) => void;
   onError?: (error: string) => void;
   onSearchStart?: () => void;
   onSearchComplete?: (results?: any[]) => void;
@@ -467,9 +472,14 @@ class ChatService {
                 }
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
-                // Separate try so callback bugs aren't reported as streaming failures
+                // Separate try so callback bugs aren't reported as streaming failures.
+                // Pass fullContent as rawMessage so loggers can persist the full
+                // response (including [EDIT_INSTRUCTIONS] blocks); cleanContent is
+                // for display. Edit-only responses clean to "" which would 400 the
+                // save and cascade into a 500 on the follow-up snapshot via the
+                // triggered_by_message_id FK.
                 try {
-                  callbacks.onComplete?.(cleanContent, editInstructions, usage);
+                  callbacks.onComplete?.(cleanContent, editInstructions, usage, fullContent);
                 } catch (callbackErr) {
                   console.error('[ChatService] onComplete callback error:', callbackErr);
                 }
