@@ -574,7 +574,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       case 'turnstile_failed':
         // Siteverify rejected. Keep the widget visible, surface the error.
         setHasTurnstileSession(false);
-        setTurnstileError('Challenge failed — please try again.');
+        setTurnstileError('Challenge failed; please try again.');
         return;
       case 'idempotent_replay':
         // Silent: the user double-clicked or the browser replayed. The
@@ -652,14 +652,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       const message =
         body.error === 'turnstile_failed'
-          ? 'Challenge failed — please try again.'
-          : 'Verification failed — please try again.';
+          ? 'Challenge failed; please try again.'
+          : 'Verification failed; please try again.';
       setHasTurnstileSession(false);
       setTurnstileError(message);
     } catch (err) {
       console.warn('[ChatInterface] verify-turnstile failed:', err);
       setHasTurnstileSession(false);
-      setTurnstileError('Network error while verifying — please try again.');
+      setTurnstileError('Network error while verifying; please try again.');
     }
   }, []);
 
