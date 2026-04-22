@@ -2208,6 +2208,30 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           {/* Input Area */}
           <div className="p-3 border-t border-gray-200">
               {currentMode === 'chat' ? (
+                !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
+                  /* Turnstile gate: block the entire composer for anonymous
+                     visitors until they solve the challenge and we exchange
+                     the token for a session cookie. Avoids the old behavior
+                     where users could type + send and then see a cryptic 401
+                     from the Worker. Once `hasTurnstileSession` flips true
+                     the full composer below renders. If the Worker later
+                     returns `turnstile_required` (cookie expired or IP
+                     changed), `handleCostError` flips us back to this branch. */
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                      Solve the challenge below to verify you're human before sending a message. We do this once per 24 hours (or whenever your IP changes) to prevent abuse of the free tier.
+                    </div>
+                    <TurnstileWidget
+                      siteKey={TURNSTILE_SITE_KEY}
+                      onToken={handleTurnstileToken}
+                    />
+                    {turnstileError && (
+                      <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                        {turnstileError}
+                      </div>
+                    )}
+                  </div>
+                ) : (
                 <div className="space-y-2">
                   {/* Selected Nodes Context */}
                   {selectedNodes.length > 0 && (
@@ -2215,31 +2239,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       {selectedNodes.length === 1 ? '1 node selected' : `${selectedNodes.length} nodes selected`}
                     </div>
                   )}
-                  {/* Turnstile challenge: anonymous visitors only. With a site
-                      key configured, the widget is rendered until a solve is
-                      exchanged for a session cookie. The Worker sets an
-                      httpOnly `tocb_anon` cookie on successful verify, so the
-                      raw token isn't used after this step. If the Worker
-                      later returns `turnstile_required` (cookie expired or
-                      IP changed), `handleCostError` flips us back to this
-                      branch so the widget re-renders.
-
-                      Without a site key, we skip (matches server-side U9
-                      skip). In DEV, surface a hint so developers know why
-                      sends are unchallenged. */}
-                  {!isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
-                    <div className="flex flex-col gap-1">
-                      <TurnstileWidget
-                        siteKey={TURNSTILE_SITE_KEY}
-                        onToken={handleTurnstileToken}
-                      />
-                      {turnstileError && (
-                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-                          {turnstileError}
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
                   {!isAuthenticated && !TURNSTILE_SITE_KEY && import.meta.env.DEV ? (
                     <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                       Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
@@ -2389,6 +2388,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   </div>
                 </div>
+                )
               ) : null}
             </div>
         </div>
