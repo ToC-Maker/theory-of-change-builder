@@ -722,6 +722,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, []);
 
+  // Refs mirroring values we WANT the estimate to read on fire but NOT
+  // to retrigger it. Anthropic's count_tokens is rate-limited (Tier 1:
+  // 100 RPM); re-running the estimate every time the user nudges a node
+  // burns budget for no user benefit — the result is only consumed at
+  // send time.
+  const graphDataRef = useRef(graphData);
+  useEffect(() => { graphDataRef.current = graphData; }, [graphData]);
+  const customSystemPromptRef = useRef(customSystemPrompt);
+  useEffect(() => { customSystemPromptRef.current = customSystemPrompt; }, [customSystemPrompt]);
+
   // Debounced input-cost estimate for the Chat composer. Mirrors the
   // request shape streamMessage assembles so the number reflects actual
   // billing, not just the visible textarea:
@@ -729,6 +739,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   //   - messages: full history + current draft, with [CURRENT_GRAPH_DATA]
   //     JSON appended to the draft (chatService.ts:546-557)
   //   - cache_control: ephemeral, defaulting to 5m TTL per Anthropic docs
+  //
+  // Rate-limit hygiene: 600ms debounce + graphData/customSystemPrompt
+  // read via ref so graph nudges and rare prompt edits don't refire the
+  // effect. Tier 1 is 100 RPM; a continuously-typing user would otherwise
+  // fire ~100 RPM alone between pauses.
   //
   // Cache accounting: count_tokens returns a flat input-token count with no
   // write-vs-read split. We approximate by timing the last assistant turn:
@@ -760,17 +775,19 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           : inputValue;
 
       // Mirror chatService.ts:551-557: the last user message gets graph data
-      // appended inside [CURRENT_GRAPH_DATA] tags. Skip if no graph loaded.
-      if (graphData) {
+      // appended inside [CURRENT_GRAPH_DATA] tags. Read graph via ref so
+      // node nudges don't retrigger the estimate.
+      const currentGraph = graphDataRef.current;
+      if (currentGraph) {
         try {
-          const dataWithPaths = addNodePaths(graphData);
+          const dataWithPaths = addNodePaths(currentGraph);
           draftBody += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
         } catch {
           // addNodePaths shape mismatch; skip rather than break the estimate.
         }
       }
 
-      const baseSystemPrompt = customSystemPrompt?.trim() || systemPromptContent;
+      const baseSystemPrompt = customSystemPromptRef.current?.trim() || systemPromptContent;
       const systemPrompt = `${baseSystemPrompt}\n\n${chatModePromptContent}`;
       const historyForEstimate = messages.map((m) => ({
         role: m.role,
@@ -842,12 +859,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setEstimatingCost(false);
         }
       })();
-    }, 300);
+    }, 600);
     return () => {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [inputValue, chatAttachedFiles, selectedModel, messages, customSystemPrompt, graphData]);
+  }, [inputValue, chatAttachedFiles, selectedModel, messages]);
 
   // Debounced input-cost estimate for Generate mode. Assembles the same
   // prompt shape startGeneration() builds (system prompt + document
@@ -872,7 +889,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           : ''
       }`;
 
-      const baseSystemPrompt = customSystemPrompt?.trim() || systemPromptContent;
+      const baseSystemPrompt = customSystemPromptRef.current?.trim() || systemPromptContent;
       const systemPromptForEstimate = `${baseSystemPrompt}\n\n${generateModePromptContent}`;
 
       setEstimatingCost(true);
@@ -916,12 +933,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setEstimatingCost(false);
         }
       })();
-    }, 300);
+    }, 600);
     return () => {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [files, additionalInstructions, generateAttachedFileIds, selectedModel, customSystemPrompt]);
+  }, [files, additionalInstructions, generateAttachedFileIds, selectedModel]);
 
   const handleStopStreaming = () => {
     if (abortControllerRef.current) {
