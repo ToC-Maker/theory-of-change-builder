@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { useParams, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage, type CostError } from '../services/chatService';
+import { ChartService } from '../services/chartService';
 import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
@@ -59,6 +60,11 @@ interface ChatInterfaceProps {
   graphData?: any;
   onGraphUpdate?: (newGraphData: any) => void;
   highlightedNodes?: Set<string>;
+  // Called when an action in Chat/Generate (e.g. auto-saving the chart on
+  // first file upload) creates a new chart row. The parent uses this to
+  // sync its own state (currentEditToken/currentChartId) without needing
+  // a full navigation — URL is updated in place via history.replaceState.
+  onChartCreated?: (editToken: string, chartId: string) => void;
 }
 
 const MODELS = {
@@ -201,7 +207,7 @@ function TurnstileWidget({
   return <div ref={containerRef} className="cf-turnstile" />;
 }
 
-export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
+export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set(), onChartCreated }: ChatInterfaceProps) {
   const { hasKey, keyLast4, verified, useForChat, setUseForChat, clearKey } = useApiKey();
   const { isAuthenticated, getIdTokenClaims } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
@@ -1056,16 +1062,40 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Shared by Chat and Generate modes: Chat tracks chips in chatAttachedFiles,
   // Generate tracks them in generateAttachedChips. Returns early with an error
   // message if the chart hasn't been saved yet (the worker requires chart_id).
+  // Tracks a chart id/edit token for charts auto-saved during this session.
+  // params.chartId / params.editToken reflect the URL; history.replaceState
+  // below updates the URL without a route re-render, so React Router params
+  // won't catch the change. We read this ref as an additional source of
+  // truth for subsequent uploads in the same session.
+  const autosavedEditTokenRef = useRef<string | null>(null);
+  const autosavedChartIdRef = useRef<string | null>(null);
+
   const uploadPdfToFilesApi = useCallback(
     async (
       file: File,
     ): Promise<{ file_id: string; filename: string; size_bytes: number; mime_type: string }> => {
-      if (!params.chartId && !params.editToken) {
-        throw new Error('Save the chart before attaching files');
+      let chartIdForUpload = params.chartId ?? autosavedChartIdRef.current ?? params.editToken ?? autosavedEditTokenRef.current;
+      if (!chartIdForUpload) {
+        // Auto-save the chart so chart_files has a valid FK target. Uses
+        // the in-memory graph (whatever the user has set up so far, or the
+        // default template on a fresh `/` route).
+        if (!graphData) {
+          throw new Error('No chart data available to save');
+        }
+        const created = await ChartService.createChart(graphData);
+        ChartService.saveEditToken(created.chartId, created.editToken);
+        autosavedEditTokenRef.current = created.editToken;
+        autosavedChartIdRef.current = created.chartId;
+        // Update the URL in place so a page refresh finds the chart. No
+        // route re-render (that would lose chip state).
+        window.history.replaceState(null, '', `/edit/${created.editToken}`);
+        onChartCreated?.(created.editToken, created.chartId);
+        chartIdForUpload = created.chartId;
       }
+
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('chart_id', params.chartId ?? params.editToken ?? '');
+      formData.append('chart_id', chartIdForUpload);
 
       const headers = await getAuthHeaders();
       const response = await fetch('/api/upload-file', {
@@ -1080,7 +1110,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       }
       return response.json();
     },
-    [getAuthHeaders, params.chartId, params.editToken],
+    [getAuthHeaders, params.chartId, params.editToken, graphData, onChartCreated],
   );
 
   // Generate-mode file handler. Text files continue to be inlined via the
@@ -1826,6 +1856,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               </>
             ) : currentMode === 'generate' ? (
               <div className="space-y-4">
+                {/* Generate-mode BYOK gate. Generation concentrates cost
+                    (extended thinking + web search + documents) into a
+                    single one-shot request, so we require BYOK up front
+                    before showing any input UI. Once the user submits a
+                    verified key, hasKey flips and the full panel renders
+                    below. */}
+                {!hasKey || !verified ? (
+                  <ByokPanel
+                    mode="generate"
+                    onSubmitted={() => {
+                      void refreshUsage();
+                    }}
+                  />
+                ) : (
+                <>
                 <div className="text-center text-gray-500 text-sm py-4">
                   <div className="mb-2"><DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
                   <p>Upload documents to generate a Theory of Change conversation</p>
@@ -1951,68 +1996,33 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   />
                 </div>
 
-                {/* Generate gate: require a verified BYOK key. Rationale
-                    (plan §Subtask 2 + decision 7): generation is expensive
-                    and we don't subsidize it from the shared pool. If the
-                    user doesn't have a key yet, surface the inline
-                    ByokPanel with a cost estimate instead of the button.
-                    Files and instructions remain visible above so context
-                    is preserved across the key-entry step. */}
-                {hasKey && verified ? (
-                  <button
-                    onClick={startGeneration}
-                    disabled={
-                      files.filter((f) => f.status === 'ready').length +
-                        generateAttachedFileIds.length ===
-                        0 ||
-                      generateAttachedChips.some((f) => f.status === 'uploading') ||
-                      isLoading
-                    }
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {isLoading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <DocumentPlusIcon className="w-4 h-4" />
-                        Generate Theory of Change
-                      </>
-                    )}
-                  </button>
-                ) : files.filter((f) => f.status === 'ready').length +
-                    generateAttachedFileIds.length >
-                  0 ? (
-                  <ByokPanel
-                    mode="generate"
-                    costEstimate={(() => {
-                      const promptChars =
-                        files
-                          .filter((f) => f.status === 'ready')
-                          .reduce((sum, f) => sum + (f.content?.length ?? 0), 0) +
-                        additionalInstructions.length +
-                        // Rough constant for the generate-mode prompt scaffolding.
-                        generateModePromptContent.length;
-                      const low = estimateCostLowBound(
-                        roughInputTokensFromChars(promptChars, selectedModel),
-                        selectedModel,
-                      );
-                      const remaining = usage
-                        ? Math.max(0, usage.limit_usd - usage.used_usd)
-                        : undefined;
-                      return { low_usd: low, remaining_usd: remaining };
-                    })()}
-                    onSubmitted={() => {
-                      void refreshUsage();
-                      void startGeneration();
-                    }}
-                  />
-                ) : (
-                  <div className="text-xs text-gray-500 text-center">
-                    Upload at least one document to continue.
-                  </div>
+                {/* Generate button. The BYOK gate is enforced upstream:
+                    this render path is reached only when hasKey && verified,
+                    so we don't need a fallback branch for the unkeyed case. */}
+                <button
+                  onClick={startGeneration}
+                  disabled={
+                    files.filter((f) => f.status === 'ready').length +
+                      generateAttachedFileIds.length ===
+                      0 ||
+                    generateAttachedChips.some((f) => f.status === 'uploading') ||
+                    isLoading
+                  }
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isLoading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <DocumentPlusIcon className="w-4 h-4" />
+                      Generate Theory of Change
+                    </>
+                  )}
+                </button>
+                </>
                 )}
               </div>
             ) : currentMode === 'search' ? (

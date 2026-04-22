@@ -228,11 +228,19 @@ function FileChip({ file, onRemove, onRetry }: FileChipProps) {
       )}
 
       {file.status === 'error' && (
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1.5">
           <span
             className="inline-block w-1.5 h-1.5 rounded-full bg-red-500"
             aria-hidden
           />
+          {file.error && (
+            <span
+              className="text-xs font-normal text-red-700 max-w-[18rem] truncate"
+              title={file.error}
+            >
+              {file.error}
+            </span>
+          )}
           {onRetry && (
             <button
               type="button"

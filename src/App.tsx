@@ -1439,6 +1439,7 @@ function ToCViewer() {
         graphData={data}
         onGraphUpdate={handleGraphUpdate}
         highlightedNodes={highlightedNodes}
+        onChartCreated={handleChartCreated}
       />
 
       {/* Zoomable/Pannable Graph Area */}
