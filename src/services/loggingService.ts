@@ -551,6 +551,13 @@ class LoggingServiceClass {
   }): Promise<void> {
     if (!this.isLoggingEnabled()) return;
 
+    // Server rejects empty content with a generic 400 (line 32: `!data.content`
+    // is true for empty strings). Skip client-side so the circuit breaker
+    // doesn't count a cosmetic failure. Callers hitting this are usually
+    // assistant messages that finished with zero streamed content after an
+    // upstream error.
+    if (!data.content) return;
+
     // If a session initialization is in flight (typical on first load —
     // initializeSession is fired from App.tsx but not awaited), wait for
     // it before bailing out. Without this the user's first message of the

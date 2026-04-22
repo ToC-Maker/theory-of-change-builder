@@ -10,6 +10,7 @@ import { useApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
+import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
@@ -19,6 +20,7 @@ import {
   formatCostUsd,
   estimateCostLowBound,
   roughInputTokensFromChars,
+  MODEL_INPUT_RATES_USD_PER_MTOK,
 } from '../utils/cost';
 import {
   ChevronLeftIcon,
@@ -282,6 +284,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // hammering /api/count-tokens-estimate on every keystroke.
   const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
   const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
+  // Loading flag so the composer can show a spinner while the debounced
+  // fetch is in flight; avoids displaying a stale number that's about to
+  // change, and signals to the user that the field is being updated.
+  const [estimatingCost, setEstimatingCost] = useState<boolean>(false);
 
   // Inline error banner shown under the last user message when the server
   // rejects the request on cost/quota grounds (429/402). Persists the chat
@@ -713,14 +719,22 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, []);
 
-  // Debounced input-cost estimate for the Chat composer. Calls our server
-  // wrapper around Anthropic's free count_tokens endpoint so the number uses
-  // the real tokenizer (char-based heuristic is ~35% off for Opus). Input
-  // only — output cost is shown live during streaming. Includes the full
-  // assembled payload the actual stream will send (system prompt, prior
-  // turns, current draft, inlined attachment content) so multi-turn
-  // estimates reflect the growing conversation. Falls back to a char-based
-  // heuristic when the server is unreachable.
+  // Debounced input-cost estimate for the Chat composer. Mirrors the
+  // request shape streamMessage assembles so the number reflects actual
+  // billing, not just the visible textarea:
+  //   - system: baseSystemPrompt + chatModePromptContent
+  //   - messages: full history + current draft, with [CURRENT_GRAPH_DATA]
+  //     JSON appended to the draft (chatService.ts:546-557)
+  //   - cache_control: ephemeral, defaulting to 5m TTL per Anthropic docs
+  //
+  // Cache accounting: count_tokens returns a flat input-token count with no
+  // write-vs-read split. We approximate by timing the last assistant turn:
+  //   cold (no prior turn or last turn > 5m ago) → tokens × rate × 1.25
+  //     (cache-write multiplier)
+  //   warm (last turn within 5m) → new-draft chars at full rate,
+  //     system+history at 0.1× (cache-read multiplier)
+  // Anthropic's default ephemeral TTL is 5m (optional "1h" if we set it;
+  // we don't, so 5m it is).
   useEffect(() => {
     const controller = new AbortController();
     const timeout = setTimeout(() => {
@@ -730,22 +744,29 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const draftChars = inputValue.length + attachedChars;
       if (draftChars === 0 && messages.length === 0) {
         setComposerEstimateUsd(0);
+        setEstimatingCost(false);
         return;
       }
 
       const inlineSections = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
         .map((f) => `=== ${f.filename} ===\n${f.content}`);
-      const draftBody =
+      let draftBody =
         inlineSections.length > 0
           ? `${inputValue}\n\n${inlineSections.join('\n\n')}`
           : inputValue;
 
-      // Match the request shape chatService.streamMessage assembles: system
-      // prompt (mirrors chatService.ts:591-600), full message history, and
-      // the current draft appended as the next user turn. PDFs attached by
-      // file_id aren't folded in (count_tokens needs the file reference
-      // shape; acceptable undercount for a composer hint).
+      // Mirror chatService.ts:551-557: the last user message gets graph data
+      // appended inside [CURRENT_GRAPH_DATA] tags. Skip if no graph loaded.
+      if (graphData) {
+        try {
+          const dataWithPaths = addNodePaths(graphData);
+          draftBody += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
+        } catch {
+          // addNodePaths shape mismatch; skip rather than break the estimate.
+        }
+      }
+
       const baseSystemPrompt = customSystemPrompt?.trim() || systemPromptContent;
       const systemPrompt = `${baseSystemPrompt}\n\n${chatModePromptContent}`;
       const historyForEstimate = messages.map((m) => ({
@@ -756,6 +777,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         ? [...historyForEstimate, { role: 'user' as const, content: draftBody }]
         : historyForEstimate;
 
+      // Cache warmth: cached for 5m after the last assistant turn.
+      const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+      const cacheWarm =
+        !!lastAssistant &&
+        Date.now() - lastAssistant.timestamp.getTime() < 5 * 60 * 1000;
+
+      setEstimatingCost(true);
       void (async () => {
         try {
           const response = await fetch('/api/count-tokens-estimate', {
@@ -770,21 +798,44 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }),
           });
           if (!response.ok) throw new Error(`status ${response.status}`);
-          const data = (await response.json()) as { estimated_cost_usd?: number };
-          if (typeof data.estimated_cost_usd === 'number') {
-            setComposerEstimateUsd(data.estimated_cost_usd);
-            return;
-          }
-          throw new Error('no cost in response');
+          const data = (await response.json()) as {
+            input_tokens?: number;
+            estimated_cost_usd?: number;
+          };
+          const totalTokens = data.input_tokens ?? 0;
+          const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
+          // Approximate draft-only tokens via char ratio (no second fetch).
+          const draftOnlyTokens =
+            totalTokens > 0 && draftBody.length > 0
+              ? Math.round(
+                  totalTokens *
+                    (draftBody.length /
+                      (systemPrompt.length +
+                        messagesForEstimate.reduce(
+                          (n, m) =>
+                            n +
+                            (typeof m.content === 'string' ? m.content.length : 0),
+                          0,
+                        ))),
+                )
+              : 0;
+          const cachedTokens = Math.max(0, totalTokens - draftOnlyTokens);
+          const estimate = cacheWarm
+            ? (draftOnlyTokens * inputRate +
+                cachedTokens * inputRate * 0.1) /
+              1_000_000
+            : (totalTokens * inputRate * 1.25) / 1_000_000;
+          setComposerEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          // Fallback heuristic: sum the draft + history as chars.
           const historyChars = messages.reduce((sum, m) => sum + m.content.length, 0);
           const tokens = roughInputTokensFromChars(
             systemPrompt.length + historyChars + draftChars,
             selectedModel,
           );
           setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+        } finally {
+          setEstimatingCost(false);
         }
       })();
     }, 300);
@@ -792,7 +843,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [inputValue, chatAttachedFiles, selectedModel, messages, customSystemPrompt]);
+  }, [inputValue, chatAttachedFiles, selectedModel, messages, customSystemPrompt, graphData]);
 
   // Debounced input-cost estimate for Generate mode. Assembles the same
   // prompt shape startGeneration() builds (system prompt + document
@@ -820,6 +871,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const baseSystemPrompt = customSystemPrompt?.trim() || systemPromptContent;
       const systemPromptForEstimate = `${baseSystemPrompt}\n\n${generateModePromptContent}`;
 
+      setEstimatingCost(true);
       void (async () => {
         try {
           const response = await fetch('/api/count-tokens-estimate', {
@@ -834,12 +886,19 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }),
           });
           if (!response.ok) throw new Error(`status ${response.status}`);
-          const data = (await response.json()) as { estimated_cost_usd?: number };
-          if (typeof data.estimated_cost_usd === 'number') {
-            setGenerateEstimateUsd(data.estimated_cost_usd);
-            return;
-          }
-          throw new Error('no cost in response');
+          const data = (await response.json()) as {
+            input_tokens?: number;
+            estimated_cost_usd?: number;
+          };
+          const totalTokens = data.input_tokens ?? 0;
+          const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
+          // Generate is one-shot with a fresh user turn each click; the
+          // system prompt caches across runs but the documents don't, so
+          // the system prompt gets cache-write (1.25×) on first submit.
+          // Simpler approximation: apply 1.25× to whole count, matching
+          // startGeneration's actual behavior on the first click.
+          const estimate = (totalTokens * inputRate * 1.25) / 1_000_000;
+          setGenerateEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
           const chars =
@@ -848,6 +907,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             readyTextFiles.reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
           const tokens = roughInputTokensFromChars(chars, selectedModel);
           setGenerateEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+        } finally {
+          setEstimatingCost(false);
         }
       })();
     }, 300);
@@ -2147,12 +2208,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   />
                 </div>
 
-                {generateEstimateUsd > 0 && (
-                  <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
-                    Estimated input cost:{' '}
-                    <strong>{formatCostUsd(generateEstimateUsd)}</strong>.
-                    Output is billed on top as the response streams; hit Stop
-                    to abort if it runs long.
+                {(generateEstimateUsd > 0 || estimatingCost) && (
+                  <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
+                    {estimatingCost && (
+                      <span
+                        className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                        aria-label="Recalculating estimate"
+                      />
+                    )}
+                    {generateEstimateUsd > 0 ? (
+                      <span>
+                        Estimated input cost:{' '}
+                        <strong>{formatCostUsd(generateEstimateUsd)}</strong>.
+                        Output is billed on top as the response streams; hit Stop
+                        to abort if it runs long.
+                      </span>
+                    ) : (
+                      <span className="text-gray-500">Estimating…</span>
+                    )}
                   </div>
                 )}
 
@@ -2466,10 +2539,22 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       target.style.height = newHeight + 'px';
                     }}
                   />
-                  {composerEstimateUsd > 0 && (
-                    <div className="text-xs text-gray-500">
-                      Est. input {formatCostUsd(composerEstimateUsd)}; output
-                      shown live during streaming.
+                  {(composerEstimateUsd > 0 || estimatingCost) && (
+                    <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                      {estimatingCost && (
+                        <span
+                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                          aria-label="Recalculating estimate"
+                        />
+                      )}
+                      {composerEstimateUsd > 0 ? (
+                        <span>
+                          Est. input {formatCostUsd(composerEstimateUsd)}; output
+                          shown live during streaming.
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">Estimating…</span>
+                      )}
                     </div>
                   )}
                   <div className="flex items-center justify-between">
