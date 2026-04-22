@@ -111,7 +111,7 @@ const COST_ERROR_CATEGORIES: ReadonlyArray<
   ['global_budget', ['global_budget_exhausted', 'shared budget']],
   ['turnstile', ['turnstile_required', 'turnstile_failed']],
   ['body_too_large', ['body_too_large', 'payload too large']],
-  ['service_unavailable', ['database_unavailable', 'authentication_service_unavailable']],
+  ['service_unavailable', ['database_unavailable', 'estimation_unavailable', 'authentication_service_unavailable']],
 ];
 
 // Global reference to Cloudflare's injected helper. We attach it via the
@@ -623,8 +623,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         });
         return;
       default:
-        // database_unavailable / authentication_service_unavailable /
-        // invalid_token all fall through to a generic service banner.
+        // database_unavailable / estimation_unavailable /
+        // authentication_service_unavailable / invalid_token all fall
+        // through to a generic service banner.
         setCostErrorBanner({
           kind: 'service_unavailable',
           message: COST_ERROR_COPY.service_unavailable,

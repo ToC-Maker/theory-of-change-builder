@@ -56,6 +56,7 @@ export type CostErrorType =
   | 'idempotent_replay'
   | 'body_too_large'
   | 'database_unavailable'
+  | 'estimation_unavailable'
   | 'authentication_service_unavailable'
   | 'request_cost_ceiling_exceeded'
   | 'chart_deleted'
@@ -144,7 +145,7 @@ const COST_ERROR_MAP: Record<number, CostErrorType[]> = {
   409: ['idempotent_replay'],
   413: ['body_too_large'],
   429: ['lifetime_cap_reached'],
-  503: ['database_unavailable'],
+  503: ['database_unavailable', 'estimation_unavailable'],
 };
 
 /** Mid-stream synthesized error event type -> CostErrorType. */

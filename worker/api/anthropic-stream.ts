@@ -319,29 +319,29 @@ async function estimateProjectedCost(
       body: JSON.stringify(countBody),
     });
   } catch (e) {
-    console.error('count_tokens network error:', e);
-    // Fail closed: we can't estimate, so we can't enforce. Reuse
-    // database_unavailable since it's the closest catch-all 503.
+    // Fail closed: we can't estimate, so we can't enforce.
+    console.error('[estimate] count_tokens network error:', e);
     return {
       ok: false,
-      response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders),
+      response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders),
     };
   }
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    console.error(`count_tokens failed (${resp.status}): ${text}`);
+    console.error(`[estimate] count_tokens upstream ${resp.status}: ${text}`);
     return {
       ok: false,
-      response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders),
+      response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders),
     };
   }
 
   let data: { input_tokens?: number };
   try {
     data = await resp.json() as { input_tokens?: number };
-  } catch {
-    return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
+  } catch (e) {
+    console.error('[estimate] count_tokens JSON parse failed:', e);
+    return { ok: false, response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders) };
   }
 
   const inputTokens = typeof data.input_tokens === 'number' ? data.input_tokens : 0;
@@ -385,7 +385,7 @@ async function reserveCost(
       RETURNING cost_micro_usd
     ` as { cost_micro_usd: bigint | number | string }[];
   } catch (e) {
-    console.error('reserve UPDATE failed:', e);
+    console.error('[reserve] UPDATE user_api_usage failed:', e);
     return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
   }
 
@@ -405,7 +405,7 @@ async function reserveCost(
       RETURNING cost_micro_usd
     ` as { cost_micro_usd: bigint | number | string }[];
   } catch (e) {
-    console.error('reserve INSERT failed:', e);
+    console.error('[reserve] INSERT user_api_usage failed:', e);
     return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
   }
 
