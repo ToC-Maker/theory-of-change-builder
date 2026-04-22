@@ -548,7 +548,7 @@ class LoggingServiceClass {
     usage_input_tokens?: number;
     usage_output_tokens?: number;
     usage_total_tokens?: number;
-    content_strip_reason?: 'edit_instructions';
+    content_strip_reason?: 'edit_instructions' | 'stripped_other';
   }): Promise<void> {
     if (!this.isLoggingEnabled()) return;
 
@@ -602,10 +602,13 @@ class LoggingServiceClass {
     content: string;
     chartId?: string;
     tokenUsage?: { input_tokens?: number; output_tokens?: number };
-    /** Set when an assistant reply cleaned to "" because only an
-     * [EDIT_INSTRUCTIONS] block was emitted; required by the server
-     * to accept empty assistant content. */
-    contentStripReason?: 'edit_instructions';
+    /** Set when an assistant reply cleaned to "". Required by the server
+     * to accept empty assistant content.
+     *   'edit_instructions' — valid EDIT_INSTRUCTIONS block emitted and
+     *     parsed into non-empty edits.
+     *   'stripped_other' — anything else got stripped (malformed block,
+     *     hallucinated [CURRENT_GRAPH_DATA] / [SELECTED_NODES], etc.). */
+    contentStripReason?: 'edit_instructions' | 'stripped_other';
   }): void {
     const chartId = params.chartId ?? this.currentChartId ?? this.initializingChartId;
     if (!chartId) return;

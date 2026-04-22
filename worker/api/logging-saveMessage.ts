@@ -13,10 +13,15 @@ interface SaveMessageRequest {
   usage_output_tokens?: number;
   usage_total_tokens?: number;
   // Client signal for legitimate empty-after-cleaning assistant content.
-  // Current single value 'edit_instructions' = the model replied with only
-  // an [EDIT_INSTRUCTIONS] block that cleanResponseContent stripped. Add
-  // new values (e.g. tool_use) as other content-stripping cases appear.
-  content_strip_reason?: 'edit_instructions';
+  // Values:
+  //   'edit_instructions' — model emitted a valid [EDIT_INSTRUCTIONS] block
+  //     that parsed to non-empty edits; the block was stripped for display
+  //     but the edits live in logging_snapshots.edit_instructions.
+  //   'stripped_other' — raw reply was non-empty but cleanResponseContent
+  //     stripped everything (e.g. model hallucinated [CURRENT_GRAPH_DATA]
+  //     or [SELECTED_NODES], or emitted a malformed EDIT_INSTRUCTIONS
+  //     block that failed to parse). Row kept so we can audit bad outputs.
+  content_strip_reason?: 'edit_instructions' | 'stripped_other';
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -55,7 +60,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       if (data.role === 'user') {
         return Response.json({ error: 'user messages require non-empty content' }, { status: 400 });
       }
-      if (data.content_strip_reason !== 'edit_instructions') {
+      if (
+        data.content_strip_reason !== 'edit_instructions' &&
+        data.content_strip_reason !== 'stripped_other'
+      ) {
         return Response.json(
           { error: 'empty assistant content requires content_strip_reason' },
           { status: 400 },

@@ -1051,7 +1051,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             }
             setStreamingContent(fullContent);
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
+          onComplete: (finalMessage: string, editInstructions?: any, usage?: any, contentWasStripped?: boolean) => {
           const assistantMessage: ChatMessage = {
             id: assistantMessageId,
             role: 'assistant',
@@ -1079,17 +1079,25 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           void refreshUsage();
 
           // Log assistant message (fire and forget). Content may be empty
-          // when the model replied with only an [EDIT_INSTRUCTIONS] block;
-          // declare contentStripReason so the server keeps the row (needed
-          // for logging_snapshots.triggered_by_message_id FK). Edit
-          // payload lives in logging_snapshots.edit_instructions, not here.
-          const hasEditsStrip =
-            finalMessage.length === 0 && !!editInstructions && editInstructions.length > 0;
+          // after cleanResponseContent strips [EDIT_INSTRUCTIONS],
+          // [CURRENT_GRAPH_DATA], or [SELECTED_NODES] blocks. Declare the
+          // strip reason so the server keeps the row (needed for the
+          // logging_snapshots.triggered_by_message_id FK and for auditing
+          // bad model outputs). 'edit_instructions' is the legitimate
+          // case; 'stripped_other' covers malformed blocks + hallucinated
+          // injection markers so those still get captured for analysis.
+          let stripReason: 'edit_instructions' | 'stripped_other' | undefined;
+          if (finalMessage.length === 0 && contentWasStripped) {
+            stripReason =
+              editInstructions && editInstructions.length > 0
+                ? 'edit_instructions'
+                : 'stripped_other';
+          }
           loggingService.logUserMessage({
             messageId: assistantMessageId,
             role: 'assistant',
             content: finalMessage,
-            contentStripReason: hasEditsStrip ? 'edit_instructions' : undefined,
+            contentStripReason: stripReason,
             tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
           });
 

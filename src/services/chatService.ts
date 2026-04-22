@@ -103,7 +103,15 @@ function newIdempotencyKey(): string {
 
 export interface StreamCallbacks {
   onContent?: (chunk: string, fullContent: string) => void;
-  onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
+  onComplete?: (
+    message: string,
+    editInstructions?: EditInstruction[],
+    usage?: any,
+    /** true when the raw reply was non-empty but cleanResponseContent
+     *  stripped it to "". Used by the logger to declare
+     *  content_strip_reason so the server keeps the row. */
+    contentWasStripped?: boolean,
+  ) => void;
   onError?: (error: string) => void;
   onSearchStart?: () => void;
   onSearchComplete?: (results?: any[]) => void;
@@ -467,9 +475,11 @@ class ChatService {
                 }
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
+                const contentWasStripped =
+                  fullContent.length > 0 && cleanContent.length === 0;
                 // Separate try so callback bugs aren't reported as streaming failures
                 try {
-                  callbacks.onComplete?.(cleanContent, editInstructions, usage);
+                  callbacks.onComplete?.(cleanContent, editInstructions, usage, contentWasStripped);
                 } catch (callbackErr) {
                   console.error('[ChatService] onComplete callback error:', callbackErr);
                 }
