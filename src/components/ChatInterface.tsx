@@ -88,9 +88,9 @@ type CostErrorKind =
 
 const COST_ERROR_COPY: Record<CostErrorKind, string> = {
   lifetime_cap:
-    "You've reached the free quota. Keep going with your own Anthropic key, or donate to refill the shared pool.",
+    "You've reached the free quota. Bring your own Anthropic key to keep going, or donate to help us keep the free tier available for others.",
   global_budget:
-    'Our shared monthly budget is exhausted. Keep going with your own key, or donate to refill the pool.',
+    "We've hit our shared monthly AI spend cap. Bring your own Anthropic key to keep going, or donate to help us raise the cap and keep this tool sustainable.",
   turnstile: 'Please complete the challenge before sending.',
   body_too_large:
     'Your message is too large. Try a shorter message or fewer attachments.',
