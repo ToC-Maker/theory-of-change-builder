@@ -295,7 +295,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // token around — it's single-use and irrelevant after verification.
   // Reset to `false` whenever the Worker returns `turnstile_required` mid-flow
   // (cookie expired / IP changed) so the widget re-renders for a fresh solve.
-  const [hasTurnstileSession, setHasTurnstileSession] = useState<boolean>(false);
+  //
+  // `null` = probe in flight (on first load for anon users): we don't yet
+  // know if the browser holds a still-valid cookie. Render neither widget
+  // nor composer during this (~100ms) window so we don't flash the "please
+  // verify" banner for returning users who are already verified.
+  const [hasTurnstileSession, setHasTurnstileSession] = useState<boolean | null>(null);
   // Inline error copy shown adjacent to the Turnstile widget after a failed
   // verification, so the user knows to retry the challenge rather than just
   // seeing a silent re-render.
@@ -637,8 +642,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // still valid for this caller. The cookie is httpOnly so the client can't
   // read it directly; this lets a returning anon visitor skip the widget for
   // the remaining 24h window instead of re-solving on every refresh.
+  // Authenticated users and environments without a site key get promoted to
+  // `valid` immediately (no gate to render).
   useEffect(() => {
-    if (isAuthenticated || !TURNSTILE_SITE_KEY) return;
+    if (isAuthenticated || !TURNSTILE_SITE_KEY) {
+      setHasTurnstileSession(true);
+      return;
+    }
     const controller = new AbortController();
     void (async () => {
       try {
@@ -647,11 +657,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           credentials: 'include',
           signal: controller.signal,
         });
-        if (!response.ok) return;
+        if (!response.ok) {
+          setHasTurnstileSession(false);
+          return;
+        }
         const data = (await response.json()) as { valid?: boolean };
-        if (data.valid) setHasTurnstileSession(true);
+        setHasTurnstileSession(data.valid === true);
       } catch {
-        // Fail-open: widget stays visible, user solves normally.
+        // Network error: fall back to showing the widget rather than silently
+        // blocking the composer.
+        setHasTurnstileSession(false);
       }
     })();
     return () => controller.abort();
@@ -2298,7 +2313,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           {/* Input Area */}
           <div className="p-3 border-t border-gray-200">
               {currentMode === 'chat' ? (
-                !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
+                hasTurnstileSession === null ? (
+                  /* Probe in flight: reserve vertical space so the composer
+                     doesn't shift in when it resolves, but render no content.
+                     This avoids flashing the "please verify" banner on reload
+                     for anon visitors who already hold a valid cookie. */
+                  <div className="h-24" aria-hidden />
+                ) : !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
                   /* Turnstile gate: block the entire composer for anonymous
                      visitors until they solve the challenge and we exchange
                      the token for a session cookie. Avoids the old behavior
