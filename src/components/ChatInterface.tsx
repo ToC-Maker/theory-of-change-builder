@@ -417,7 +417,7 @@ export function ChatInterface({
   const chartByokSpendUsd = useChartByokSpendUsd(params.chartId ?? params.editToken ?? null);
 
   // Create a unique storage key based on the current route
-  const getStorageKey = () => {
+  const getStorageKey = useCallback(() => {
     if (params.chartId) {
       return `chatHistory_chart_${params.chartId}`;
     } else if (params.editToken) {
@@ -430,7 +430,7 @@ export function ChatInterface({
       // Fallback for any other routes
       return `chatHistory_${location.pathname.replace(/\//g, '_')}`;
     }
-  };
+  }, [params.chartId, params.editToken, params.filename, location.pathname]);
 
   // Load chat history from localStorage on mount
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -647,7 +647,7 @@ export function ChatInterface({
       });
       setTempSystemPrompt(promptToUse);
     }
-  }, [showSettingsModal]);
+  }, [showSettingsModal, customSystemPrompt]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -731,7 +731,7 @@ export function ChatInterface({
       console.error('Failed to load chat history on route change:', error);
       setMessages([]);
     }
-  }, [params.chartId, params.editToken, params.filename, location.pathname]);
+  }, [params.chartId, params.editToken, params.filename, location.pathname, getStorageKey]);
 
   // Save messages to localStorage whenever they change
   useEffect(() => {
@@ -744,7 +744,7 @@ export function ChatInterface({
     } catch (error) {
       console.error('Failed to save chat history:', error);
     }
-  }, [messages]);
+  }, [messages, getStorageKey]);
 
   useEffect(() => {
     scrollToBottom();
@@ -863,83 +863,86 @@ export function ChatInterface({
   // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
   // under the last user message so BYOK retries can reuse the same messages
   // array — plan v2 decision 8).
-  const handleCostError = useCallback((error: CostError) => {
-    switch (error.type) {
-      case 'turnstile_required':
-        // Cookie expired or IP changed mid-flow. Bring the widget back so
-        // the user can re-solve, and clear any stale error copy.
-        setHasTurnstileSession(false);
-        setTurnstileError(null);
-        return;
-      case 'turnstile_failed':
-        // Siteverify rejected. Keep the widget visible, surface the error.
-        setHasTurnstileSession(false);
-        setTurnstileError('Challenge failed; please try again.');
-        return;
-      case 'idempotent_replay':
-        // Silent: the user double-clicked or the browser replayed. The
-        // original request is already in flight or completed on the server;
-        // surfacing an error would confuse them.
-        return;
-      case 'lifetime_cap_reached':
-        // Server rejected the preflight reservation — our local usage
-        // snapshot was stale. Refresh so `capAlreadyReached` flips and
-        // the composer-side cap banner + ByokPanel + DonateCta appear.
-        // No separate mode state: that would double-render the panel.
-        setCostErrorBanner(null);
-        void refreshUsage();
-        return;
-      case 'global_budget_exhausted':
-        setByokPanelMode('global_budget');
-        setCostErrorBanner(null);
-        return;
-      case 'request_cost_ceiling_exceeded':
-        // Mid-stream kill: the message already ran part-way, the reconcile
-        // path is writing the actual cost to the DB right now. Surface the
-        // cut-off-specific ByokPanel header and refresh usage so the cap
-        // bar reflects reality — otherwise it stays at the pre-stream
-        // snapshot until manual reload.
-        setByokPanelMode('request_cut_off');
-        setCostErrorBanner(null);
-        void refreshUsage();
-        return;
-      case 'body_too_large':
-        setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
-        return;
-      case 'chart_deleted':
-        setCostErrorBanner({
-          kind: 'service_unavailable',
-          message: 'This chart was deleted in another tab. Reload the page to continue.',
-        });
-        return;
-      case 'file_unavailable':
-        setCostErrorBanner({
-          kind: 'service_unavailable',
-          message: 'A file referenced by this chat is no longer available. Remove it and retry.',
-        });
-        return;
-      default: {
-        // database_unavailable / estimation_unavailable /
-        // authentication_service_unavailable / invalid_token all fall
-        // through to a generic service banner. When the server included
-        // an upstream_message (e.g. Anthropic's count_tokens 429 reason,
-        // Neon timeout detail, Auth0 JWKS error), surface it so the user
-        // has something specific to try or report rather than just
-        // "something broke."
-        const data = error.data as
-          | { upstream_status?: number; upstream_message?: string }
-          | undefined;
-        const upstreamMessage =
-          typeof data?.upstream_message === 'string' ? data.upstream_message : null;
-        const upstreamStatus =
-          typeof data?.upstream_status === 'number' ? data.upstream_status : null;
-        const detail = upstreamMessage
-          ? `${COST_ERROR_COPY.service_unavailable} (${error.type}${upstreamStatus ? ` ${upstreamStatus}` : ''}: ${upstreamMessage})`
-          : `${COST_ERROR_COPY.service_unavailable} (${error.type})`;
-        setCostErrorBanner({ kind: 'service_unavailable', message: detail });
+  const handleCostError = useCallback(
+    (error: CostError) => {
+      switch (error.type) {
+        case 'turnstile_required':
+          // Cookie expired or IP changed mid-flow. Bring the widget back so
+          // the user can re-solve, and clear any stale error copy.
+          setHasTurnstileSession(false);
+          setTurnstileError(null);
+          return;
+        case 'turnstile_failed':
+          // Siteverify rejected. Keep the widget visible, surface the error.
+          setHasTurnstileSession(false);
+          setTurnstileError('Challenge failed; please try again.');
+          return;
+        case 'idempotent_replay':
+          // Silent: the user double-clicked or the browser replayed. The
+          // original request is already in flight or completed on the server;
+          // surfacing an error would confuse them.
+          return;
+        case 'lifetime_cap_reached':
+          // Server rejected the preflight reservation — our local usage
+          // snapshot was stale. Refresh so `capAlreadyReached` flips and
+          // the composer-side cap banner + ByokPanel + DonateCta appear.
+          // No separate mode state: that would double-render the panel.
+          setCostErrorBanner(null);
+          void refreshUsage();
+          return;
+        case 'global_budget_exhausted':
+          setByokPanelMode('global_budget');
+          setCostErrorBanner(null);
+          return;
+        case 'request_cost_ceiling_exceeded':
+          // Mid-stream kill: the message already ran part-way, the reconcile
+          // path is writing the actual cost to the DB right now. Surface the
+          // cut-off-specific ByokPanel header and refresh usage so the cap
+          // bar reflects reality — otherwise it stays at the pre-stream
+          // snapshot until manual reload.
+          setByokPanelMode('request_cut_off');
+          setCostErrorBanner(null);
+          void refreshUsage();
+          return;
+        case 'body_too_large':
+          setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
+          return;
+        case 'chart_deleted':
+          setCostErrorBanner({
+            kind: 'service_unavailable',
+            message: 'This chart was deleted in another tab. Reload the page to continue.',
+          });
+          return;
+        case 'file_unavailable':
+          setCostErrorBanner({
+            kind: 'service_unavailable',
+            message: 'A file referenced by this chat is no longer available. Remove it and retry.',
+          });
+          return;
+        default: {
+          // database_unavailable / estimation_unavailable /
+          // authentication_service_unavailable / invalid_token all fall
+          // through to a generic service banner. When the server included
+          // an upstream_message (e.g. Anthropic's count_tokens 429 reason,
+          // Neon timeout detail, Auth0 JWKS error), surface it so the user
+          // has something specific to try or report rather than just
+          // "something broke."
+          const data = error.data as
+            | { upstream_status?: number; upstream_message?: string }
+            | undefined;
+          const upstreamMessage =
+            typeof data?.upstream_message === 'string' ? data.upstream_message : null;
+          const upstreamStatus =
+            typeof data?.upstream_status === 'number' ? data.upstream_status : null;
+          const detail = upstreamMessage
+            ? `${COST_ERROR_COPY.service_unavailable} (${error.type}${upstreamStatus ? ` ${upstreamStatus}` : ''}: ${upstreamMessage})`
+            : `${COST_ERROR_COPY.service_unavailable} (${error.type})`;
+          setCostErrorBanner({ kind: 'service_unavailable', message: detail });
+        }
       }
-    }
-  }, []);
+    },
+    [refreshUsage],
+  );
 
   // Page-load probe: ask the worker whether an existing tocb_anon cookie is
   // still valid for this caller. The cookie is httpOnly so the client can't
@@ -980,45 +983,48 @@ export function ChatInterface({
   // browser rides the cookie on subsequent /api/anthropic-stream requests.
   // Failures keep the widget visible with an inline error. Called by the
   // TurnstileWidget on solve, expiry, or error (null payload).
-  const handleTurnstileToken = useCallback(async (token: string | null) => {
-    if (!token) {
-      // Widget reports expiry or error — force a re-render with a prompt.
-      setHasTurnstileSession(false);
-      return;
-    }
-    try {
-      const response = await fetch('/api/verify-turnstile', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
-      if (response.ok) {
-        setHasTurnstileSession(true);
-        setTurnstileError(null);
-        // Actor identity may have changed at the same time (IP flip or
-        // cookie renewal), which would mean a different row in
-        // user_api_usage. Refresh so the UI's usage bar + wouldExceedCap
-        // gate reflect the current identity, not the stale one.
-        void refreshUsage();
+  const handleTurnstileToken = useCallback(
+    async (token: string | null) => {
+      if (!token) {
+        // Widget reports expiry or error — force a re-render with a prompt.
+        setHasTurnstileSession(false);
         return;
       }
-      // Treat 401 turnstile_failed the same as any other non-200: keep the
-      // widget visible, show an error. Other statuses (5xx, 501) also fall
-      // through — the user can re-solve to retry.
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
-      const message =
-        body.error === 'turnstile_failed'
-          ? 'Challenge failed; please try again.'
-          : 'Verification failed; please try again.';
-      setHasTurnstileSession(false);
-      setTurnstileError(message);
-    } catch (err) {
-      console.warn('[ChatInterface] verify-turnstile failed:', err);
-      setHasTurnstileSession(false);
-      setTurnstileError('Network error while verifying; please try again.');
-    }
-  }, []);
+      try {
+        const response = await fetch('/api/verify-turnstile', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        if (response.ok) {
+          setHasTurnstileSession(true);
+          setTurnstileError(null);
+          // Actor identity may have changed at the same time (IP flip or
+          // cookie renewal), which would mean a different row in
+          // user_api_usage. Refresh so the UI's usage bar + wouldExceedCap
+          // gate reflect the current identity, not the stale one.
+          void refreshUsage();
+          return;
+        }
+        // Treat 401 turnstile_failed the same as any other non-200: keep the
+        // widget visible, show an error. Other statuses (5xx, 501) also fall
+        // through — the user can re-solve to retry.
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        const message =
+          body.error === 'turnstile_failed'
+            ? 'Challenge failed; please try again.'
+            : 'Verification failed; please try again.';
+        setHasTurnstileSession(false);
+        setTurnstileError(message);
+      } catch (err) {
+        console.warn('[ChatInterface] verify-turnstile failed:', err);
+        setHasTurnstileSession(false);
+        setTurnstileError('Network error while verifying; please try again.');
+      }
+    },
+    [refreshUsage],
+  );
 
   // Defer inputValue for the estimate effect so React yields to urgent
   // user-input renders during a paste + rapid typing. Without this, the
@@ -1865,7 +1871,7 @@ export function ChatInterface({
       console.error('[ChatInterface] ensureChartExists failed:', e);
       return null;
     }
-  }, [params.chartId, params.editToken, graphData, onChartCreated, navigate]);
+  }, [params.chartId, params.editToken, graphData, onChartCreated, navigate, getStorageKey]);
 
   const uploadPdfToFilesApi = useCallback(
     async (
@@ -1908,7 +1914,7 @@ export function ChatInterface({
       }
       return response.json();
     },
-    [getAuthHeaders, params.chartId, params.editToken, graphData, onChartCreated],
+    [getAuthHeaders, ensureChartExists],
   );
 
   // Generate-mode file handler. Text files continue to be inlined via the
