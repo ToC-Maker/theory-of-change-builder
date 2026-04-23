@@ -472,10 +472,12 @@ async function estimateProjectedCost(
         SELECT file_id, input_tokens
         FROM chart_files
         WHERE file_id = ANY(${strippedFileIds})
-      ` as { file_id: string; input_tokens: number | null }[];
+      ` as { file_id: string; input_tokens: string | number | null }[];
+      // Neon returns BIGINT as a string; parse before summing.
       for (const r of rows) {
-        if (typeof r.input_tokens === 'number' && r.input_tokens >= 0) {
-          cachedFileTokens += r.input_tokens;
+        const n = r.input_tokens == null ? NaN : Number(r.input_tokens);
+        if (Number.isFinite(n) && n >= 0) {
+          cachedFileTokens += n;
         }
       }
     } catch (e) {
