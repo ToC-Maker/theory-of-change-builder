@@ -998,14 +998,36 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         }
       }
 
+      // Anthropic-Files-API uploads (PDFs): send as `document` content blocks
+      // so count_tokens counts the PDF text. Without this the estimate
+      // silently ignores the attached PDFs' token cost — easy to hit a
+      // 429 at send-time from a "safe-looking" composer number.
+      const uploadFiles = chatAttachedFiles.filter(
+        (f) => f.kind === 'upload' && f.status === 'ready' && f.fileId,
+      );
+      const uploadPageCount = uploadFiles.reduce(
+        (sum, f) => sum + (f.kind === 'upload' ? f.pageCount : 0),
+        0,
+      );
+      const userContent: unknown = uploadFiles.length > 0
+        ? [
+            ...uploadFiles.map((f) => ({
+              type: 'document' as const,
+              source: { type: 'file' as const, file_id: f.fileId! },
+            })),
+            { type: 'text' as const, text: draftBody },
+          ]
+        : draftBody;
+
       const baseSystemPrompt = customSystemPromptRef.current?.trim() || systemPromptContent;
       const systemPrompt = `${baseSystemPrompt}\n\n${chatModePromptContent}`;
       const historyForEstimate = messages.map((m) => ({
         role: m.role,
         content: m.content,
       }));
-      const messagesForEstimate = draftBody
-        ? [...historyForEstimate, { role: 'user' as const, content: draftBody }]
+      const hasDraftContent = draftBody.length > 0 || uploadFiles.length > 0;
+      const messagesForEstimate = hasDraftContent
+        ? [...historyForEstimate, { role: 'user' as const, content: userContent }]
         : historyForEstimate;
 
       // Cache warmth: cached for CACHE_TTL_MILLIS after the last assistant
@@ -1036,20 +1058,27 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           };
           const totalTokens = data.input_tokens ?? 0;
           const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
-          // Approximate draft-only tokens via char ratio (no second fetch).
+          // Approximate draft-only tokens by converting every contributor
+          // into a token estimate, then taking the draft's share of the
+          // total. Char-to-token ratio is ~4:1; PDF pages are ~400 tokens
+          // per page per Anthropic's Files-API guidance, which is
+          // otherwise invisible to a pure char ratio.
+          const CHAR_PER_TOKEN = 4;
+          const PDF_TOKENS_PER_PAGE = 400;
+          const draftTextTokensEst = Math.ceil(draftBody.length / CHAR_PER_TOKEN);
+          const pdfTokensEst = uploadPageCount * PDF_TOKENS_PER_PAGE;
+          const draftTokensEst = draftTextTokensEst + pdfTokensEst;
+          const historyCharSum =
+            systemPrompt.length +
+            messages.reduce(
+              (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
+              0,
+            );
+          const historyTokensEst = Math.ceil(historyCharSum / CHAR_PER_TOKEN);
+          const denom = draftTokensEst + historyTokensEst;
           const draftOnlyTokens =
-            totalTokens > 0 && draftBody.length > 0
-              ? Math.round(
-                  totalTokens *
-                    (draftBody.length /
-                      (systemPrompt.length +
-                        messagesForEstimate.reduce(
-                          (n, m) =>
-                            n +
-                            (typeof m.content === 'string' ? m.content.length : 0),
-                          0,
-                        ))),
-                )
+            totalTokens > 0 && denom > 0
+              ? Math.round(totalTokens * (draftTokensEst / denom))
               : 0;
           const cachedTokens = Math.max(0, totalTokens - draftOnlyTokens);
           // Warm-cache: prior system+history read at 0.1×. The *new draft*
