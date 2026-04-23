@@ -17,6 +17,7 @@ import { handler as usage } from './api/usage';
 import { handler as byokKey } from './api/byok-key';
 import { handler as uploadFile } from './api/upload-file';
 import { handler as chartFiles } from './api/chart-files';
+import { handler as deleteFile } from './api/delete-file';
 import { handler as verifyTurnstile } from './api/verify-turnstile';
 import { handler as countTokensEstimate } from './api/count-tokens-estimate';
 
@@ -46,6 +47,7 @@ const routes: [HttpMethod, string, Handler][] = [
   ['*', '/api/byok-key', byokKey],
   ['POST', '/api/upload-file', uploadFile],
   ['GET', '/api/files/*', chartFiles],
+  ['DELETE', '/api/files/*', deleteFile],
   ['DELETE', '/api/chart-files', chartFiles],
   ['*', '/api/verify-turnstile', verifyTurnstile],
   ['POST', '/api/count-tokens-estimate', countTokensEstimate],

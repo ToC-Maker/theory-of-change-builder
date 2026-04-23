@@ -1963,9 +1963,29 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     [uploadPdfToFilesApi],
   );
 
-  const handleGenerateFileRemove = useCallback((id: string) => {
-    setGenerateAttachedChips((prev) => prev.filter((f) => f.id !== id));
-  }, []);
+  const handleGenerateFileRemove = useCallback(
+    (id: string) => {
+      // Same orphan-cleanup posture as handleChatFileRemove: if the
+      // removed chip was an already-uploaded PDF, fire the DELETE so the
+      // Anthropic file + chart_files row don't linger.
+      const removed = generateAttachedChips.find((f) => f.id === id);
+      setGenerateAttachedChips((prev) => prev.filter((f) => f.id !== id));
+      if (removed?.kind === 'upload' && removed.fileId) {
+        void (async () => {
+          try {
+            const headers = await getAuthHeaders();
+            await fetch(
+              `/api/files/${encodeURIComponent(removed.fileId!)}`,
+              { method: 'DELETE', headers },
+            );
+          } catch (err) {
+            console.warn('[ChatInterface] delete-file cleanup failed:', err);
+          }
+        })();
+      }
+    },
+    [generateAttachedChips, getAuthHeaders],
+  );
 
   const removeFile = (fileToRemove: File) => {
     setFiles(prev => prev.filter(f => f.file !== fileToRemove));
@@ -2079,9 +2099,33 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     [uploadChatFile],
   );
 
-  const handleChatFileRemove = useCallback((id: string) => {
-    setChatAttachedFiles((prev) => prev.filter((f) => f.id !== id));
-  }, []);
+  const handleChatFileRemove = useCallback(
+    (id: string) => {
+      // Snapshot the chip before we filter it out so we can tell if it
+      // needs a server-side cleanup (uploaded PDF → chart_files row +
+      // Anthropic Files API entry) or is purely local (text file we
+      // never uploaded, or a still-uploading placeholder with no
+      // file_id yet).
+      const removed = chatAttachedFiles.find((f) => f.id === id);
+      setChatAttachedFiles((prev) => prev.filter((f) => f.id !== id));
+      if (removed?.kind === 'upload' && removed.fileId) {
+        void (async () => {
+          try {
+            const headers = await getAuthHeaders();
+            await fetch(
+              `/api/files/${encodeURIComponent(removed.fileId!)}`,
+              { method: 'DELETE', headers },
+            );
+          } catch (err) {
+            // Fire-and-forget — the sweep/clear-chat paths catch orphans
+            // if this DELETE misses. Logging only for visibility.
+            console.warn('[ChatInterface] delete-file cleanup failed:', err);
+          }
+        })();
+      }
+    },
+    [chatAttachedFiles, getAuthHeaders],
+  );
 
   const handleChatFileRetry = useCallback(
     (id: string) => {
