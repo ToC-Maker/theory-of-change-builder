@@ -1443,10 +1443,21 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         onCostError: (error) => {
           // Preserve whatever partial content streamed before the kill so the
           // user can still read it. Without this the entire assistant turn
-          // would vanish from the chat window on a mid-stream cap hit.
+          // would vanish from the chat window on a mid-stream cap hit. Even
+          // when no visible text arrived (model was still thinking), keep a
+          // placeholder so the conversation history shows the turn happened.
           const partial = streamingMessageRef.current;
-          if (partial && partial.content.length > 0) {
-            setMessages((prev) => [...prev, partial]);
+          if (partial) {
+            const hasText = partial.content.length > 0;
+            setMessages((prev) => [
+              ...prev,
+              hasText
+                ? partial
+                : {
+                    ...partial,
+                    content: '_(Assistant was cut off before writing a visible response.)_',
+                  },
+            ]);
           }
           handleCostError(error);
           setIsStreaming(false);
@@ -2095,10 +2106,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         },
         onCostError: (error) => {
           // Preserve the partial Generate turn (text/thinking streamed
-          // before the kill) so it's still visible in the chat.
+          // before the kill) so it's still visible in the chat. Even with
+          // no visible text (cut off mid-thinking), keep a placeholder.
           const partial = streamingMessageRef.current;
-          if (partial && partial.content.length > 0) {
-            setMessages((prev) => [...prev, partial]);
+          if (partial) {
+            const hasText = partial.content.length > 0;
+            setMessages((prev) => [
+              ...prev,
+              hasText
+                ? partial
+                : {
+                    ...partial,
+                    content: '_(Assistant was cut off before writing a visible response.)_',
+                  },
+            ]);
           }
           handleCostError(error);
           setIsStreaming(false);
