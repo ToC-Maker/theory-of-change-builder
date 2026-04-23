@@ -2711,45 +2711,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </div>
                 )}
 
-                {/* Inline BYOK flows for mid-stream kill, global-budget
-                    exhaustion, and voluntary add-key. Each path has its
-                    own context banner above a shared minimal ByokPanel
-                    (sign in OR key form). Donate CTA is only on
-                    global_budget — request_cut_off can't be unblocked by
-                    donations, and voluntary hasn't hit any cap.
-                    Note: lifetime_cap_reached is handled by the
-                    composer-side `capAlreadyReached` path, not here. */}
-                {byokPanelMode === 'request_cut_off' && (
-                  <div className="space-y-2">
-                    <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                      Message cut off — your last message used the rest of the free
-                      quota. Add your Anthropic API key to keep going.
-                    </div>
-                    <ByokPanel
-                      onSubmitted={() => {
-                        setByokPanelMode(null);
-                        setCostErrorBanner(null);
-                        void refreshUsage();
-                      }}
-                    />
-                  </div>
-                )}
-                {byokPanelMode === 'global_budget' && (
-                  <div className="space-y-2">
-                    <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                      We&apos;ve hit our shared monthly spend cap. Everyone on the free
-                      tier is paused until next month&apos;s reset.
-                    </div>
-                    <ByokPanel
-                      onSubmitted={() => {
-                        setByokPanelMode(null);
-                        setCostErrorBanner(null);
-                        void refreshUsage();
-                      }}
-                    />
-                    <DonateCta />
-                  </div>
-                )}
+                {/* mid-stream-kill (request_cut_off) and global-budget
+                    banners now render in the composer area (below) so they
+                    sit next to the input rather than scrolling away in the
+                    message history. See the composer-side render. */}
 
                 {isLoading && !isStreaming && !isSearching && (
                   <div className="flex justify-start">
@@ -2837,11 +2802,45 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           understand "this one is too big" vs "you're out."
                       Composer and send button stay visible but disabled; the
                       inline BYOK panel is the unblock path. */}
-                  {/* byokPanelMode covers the mid-stream-kill and
-                      global-cap paths with their own banner above — don't
-                      also render the composer-side cap banner or we get
-                      duplicate panels. */}
-                  {byokPanelMode ? null : capAlreadyReached ? (
+                  {/* Four cap/quota paths, all shown above the input so
+                      the user can read them next to the action. Priority
+                      from "most recent event" down:
+                        - request_cut_off: mid-stream kill just fired.
+                        - global_budget: Anthropic Console cap hit.
+                        - capAlreadyReached: prior cumulative at/over cap.
+                        - wouldExceedCap: draft's estimate would push over.
+                      DonateCta only on paths where donations are a valid
+                      alternative (capAlreadyReached, global_budget). */}
+                  {byokPanelMode === 'request_cut_off' ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                        Message cut off — your last message used the rest of the free
+                        quota. Add your Anthropic API key to keep going.
+                      </div>
+                      <ByokPanel
+                        onSubmitted={() => {
+                          setByokPanelMode(null);
+                          setCostErrorBanner(null);
+                          void refreshUsage();
+                        }}
+                      />
+                    </div>
+                  ) : byokPanelMode === 'global_budget' ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                        We&apos;ve hit our shared monthly spend cap. Everyone on the free
+                        tier is paused until next month&apos;s reset.
+                      </div>
+                      <ByokPanel
+                        onSubmitted={() => {
+                          setByokPanelMode(null);
+                          setCostErrorBanner(null);
+                          void refreshUsage();
+                        }}
+                      />
+                      <DonateCta />
+                    </div>
+                  ) : capAlreadyReached ? (
                     <div className="space-y-2">
                       <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
                         You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}.
@@ -3041,7 +3040,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           // as a visual cue; handleSendMessage also early-
                           // returns on both.
                           disabled={inputValue.length === 0 || isLoading || capAlreadyReached || wouldExceedCap}
-                          className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          className="p-2 bg-blue-500 text-white rounded-lg enabled:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           title="Send message"
                         >
                           <PaperAirplaneIcon className="w-5 h-5" />
