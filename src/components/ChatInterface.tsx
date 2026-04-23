@@ -1306,6 +1306,15 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               setIsThinking(false);
             }
             setStreamingContent(fullContent);
+            // Mirror into the ref so onCostError can preserve the partial
+            // text when the stream is killed mid-turn. Without this the
+            // ref's `content` stays at '' (only ever assigned at stream
+            // start) and the kill-recovery path falls back to the
+            // "cut off before writing a visible response" placeholder —
+            // even when text deltas did arrive.
+            if (streamingMessageRef.current) {
+              streamingMessageRef.current.content = fullContent;
+            }
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any, rawMessage?: string) => {
           const assistantMessage: ChatMessage = {
@@ -1994,6 +2003,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               setIsThinking(false);
             }
             setStreamingContent(fullContent);
+            // Mirror into the ref so onCostError can preserve the partial
+            // text when the stream is killed mid-turn. Without this the
+            // ref's `content` stays at '' (only ever assigned at stream
+            // start) and the kill-recovery path falls back to the
+            // "cut off before writing a visible response" placeholder —
+            // even when text deltas did arrive.
+            if (streamingMessageRef.current) {
+              streamingMessageRef.current.content = fullContent;
+            }
           },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
           const assistantMessage: ChatMessage = {

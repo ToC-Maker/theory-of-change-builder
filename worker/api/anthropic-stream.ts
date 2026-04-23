@@ -730,6 +730,20 @@ type SseTeeContext = {
     count_tokens_total?: number;       // only set for poll-triggered kills
     fired_at_ms: number;               // Date.now()
   } | null;
+  /**
+   * Diagnostic for the first time polling gets disabled, written to
+   * logging_errors from reconcile. Captures WHY the poller silently
+   * stopped (network error / rate limit / JSON parse / etc.) so we can
+   * tell apart "polling never ran" from "polling ran and passed" when
+   * debugging overshoot.
+   */
+  pollDisableDiagnostic: {
+    reason: 'network_error' | 'upstream_error' | 'rate_limited' | 'json_parse_failed' | 'cost_compute_failed';
+    http_status?: number;
+    upstream_body?: string;
+    error_message?: string;
+    fired_at_ms: number;
+  } | null;
 };
 
 /**
@@ -801,6 +815,13 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     });
   } catch (e) {
     console.warn('[kill-poll] count_tokens network error, disabling polling:', e);
+    if (!teeCtx.pollDisableDiagnostic) {
+      teeCtx.pollDisableDiagnostic = {
+        reason: 'network_error',
+        error_message: e instanceof Error ? e.message : String(e),
+        fired_at_ms: Date.now(),
+      };
+    }
     teeCtx.pollingDisabled = true;
     return;
   }
@@ -809,8 +830,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     // Rate-limit or upstream failure: give up on polling for the rest of
     // this stream. The message_delta kill still fires at end-of-stream as a
     // backstop, but that's often too late to avoid overshoot — so log the
-    // body so we can tell in Workers logs whether polling silently died
-    // during real streams.
+    // body so we can tell what killed polling.
     const bodyText = await resp.text().catch(() => '');
     console.warn(JSON.stringify({
       event: 'kill_poll_disabled',
@@ -818,6 +838,14 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       reason: resp.status === 429 ? 'rate_limited' : 'upstream_error',
       upstream_body: bodyText.slice(0, 500),
     }));
+    if (!teeCtx.pollDisableDiagnostic) {
+      teeCtx.pollDisableDiagnostic = {
+        reason: resp.status === 429 ? 'rate_limited' : 'upstream_error',
+        http_status: resp.status,
+        upstream_body: bodyText.slice(0, 500),
+        fired_at_ms: Date.now(),
+      };
+    }
     teeCtx.pollingDisabled = true;
     return;
   }
@@ -827,6 +855,13 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     data = await resp.json() as { input_tokens?: number };
   } catch (e) {
     console.warn('[kill-poll] count_tokens JSON parse failed, disabling polling:', e);
+    if (!teeCtx.pollDisableDiagnostic) {
+      teeCtx.pollDisableDiagnostic = {
+        reason: 'json_parse_failed',
+        error_message: e instanceof Error ? e.message : String(e),
+        fired_at_ms: Date.now(),
+      };
+    }
     teeCtx.pollingDisabled = true;
     return;
   }
@@ -851,6 +886,13 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     estimatedMicro = computeCostMicroUsd(teeCtx.model, usage);
   } catch (e) {
     console.warn('[kill-poll] cost compute failed, disabling polling:', e);
+    if (!teeCtx.pollDisableDiagnostic) {
+      teeCtx.pollDisableDiagnostic = {
+        reason: 'cost_compute_failed',
+        error_message: e instanceof Error ? e.message : String(e),
+        fired_at_ms: Date.now(),
+      };
+    }
     teeCtx.pollingDisabled = true;
     return;
   }
@@ -967,6 +1009,13 @@ function createCostTrackingStream(
       pollCostEstimate(teeCtx)
         .catch((e) => {
           console.warn('[kill-poll] unexpected, disabling:', e);
+          if (!teeCtx.pollDisableDiagnostic) {
+            teeCtx.pollDisableDiagnostic = {
+              reason: 'network_error',
+              error_message: e instanceof Error ? e.message : String(e),
+              fired_at_ms: Date.now(),
+            };
+          }
           teeCtx.pollingDisabled = true;
         })
         .finally(() => {
@@ -1591,6 +1640,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     pendingRunningCostFrame: null,
     pollingDisabled: false,
     killDiagnostic: null,
+    pollDisableDiagnostic: null,
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
@@ -1608,9 +1658,26 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     // stable — no further transform() callbacks will mutate it.
     await tracked.done;
 
+    // When the stream is killed mid-flight, Anthropic's message_delta never
+    // arrives — which means the accumulator's `web_search_requests` stays 0
+    // even though server_tool_use blocks actually fired on the upstream.
+    // We've been counting those live in streamingContent.webSearchCount
+    // (incremented on each content_block_start of type server_tool_use
+    // name=web_search). If that live count is higher than the accumulator's
+    // snapshot, trust the live count — Anthropic will bill us for those
+    // searches whether message_delta confirms them or not.
+    const reconciledWebSearch = Math.max(
+      accumulator.web_search_requests,
+      teeCtx.streamingContent.webSearchCount,
+    );
+    const reconciledAccumulator: UsageAccumulator = {
+      ...accumulator,
+      web_search_requests: reconciledWebSearch,
+    };
+
     let actualMicro: bigint;
     try {
-      actualMicro = computeCostMicroUsd(model, accumulatorToUsage(accumulator));
+      actualMicro = computeCostMicroUsd(model, accumulatorToUsage(reconciledAccumulator));
     } catch (e) {
       console.error('Post-stream cost computation failed:', e);
       return;
@@ -1622,11 +1689,11 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
         await sql`
           UPDATE user_api_usage
           SET cost_micro_usd        = cost_micro_usd + ${deltaMicro.toString()}::bigint,
-              input_tokens          = input_tokens + ${accumulator.input_tokens},
-              output_tokens         = output_tokens + ${accumulator.output_tokens},
-              cache_create_tokens   = cache_create_tokens + ${accumulator.cache_creation_input_tokens},
-              cache_read_tokens     = cache_read_tokens + ${accumulator.cache_read_input_tokens},
-              web_search_uses       = web_search_uses + ${accumulator.web_search_requests},
+              input_tokens          = input_tokens + ${reconciledAccumulator.input_tokens},
+              output_tokens         = output_tokens + ${reconciledAccumulator.output_tokens},
+              cache_create_tokens   = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},
+              cache_read_tokens     = cache_read_tokens + ${reconciledAccumulator.cache_read_input_tokens},
+              web_search_uses       = web_search_uses + ${reconciledAccumulator.web_search_requests},
               last_activity_at      = NOW()
           WHERE user_id = ${actorId}
         `;
@@ -1653,6 +1720,44 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
         `;
       } catch (e) {
         console.error('logging_messages cost update failed (non-fatal):', e);
+      }
+    }
+
+    // Persist first-time poll-disable reason to logging_errors. The poller
+    // going silent is a primary cause of overshoot (parse_frame kill only
+    // fires on usage-event boundaries, so without polling the window between
+    // message_start and message_delta is kill-blind for output tokens). We
+    // need to know WHY — rate limit vs upstream 5xx vs shape change — to
+    // tune. Preview deploys have no log stream so this is the only signal.
+    if (teeCtx.pollDisableDiagnostic) {
+      try {
+        const p = teeCtx.pollDisableDiagnostic;
+        await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, chart_id,
+            http_status, request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'DiagnosticPollDisabled',
+            ${`Polling disabled: ${p.reason}${p.error_message ? ` — ${p.error_message}` : ''}`},
+            ${actorId},
+            ${chartId ?? null},
+            ${p.http_status ?? null},
+            ${JSON.stringify({
+              reason: p.reason,
+              http_status: p.http_status,
+              upstream_body: p.upstream_body,
+              error_message: p.error_message,
+              fired_at_ms: p.fired_at_ms,
+              model,
+              deployment_host: requestUrl.hostname,
+            })}
+          )
+          ON CONFLICT (error_id) DO NOTHING
+        `;
+      } catch (e) {
+        console.error('poll-disable diagnostic insert failed (non-fatal):', e);
       }
     }
 
