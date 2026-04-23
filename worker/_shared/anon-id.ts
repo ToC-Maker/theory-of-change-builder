@@ -33,9 +33,8 @@ export const ACTOR_COOKIE_NAME = 'tocb_actor_id';
 /** 1 year — effectively permanent for a browser profile. */
 export const ACTOR_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 
-/** UUIDv4 string. Any other shape (including the pre-Policy-B IP-hash hex)
- * is rejected so we mint a fresh UUID instead. Only preview-branch testing
- * ever produced the legacy format, so no real users get reset by this. */
+/** UUIDv4-shape string. Any other shape is rejected so we mint a fresh
+ * UUID instead. */
 function isValidActorId(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s);
 }
@@ -53,16 +52,41 @@ function readCookie(cookieHeader: string | null, name: string): string | null {
   return null;
 }
 
-export async function hashIP(ip: string, salt: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
+/**
+ * HMAC-SHA256 with a purpose tag prepended to the input. The NUL-terminated
+ * purpose string is prefixed to the payload so the same `IP_HASH_SALT` can
+ * safely key HMACs for different purposes (ip-hash, auth-link cookie,
+ * turnstile session) without one output being valid in another context.
+ *
+ * Purposes currently in use (keep this list current; they must all be
+ * distinct strings so the NUL-terminated prefix guarantees domain
+ * separation):
+ *   - `ip-hash`     — hashIP() output
+ *   - `auth-link`   — tocb_auth_link cookie signature
+ *   - `turnstile`   — tocb_anon Turnstile-session cookie signature
+ */
+export async function hmacSha256Purpose(
+  key: string,
+  purpose: string,
+  payload: string,
+): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(salt),
+    new TextEncoder().encode(key),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
   );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ip));
-  return Array.from(new Uint8Array(sig))
+  // NUL is never valid in any of the purposes we use, so the prefix acts as
+  // an unambiguous separator between domain tag and payload.
+  const input = new TextEncoder().encode(`${purpose}\x00${payload}`);
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, input);
+  return new Uint8Array(sig);
+}
+
+export async function hashIP(ip: string, salt: string): Promise<string> {
+  const sig = await hmacSha256Purpose(salt, 'ip-hash', ip);
+  return Array.from(sig)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
@@ -96,7 +120,15 @@ export type AnonActorResolution = {
   setCookieHeader?: string;
 };
 
+// Cookies are composed header-style with `name=value; attr=…; …`; a bogus
+// `value` containing `;` or CRLF would let a caller smuggle attributes or
+// additional headers. Today every call site passes a UUID or b64url payload,
+// both of which stay in the safe character class — but the builder is
+// exported, so we enforce the invariant instead of trusting callers.
+const SAFE_COOKIE_VALUE_RE = /^[A-Za-z0-9_\-\.=]+$/;
+
 function buildCookieHeader(value: string): string {
+  if (!SAFE_COOKIE_VALUE_RE.test(value)) throw new Error('invalid cookie value');
   return `${ACTOR_COOKIE_NAME}=${value}; Path=/; Max-Age=${ACTOR_COOKIE_MAX_AGE}; Secure; HttpOnly; SameSite=Lax`;
 }
 
@@ -153,12 +185,21 @@ export async function resolveAnonActor(
  * subsequent calls INSERT…SELECT nothing and DELETE matches nothing.
  *
  * Closes the "sign in to reset the anon cap" loophole — without this a
- * user could spend $4.99 as anon, sign in, and immediately get a fresh
- * $5 quota because the authenticated identity started with no row.
+ * user could spend most of the anon cap, sign in, and immediately get a
+ * fresh quota because the authenticated identity started with no row.
  *
  * Non-fatal on error: the reservation path in anthropic-stream still runs
  * against whatever user_id we were handed, so a failed merge just means
  * the anon spend stays orphaned rather than crediting into the auth cap.
+ *
+ * Concurrency: the merge SELECT/INSERT/DELETE runs inside a single
+ * transaction, and the SELECT takes `FOR UPDATE` on the anon row. Two
+ * concurrent auth'd requests carrying the same anon cookie can race at
+ * this point (e.g. a tab revival firing several requests in parallel);
+ * without the row lock both transactions could read the anon totals and
+ * both do `cost += anon_cost`, double-crediting the auth row. With the
+ * lock, the second transaction blocks until the first commits, then sees
+ * an empty SELECT (the DELETE already ran) and INSERTs zero rows.
  */
 export async function mergeAnonUsageIntoAuth(
   sql: NeonQueryFunction<false, false>,
@@ -171,9 +212,14 @@ export async function mergeAnonUsageIntoAuth(
 
   try {
     await sql.transaction([
-      // INSERT … SELECT is a no-op when the anon row doesn't exist, so the
-      // common post-first-login case (already merged) pays one empty INSERT
-      // plus one empty DELETE — no separate existence probe needed.
+      // Lock the anon row first so two concurrent auth'd requests can't
+      // both read its totals and double-credit the auth row. The SELECT
+      // is a no-op output-wise; we only care about its side effect (row
+      // lock for the rest of the transaction). When the anon row is
+      // already gone (idempotent re-run / never existed) the FOR UPDATE
+      // matches zero rows, nothing is locked, and the INSERT…SELECT plus
+      // DELETE also match zero — the common post-first-login hot path.
+      sql`SELECT 1 FROM user_api_usage WHERE user_id = ${anonUserId} FOR UPDATE`,
       sql`INSERT INTO user_api_usage (user_id, input_tokens, output_tokens, cache_create_tokens,
                                       cache_read_tokens, web_search_uses, cost_micro_usd,
                                       first_activity_at, last_activity_at)
@@ -231,18 +277,6 @@ function b64urlDecode(str: string): string {
   return atob(str.replace(/-/g, '+').replace(/_/g, '/') + pad);
 }
 
-async function hmacSha256(key: string, data: string): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(key),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(data));
-  return new Uint8Array(sig);
-}
-
 export async function signAuthLinkCookie(
   authSub: string,
   salt: string,
@@ -250,7 +284,7 @@ export async function signAuthLinkCookie(
 ): Promise<string> {
   const payload = JSON.stringify({ sub: authSub, exp: Math.floor(Date.now() / 1000) + ttlSeconds });
   const payloadB64 = b64urlEncode(payload);
-  const sigBytes = await hmacSha256(salt, payloadB64);
+  const sigBytes = await hmacSha256Purpose(salt, 'auth-link', payloadB64);
   return `${payloadB64}.${b64urlEncode(sigBytes)}`;
 }
 
@@ -267,7 +301,7 @@ export async function verifyAuthLinkCookie(
   const parts = cookie.split('.');
   if (parts.length !== 2) return null;
   const [payloadB64, sigB64] = parts;
-  const expectedSigBytes = await hmacSha256(salt, payloadB64);
+  const expectedSigBytes = await hmacSha256Purpose(salt, 'auth-link', payloadB64);
   const expectedSigB64 = b64urlEncode(expectedSigBytes);
   if (expectedSigB64.length !== sigB64.length) return null;
   // Constant-time compare of the base64url signatures (same technique as
@@ -286,5 +320,6 @@ export async function verifyAuthLinkCookie(
 }
 
 export function buildAuthLinkCookieHeader(value: string): string {
+  if (!SAFE_COOKIE_VALUE_RE.test(value)) throw new Error('invalid cookie value');
   return `${AUTH_LINK_COOKIE_NAME}=${value}; Path=/; Max-Age=${AUTH_LINK_COOKIE_MAX_AGE}; Secure; HttpOnly; SameSite=Lax`;
 }
