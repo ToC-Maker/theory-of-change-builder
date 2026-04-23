@@ -1,6 +1,7 @@
 import type { Env } from '../_shared/types';
 import { RATES_MICRO_USD_PER_TOKEN } from '../_shared/cost';
 import { getDb } from '../_shared/db';
+import { extractToken, verifyToken } from '../_shared/auth';
 
 // POST /api/count-tokens-estimate — thin pass-through to Anthropic's
 // /v1/messages/count_tokens plus a cost projection using the server's rate
@@ -13,7 +14,13 @@ import { getDb } from '../_shared/db';
 // and centralising it keeps the UI estimate independent of BYOK state.
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  let body: { model?: unknown; messages?: unknown; system?: unknown; tools?: unknown };
+  let body: {
+    model?: unknown;
+    messages?: unknown;
+    system?: unknown;
+    tools?: unknown;
+    chartId?: unknown;
+  };
   try {
     body = await request.json() as typeof body;
   } catch {
@@ -23,6 +30,18 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   const model = body.model;
   if (typeof model !== 'string' || !model) {
     return Response.json({ error: 'missing_model' }, { status: 400 });
+  }
+
+  // chartId is optional (older clients don't send it) but required to safely
+  // scope the chart_files lookup below. Without it, the cache lookup would
+  // be an IDOR — any caller with a file_id owned by a different chart could
+  // read its token count. VARCHAR(12) matches the charts.id column shape.
+  let chartId: string | null = null;
+  if (body.chartId !== undefined && body.chartId !== null) {
+    if (typeof body.chartId !== 'string' || !body.chartId || body.chartId.length > 12) {
+      return Response.json({ error: 'invalid_chart_id' }, { status: 400 });
+    }
+    chartId = body.chartId;
   }
 
   // Strip `{type: 'document', source: {type: 'file', ...}}` content blocks.
@@ -65,6 +84,18 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   }
   const strippedFileIds = [...draftFileIds, ...historyFileIds];
 
+  // Whitelist the fields we forward to Anthropic. Previously we sent the
+  // full request body verbatim, which meant extra fields (e.g. chartId,
+  // max_tokens, server-tools) would leak to Anthropic's count_tokens and
+  // either be ignored or reject the request. Now we send only the four
+  // fields the endpoint documents.
+  const forwardBody: Record<string, unknown> = {
+    model,
+    messages: body.messages,
+  };
+  if (body.system !== undefined) forwardBody.system = body.system;
+  if (body.tools !== undefined) forwardBody.tools = body.tools;
+
   let upstream: Response;
   try {
     upstream = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
@@ -75,11 +106,31 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         'anthropic-beta': 'files-api-2025-04-14',
         'content-type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(forwardBody),
     });
   } catch (err) {
     console.error('[count-tokens-estimate] upstream fetch failed:', err);
     return Response.json({ error: 'estimation_unavailable' }, { status: 503 });
+  }
+
+  // Surface Anthropic rate-limits as 429 rather than collapsing into a
+  // generic 503, so the client can honour Retry-After and back off instead
+  // of retrying immediately.
+  if (upstream.status === 429) {
+    const retryAfter = upstream.headers.get('retry-after');
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (retryAfter) headers['retry-after'] = retryAfter;
+    const retryAfterSec = retryAfter ? Number(retryAfter) : undefined;
+    return new Response(
+      JSON.stringify({
+        error: 'rate_limited',
+        retry_after:
+          Number.isFinite(retryAfterSec as number) && (retryAfterSec as number) >= 0
+            ? retryAfterSec
+            : undefined,
+      }),
+      { status: 429, headers },
+    );
   }
 
   if (!upstream.ok) {
@@ -130,15 +181,62 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // feels off. The count_tokens failure path at upload is logged.
   let cachedFileTokensDraft = 0;
   let cachedFileTokensHistory = 0;
-  let uncountedFileIds = 0;
+  const uncountedFileIdList: string[] = [];
   const sql = getDb(env);
+
+  // If the caller is authenticated and a chartId is supplied, verify they
+  // actually have access to that chart before we hand back token counts.
+  // Anon charts (no owner) are public by definition and don't need this
+  // check. An owned chart + no JWT is refused — returning cache data for
+  // a chart the caller can't otherwise read would be an IDOR.
+  if (chartId) {
+    const chartRows = await sql`
+      SELECT user_id FROM charts WHERE id = ${chartId}
+    ` as { user_id: string | null }[];
+    const chartOwnerId = chartRows[0]?.user_id ?? null;
+    if (chartOwnerId) {
+      const token = extractToken(request.headers.get('authorization'));
+      let allowed = false;
+      if (token) {
+        try {
+          const decoded = await verifyToken(token, env);
+          if (decoded.sub === chartOwnerId) {
+            allowed = true;
+          } else {
+            const perm = await sql`
+              SELECT status FROM chart_permissions
+              WHERE chart_id = ${chartId} AND user_id = ${decoded.sub}
+            ` as { status: string }[];
+            allowed = !!perm.length && perm[0].status === 'approved';
+          }
+        } catch {
+          /* bad token -> allowed stays false */
+        }
+      }
+      if (!allowed) {
+        return Response.json({ error: 'forbidden' }, { status: 403 });
+      }
+    }
+  }
+
   if (strippedFileIds.length > 0) {
     try {
-      const rows = await sql<{ file_id: string; input_tokens: string | number | null }>`
-        SELECT file_id, input_tokens
-        FROM chart_files
-        WHERE file_id = ANY(${strippedFileIds})
-      `;
+      // Scope by chart_id when we have one so a file_id that belongs to a
+      // different chart can't leak its token count. When chartId is missing
+      // (older clients) we fall back to the file_id-only query; this is
+      // retained for compatibility and will be removed once all clients
+      // carry the field.
+      const rows = chartId
+        ? await sql<{ file_id: string; input_tokens: string | number | null }>`
+            SELECT file_id, input_tokens
+            FROM chart_files
+            WHERE file_id = ANY(${strippedFileIds}) AND chart_id = ${chartId}
+          `
+        : await sql<{ file_id: string; input_tokens: string | number | null }>`
+            SELECT file_id, input_tokens
+            FROM chart_files
+            WHERE file_id = ANY(${strippedFileIds})
+          `;
       // Neon returns BIGINT as a string (safe for values > 2^53). Build a
       // lookup so we can bucket each file_id by whether it was in the draft
       // (last) message or history.
@@ -149,17 +247,19 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
       for (const fid of draftFileIds) {
         const n = tokensByFileId.get(fid);
-        if (n === undefined) uncountedFileIds += 1;
+        if (n === undefined) uncountedFileIdList.push(fid);
         else cachedFileTokensDraft += n;
       }
       for (const fid of historyFileIds) {
         const n = tokensByFileId.get(fid);
-        if (n === undefined) uncountedFileIds += 1;
+        if (n === undefined) uncountedFileIdList.push(fid);
         else cachedFileTokensHistory += n;
       }
     } catch (err) {
       console.warn('[count-tokens-estimate] chart_files lookup failed:', err);
-      uncountedFileIds = strippedFileIds.length;
+      // Surface the full list so the client can retry / flag the mismatch
+      // rather than silently dropping these from the total.
+      uncountedFileIdList.push(...strippedFileIds);
     }
   }
 
@@ -176,10 +276,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     estimated_cost_usd: estimatedCostUsd,
     model,
     // Diagnostic breakdown for the client: how many file blocks we stripped
-    // and how many of those had no cached token count. The UI can render
-    // "+ ~$X for N uncounted PDFs" if uncounted_file_ids > 0.
+    // and which ones had no cached token count. The client (Unit E) uses
+    // the id list to reconcile a "+ ~$X for N uncounted PDFs" banner and
+    // to know which files to re-probe if the count looks off.
     stripped_file_blocks: strippedFileIds.length,
-    uncounted_file_ids: uncountedFileIds,
+    uncounted_file_ids: uncountedFileIdList,
     cached_file_tokens: cachedFileTokens,
     // Split so the client can apply cache-write (1.25×) to draft-side PDFs
     // and cache-read (0.1×) to history-side PDFs already in the prefix.
