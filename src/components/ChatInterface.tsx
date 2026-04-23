@@ -39,7 +39,6 @@ import {
   ArrowUpTrayIcon,
   ChatBubbleLeftRightIcon,
   DocumentTextIcon,
-  MagnifyingGlassCircleIcon,
   StopIcon,
   SparklesIcon,
   PencilSquareIcon,
@@ -52,13 +51,6 @@ interface UploadedFile {
   content: string;
   status: 'reading' | 'ready' | 'error';
   errorMessage?: string;
-}
-
-interface SearchResult {
-  title: string;
-  url: string;
-  content: string;
-  score: number;
 }
 
 interface ChatInterfaceProps {
@@ -546,11 +538,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     localStorage.setItem('tocb_file_upload_notice_shown', 'true');
     setShowFileUploadNotice(false);
   }, []);
-
-  // Search mode state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchAnswer, setSearchAnswer] = useState('');
 
   // Settings modal state
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -1322,17 +1309,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           onSearchStart: () => {
             setIsSearching(true);
           },
-          onSearchComplete: (results?: any[]) => {
+          onSearchComplete: () => {
             setIsSearching(false);
-            // Update search section with results from chat searches
-            if (results && results.length > 0) {
-              setSearchResults(results.map(result => ({
-                title: result.title || '',
-                url: result.url || '',
-                content: result.content || '',
-                score: result.score || 0
-              })));
-            }
           },
           onContent: (_chunk: string, fullContent: string) => {
             // Clear thinking state when content starts streaming
