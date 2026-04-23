@@ -15,6 +15,7 @@
     "preview": "vite build && wrangler dev",
     "deploy": "vite build && wrangler deploy",
     "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p worker/tsconfig.json --noEmit",
     "pretest": "mkdir -p dist",
     "test": "vitest run",
     "test:watch": "vitest",

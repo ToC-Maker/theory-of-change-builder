@@ -30,6 +30,36 @@ jobs:
         id: branch_name
         uses: tj-actions/branch-names@v8
 
+  typecheck:
+    # Standalone job so it runs in parallel with the preview/test job and
+    # gives fast feedback without waiting on Neon branch creation. No DB,
+    # no migrations — just `tsc --noEmit` on both tsconfigs.
+    name: TypeScript typecheck
+    if: |
+      github.event_name == 'pull_request' && (
+        github.event.action == 'opened'
+        || github.event.action == 'reopened'
+        || github.event.action == 'synchronize'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
   preview_and_test:
     name: Preview branch + CI
     needs: setup
