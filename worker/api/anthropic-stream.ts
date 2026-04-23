@@ -701,6 +701,14 @@ type SseTeeContext = {
    */
   pendingKillFrame: Uint8Array | null;
   /**
+   * Transient frame carrying the latest poller-derived running-cost
+   * estimate. Flushed on the next transform() tick the same way as
+   * pendingKillFrame. Lets the client's "$X so far" label update every
+   * ~5s instead of staying frozen on the message_start snapshot until
+   * Anthropic's message_delta arrives at end-of-stream.
+   */
+  pendingRunningCostFrame: Uint8Array | null;
+  /**
    * Sticky flag set when count_tokens returns 429 / network error. Polling
    * stops silently; the message_delta-based end-of-stream kill still acts as
    * a backstop. No user-visible error — graceful degradation only.
@@ -830,6 +838,16 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     teeCtx.pollingDisabled = true;
     return;
   }
+
+  // Publish the fresh estimate to the client so the composer's "$X so far"
+  // label isn't frozen on the message_start snapshot during generation.
+  // The client's chatService SSE parser watches for `running_cost` events.
+  teeCtx.pendingRunningCostFrame = new TextEncoder().encode(
+    `event: running_cost\ndata: ${JSON.stringify({
+      cost_usd: microToUsd(estimatedMicro),
+      output_tokens_est: outputTokensSoFar,
+    })}\n\n`,
+  );
 
   if (estimatedMicro > teeCtx.killThresholdMicro) {
     // Race: if another path (parseFrame kill, abort, etc.) already fired, skip.
@@ -1168,22 +1186,31 @@ function createCostTrackingStream(
   }
 
   /**
-   * Flush any pending kill frame set by the out-of-band poller. Called at the
-   * top of every transform() tick and from flush() so kill frames emitted by
-   * the 5s poll land on the next chunk boundary (typically <50ms).
+   * Flush any poller-staged frames (running-cost snapshot + kill). Called at
+   * the top of every transform() tick and from flush() so frames emitted by
+   * the 5s poll land on the next chunk boundary (typically <50ms). The
+   * running-cost frame goes first so the kill (if present) is the final
+   * event the client sees before termination.
    */
-  function flushPendingKillFrame(controller: TransformStreamDefaultController<Uint8Array>): void {
-    if (teeCtx.pendingKillFrame === null) return;
-    try { controller.enqueue(teeCtx.pendingKillFrame); } catch (e) {
-      console.warn('pending kill frame enqueue failed (controller closed):', e);
+  function flushPendingPollerFrames(controller: TransformStreamDefaultController<Uint8Array>): void {
+    if (teeCtx.pendingRunningCostFrame !== null) {
+      try { controller.enqueue(teeCtx.pendingRunningCostFrame); } catch (e) {
+        console.warn('pending running-cost frame enqueue failed (controller closed):', e);
+      }
+      teeCtx.pendingRunningCostFrame = null;
     }
-    teeCtx.pendingKillFrame = null;
+    if (teeCtx.pendingKillFrame !== null) {
+      try { controller.enqueue(teeCtx.pendingKillFrame); } catch (e) {
+        console.warn('pending kill frame enqueue failed (controller closed):', e);
+      }
+      teeCtx.pendingKillFrame = null;
+    }
   }
 
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     async transform(chunk, controller) {
       if (teeCtx.killed.v) {
-        flushPendingKillFrame(controller);
+        flushPendingPollerFrames(controller);
         try { controller.terminate(); } catch { /* ignore */ }
         // Abort upstream so we stop charging ourselves for tokens the client
         // will never see. The poller sets killed.v but intentionally doesn't
@@ -1205,7 +1232,7 @@ function createCostTrackingStream(
         // killed.v and we must NOT forward the raw Anthropic error too.
         const intercepted = await parseFrame(frame, controller);
         if (teeCtx.killed.v) {
-          flushPendingKillFrame(controller);
+          flushPendingPollerFrames(controller);
           clearPollTimer();
           // resolveDone was called by parseFrame (or will be on abort).
           return;
@@ -1219,7 +1246,7 @@ function createCostTrackingStream(
       // Either end-of-stream or the poller-triggered kill reached flush
       // without a further chunk. Emit the synthesized kill frame (if pending)
       // before the trailing buffer so the client sees it as the last event.
-      flushPendingKillFrame(controller);
+      flushPendingPollerFrames(controller);
       if (sseBuffer.length > 0) {
         try { controller.enqueue(encoder.encode(sseBuffer)); } catch { /* ignore */ }
       }
@@ -1527,6 +1554,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     initialInputTokens,
     streamingContent: newStreamingAssistantContent(),
     pendingKillFrame: null,
+    pendingRunningCostFrame: null,
     pollingDisabled: false,
   };
 

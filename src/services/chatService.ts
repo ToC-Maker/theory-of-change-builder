@@ -495,6 +495,14 @@ class ChatService {
               } else if (event.type === 'message_delta' && event.usage) {
                 usage = { ...usage, ...event.usage };
                 updateUsage(event.usage);
+              } else if (event.type === 'running_cost' && typeof event.cost_usd === 'number') {
+                // Worker-synthesized event: the server-side count_tokens
+                // poller has a fresh cumulative-cost estimate. Anthropic's
+                // own usage fields only fire at message_start/message_delta,
+                // so without this the UI "$X so far" stayed frozen through
+                // the whole generation phase. The poller event updates it
+                // every ~5 seconds.
+                callbacks.onCostUpdate?.(event.cost_usd);
               } else if (event.type === 'message_stop') {
                 ctx?.markComplete();
                 if (ctx) {
