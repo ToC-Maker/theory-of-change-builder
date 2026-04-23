@@ -154,7 +154,9 @@ async function parseText(file: File): Promise<ParsedFile> {
     }
 
     // Reject files that look like binary masquerading as text (>10%
-    // non-printable characters).
+    // non-printable characters). The range intentionally targets C0/C1
+    // control chars plus DEL, so the no-control-regex warning is noise here.
+    // eslint-disable-next-line no-control-regex
     const nonPrintableCount = (content.match(/[\x00-\x08\x0E-\x1F\x7F-\x9F]/g) || []).length;
     const isProbablyBinary = nonPrintableCount / content.length > 0.1;
 

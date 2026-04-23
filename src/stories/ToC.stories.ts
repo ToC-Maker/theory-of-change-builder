@@ -1345,7 +1345,7 @@ export const AnimalCharityEvaluators: Story = {
                       "assumptions": "Research staff can develop domain expertise faster than biases accumulate. Systematic approaches provide value over intuition despite limitations."
                     }
                   ],
-                  "yPosition": 8.205703735351562,
+                  "yPosition": 8.2057037353515625,
                   "width": 224,
                   "color": "#00a6a1"
                 },

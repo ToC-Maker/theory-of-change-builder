@@ -125,7 +125,7 @@ export type AnonActorResolution = {
 // additional headers. Today every call site passes a UUID or b64url payload,
 // both of which stay in the safe character class — but the builder is
 // exported, so we enforce the invariant instead of trusting callers.
-const SAFE_COOKIE_VALUE_RE = /^[A-Za-z0-9_\-\.=]+$/;
+const SAFE_COOKIE_VALUE_RE = /^[A-Za-z0-9_\-.=]+$/;
 
 function buildCookieHeader(value: string): string {
   if (!SAFE_COOKIE_VALUE_RE.test(value)) throw new Error('invalid cookie value');
