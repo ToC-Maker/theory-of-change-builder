@@ -65,6 +65,14 @@ export function ConnectionsComponent({
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
   const [edgePopup, setEdgePopupState] = useState<EdgePopupState | null>(null);
 
+  // Stash `onSizeChange` in a ref so `updateSize` doesn't need it as a dep —
+  // the parent passes a fresh inline arrow every render, which would otherwise
+  // re-create `updateSize` on every parent render.
+  const onSizeChangeRef = useRef(onSizeChange);
+  useEffect(() => {
+    onSizeChangeRef.current = onSizeChange;
+  }, [onSizeChange]);
+
   const setEdgePopup: React.Dispatch<React.SetStateAction<EdgePopupState | null>> = (value) => {
     setEdgePopupState((prev) => {
       const next = typeof value === 'function' ? value(prev) : value;
@@ -155,10 +163,11 @@ export function ConnectionsComponent({
 
     const newSize = { width: totalWidth, height: dynamicHeight };
     setSvgSize(newSize);
-    onSizeChange(newSize);
+    onSizeChangeRef.current(newSize);
   }, [
     sectionWidths,
     data.sections,
+    data.title,
     editMode,
     layoutMode,
     nodeHeights,
