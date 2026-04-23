@@ -1193,6 +1193,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setComposerEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
+          // Network-level failure (CORS, offline, DNS). Mirror the !response.ok
+          // branch by setting composerEstimateError so the UI shows a
+          // degraded-estimate banner instead of presenting the local char
+          // fallback as if it were precise.
+          setComposerEstimateError('Estimate unavailable; showing rough value');
           const historyChars = messages.reduce((sum, m) => sum + m.content.length, 0);
           const tokens = roughInputTokensFromChars(
             systemPrompt.length + historyChars + draftChars,
@@ -1280,6 +1285,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setGenerateEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
+          // Network-level failure. Mirror the !response.ok branch so the UI
+          // shows a degraded-estimate indicator rather than silently falling
+          // back to the char-based estimate and presenting it as precise.
+          setComposerEstimateError('Estimate unavailable; showing rough value');
           const chars =
             systemPromptForEstimate.length +
             assembled.length +
@@ -1745,7 +1754,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         autosavedEditTokenRef.current = existingEditToken;
         return { chartId: resolved.chartId, editToken: existingEditToken };
       } catch (e) {
-        console.warn('[ChatInterface] getChartByEditToken failed; falling through to create:', e);
+        // Do NOT fall through to createChart — we already have an editToken
+        // pointing at a real chart, creating a new one would strand the
+        // user's existing chart under a different URL and they'd lose their
+        // work. Surface the error via the cost-error banner (reusing the
+        // service_unavailable kind since it's the same "try again" shape)
+        // and return null so the caller knows not to proceed.
+        console.error('[ChatInterface] getChartByEditToken failed:', e);
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message:
+            "Couldn't load your chart. Check your connection and try again — " +
+            "we won't create a duplicate while the existing chart is still around.",
+        });
+        return null;
       }
     }
     // 3. No chart yet — auto-save.
