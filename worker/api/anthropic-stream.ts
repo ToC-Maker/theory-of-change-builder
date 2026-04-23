@@ -7,6 +7,7 @@ import { resolveAnonActor } from '../_shared/anon-id';
 import {
   computeCostMicroUsd,
   RATES_MICRO_USD_PER_TOKEN,
+  WEB_SEARCH_MICRO_USD_PER_USE,
   type AnthropicUsage,
 } from '../_shared/cost';
 import {
@@ -306,9 +307,15 @@ type EstimateResult =
  * definitions still count toward the token total.
  */
 function stripToCountTokensBody(body: Record<string, unknown>): Record<string, unknown> {
+  // NOTE: `cache_control` is INTENTIONALLY not in the allow-list. Passing it
+  // to count_tokens makes Anthropic return only the NON-cached token count,
+  // which wildly under-estimates our cost projection for long conversations
+  // whose prefix is already cached. We want the total token count as a
+  // conservative upper bound; cache discounts apply at billing time, not
+  // estimation time. (We also strip nested cache_control markers below.)
   const COUNT_TOKENS_ALLOWED = new Set([
     'messages', 'model', 'system', 'tools', 'tool_choice',
-    'thinking', 'output_config', 'cache_control',
+    'thinking', 'output_config',
   ]);
   const countBody: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(body)) {
@@ -323,7 +330,22 @@ function stripToCountTokensBody(body: Record<string, unknown>): Record<string, u
     if (filtered.length > 0) countBody.tools = filtered;
     else delete countBody.tools;
   }
-  return countBody;
+
+  // Deep-strip `cache_control` from any nested content block (system[i],
+  // messages[i].content[j], tool definitions). Without this, Anthropic still
+  // returns the reduced-count behavior based on per-block markers even
+  // though we dropped the top-level field.
+  const stripCacheControl = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(stripCacheControl);
+    if (node && typeof node === 'object') {
+      const entries = Object.entries(node as Record<string, unknown>)
+        .filter(([k]) => k !== 'cache_control')
+        .map(([k, v]) => [k, stripCacheControl(v)] as const);
+      return Object.fromEntries(entries);
+    }
+    return node;
+  };
+  return stripCacheControl(countBody) as Record<string, unknown>;
 }
 
 /**
@@ -760,10 +782,18 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   }
 
   if (!resp.ok) {
-    // Rate-limit or upstream failure: silently give up on polling. Graceful
-    // degradation — the end-of-stream message_delta kill is still armed.
-    const tag = resp.status === 429 ? 'rate-limited' : `status=${resp.status}`;
-    console.info(`[kill-poll] count_tokens ${tag}; disabling polling`);
+    // Rate-limit or upstream failure: give up on polling for the rest of
+    // this stream. The message_delta kill still fires at end-of-stream as a
+    // backstop, but that's often too late to avoid overshoot — so log the
+    // body so we can tell in Workers logs whether polling silently died
+    // during real streams.
+    const bodyText = await resp.text().catch(() => '');
+    console.warn(JSON.stringify({
+      event: 'kill_poll_disabled',
+      status: resp.status,
+      reason: resp.status === 429 ? 'rate_limited' : 'upstream_error',
+      upstream_body: bodyText.slice(0, 500),
+    }));
     teeCtx.pollingDisabled = true;
     return;
   }
@@ -1003,6 +1033,13 @@ function createCostTrackingStream(
           teeCtx.streamingContent.blocks.set(idx, { type: 'thinking', text: '' });
         } else if (cbType === 'server_tool_use' && cbr.name === 'web_search') {
           teeCtx.streamingContent.webSearchCount += 1;
+          // Web-search cost alone can push cumulative over the kill threshold
+          // (51 searches × $0.01 = $0.51 for a single turn). Check here so we
+          // don't wait for the 5s poll — which may also be disabled if
+          // Anthropic rate-limited our count_tokens. Use the accumulator's
+          // snapshot + the live web-search count; the accumulator's own
+          // web_search_requests field stays 0 until message_delta.
+          if (fireKillIfOverThreshold(controller)) return false;
         }
       }
       return false;
@@ -1042,11 +1079,36 @@ function createCostTrackingStream(
     }
     if (!usageObj) return false;
 
-    mergeUsage(teeCtx.accumulator, usageObj);
+    // Diagnostic: log the raw usage shape on message_start so we can confirm
+    // whether cache_creation/cache_read land immediately (as the kill switch
+    // assumes) or only at message_delta at end-of-stream. One log per stream.
+    if (eventType === 'message_start') {
+      console.log(JSON.stringify({
+        event: 'message_start_usage',
+        model: teeCtx.model,
+        usage: usageObj,
+      }));
+    }
 
-    // Kill-switch only runs for capped tiers. BYOK passes teeCtx.killThresholdMicro
-    // as null — the user is paying, no bound applies on our side.
+    mergeUsage(teeCtx.accumulator, usageObj);
+    fireKillIfOverThreshold(controller);
+    return false;
+  }
+
+  /**
+   * Compute cumulative cost from the latest accumulator + live web-search
+   * count, and fire the synthesized `request_cost_ceiling_exceeded` kill
+   * frame if we've crossed the threshold. Returns true if kill fired.
+   *
+   * Returns false when the tier is BYOK (no threshold), when the cost can't
+   * be computed, or when we're still under budget. Safe to call from any
+   * parseFrame branch.
+   */
+  function fireKillIfOverThreshold(
+    controller: TransformStreamDefaultController<Uint8Array>,
+  ): boolean {
     if (teeCtx.killThresholdMicro === null) return false;
+    if (teeCtx.killed.v) return false;
 
     let cumulativeMicro: bigint;
     try {
@@ -1058,33 +1120,36 @@ function createCostTrackingStream(
       console.error('cost compute failed (non-fatal, continuing):', e);
       return false;
     }
-
-    if (cumulativeMicro > teeCtx.killThresholdMicro) {
-      teeCtx.killed.v = true;
-      const payload = JSON.stringify({
-        type: 'request_cost_ceiling_exceeded',
-        limit_usd: microToUsd(teeCtx.killThresholdMicro),
-      });
-      const killFrame = encoder.encode(`event: error\ndata: ${payload}\n\n`);
-      try {
-        controller.enqueue(killFrame);
-      } catch (e) {
-        console.warn('kill-switch enqueue failed (controller closed):', e);
-      }
-      try {
-        controller.terminate();
-      } catch { /* ignore */ }
-      try {
-        teeCtx.abortController.abort();
-      } catch { /* ignore */ }
-      // terminate() doesn't run flush(); resolve done directly so reconcile
-      // doesn't hang waiting for a flush that never comes.
-      resolveDone();
-      // The caller loop checks teeCtx.killed.v and returns without forwarding
-      // the triggering frame — client sees [earlier frames] + synthesized kill.
-      return false;
+    // Accumulator's web_search_requests is 0 until message_delta at end-of-
+    // stream. Top it up with the live per-block count so web-search cost is
+    // reflected in cumulative *during* the stream.
+    const liveWebExtra = Math.max(
+      0,
+      teeCtx.streamingContent.webSearchCount - teeCtx.accumulator.web_search_requests,
+    );
+    if (liveWebExtra > 0) {
+      cumulativeMicro += BigInt(liveWebExtra) * BigInt(WEB_SEARCH_MICRO_USD_PER_USE);
     }
-    return false;
+
+    if (cumulativeMicro <= teeCtx.killThresholdMicro) return false;
+
+    teeCtx.killed.v = true;
+    const payload = JSON.stringify({
+      type: 'request_cost_ceiling_exceeded',
+      limit_usd: microToUsd(teeCtx.killThresholdMicro),
+    });
+    const killFrame = encoder.encode(`event: error\ndata: ${payload}\n\n`);
+    try {
+      controller.enqueue(killFrame);
+    } catch (e) {
+      console.warn('kill-switch enqueue failed (controller closed):', e);
+    }
+    try { controller.terminate(); } catch { /* ignore */ }
+    try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+    // terminate() doesn't run flush(); resolve done directly so reconcile
+    // doesn't hang waiting for a flush that never comes.
+    resolveDone();
+    return true;
   }
 
   /**

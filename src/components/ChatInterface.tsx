@@ -1433,6 +1433,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           setRunningCostUsd(runningUsd);
         },
         onCostError: (error) => {
+          // Preserve whatever partial content streamed before the kill so the
+          // user can still read it. Without this the entire assistant turn
+          // would vanish from the chat window on a mid-stream cap hit.
+          const partial = streamingMessageRef.current;
+          if (partial && partial.content.length > 0) {
+            setMessages((prev) => [...prev, partial]);
+          }
           handleCostError(error);
           setIsStreaming(false);
           setStreamingContent('');
@@ -2043,6 +2050,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setRunningCostUsd(runningUsd);
         },
         onCostError: (error) => {
+          // Preserve the partial Generate turn (text/thinking streamed
+          // before the kill) so it's still visible in the chat.
+          const partial = streamingMessageRef.current;
+          if (partial && partial.content.length > 0) {
+            setMessages((prev) => [...prev, partial]);
+          }
           handleCostError(error);
           setIsStreaming(false);
           setStreamingContent('');
@@ -2741,7 +2754,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           understand "this one is too big" vs "you're out."
                       Composer and send button stay visible but disabled; the
                       inline BYOK panel is the unblock path. */}
-                  {capAlreadyReached ? (
+                  {/* byokPanelMode covers the mid-stream-kill and
+                      global-cap paths with their own banner above — don't
+                      also render the composer-side cap banner or we get
+                      duplicate panels. */}
+                  {byokPanelMode ? null : capAlreadyReached ? (
                     <div className="space-y-2">
                       <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
                         You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}.
