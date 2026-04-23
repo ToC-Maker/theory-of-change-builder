@@ -162,11 +162,17 @@ function TurnstileWidget({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
+  // Flips true once window.turnstile.render() returns a widget id. Before
+  // that, the script may still be loading or the widget injecting its
+  // iframe — either way the user sees a blank placeholder, so we show an
+  // inline loading indicator instead.
+  const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
     if (!siteKey) return;
 
     let cancelled = false;
+    setRendered(false);
 
     const renderWidget = () => {
       if (cancelled || !containerRef.current || !window.turnstile) return;
@@ -176,6 +182,7 @@ function TurnstileWidget({
         'expired-callback': () => onToken(null),
         'error-callback': () => onToken(null),
       });
+      if (widgetIdRef.current) setRendered(true);
     };
 
     // The explicit render mode requires the script to be loaded once; we
@@ -210,7 +217,24 @@ function TurnstileWidget({
   }, [siteKey, onToken]);
 
   if (!siteKey) return null;
-  return <div ref={containerRef} className="cf-turnstile" />;
+  return (
+    <div className="relative">
+      <div ref={containerRef} className="cf-turnstile" />
+      {!rendered && (
+        <div
+          className="flex items-center gap-2 text-xs text-gray-500 py-2"
+          role="status"
+          aria-live="polite"
+        >
+          <span
+            className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+            aria-hidden
+          />
+          <span>Loading challenge…</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
