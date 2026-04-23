@@ -283,41 +283,29 @@ export function parseEditInstructions(content: string): EditInstruction[] {
   }
 }
 
-// Clean response content by removing edit instructions and internal context for display
+// Clean response content by removing structured blocks that the display
+// shouldn't expose (edit instructions, graph data echo, selected-nodes echo).
+//
+// Handles the mid-stream case: when only the start marker is present (the
+// close hasn't arrived yet), strip from the start to end-of-string. Otherwise
+// mid-stream responses show raw `[EDIT_INSTRUCTIONS]` + half-formed JSON in
+// the chat bubble until the closing tag lands. When the closer eventually
+// arrives, subsequent cleanResponseContent calls trim the whole block.
 export function cleanResponseContent(content: string): string {
   let cleanContent = content;
 
-  // Remove edit instructions
-  const editStartMarker = '[EDIT_INSTRUCTIONS]';
-  const editEndMarker = '[/EDIT_INSTRUCTIONS]';
+  const markerPairs: ReadonlyArray<readonly [string, string]> = [
+    ['[EDIT_INSTRUCTIONS]', '[/EDIT_INSTRUCTIONS]'],
+    ['[CURRENT_GRAPH_DATA]', '[/CURRENT_GRAPH_DATA]'],
+    ['[SELECTED_NODES]', '[/SELECTED_NODES]'],
+  ];
 
-  const editStartIndex = cleanContent.indexOf(editStartMarker);
-  const editEndIndex = cleanContent.indexOf(editEndMarker);
-
-  if (editStartIndex !== -1 && editEndIndex !== -1) {
-    cleanContent = cleanContent.substring(0, editStartIndex) + cleanContent.substring(editEndIndex + editEndMarker.length);
-  }
-
-  // Remove current graph data
-  const graphStartMarker = '[CURRENT_GRAPH_DATA]';
-  const graphEndMarker = '[/CURRENT_GRAPH_DATA]';
-
-  const graphStartIndex = cleanContent.indexOf(graphStartMarker);
-  const graphEndIndex = cleanContent.indexOf(graphEndMarker);
-
-  if (graphStartIndex !== -1 && graphEndIndex !== -1) {
-    cleanContent = cleanContent.substring(0, graphStartIndex) + cleanContent.substring(graphEndIndex + graphEndMarker.length);
-  }
-
-  // Remove selected nodes context
-  const nodesStartMarker = '[SELECTED_NODES]';
-  const nodesEndMarker = '[/SELECTED_NODES]';
-
-  const nodesStartIndex = cleanContent.indexOf(nodesStartMarker);
-  const nodesEndIndex = cleanContent.indexOf(nodesEndMarker);
-
-  if (nodesStartIndex !== -1 && nodesEndIndex !== -1) {
-    cleanContent = cleanContent.substring(0, nodesStartIndex) + cleanContent.substring(nodesEndIndex + nodesEndMarker.length);
+  for (const [startMarker, endMarker] of markerPairs) {
+    const startIdx = cleanContent.indexOf(startMarker);
+    if (startIdx === -1) continue;
+    const endIdx = cleanContent.indexOf(endMarker, startIdx + startMarker.length);
+    const cutEnd = endIdx !== -1 ? endIdx + endMarker.length : cleanContent.length;
+    cleanContent = cleanContent.substring(0, startIdx) + cleanContent.substring(cutEnd);
   }
 
   return cleanContent.trim();
