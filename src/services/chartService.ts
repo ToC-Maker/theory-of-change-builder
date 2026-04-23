@@ -117,9 +117,20 @@ export class ChartService {
   }
 
   static async updateChart(editToken: string, chartData: ToCData): Promise<void> {
+    // Attach the Bearer token when one's available so the server can
+    // attribute the edit to the caller — used by worker/api/updateChart.ts
+    // to upsert a chart_permissions row (permission_level='edit') so
+    // non-owned charts the user modifies surface in "My Charts".
+    // Anonymous edits still work (the edit_token is the authorization
+    // gate); they just don't produce an attribution row.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
     const response = await fetch(`${API_BASE}/updateChart`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ editToken, chartData })
     });
 
