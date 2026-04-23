@@ -148,12 +148,14 @@ export function AttachedFilesBar({
   if (files.length === 0 && !acceptsDrop) return null;
 
   const wrapperClass = [
-    'relative flex flex-wrap items-center gap-2',
+    'relative flex flex-col gap-2',
     files.length === 0 ? 'min-h-[2rem]' : '',
     className ?? '',
   ]
     .filter(Boolean)
     .join(' ');
+
+  const failedFiles = files.filter((f) => f.status === 'error' && f.error);
 
   return (
     <div
@@ -163,14 +165,30 @@ export function AttachedFilesBar({
       onDragLeave={acceptsDrop ? handleDragLeave : undefined}
       onDrop={acceptsDrop ? handleDrop : undefined}
     >
-      {files.map((file) => (
-        <FileChip
-          key={file.id}
-          file={file}
-          onRemove={onRemove}
-          onRetry={onRetry}
-        />
-      ))}
+      <div className="flex flex-wrap items-center gap-2">
+        {files.map((file) => (
+          <FileChip
+            key={file.id}
+            file={file}
+            onRemove={onRemove}
+            onRetry={onRetry}
+          />
+        ))}
+      </div>
+
+      {/* Full error text lives outside the chip so long messages wrap
+          naturally — chips stay compact; users still see the whole
+          message (no "Anthropic limits PDFs to 600 pag…" cut-off). */}
+      {failedFiles.length > 0 && (
+        <ul className="flex flex-col gap-1 text-xs text-red-800 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+          {failedFiles.map((file) => (
+            <li key={file.id} className="leading-snug">
+              <span className="font-medium">{file.filename}:</span>{' '}
+              <span className="font-normal">{file.error}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {liveStatus}
@@ -233,14 +251,9 @@ function FileChip({ file, onRemove, onRetry }: FileChipProps) {
             className="inline-block w-1.5 h-1.5 rounded-full bg-red-500"
             aria-hidden
           />
-          {file.error && (
-            <span
-              className="text-xs font-normal text-red-700 max-w-[18rem] truncate"
-              title={file.error}
-            >
-              {file.error}
-            </span>
-          )}
+          {/* Error text moved out of the chip — see the list below the
+              chip row. Keeping the chip compact lets long error messages
+              wrap naturally instead of truncating with ellipsis. */}
           {onRetry && (
             <button
               type="button"
