@@ -1853,10 +1853,19 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
       return jsonError(payload, 404, altSvcHeaders);
     }
 
-    return new Response(errorText, {
-      status: upstream.status,
-      headers: { 'Content-Type': 'application/json', ...altSvcHeaders },
-    });
+    // Sanitize: Anthropic's error bodies can carry BYOK account context (org
+    // ids, rate-limit details) or edge-layer stack traces that shouldn't be
+    // forwarded verbatim to the browser. Wrap the message in our own envelope
+    // and cap it at 500 chars so a verbose upstream can't pad the response.
+    return jsonError(
+      {
+        error: 'upstream_error',
+        upstream_message: errorText.slice(0, 500),
+        upstream_status: upstream.status,
+      },
+      upstream.status,
+      altSvcHeaders,
+    );
   }
 
   if (!upstream.body) {
