@@ -87,7 +87,17 @@ export function ByokPanel({
         <div className="mt-3">
           <button
             type="button"
-            onClick={() => { void loginWithRedirect(); }}
+            onClick={() => {
+              // Preserve the current chart URL across the Auth0 redirect so
+              // the user lands back where they were. Without this the bare
+              // `loginWithRedirect()` drops them at `/` and they lose track
+              // of the chart they were editing (localStorage chat history
+              // is keyed by URL, so it'd silently switch to the root chat).
+              // Matches the pattern Auth0RedirectHandler consumes in App.tsx.
+              const returnTo = window.location.pathname + window.location.search;
+              localStorage.setItem('auth0_returnTo', returnTo);
+              void loginWithRedirect({ appState: { returnTo } });
+            }}
             className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
           >
             Sign in

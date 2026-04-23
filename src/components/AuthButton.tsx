@@ -323,7 +323,12 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
             <button
               onClick={() => {
                 setShowDropdown(false)
-                loginWithRedirect()
+                // Preserve current URL across Auth0 redirect so the user
+                // lands back on their chart (localStorage chat history is
+                // keyed by URL). Matches Auth0RedirectHandler in App.tsx.
+                const returnTo = window.location.pathname + window.location.search
+                localStorage.setItem('auth0_returnTo', returnTo)
+                void loginWithRedirect({ appState: { returnTo } })
               }}
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
             >
