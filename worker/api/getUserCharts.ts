@@ -1,15 +1,28 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { tryMigrateUser } from '../_shared/auth';
+import { tryMigrateUser, extractToken, verifyToken, JWKSFetchError } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   try {
-    const url = new URL(request.url);
-    const userId = url.searchParams.get('userId');
-
-    if (!userId) {
-      return Response.json({ error: 'User ID is required' }, { status: 400 });
+    // userId is always derived from the verified JWT; the previous contract
+    // read it from a query param, which let any caller enumerate another
+    // user's charts by guessing their sub.
+    const token = extractToken(request.headers.get('authorization'));
+    if (!token) {
+      return Response.json({ error: 'Authentication required' }, { status: 401 });
     }
+
+    let decodedToken;
+    try {
+      decodedToken = await verifyToken(token, env);
+    } catch (err) {
+      if (err instanceof JWKSFetchError) {
+        return Response.json({ error: 'Authentication service unavailable' }, { status: 502 });
+      }
+      return Response.json({ error: 'Invalid or expired token' }, { status: 401 });
+    }
+
+    const userId = decodedToken.sub;
 
     const sql = getDb(env);
 

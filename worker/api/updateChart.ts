@@ -1,6 +1,6 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { extractToken, verifyToken } from '../_shared/auth';
+import { extractToken, verifyToken, JWKSFetchError } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   let body: { editToken?: string; chartData?: any };
@@ -19,6 +19,61 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const sql = getDb(env);
     const chartTitle = chartData.title || 'Theory of Change';
+
+    // Look up the chart first so we can gate edit access on link_sharing_level
+    // and chart_permissions. Previously the edit token alone was sufficient,
+    // which meant a rejected collaborator (or an ex-member whose access was
+    // revoked) could still overwrite the chart as long as they remembered the
+    // edit URL. Anon charts (user_id IS NULL) and owned charts with
+    // link_sharing_level='editor' still rely on the edit token only.
+    const chartRows = await sql`
+      SELECT id, user_id, link_sharing_level FROM charts WHERE edit_token = ${editToken}
+    ` as { id: string; user_id: string | null; link_sharing_level: string | null }[];
+
+    if (!chartRows || chartRows.length === 0) {
+      return Response.json({ error: 'Chart not found or invalid edit token' }, { status: 404 });
+    }
+
+    const chart = chartRows[0];
+    const linkSharingLevel = chart.link_sharing_level || 'restricted';
+
+    if (chart.user_id && linkSharingLevel !== 'editor') {
+      const authToken = extractToken(request.headers.get('authorization'));
+      if (!authToken) {
+        return Response.json(
+          { error: 'Authentication required to edit this chart.' },
+          { status: 403 },
+        );
+      }
+      let decoded;
+      try {
+        decoded = await verifyToken(authToken, env);
+      } catch (err) {
+        if (err instanceof JWKSFetchError) {
+          return Response.json(
+            { error: 'Authentication service unavailable. Please try again later.' },
+            { status: 502 },
+          );
+        }
+        return Response.json(
+          { error: 'Invalid or expired authentication. Please log in again.' },
+          { status: 403 },
+        );
+      }
+
+      if (decoded.sub !== chart.user_id) {
+        const perm = await sql`
+          SELECT status FROM chart_permissions
+          WHERE chart_id = ${chart.id} AND user_id = ${decoded.sub}
+        ` as { status: string }[];
+        if (!perm.length || perm[0].status !== 'approved') {
+          return Response.json(
+            { error: 'You do not have permission to edit this chart.' },
+            { status: 403 },
+          );
+        }
+      }
+    }
 
     const result = await sql`
       UPDATE charts
