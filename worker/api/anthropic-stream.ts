@@ -293,8 +293,10 @@ async function verifyTurnstileFromCookie(
 /**
  * Returns true if the insert succeeded (first time we've seen this key in the
  * window). Returns false on conflict (replay). On DB error, returns true and
- * logs — a broken Neon shouldn't block legitimate requests; the cap check
- * still gates cost.
+ * logs — reserveCost fails closed on Neon outage, so this idempotency check
+ * can safely fail open: the reservation blocks the request before any
+ * upstream call, and a DB outage that bypasses dedup is strictly less bad
+ * than one that blocks every legitimate request.
  */
 async function claimIdempotencyKey(
   sql: NeonQueryFunction<false, false>,
@@ -2074,7 +2076,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     // fires on usage-event boundaries, so without polling the window between
     // message_start and message_delta is kill-blind for output tokens). We
     // need to know WHY — rate limit vs upstream 5xx vs shape change — to
-    // tune. Preview deploys have no log stream so this is the only signal.
+    // tune.
     if (teeCtx.pollDisableDiagnostic) {
       try {
         const p = teeCtx.pollDisableDiagnostic;
@@ -2108,9 +2110,9 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     }
 
     // Persist kill-switch diagnostics to logging_errors so post-hoc debugging
-    // doesn't depend on worker log availability (preview deployments can
-    // have separate log streams). Errors bypass the usage-data opt-out, so
-    // this lands unconditionally. Minimal payload — no message content.
+    // doesn't depend on worker log availability. Errors bypass the usage-data
+    // opt-out, so this lands unconditionally. Minimal payload — no message
+    // content.
     if (teeCtx.killDiagnostic) {
       try {
         const d = teeCtx.killDiagnostic;
