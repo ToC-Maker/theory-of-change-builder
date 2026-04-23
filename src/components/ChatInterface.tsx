@@ -484,6 +484,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Rendered inline so shape issues (file_id unresolvable, etc.) surface
   // to the user instead of silently falling back to a char-based estimate.
   const [composerEstimateError, setComposerEstimateError] = useState<string | null>(null);
+  // file_ids that /api/count-tokens-estimate couldn't price (e.g. Anthropic's
+  // count_tokens endpoint rejected them, or they're awaiting upload). Surfaced
+  // so the user knows the estimate excludes those files and the real billed
+  // amount will be higher.
+  const [composerUncountedFileIds, setComposerUncountedFileIds] = useState<string[]>([]);
   const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
 
   // Derived cap-gate flags, computed from the cached usage snapshot +
@@ -1147,7 +1152,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             cached_file_tokens?: number;
             cached_file_tokens_draft?: number;
             cached_file_tokens_history?: number;
+            uncounted_file_ids?: string[];
           };
+          setComposerUncountedFileIds(
+            Array.isArray(data.uncounted_file_ids) ? data.uncounted_file_ids : [],
+          );
           const totalTokens = data.input_tokens ?? 0;
           const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
           // Server returns input_tokens already including the precise
@@ -2834,7 +2843,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   const hasAnything = display || generatingEdits || streamingThinking;
                   if (!hasAnything) return null;
                   return (
-                    <div className="w-full text-sm text-gray-800">
+                    <div
+                      className="w-full text-sm text-gray-800"
+                      // Only the streaming bubble announces; historical
+                      // messages remain silent so screen readers aren't
+                      // flooded on scrollback. aria-atomic=false so deltas
+                      // are announced incrementally rather than the whole
+                      // bubble repeating on every chunk.
+                      role="log"
+                      aria-live="polite"
+                      aria-atomic="false"
+                    >
                       <div>
                         {display && (
                           <div className="text-left prose prose-sm max-w-none prose-table:block prose-table:overflow-x-auto prose-pre:overflow-x-auto prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
@@ -3129,6 +3148,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                       Estimation failed: {composerEstimateError}. Fell back to a
                       rough local estimate; the actual reservation may differ.
+                    </div>
+                  )}
+                  {composerUncountedFileIds.length > 0 && (
+                    <div
+                      className="text-xs text-amber-800"
+                      title={`File IDs: ${composerUncountedFileIds.join(', ')}`}
+                    >
+                      {composerUncountedFileIds.length} file
+                      {composerUncountedFileIds.length === 1 ? '' : 's'} couldn't
+                      be priced; estimate excludes them.
                     </div>
                   )}
                   <div className="flex items-center justify-between">
