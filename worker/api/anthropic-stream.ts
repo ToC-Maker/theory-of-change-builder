@@ -1209,24 +1209,34 @@ function createCostTrackingStream(
     // Decide which synthesized event to send: if no chart id, we can't be
     // specific about a file. If we have a chart id, check whether it still
     // exists; if not, this is chart_deleted, otherwise it's a file within the
-    // chart that was garbage-collected.
-    let kind: 'chart_deleted' | 'file_unavailable' = 'file_unavailable';
+    // chart that was garbage-collected. If the lookup errors, surface that
+    // honestly as classification_unavailable so the UI can prompt a reload
+    // instead of sending the user after a non-existent file.
+    let kind: 'chart_deleted' | 'file_unavailable' | 'classification_unavailable' = 'file_unavailable';
     if (teeCtx.chartId) {
       try {
         const rows = await teeCtx.sql`SELECT 1 FROM charts WHERE id = ${teeCtx.chartId} LIMIT 1`;
         if (rows.length === 0) kind = 'chart_deleted';
       } catch (e) {
         console.error('chart existence lookup failed during not_found interception:', e);
-        // Leave as file_unavailable; we can't prove chart_deleted.
+        kind = 'classification_unavailable';
       }
     }
 
-    const payload = kind === 'chart_deleted'
-      ? { type: 'chart_deleted' }
-      : {
-          type: 'file_unavailable',
-          message: 'A file referenced by this chat is no longer available.',
-        };
+    let payload: Record<string, string>;
+    if (kind === 'chart_deleted') {
+      payload = { type: 'chart_deleted' };
+    } else if (kind === 'classification_unavailable') {
+      payload = {
+        type: 'classification_unavailable',
+        message: 'Something went wrong, please reload.',
+      };
+    } else {
+      payload = {
+        type: 'file_unavailable',
+        message: 'A file referenced by this chat is no longer available.',
+      };
+    }
     const frame = encoder.encode(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
     try { controller.enqueue(frame); } catch (e) {
       console.warn('not-found synthesized enqueue failed (controller closed):', e);
@@ -1564,18 +1574,24 @@ function looksLikeBillingError(status: number, errorBody: unknown): boolean {
  * 404) into `chart_deleted` vs `file_unavailable`. Without a chart_id we can
  * only assume the specific file is gone; with one we can prove the chart
  * itself was deleted.
+ *
+ * A third kind, `classification_unavailable`, surfaces when the `charts`
+ * lookup itself errors: we genuinely don't know which of the two cases
+ * applies, and claiming `file_unavailable` at that point is misleading
+ * since it steers the user toward a file-level remedy they probably can't
+ * act on. The client renders this as a generic "reload" prompt.
  */
 async function classifyNotFound(
   sql: NeonQueryFunction<false, false>,
   chartId: string | null,
-): Promise<'chart_deleted' | 'file_unavailable'> {
+): Promise<'chart_deleted' | 'file_unavailable' | 'classification_unavailable'> {
   if (!chartId) return 'file_unavailable';
   try {
     const rows = await sql`SELECT 1 FROM charts WHERE id = ${chartId} LIMIT 1`;
     return rows.length === 0 ? 'chart_deleted' : 'file_unavailable';
   } catch (e) {
     console.error('classifyNotFound: charts lookup failed', e);
-    return 'file_unavailable';
+    return 'classification_unavailable';
   }
 }
 
@@ -1820,9 +1836,20 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     // file-unavailable synthesis path, so the client doesn't see a raw 404.
     if (upstream.status === 404) {
       const kind = await classifyNotFound(sql, chartId);
-      const payload = kind === 'chart_deleted'
-        ? { error: 'chart_deleted' }
-        : { error: 'file_unavailable', message: 'A file referenced by this chat is no longer available.' };
+      let payload: Record<string, string>;
+      if (kind === 'chart_deleted') {
+        payload = { error: 'chart_deleted' };
+      } else if (kind === 'classification_unavailable') {
+        payload = {
+          error: 'classification_unavailable',
+          message: 'Something went wrong, please reload.',
+        };
+      } else {
+        payload = {
+          error: 'file_unavailable',
+          message: 'A file referenced by this chat is no longer available.',
+        };
+      }
       return jsonError(payload, 404, altSvcHeaders);
     }
 
