@@ -193,7 +193,7 @@ export class ChartService {
   }
 
   // Get permissions for a chart (owner only)
-  static async getChartPermissions(chartId: string): Promise<{ permissions: Permission[]; linkSharingLevel?: string }> {
+  static async getChartPermissions(chartId: string): Promise<{ permissions: Permission[]; linkSharingLevel?: 'restricted' | 'viewer' | 'editor' }> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }

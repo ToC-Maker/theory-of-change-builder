@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react"
-import { ToCData, Node } from "../types"
-import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, XMarkIcon, ClockIcon, Bars3Icon } from "@heroicons/react/24/outline"
+import { ToCData, Node as GraphNode } from "../types"
+import { ShareIcon, AdjustmentsHorizontalIcon, EyeIcon, PencilIcon, ChevronDownIcon, TrashIcon, MinusIcon, PlusIcon, QuestionMarkCircleIcon, ClockIcon, Bars3Icon } from "@heroicons/react/24/outline"
 import { ChartService, CreateChartResponse, UserChart } from "../services/chartService"
 import { shortcuts } from "../utils/keyboardShortcuts"
 import { Tooltip } from 'react-tooltip'
@@ -45,8 +45,8 @@ interface EditToolbarProps {
   getTimeAgo: (date: Date) => string
   data: ToCData
   onDeleteNode?: (nodeId: string) => void
-  nodePopup?: any
-  edgePopup?: any
+  nodePopup?: unknown
+  edgePopup?: unknown
   // Camera props for toolbar positioning
   camera?: { x: number; y: number; z: number }
   // Callback to notify parent when chart is created/saved
@@ -124,7 +124,6 @@ export function EditToolbar({
   const [shareLoading, setShareLoading] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
   const [copiedField, setCopiedField] = useState<string | null>(null)
-  const [embedScale, setEmbedScale] = useState(1.0)
 
   // Permission management state
   const [showPermissionsSection, setShowPermissionsSection] = useState(false)
@@ -150,12 +149,18 @@ export function EditToolbar({
       try {
         const stored = localStorage.getItem('recentEditCharts')
         if (stored) {
-          const charts = JSON.parse(stored)
-          charts.sort((a: any, b: any) => b.timestamp - a.timestamp)
+          interface StoredRecentChart {
+            chartId?: string
+            title?: string
+            editUrl: string
+            timestamp: number
+          }
+          const charts = JSON.parse(stored) as StoredRecentChart[]
+          charts.sort((a, b) => b.timestamp - a.timestamp)
           // Map to UserChart format
-          const mappedCharts: UserChart[] = charts.slice(0, 10).map((c: any) => ({
+          const mappedCharts: UserChart[] = charts.slice(0, 10).map((c) => ({
             chartId: c.chartId || '',
-            title: c.title,
+            title: c.title || 'Theory of Change',
             editUrl: c.editUrl,
             viewUrl: '',
             updatedAt: new Date(c.timestamp).toISOString(),
@@ -193,7 +198,7 @@ export function EditToolbar({
   const detectMisalignedNodes = (): boolean => {
     if (!editMode) return false
 
-    const allNodes: { node: Node; centerY: number }[] = []
+    const allNodes: { node: GraphNode; centerY: number }[] = []
 
     // Collect all nodes with their Y positions
     data.sections.forEach((section) => {
@@ -415,7 +420,7 @@ export function EditToolbar({
   }
 
   // Delete chart
-  const handleDeleteChart = async (chartId: string, chartTitle: string) => {
+  const handleDeleteChart = async (chartId: string, _chartTitle: string) => {
     try {
       await ChartService.deleteChart(chartId)
       // Remove the BYOK spend counter for this chart so it doesn't leak into
@@ -427,9 +432,9 @@ export function EditToolbar({
       if (!isAuthenticated) {
         const stored = localStorage.getItem('recentEditCharts')
         if (stored) {
-          const charts = JSON.parse(stored)
+          const charts = JSON.parse(stored) as { chartId?: string }[]
           // Filter out the deleted chart by chartId
-          const filtered = charts.filter((c: any) => c.chartId !== chartId)
+          const filtered = charts.filter((c) => c.chartId !== chartId)
           localStorage.setItem('recentEditCharts', JSON.stringify(filtered))
         }
         // Reload the recent charts list
@@ -527,8 +532,14 @@ export function EditToolbar({
   useEffect(() => {
     if (!isAuthenticated && currentEditToken && shareData?.chartId) {
       const stored = localStorage.getItem('recentEditCharts')
-      const charts = stored ? JSON.parse(stored) : []
-      const chartIndex = charts.findIndex((c: any) => c.chartId === shareData.chartId)
+      interface StoredRecentChartEntry {
+        chartId: string
+        title: string
+        editUrl: string
+        timestamp: number
+      }
+      const charts: StoredRecentChartEntry[] = stored ? JSON.parse(stored) : []
+      const chartIndex = charts.findIndex((c) => c.chartId === shareData.chartId)
 
       const newTitle = data.title || 'Theory of Change'
       const editUrl = shareData.editUrl || `${window.location.origin}/edit/${currentEditToken}`
@@ -599,7 +610,6 @@ export function EditToolbar({
       setShareData(null)
       setShareError(null)
       setCopiedField(null)
-      setEmbedScale(1.0) // Reset scale to 100%
       setShowPermissionsSection(false)
       setPermissions([])
       setPermissionError(null)
@@ -640,9 +650,9 @@ export function EditToolbar({
     if (highlightedNodes.size === 0) return;
 
     // Calculate new position
-    const nodeElements = Array.from(highlightedNodes).map(nodeId =>
-      document.getElementById(`node-${nodeId}`)
-    ).filter(Boolean);
+    const nodeElements = Array.from(highlightedNodes)
+      .map(nodeId => document.getElementById(`node-${nodeId}`))
+      .filter((el): el is HTMLElement => el !== null);
 
     if (nodeElements.length > 0) {
       const rects = nodeElements.map(el => el.getBoundingClientRect());
