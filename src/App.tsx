@@ -366,7 +366,12 @@ function ToCViewerOnly() {
       document.removeEventListener('click', handleActivity);
       document.removeEventListener('scroll', handleActivity);
     };
-  }, [chartId]); // Remove data dependency to avoid recreation
+    // The effect intentionally snapshots `data` once at setup; lastDataString
+    // is then maintained from server responses only. Including `data` as a
+    // dep would tear down and rebuild the 5 event listeners + interval on
+    // every user edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartId]);
 
   if (loading) {
     return (
