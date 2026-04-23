@@ -1,4 +1,5 @@
 import js from "@eslint/js"
+import eslintConfigPrettier from "eslint-config-prettier/flat"
 import reactHooks from "eslint-plugin-react-hooks"
 import reactRefresh from "eslint-plugin-react-refresh"
 import globals from "globals"
@@ -25,4 +26,7 @@ export default tseslint.config(
       ],
     },
   },
+  // Must be last: turns off ESLint stylistic rules that would conflict with
+  // Prettier (the formatter owns whitespace/quotes/semi/etc.).
+  eslintConfigPrettier,
 )
