@@ -1247,8 +1247,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // session can't init → logUserMessage silently drops the message, and
     // the worker's X-Logging-Message-Id is never sent, so the reconcile
     // can't populate logging_messages.cost_micro_usd either. Idempotent
-    // when the chart already exists.
-    await ensureChartExists();
+    // when the chart already exists. Capture the canonical chartId here
+    // so the stream headers downstream use the 12-char id and not the
+    // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
+    const resolvedChart = await ensureChartExists();
+    const resolvedChartId = resolvedChart?.chartId;
 
     // Generate UUIDs for message logging
     const userMessageId = crypto.randomUUID();
@@ -1529,7 +1532,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       extendedThinkingEnabled: true,
       attachedFileIds,
       idempotencyKey,
-      chartId: params.chartId ?? params.editToken,
+      chartId: resolvedChartId,
       loggingMessageId: userMessageId,
       // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
     });
@@ -1627,11 +1630,28 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     chartId: string;
     editToken: string;
   } | null> => {
+    // 1. Already have both (route param, autosave ref, or previous lookup).
     const existingChartId = params.chartId ?? autosavedChartIdRef.current;
     const existingEditToken = params.editToken ?? autosavedEditTokenRef.current;
     if (existingChartId && existingEditToken) {
       return { chartId: existingChartId, editToken: existingEditToken };
     }
+    // 2. Have editToken but no chartId — happens on `/edit/<token>` after a
+    //    page reload, since autosavedChartIdRef is memory-only. Resolve via
+    //    the API rather than creating a new chart (which would strand the
+    //    user's existing one). Also guards against the past bug where
+    //    editToken (36 chars) fell through as chart_id (VARCHAR(12)).
+    if (existingEditToken && !existingChartId) {
+      try {
+        const resolved = await ChartService.getChartByEditToken(existingEditToken);
+        autosavedChartIdRef.current = resolved.chartId;
+        autosavedEditTokenRef.current = existingEditToken;
+        return { chartId: resolved.chartId, editToken: existingEditToken };
+      } catch (e) {
+        console.warn('[ChatInterface] getChartByEditToken failed; falling through to create:', e);
+      }
+    }
+    // 3. No chart yet — auto-save.
     if (!graphData) return null;
     try {
       const created = await ChartService.createChart(graphData);
@@ -1651,24 +1671,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     async (
       file: File,
     ): Promise<{ file_id: string; filename: string; size_bytes: number; mime_type: string }> => {
-      let chartIdForUpload = params.chartId ?? autosavedChartIdRef.current ?? params.editToken ?? autosavedEditTokenRef.current;
-      if (!chartIdForUpload) {
-        // Auto-save the chart so chart_files has a valid FK target. Uses
-        // the in-memory graph (whatever the user has set up so far, or the
-        // default template on a fresh `/` route).
-        if (!graphData) {
-          throw new Error('No chart data available to save');
-        }
-        const created = await ChartService.createChart(graphData);
-        ChartService.saveEditToken(created.chartId, created.editToken);
-        autosavedEditTokenRef.current = created.editToken;
-        autosavedChartIdRef.current = created.chartId;
-        // Update the URL in place so a page refresh finds the chart. No
-        // route re-render (that would lose chip state).
-        window.history.replaceState(null, '', `/edit/${created.editToken}`);
-        onChartCreated?.(created.editToken, created.chartId);
-        chartIdForUpload = created.chartId;
+      // Delegate chart resolution to ensureChartExists so the upload path
+      // can't accidentally use editToken (36 chars) as chart_id (VARCHAR(12))
+      // — the fallback chain in the old inline code did exactly that on
+      // page reloads, producing NeonDbError: value too long for type
+      // character varying(12).
+      const chart = await ensureChartExists();
+      if (!chart) {
+        throw new Error('No chart data available to save');
       }
+      const chartIdForUpload = chart.chartId;
 
       const formData = new FormData();
       formData.append('file', file);
@@ -2208,7 +2220,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       extendedThinkingEnabled: true,
       attachedFileIds: generateAttachedFileIds,
       idempotencyKey: crypto.randomUUID(), // fresh per send: dedupes browser reload / double-click
-      chartId: params.chartId ?? params.editToken,
+      // Generate mode always has a chart by this point (attached files
+      // routed through uploadPdfToFilesApi, which calls ensureChartExists).
+      // Fall back to route params for defense in depth but never leak
+      // editToken through as chart_id.
+      chartId: params.chartId ?? autosavedChartIdRef.current ?? undefined,
       loggingMessageId: userMessageId,
       // userAnthropicKey: server-stored BYOK; raw key not held client-side.
     });
