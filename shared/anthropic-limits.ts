@@ -40,4 +40,4 @@ export const COUNT_TOKENS_RPM_BY_TIER: Record<1 | 2 | 3 | 4, number> = {
 };
 
 /** Our current tier — update when we move up. Drives client-side debounce budgeting. */
-export const CURRENT_ANTHROPIC_TIER = 1 as const;
+export const CURRENT_ANTHROPIC_TIER = 2 as const;
