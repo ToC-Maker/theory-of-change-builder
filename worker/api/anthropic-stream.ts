@@ -345,7 +345,31 @@ function stripToCountTokensBody(body: Record<string, unknown>): Record<string, u
     }
     return node;
   };
-  return stripCacheControl(countBody) as Record<string, unknown>;
+  const withoutCacheControl = stripCacheControl(countBody) as Record<string, unknown>;
+
+  // Strip `{type: 'document', source: {type: 'file', ...}}` content blocks.
+  // Anthropic's count_tokens supports document sources of type `base64`,
+  // `text`, `content`, and `url` — but NOT `file` (Files-API file_id).
+  // Leaving them in returns 400 "messages.*.content.*.source: invalid
+  // source type" and breaks preflight entirely when the user has PDFs
+  // attached. The /v1/messages endpoint itself does accept file sources;
+  // only count_tokens is the problem. We accept a small under-estimate
+  // of the PDF's contribution — post-stream reconcile captures the real
+  // cost from Anthropic's message_delta usage fields either way.
+  if (Array.isArray(withoutCacheControl.messages)) {
+    withoutCacheControl.messages = (withoutCacheControl.messages as Array<Record<string, unknown>>)
+      .map((msg) => {
+        if (!Array.isArray(msg.content)) return msg;
+        const filtered = (msg.content as Array<Record<string, unknown>>).filter((block) => {
+          if (block?.type !== 'document') return true;
+          const src = block.source as Record<string, unknown> | undefined;
+          return src?.type !== 'file';
+        });
+        return { ...msg, content: filtered };
+      });
+  }
+
+  return withoutCacheControl;
 }
 
 /**
@@ -361,6 +385,7 @@ async function estimateProjectedCost(
   body: Record<string, unknown>,
   env: Env,
   altSvcHeaders: Record<string, string>,
+  sql: NeonQueryFunction<false, false>,
 ): Promise<EstimateResult> {
   const model = typeof body.model === 'string' ? body.model : DEFAULT_MODEL;
   const rate = RATES_MICRO_USD_PER_TOKEN[model];
@@ -372,6 +397,14 @@ async function estimateProjectedCost(
       response: jsonError({ error: 'unknown_model', model }, 400, altSvcHeaders),
     };
   }
+
+  // Extract file_id references before stripping — we'll look up their
+  // precise cached token counts (populated at upload time by upload-file.ts)
+  // and add them to the projection. count_tokens itself can't count file_id
+  // document blocks; without this step preflight would undercount by the
+  // full PDF size on file-attached messages and the reservation would be
+  // too low.
+  const strippedFileIds = extractDocumentFileIds(body);
 
   const countBody = stripToCountTokensBody(body);
 
@@ -426,9 +459,62 @@ async function estimateProjectedCost(
     return { ok: false, response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders) };
   }
 
-  const inputTokens = typeof data.input_tokens === 'number' ? data.input_tokens : 0;
-  const projected = BigInt(inputTokens) * BigInt(rate.input);
-  return { ok: true, projected, model, inputTokens, countBody };
+  const baseInputTokens = typeof data.input_tokens === 'number' ? data.input_tokens : 0;
+
+  // Look up precise cached token counts for stripped file_ids. NULL or
+  // missing rows contribute 0 — we log and under-project rather than fail
+  // the estimate outright; the mid-stream kill switch still catches any
+  // significant overshoot.
+  let cachedFileTokens = 0;
+  if (strippedFileIds.length > 0) {
+    try {
+      const rows = await sql`
+        SELECT file_id, input_tokens
+        FROM chart_files
+        WHERE file_id = ANY(${strippedFileIds}::text[])
+      ` as { file_id: string; input_tokens: number | null }[];
+      for (const r of rows) {
+        if (typeof r.input_tokens === 'number' && r.input_tokens >= 0) {
+          cachedFileTokens += r.input_tokens;
+        }
+      }
+    } catch (e) {
+      console.warn('[estimate] chart_files lookup failed (continuing with base count):', e);
+    }
+  }
+
+  const totalInputTokens = baseInputTokens + cachedFileTokens;
+  const projected = BigInt(totalInputTokens) * BigInt(rate.input);
+  // The polling kill switch subtracts initialInputTokens from each poll's
+  // result. Polling uses countBody (file_ids already stripped), so the
+  // baseline it compares against must be the BASE count — not the cached-
+  // file-inclusive total. Otherwise the first poll's delta = -cachedFileTokens
+  // and output_tokens_est goes negative.
+  return { ok: true, projected, model, inputTokens: baseInputTokens, countBody };
+}
+
+/**
+ * Walk the original request body's messages and collect every
+ * `{type: 'document', source: {type: 'file', file_id: '...'}}` block's
+ * file_id. Used by estimateProjectedCost before the Anthropic-unfriendly
+ * blocks are stripped out of the count_tokens body.
+ */
+function extractDocumentFileIds(body: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return out;
+  for (const msg of messages as Array<Record<string, unknown>>) {
+    const content = msg.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block?.type !== 'document') continue;
+      const src = block.source as Record<string, unknown> | undefined;
+      if (src?.type === 'file' && typeof src.file_id === 'string') {
+        out.push(src.file_id);
+      }
+    }
+  }
+  return out;
 }
 
 type ReserveResult =
@@ -1526,7 +1612,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   let initialInputTokens = 0;
   let countTokensBase: Record<string, unknown> | null = null;
   if (isCapped(tier)) {
-    const est = await estimateProjectedCost(body, env, altSvcHeaders);
+    const est = await estimateProjectedCost(body, env, altSvcHeaders, sql);
     if (!est.ok) return est.response;
     projected = est.projected;
     model = est.model;

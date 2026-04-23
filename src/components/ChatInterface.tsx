@@ -1048,18 +1048,21 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
+            cached_file_tokens?: number;
           };
           const totalTokens = data.input_tokens ?? 0;
           const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
-          // Approximate draft-only tokens by converting every contributor
-          // into a token estimate, then taking the draft's share of the
-          // total. Char-to-token ratio is ~4:1; PDF pages are ~400 tokens
-          // per page per Anthropic's Files-API guidance, which is
-          // otherwise invisible to a pure char ratio.
+          // Server returns input_tokens already including the precise
+          // cached token counts for any attached files (from
+          // chart_files.input_tokens, counted at upload time). We just need
+          // to split the total into draft-side vs history-side for the
+          // warm-cache 1.25× / 0.1× multipliers. Char-to-token ratio is
+          // ~4:1 for text; for PDF tokens we trust the server's
+          // cached_file_tokens (which is a count_tokens call from upload
+          // time, not a heuristic).
           const CHAR_PER_TOKEN = 4;
-          const PDF_TOKENS_PER_PAGE = 400;
           const draftTextTokensEst = Math.ceil(draftBody.length / CHAR_PER_TOKEN);
-          const pdfTokensEst = uploadPageCount * PDF_TOKENS_PER_PAGE;
+          const pdfTokensEst = data.cached_file_tokens ?? 0;
           const draftTokensEst = draftTextTokensEst + pdfTokensEst;
           const historyCharSum =
             systemPrompt.length +

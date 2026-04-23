@@ -149,10 +149,71 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   const mimeType = upstreamJson.mime_type ?? file.type ?? 'application/octet-stream';
   const sizeBytes = upstreamJson.size_bytes ?? file.size;
 
+  // Count tokens precisely while we still have the bytes in memory. Anthropic's
+  // count_tokens accepts DocumentBlockParam with Base64PDFSource but NOT the
+  // file_id source variant, so once we finish this request we can't re-derive
+  // the token count — Anthropic also won't let us download files we uploaded.
+  // Stored on chart_files.input_tokens; downstream estimators (composer,
+  // preflight, polling) sum this column instead of a pageCount heuristic.
+  //
+  // Only attempted for PDFs; for other mime types the document block isn't
+  // applicable. NULL in the DB means "not counted" and the downstream UI falls
+  // back to a rough estimate.
+  let inputTokens: number | null = null;
+  if (mimeType === 'application/pdf') {
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      // Base64 encode in chunks so we don't hit a stack overflow from
+      // String.fromCharCode.apply on large PDFs.
+      let binary = '';
+      const CHUNK = 8192;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+      }
+      const b64 = btoa(binary);
+      const countResp = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'files-api-2025-04-14',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-4-7',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  source: { type: 'base64', media_type: 'application/pdf', data: b64 },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      if (countResp.ok) {
+        const data = await countResp.json() as { input_tokens?: number };
+        if (typeof data.input_tokens === 'number' && data.input_tokens >= 0) {
+          inputTokens = data.input_tokens;
+        }
+      } else {
+        const body = await countResp.text().catch(() => '');
+        console.warn(
+          `[upload-file] count_tokens failed at upload (status=${countResp.status}): ${body.slice(0, 300)}`,
+        );
+      }
+    } catch (err) {
+      console.warn('[upload-file] count_tokens attempt failed (non-fatal, continuing):', err);
+    }
+  }
+
   try {
     await sql`
-      INSERT INTO chart_files (file_id, chart_id, user_id, filename, size_bytes, mime_type)
-      VALUES (${fileId}, ${chartId}, ${userId}, ${filename}, ${sizeBytes}, ${mimeType})
+      INSERT INTO chart_files (file_id, chart_id, user_id, filename, size_bytes, mime_type, input_tokens)
+      VALUES (${fileId}, ${chartId}, ${userId}, ${filename}, ${sizeBytes}, ${mimeType}, ${inputTokens})
     `;
   } catch (err) {
     // File already uploaded at Anthropic but DB insert failed. We can't roll
@@ -174,6 +235,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       filename,
       size_bytes: sizeBytes,
       mime_type: mimeType,
+      input_tokens: inputTokens,
     }),
     { status: 200, headers },
   );
