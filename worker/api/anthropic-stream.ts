@@ -859,6 +859,15 @@ type SseTeeContext = {
    */
   pollingDisabled: boolean;
   /**
+   * Set to true once the transform stream has finished (natural end, cancel,
+   * explicit kill, or client abort). The poller's fetch can outlive the
+   * stream — without this flag an in-flight poll that returns after flush()
+   * would set `killed.v` and append a kill-diagnostic even though the stream
+   * has already completed successfully. Checked inside pollCostEstimate
+   * before firing the kill.
+   */
+  streamDone: { v: boolean };
+  /**
    * Diagnostic payload captured when the kill switch fires, for post-hoc
    * debugging via `logging_errors`. Written during post-stream reconcile
    * rather than from the kill site itself because ctx.waitUntil is scoped
@@ -923,6 +932,7 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  */
 async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
+  if (teeCtx.streamDone.v) return;
   if (teeCtx.killThresholdMicro === null) return;
   if (!teeCtx.env || !teeCtx.countTokensBase) return;
 
@@ -989,6 +999,12 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     teeCtx.pollingDisabled = true;
     return;
   }
+
+  // The fetch can outlive the stream. If flush() / cancel() / kill already
+  // ran while we were awaiting the count_tokens response, bail before doing
+  // anything that could mutate state — firing a kill diagnostic now would
+  // spuriously tag a successfully-completed stream as over-budget.
+  if (teeCtx.streamDone.v || teeCtx.killed.v) return;
 
   if (!resp.ok) {
     // Rate-limit or upstream failure: give up on polling for the rest of
@@ -1133,8 +1149,15 @@ function createCostTrackingStream(
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let sseBuffer = '';
-  let resolveDone!: () => void;
-  const done = new Promise<void>((resolve) => { resolveDone = resolve; });
+  let resolveDoneInner!: () => void;
+  const done = new Promise<void>((resolve) => { resolveDoneInner = resolve; });
+  // Idempotent: first call sets streamDone + resolves the promise; subsequent
+  // calls are no-ops. Centralizing the set-and-resolve pair here keeps the
+  // poll-race fix correct no matter which exit path runs first.
+  const resolveDone = () => {
+    teeCtx.streamDone.v = true;
+    resolveDoneInner();
+  };
 
   // Polling timer for the async count_tokens kill switch. Armed below when
   // the tier is capped and we have everything the poller needs; cleared on
@@ -1551,7 +1574,26 @@ function createCostTrackingStream(
     },
   });
 
-  return { stream: source.pipeThrough(transform), done };
+  // Belt-and-braces hang safeguard: if the upstream source rejects (network
+  // error, Anthropic kill-shot, edge 5xx) before flush/cancel have fired on
+  // the transform, neither handler runs and `done` sleeps until the Worker
+  // times out (~30s) — during which `ctx.waitUntil(tracked.done)` starves
+  // the reconcile UPSERT. Chain a tail transform that mirrors chunks but
+  // whose own flush/cancel hooks resolveDone so every exit path — clean
+  // end-of-stream, downstream cancel, or readable-side error propagated
+  // through the pipe — fires it exactly once (resolveDone is idempotent).
+  const tail = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) { controller.enqueue(chunk); },
+    flush() { resolveDone(); },
+    cancel(reason) {
+      if (reason) {
+        console.warn('[cost-tracking] tail cancelled:', reason);
+      }
+      resolveDone();
+    },
+  });
+  const piped = source.pipeThrough(transform).pipeThrough(tail);
+  return { stream: piped, done };
 }
 
 // --- Anthropic billing-error detection -----------------------------------
@@ -1909,6 +1951,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     pendingKillFrame: null,
     pendingRunningCostFrame: null,
     pollingDisabled: false,
+    streamDone: { v: false },
     killDiagnostic: null,
     pollDisableDiagnostic: null,
   };
