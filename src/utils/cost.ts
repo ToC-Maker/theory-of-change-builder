@@ -20,6 +20,13 @@ export const MODEL_OUTPUT_RATES_USD_PER_MTOK: Record<string, number> = Object.fr
   Object.entries(MODEL_PRICING).map(([model, p]) => [model, p.output_usd_per_mtok]),
 );
 
+// Most-expensive input rate across the pricing table. Derived so a pricing
+// change doesn't leave a stale fallback. Used as the conservative upper-bound
+// estimate when `estimateCostLowBound` is called with an unknown model.
+const MAX_INPUT_RATE_USD_PER_MTOK: number = Math.max(
+  ...Object.values(MODEL_PRICING).map((p) => p.input_usd_per_mtok),
+);
+
 // Re-export the shared cache + web-search constants so existing imports
 // keep working with a single canonical reference.
 export const WEB_SEARCH_USD_PER_USE = SHARED_WEB_SEARCH_USD_PER_USE;
@@ -27,10 +34,27 @@ export const CACHE_WRITE_MULTIPLIER = CACHE_WRITE_5M_MULTIPLIER;
 export const CACHE_READ_MULTIPLIER_VALUE = CACHE_READ_MULTIPLIER;
 export const CACHE_TTL_MILLIS = CACHE_TTL_MS;
 
-/** Rough lower-bound estimate: input cost only, assuming no output. */
+/**
+ * Rough lower-bound estimate: input cost only, assuming no output.
+ *
+ * If the caller passes an unknown model (e.g. the dropdown drifted out of
+ * sync with `shared/pricing.ts`), we used to silently return 0 — which
+ * rendered "$0.00" in the composer and gave the user a dangerously wrong
+ * impression of free usage. Instead, warn and fall back to the most
+ * expensive input rate in the table so the displayed estimate is a
+ * conservative upper bound. Callers that want to branch on "unknown
+ * model" should check membership in `MODEL_INPUT_RATES_USD_PER_MTOK`
+ * directly before calling this helper.
+ */
 export function estimateCostLowBound(inputTokens: number, model: string): number {
   const rate = MODEL_INPUT_RATES_USD_PER_MTOK[model];
-  if (rate == null) return 0;
+  if (rate == null) {
+    console.warn(
+      `[cost] unknown model "${model}" passed to estimateCostLowBound; ` +
+      `falling back to max input rate ($${MAX_INPUT_RATE_USD_PER_MTOK}/MTok)`,
+    );
+    return (inputTokens / 1_000_000) * MAX_INPUT_RATE_USD_PER_MTOK;
+  }
   return (inputTokens / 1_000_000) * rate;
 }
 
