@@ -217,6 +217,34 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         console.warn(
           `[upload-file] count_tokens failed at upload (status=${countResp.status}): ${body.slice(0, 300)}`,
         );
+        // Anthropic rejects PDFs >600 pages here AND in /v1/messages, so a
+        // file that fails count_tokens for this reason is permanently
+        // unusable. Delete the orphan from the Files API and fail the
+        // upload with a user-facing error, rather than leaving a dead
+        // file_id on the account.
+        if (countResp.status === 400 && /600 PDF pages/i.test(body)) {
+          try {
+            await fetch(`https://api.anthropic.com/v1/files/${fileId}`, {
+              method: 'DELETE',
+              headers: {
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'files-api-2025-04-14',
+              },
+            });
+          } catch (delErr) {
+            console.warn('[upload-file] Failed to delete orphaned file_id after page-limit rejection:', delErr);
+          }
+          const headersOut = new Headers({ 'content-type': 'application/json' });
+          if (anonSetCookie) headersOut.append('Set-Cookie', anonSetCookie);
+          return new Response(
+            JSON.stringify({
+              error: 'pdf_too_many_pages',
+              upstream_message: 'Anthropic limits PDFs to 600 pages per document. Please split this file into smaller sections.',
+            }),
+            { status: 400, headers: headersOut },
+          );
+        }
       }
     } catch (err) {
       countTokensFailure = {

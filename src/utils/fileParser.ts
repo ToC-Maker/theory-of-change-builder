@@ -40,6 +40,21 @@ export async function parseFile(file: File): Promise<ParsedFile> {
   try {
     if (isPdf) {
       const { pageCount, sizeBytes } = await validatePdf(file);
+      // Anthropic caps PDFs at 600 pages for both /v1/messages and
+      // count_tokens. Uploading a larger PDF succeeds at the Files API
+      // but every downstream call will 400. Reject here so the user sees
+      // a clear error immediately instead of a post-upload surprise.
+      // pageCount is a best-effort header scan and may be 0 for
+      // non-standard PDFs; skip the check when parsing failed.
+      const PDF_PAGE_LIMIT = 600;
+      if (pageCount > PDF_PAGE_LIMIT) {
+        return {
+          kind: 'error',
+          success: false,
+          content: '',
+          error: `${file.name}: ${pageCount}-page PDF. Anthropic limits PDFs to ${PDF_PAGE_LIMIT} pages per document — please split it into smaller sections.`,
+        };
+      }
       return {
         kind: 'upload',
         success: true,
