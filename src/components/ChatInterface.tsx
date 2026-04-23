@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useRef, useEffect, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage, type CostError } from '../services/chatService';
@@ -329,31 +330,57 @@ function TurnstileWidget({
  * cleanResponseContent was applied in onComplete before the row landed
  * in `messages` state; no per-render cleaning needed here.
  */
+/**
+ * Assistant messages render flush with the scrollable container (no
+ * bubble, full width, at the container's visual hierarchy). User messages
+ * stay as a right-aligned blue bubble — the bubble + alignment makes the
+ * role clear without relying on left/right as the only signal.
+ *
+ * Both sides render GitHub-flavored markdown (remark-gfm) so tables,
+ * strikethrough, task lists, and autolinks show up in either direction.
+ * `prose-table:block prose-table:overflow-x-auto` lets wide tables scroll
+ * horizontally instead of overflowing the narrow chat column.
+ */
 const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
-  return (
-    <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-[85%] p-2 rounded-lg text-sm ${
-          message.role === 'user'
-            ? 'bg-blue-500 text-white rounded-br-sm'
-            : 'bg-gray-100 text-gray-800 rounded-bl-sm'
-        }`}
-      >
-        {message.role === 'assistant' ? (
-          <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+  const proseClass =
+    'text-left prose prose-sm max-w-none ' +
+    'prose-table:block prose-table:overflow-x-auto ' +
+    'prose-pre:overflow-x-auto';
+
+  if (message.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] px-3 py-2 rounded-lg rounded-br-sm bg-blue-500 text-white text-sm">
+          <div className={`${proseClass} prose-invert`}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
           </div>
-        ) : (
-          <div className="whitespace-pre-wrap text-left">{message.content}</div>
-        )}
-        <div className={`text-xs mt-1 opacity-70 ${
-          message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
-        }`}>
-          <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-          {message.usage && typeof message.usage.cost_usd === 'number' && message.usage.cost_usd > 0 && (
-            <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
-          )}
+          <div className="text-xs mt-1 opacity-70 text-blue-100">
+            <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+            {message.usage && typeof message.usage.cost_usd === 'number' && message.usage.cost_usd > 0 && (
+              <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
+            )}
+          </div>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full text-sm text-gray-800">
+      <div
+        className={
+          `${proseClass} ` +
+          'prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 ' +
+          'prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800'
+        }
+      >
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      </div>
+      <div className="text-xs mt-1 text-gray-500 opacity-70">
+        <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+        {message.usage && typeof message.usage.cost_usd === 'number' && message.usage.cost_usd > 0 && (
+          <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
+        )}
       </div>
     </div>
   );
@@ -2693,11 +2720,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   const hasAnything = display || generatingEdits || streamingThinking;
                   if (!hasAnything) return null;
                   return (
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
+                    <div className="w-full text-sm text-gray-800">
+                      <div>
                         {display && (
-                          <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-                            <ReactMarkdown>{display}</ReactMarkdown>
+                          <div className="text-left prose prose-sm max-w-none prose-table:block prose-table:overflow-x-auto prose-pre:overflow-x-auto prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{display}</ReactMarkdown>
                           </div>
                         )}
                         {generatingEdits && (
