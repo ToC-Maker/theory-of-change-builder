@@ -1329,6 +1329,7 @@ function ToCViewer() {
     authTokenReady,
     isAuthenticated,
     location.state,
+    initializeLogging,
   ]);
 
   // Update document title when data changes
