@@ -580,7 +580,10 @@ export function ToC({
     [data.sections],
   );
 
-  // Calculate total width needed for each section (all columns + gaps)
+  // Calculate total width needed for each section (all columns + gaps).
+  // `data.sections` reference changes on every immutable update (including
+  // column-count changes), so it's sufficient as a dep — no need for a
+  // secondary fingerprint key that the original code tried to add.
   const sectionWidths = useMemo(() => {
     // Defensive programming: ensure sections is an array
     if (!data.sections || !Array.isArray(data.sections)) {
@@ -613,15 +616,7 @@ export function ToC({
       return totalColumnWidth + gaps;
     });
     return widths;
-  }, [
-    data.sections,
-    columnPadding,
-    editMode,
-    layoutMode,
-    data.sections.map((s) => s.columns.length).join(','),
-    editingSectionIndex,
-    fontFamily,
-  ]);
+  }, [data.sections, columnPadding, editMode, layoutMode]);
 
   // Global drag tracking to handle dragging outside container bounds
   useEffect(() => {
@@ -872,115 +867,118 @@ export function ToC({
     setNodeColor('#ffffff');
   }, [editMode, highlightedNodes, setDataAndNotify, areNodesConnected, disconnectSelectedNodes]);
 
-  const handleDrop = (
-    targetSectionIndex: number,
-    targetColumnIndex: number,
-    isNewColumn: boolean = false,
-    yPosition?: number,
-  ) => {
-    if (!draggedNode || !dragOffset) {
-      console.log('No dragged node or drag offset');
-      return;
-    }
-
-    const sourceLocation = findNodeLocation(draggedNode.id);
-    if (!sourceLocation) {
-      console.log('Source location not found for node:', draggedNode.id);
-      return;
-    }
-
-    // Adjust yPosition by the drag offset so the node appears where the user grabbed it
-    let adjustedYPosition = 20; // Default fallback
-    if (yPosition !== undefined) {
-      // yPosition comes from e.clientY - rect.top where rect is from getBoundingClientRect()
-      // getBoundingClientRect() returns viewport coordinates which are already scaled by the zoom transform
-      // So we need to convert back to local space by dividing by zoom
-      const mouseLocalY = yPosition / zoomScale;
-
-      // dragOffset.y was captured from the original drag event, also in viewport space
-      const dragOffsetLocalY = dragOffset.y / zoomScale;
-
-      // Calculate where the node's top would be in local space
-      const nodeTopLocal = mouseLocalY - dragOffsetLocalY;
-
-      // Get node height (stored in local space)
-      const actualHeight = nodeHeights[draggedNode.id] || 76;
-
-      // Calculate center in local space
-      adjustedYPosition = nodeTopLocal + actualHeight / 2;
-    }
-
-    console.log('Moving node', draggedNode.id, 'from', sourceLocation, 'to', {
-      targetSectionIndex,
-      targetColumnIndex,
-      isNewColumn,
-      yPosition: adjustedYPosition,
-    });
-
-    setDataAndNotify((prevData) => {
-      // If we're just updating position in the same column, do it more precisely
-      if (
-        !isNewColumn &&
-        sourceLocation.sectionIndex === targetSectionIndex &&
-        sourceLocation.columnIndex === targetColumnIndex
-      ) {
-        // Just update the yPosition of the specific node in place
-        return {
-          ...prevData,
-          sections: prevData.sections.map((section, sIndex) =>
-            sIndex === targetSectionIndex
-              ? {
-                  ...section,
-                  columns: section.columns.map((column, cIndex) =>
-                    cIndex === targetColumnIndex
-                      ? {
-                          ...column,
-                          nodes: column.nodes.map((node) =>
-                            node.id === draggedNode.id
-                              ? { ...node, yPosition: adjustedYPosition }
-                              : node,
-                          ),
-                        }
-                      : column,
-                  ),
-                }
-              : section,
-          ),
-        };
+  const handleDrop = useCallback(
+    (
+      targetSectionIndex: number,
+      targetColumnIndex: number,
+      isNewColumn: boolean = false,
+      yPosition?: number,
+    ) => {
+      if (!draggedNode || !dragOffset) {
+        console.log('No dragged node or drag offset');
+        return;
       }
 
-      // For moves between different columns/sections, do the full remove and add
-      const newData = { ...prevData };
-
-      // Remove node from source location
-      newData.sections = prevData.sections.map((section) => ({
-        ...section,
-        columns: section.columns.map((column) => ({
-          ...column,
-          nodes: column.nodes.filter((node) => node.id !== draggedNode.id),
-        })),
-      }));
-
-      if (isNewColumn) {
-        // Insert new column at the target position
-        const targetSection = newData.sections[targetSectionIndex];
-        const newColumn = { nodes: [{ ...draggedNode, yPosition: adjustedYPosition }] };
-        targetSection.columns.splice(targetColumnIndex, 0, newColumn);
-      } else {
-        // Add node with custom yPosition to existing column
-        const nodeWithPosition = { ...draggedNode, yPosition: adjustedYPosition };
-        newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(
-          nodeWithPosition,
-        );
+      const sourceLocation = findNodeLocation(draggedNode.id);
+      if (!sourceLocation) {
+        console.log('Source location not found for node:', draggedNode.id);
+        return;
       }
 
-      return newData;
-    });
+      // Adjust yPosition by the drag offset so the node appears where the user grabbed it
+      let adjustedYPosition = 20; // Default fallback
+      if (yPosition !== undefined) {
+        // yPosition comes from e.clientY - rect.top where rect is from getBoundingClientRect()
+        // getBoundingClientRect() returns viewport coordinates which are already scaled by the zoom transform
+        // So we need to convert back to local space by dividing by zoom
+        const mouseLocalY = yPosition / zoomScale;
 
-    setDraggedNode(null);
-    setDragOffset(null);
-    setDragOverLocation(null);
-  };
+        // dragOffset.y was captured from the original drag event, also in viewport space
+        const dragOffsetLocalY = dragOffset.y / zoomScale;
+
+        // Calculate where the node's top would be in local space
+        const nodeTopLocal = mouseLocalY - dragOffsetLocalY;
+
+        // Get node height (stored in local space)
+        const actualHeight = nodeHeights[draggedNode.id] || 76;
+
+        // Calculate center in local space
+        adjustedYPosition = nodeTopLocal + actualHeight / 2;
+      }
+
+      console.log('Moving node', draggedNode.id, 'from', sourceLocation, 'to', {
+        targetSectionIndex,
+        targetColumnIndex,
+        isNewColumn,
+        yPosition: adjustedYPosition,
+      });
+
+      setDataAndNotify((prevData) => {
+        // If we're just updating position in the same column, do it more precisely
+        if (
+          !isNewColumn &&
+          sourceLocation.sectionIndex === targetSectionIndex &&
+          sourceLocation.columnIndex === targetColumnIndex
+        ) {
+          // Just update the yPosition of the specific node in place
+          return {
+            ...prevData,
+            sections: prevData.sections.map((section, sIndex) =>
+              sIndex === targetSectionIndex
+                ? {
+                    ...section,
+                    columns: section.columns.map((column, cIndex) =>
+                      cIndex === targetColumnIndex
+                        ? {
+                            ...column,
+                            nodes: column.nodes.map((node) =>
+                              node.id === draggedNode.id
+                                ? { ...node, yPosition: adjustedYPosition }
+                                : node,
+                            ),
+                          }
+                        : column,
+                    ),
+                  }
+                : section,
+            ),
+          };
+        }
+
+        // For moves between different columns/sections, do the full remove and add
+        const newData = { ...prevData };
+
+        // Remove node from source location
+        newData.sections = prevData.sections.map((section) => ({
+          ...section,
+          columns: section.columns.map((column) => ({
+            ...column,
+            nodes: column.nodes.filter((node) => node.id !== draggedNode.id),
+          })),
+        }));
+
+        if (isNewColumn) {
+          // Insert new column at the target position
+          const targetSection = newData.sections[targetSectionIndex];
+          const newColumn = { nodes: [{ ...draggedNode, yPosition: adjustedYPosition }] };
+          targetSection.columns.splice(targetColumnIndex, 0, newColumn);
+        } else {
+          // Add node with custom yPosition to existing column
+          const nodeWithPosition = { ...draggedNode, yPosition: adjustedYPosition };
+          newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(
+            nodeWithPosition,
+          );
+        }
+
+        return newData;
+      });
+
+      setDraggedNode(null);
+      setDragOffset(null);
+      setDragOverLocation(null);
+    },
+    [draggedNode, dragOffset, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
+  );
 
   // Global drop handler to complete drops even when mouse is outside column boundaries
   useEffect(() => {
@@ -1005,7 +1003,7 @@ export function ToC({
     return () => {
       document.removeEventListener('drop', handleGlobalDrop);
     };
-  }, [draggedNode, editMode, dragOverLocation]);
+  }, [draggedNode, editMode, dragOverLocation, handleDrop]);
 
   const connectedNodes = useMemo(() => {
     if (highlightedNodes.size === 0) {
@@ -1726,12 +1724,15 @@ export function ToC({
 
                 setPosition({ x: midX, y: midY });
                 positionCalculatedRef.current = true; // Mark as calculated
-              }, [sourceId, targetId]); // Only depends on node IDs
+                // sourceId/targetId are local consts captured by closure, not
+                // reactive values — this component is re-created each parent
+                // render when highlightedNodes flips, so the closure is fresh.
+              }, []);
 
               // Reset calculation flag when nodes change
               useEffect(() => {
                 positionCalculatedRef.current = false;
-              }, [sourceId, targetId]);
+              }, []);
 
               const isConnected = areNodesConnected(sourceId, targetId);
 
