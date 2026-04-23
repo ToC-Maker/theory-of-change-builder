@@ -1,0 +1,114 @@
+name: CI
+
+# Universal CI: typecheck, lint + format, build, unit tests, coverage.
+# Three parallel jobs so feedback arrives fast; no shared DB or migration
+# steps (Neon preview branches were removed — migrations are applied
+# manually against staging/prod).
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    # Standalone job so it runs in parallel with the others and gives fast
+    # feedback. No DB, no migrations — just `tsc --noEmit` on both tsconfigs.
+    name: TypeScript typecheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  quality:
+    # Lint and prettier. Both steps fail the build on non-zero exit;
+    # lint is exit 0 with warnings, so warnings don't block.
+    name: Lint + format check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Prettier format check
+        run: npm run format:check
+
+  build_and_test:
+    name: Build + unit tests + coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Coverage report
+        # Runs vitest with V8 coverage; logs the text summary and keeps the
+        # full report as a workflow artifact. Intentionally unguarded for now —
+        # we want a baseline before setting a floor.
+        # TODO: once the baseline is measured, enforce a coverage floor of
+        # ~60% on worker/_shared/ (lines/branches) via vitest's
+        # `coverage.thresholds` config and let this step fail on regression.
+        run: npm run test:coverage
+
+      - name: Upload coverage artifact
+        # Keep reports even if the previous step failed so we can debug
+        # coverage-tool breakage on the branch.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.event.pull_request.number || github.run_id }}
+          path: coverage/
+          if-no-files-found: warn
+          retention-days: 14
