@@ -1192,6 +1192,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // button is also disabled, this is a defense-in-depth guard.
     if (capAlreadyReached || wouldExceedCap) return;
 
+    // Persist the chart NOW, before we log the user message. Without this,
+    // a first send on the `/` root URL has no chart_id → loggingService's
+    // session can't init → logUserMessage silently drops the message, and
+    // the worker's X-Logging-Message-Id is never sent, so the reconcile
+    // can't populate logging_messages.cost_micro_usd either. Idempotent
+    // when the chart already exists.
+    await ensureChartExists();
+
     // Generate UUIDs for message logging
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
@@ -1538,6 +1546,42 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // truth for subsequent uploads in the same session.
   const autosavedEditTokenRef = useRef<string | null>(null);
   const autosavedChartIdRef = useRef<string | null>(null);
+
+  /**
+   * Ensure the chat has a persisted chart before doing anything that needs a
+   * chart_id (file uploads, logging, per-chart BYOK spend, etc.). For the
+   * `/` root route this lazily POSTs `/api/charts` on demand; for the
+   * `/edit/<token>` and `/chart/<id>` routes the chart already exists and
+   * we just return its id. Idempotent — safe to call multiple times.
+   *
+   * Side effects on first creation: updates the URL to
+   * `/edit/<editToken>` (replaceState, no route re-render) and fires
+   * `onChartCreated`, which in App.tsx triggers `initializeLogging` — so
+   * the logging session is up before the first saveMessage lands.
+   */
+  const ensureChartExists = useCallback(async (): Promise<{
+    chartId: string;
+    editToken: string;
+  } | null> => {
+    const existingChartId = params.chartId ?? autosavedChartIdRef.current;
+    const existingEditToken = params.editToken ?? autosavedEditTokenRef.current;
+    if (existingChartId && existingEditToken) {
+      return { chartId: existingChartId, editToken: existingEditToken };
+    }
+    if (!graphData) return null;
+    try {
+      const created = await ChartService.createChart(graphData);
+      ChartService.saveEditToken(created.chartId, created.editToken);
+      autosavedEditTokenRef.current = created.editToken;
+      autosavedChartIdRef.current = created.chartId;
+      window.history.replaceState(null, '', `/edit/${created.editToken}`);
+      onChartCreated?.(created.editToken, created.chartId);
+      return { chartId: created.chartId, editToken: created.editToken };
+    } catch (e) {
+      console.error('[ChatInterface] ensureChartExists failed:', e);
+      return null;
+    }
+  }, [params.chartId, params.editToken, graphData, onChartCreated]);
 
   const uploadPdfToFilesApi = useCallback(
     async (
