@@ -7,10 +7,13 @@ import { ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES } from '../../shared/anthropic-li
 interface SaveSnapshotRequest {
   session_id: string;
   chart_id: string;
-  graph_data: any;
+  // graph_data is JSONB — shape-checked at runtime below.
+  graph_data: unknown;
   edit_type: 'ai_edit' | 'manual_edit' | 'undo' | 'redo' | 'initial';
   triggered_by_message_id?: string | null;
-  edit_instructions?: any[] | null;
+  // edit_instructions is model-generated and validated by applyEdits in the
+  // client; the worker just stores the JSON verbatim.
+  edit_instructions?: unknown[] | null;
   edit_success?: boolean;
   error_message?: string | null;
 }

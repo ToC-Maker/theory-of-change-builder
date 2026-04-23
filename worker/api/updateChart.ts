@@ -3,9 +3,10 @@ import { getDb } from '../_shared/db';
 import { extractToken, verifyToken, JWKSFetchError } from '../_shared/auth';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  let body: { editToken?: string; chartData?: any };
+  // chartData is round-tripped to JSONB — we don't field-validate it here.
+  let body: { editToken?: string; chartData?: unknown };
   try {
-    body = await request.json() as { editToken?: string; chartData?: any };
+    body = await request.json() as { editToken?: string; chartData?: unknown };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
@@ -18,7 +19,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
 
     const sql = getDb(env);
-    const chartTitle = chartData.title || 'Theory of Change';
+    const chartTitle =
+      (chartData && typeof chartData === 'object' && typeof (chartData as { title?: unknown }).title === 'string')
+        ? (chartData as { title: string }).title
+        : 'Theory of Change';
 
     // Look up the chart first so we can gate edit access on link_sharing_level
     // and chart_permissions. Previously the edit token alone was sufficient,

@@ -44,7 +44,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     `;
 
     const siteUrl = env.SITE_URL || new URL(request.url).origin;
-    const charts = result.map((row: any) => ({
+    interface UserChartRow {
+      chart_id: string
+      chart_title: string | null
+      edit_token: string
+      updated_at: string
+      created_at: string
+      permission_level: string
+    }
+    const charts = (result as UserChartRow[]).map((row) => ({
       chartId: row.chart_id,
       title: row.chart_title || 'Theory of Change',
       editUrl: `${siteUrl}/edit/${row.edit_token}`,

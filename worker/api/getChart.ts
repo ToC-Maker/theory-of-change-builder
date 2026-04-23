@@ -124,7 +124,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
                 VALUES (${result[0].id}, ${userId}, ${userEmail}, ${permissionLevel}, ${chartOwnerId || userId}, 'approved')
               `;
             }
-          } catch (err) {
+          } catch {
             console.log('Token verification failed, allowing anonymous access due to link sharing level');
           }
         }

@@ -10,9 +10,11 @@ function randomBase64Url(byteCount: number): string {
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
-  let body: { chartData?: any };
+  // chartData is stored as JSONB and forwarded to the client verbatim —
+  // no field-level checks here, so unknown keeps the shape honest.
+  let body: { chartData?: unknown };
   try {
-    body = await request.json() as { chartData?: any };
+    body = await request.json() as { chartData?: unknown };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
@@ -32,7 +34,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     const authHeader = request.headers.get('authorization');
     await tryMigrateUser(sql, authHeader, 'createChart', env);
 
-    const chartTitle = chartData.title || 'Theory of Change';
+    const chartTitle =
+      (chartData && typeof chartData === 'object' && typeof (chartData as { title?: unknown }).title === 'string')
+        ? (chartData as { title: string }).title
+        : 'Theory of Change';
     let userId = null;
     let userEmail = null;
     const token = extractToken(authHeader);
