@@ -866,12 +866,20 @@ type SseTeeContext = {
    */
   killDiagnostic: {
     source: 'parse_frame' | 'poll';
+    /**
+     * Distinguishes a normal threshold-crossing kill from the fail-closed
+     * kill synthesized when computeCostMicroUsd throws (cost-table bug).
+     * Absent / undefined means the ordinary over-threshold path fired.
+     */
+    reason?: 'kill_compute_error';
     cumulative_micro_usd: string;      // BigInt serialized
     threshold_micro_usd: string;       // BigInt serialized
     accumulator_at_kill: UsageAccumulator;
     live_web_search_count: number;
     output_tokens_est?: number;        // only set for poll-triggered kills
     count_tokens_total?: number;       // only set for poll-triggered kills
+    /** Only set when reason === 'kill_compute_error'. */
+    compute_error_message?: string;
     fired_at_ms: number;               // Date.now()
   } | null;
   /**
@@ -1373,8 +1381,34 @@ function createCostTrackingStream(
         accumulatorToUsage(teeCtx.accumulator),
       );
     } catch (e) {
-      console.error('cost compute failed (non-fatal, continuing):', e);
-      return false;
+      // A cost-table bug must not silently disable the kill switch — that
+      // leaves spend unbounded. Fail closed: synthesize a kill with a
+      // distinct diagnostic reason so the reconcile path records WHY the
+      // stream was torn down without a cumulative figure.
+      console.error('cost compute failed; firing kill fail-closed:', e);
+      teeCtx.killed.v = true;
+      teeCtx.killDiagnostic = {
+        source: 'parse_frame',
+        reason: 'kill_compute_error',
+        cumulative_micro_usd: '0',
+        threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+        accumulator_at_kill: { ...teeCtx.accumulator },
+        live_web_search_count: teeCtx.streamingContent.webSearchCount,
+        compute_error_message: e instanceof Error ? e.message : String(e),
+        fired_at_ms: Date.now(),
+      };
+      const payload = JSON.stringify({
+        type: 'request_cost_ceiling_exceeded',
+        limit_usd: microToUsd(teeCtx.killThresholdMicro),
+      });
+      const killFrame = encoder.encode(`event: error\ndata: ${payload}\n\n`);
+      try { controller.enqueue(killFrame); } catch (enqueueErr) {
+        console.warn('kill-compute-error enqueue failed (controller closed):', enqueueErr);
+      }
+      try { controller.terminate(); } catch { /* ignore */ }
+      try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+      resolveDone();
+      return true;
     }
     // Accumulator's web_search_requests is 0 until message_delta at end-of-
     // stream. Top it up with the live per-block count so web-search cost is
@@ -1746,7 +1780,11 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     });
   } catch (e) {
     console.error('Upstream fetch failed:', e);
-    if (isCapped(tier)) revertReservation(ctx, sql, actorId, projected);
+    if (isCapped(tier)) {
+      revertReservation(ctx, sql, actorId, projected, {
+        model, chartId, deploymentHost: requestUrl.hostname,
+      });
+    }
     return jsonError(
       { error: 'upstream_unavailable', details: e instanceof Error ? e.message : 'Unknown error' },
       502,
@@ -1757,7 +1795,11 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   if (!upstream.ok) {
     const errorText = await upstream.text();
     console.error(`Anthropic API error (${upstream.status}):`, errorText);
-    if (isCapped(tier)) revertReservation(ctx, sql, actorId, projected);
+    if (isCapped(tier)) {
+      revertReservation(ctx, sql, actorId, projected, {
+        model, chartId, deploymentHost: requestUrl.hostname,
+      });
+    }
 
     // Detect global budget exhaustion (Anthropic Console cap).
     let parsedError: unknown;
@@ -1791,7 +1833,11 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   }
 
   if (!upstream.body) {
-    if (isCapped(tier)) revertReservation(ctx, sql, actorId, projected);
+    if (isCapped(tier)) {
+      revertReservation(ctx, sql, actorId, projected, {
+        model, chartId, deploymentHost: requestUrl.hostname,
+      });
+    }
     return jsonError({ error: 'AI service returned empty response' }, 502, altSvcHeaders);
   }
 
@@ -1872,8 +1918,8 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     }
 
     if (isCapped(tier)) {
+      const deltaMicro = actualMicro - projected;
       try {
-        const deltaMicro = actualMicro - projected;
         await sql`
           UPDATE user_api_usage
           SET cost_micro_usd        = cost_micro_usd + ${deltaMicro.toString()}::bigint,
@@ -1892,7 +1938,40 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
           SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
         `;
       } catch (e) {
+        // Reconcile drift silently accumulates when we only console.error.
+        // Persist enough metadata for a manual replay: the projected figure
+        // we've already reserved, the delta we intended to apply, and the
+        // exception that blocked the write. Best-effort — if this INSERT
+        // also fails, the outer catch logs and we stop there.
         console.error('Post-stream reconcile failed:', e);
+        try {
+          await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, chart_id,
+              request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'DiagnosticReconcileFailed',
+              ${`Reconcile failed: ${e instanceof Error ? e.message : String(e)}`},
+              ${actorId},
+              ${chartId ?? null},
+              ${JSON.stringify({
+                user_id: actorId,
+                projected_micro_usd: projected.toString(),
+                observed_delta_micro_usd: deltaMicro.toString(),
+                actual_micro_usd: actualMicro.toString(),
+                error_message: e instanceof Error ? e.message : String(e),
+                model,
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+              })}
+            )
+            ON CONFLICT (error_id) DO NOTHING
+          `;
+        } catch (innerErr) {
+          console.error('reconcile-failure diagnostic insert also failed:', innerErr);
+        }
       }
     }
 
@@ -2012,11 +2091,18 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
 
 // --- Revert reservation (fire-and-forget on pre-stream failure) --------
 
+type RevertDiagnosticContext = {
+  model: string;
+  chartId: string | null;
+  deploymentHost: string;
+};
+
 function revertReservation(
   ctx: ExecutionContext,
   sql: NeonQueryFunction<false, false>,
   userId: string,
   projected: bigint,
+  diagCtx?: RevertDiagnosticContext,
 ): void {
   if (projected === 0n) return;
   const minusProj = (-projected).toString();
@@ -2028,7 +2114,37 @@ function revertReservation(
         WHERE user_id = ${userId}
       `;
     } catch (e) {
+      // A silent revert failure leaves an over-reservation permanently on
+      // the user's row with no breadcrumb. Persist the metadata a human
+      // needs to reconcile later: the user, the µUSD we failed to return,
+      // and the error that blocked the UPDATE.
       console.error('Reservation revert failed (leaves a small over-reservation):', e);
+      try {
+        await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, chart_id,
+            request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'DiagnosticRevertFailed',
+            ${`Reservation revert failed: ${e instanceof Error ? e.message : String(e)}`},
+            ${userId},
+            ${diagCtx?.chartId ?? null},
+            ${JSON.stringify({
+              user_id: userId,
+              projected_micro_usd: projected.toString(),
+              error_message: e instanceof Error ? e.message : String(e),
+              model: diagCtx?.model,
+              deployment_host: diagCtx?.deploymentHost,
+              fired_at_ms: Date.now(),
+            })}
+          )
+          ON CONFLICT (error_id) DO NOTHING
+        `;
+      } catch (innerErr) {
+        console.error('revert-failure diagnostic insert also failed:', innerErr);
+      }
     }
   })());
 }
