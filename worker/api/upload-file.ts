@@ -1,6 +1,6 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
-import { verifyToken, extractToken } from '../_shared/auth';
+import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
 import {
   resolveAnonActor,
@@ -8,6 +8,14 @@ import {
   buildAuthLinkCookieHeader,
 } from '../_shared/anon-id';
 import { ANTHROPIC_PDF_PAGE_LIMIT } from '../../shared/anthropic-limits';
+
+// Skip count_tokens at upload for PDFs over this threshold. Anthropic's
+// endpoint requires sending the full bytes base64-encoded, which would OOM
+// a Workers isolate for a 100+ MB PDF (256 MB memory cap, and base64
+// inflates by ~33% on top of the original). Rows with NULL input_tokens
+// are handled by count-tokens-estimate.ts as "uncounted" and fall through
+// to Anthropic's on-demand counting at send time.
+const COUNT_TOKENS_SIZE_LIMIT_BYTES = 25 * 1024 * 1024;
 
 // TC39 typed-array base64 methods (stage 4 / in V8 12.8+, Workerd runs V8
 // 14+). TypeScript's lib definitions don't include them yet, so augment
@@ -54,7 +62,11 @@ async function resolveActorId(
   }
 }
 
-export async function handler(request: Request, env: Env): Promise<Response> {
+export async function handler(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
@@ -71,6 +83,62 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   const file = form.get('file');
   if (!(file instanceof File)) {
     return Response.json({ error: 'missing_file' }, { status: 400 });
+  }
+
+  // Authorization: mirror delete-file / chart-files posture.
+  // - Owned chart -> require a valid JWT whose sub is the owner OR has an
+  //   approved edit permission row.
+  // - Anon chart (user_id IS NULL) -> require proof of the edit token
+  //   (either X-Edit-Token header or edit_token form field). Previously
+  //   anyone with a chart_id could upload, which could be abused to attach
+  //   files to a victim's chart (cluttering their Files API usage + quota).
+  {
+    const authCheckSql = getDb(env);
+    const chartRows = await authCheckSql`
+      SELECT user_id, edit_token FROM charts WHERE id = ${chartId}
+    ` as { user_id: string | null; edit_token: string }[];
+    if (!chartRows.length) {
+      return Response.json({ error: 'chart_not_found' }, { status: 404 });
+    }
+    const chartOwnerId = chartRows[0].user_id;
+    const chartEditToken = chartRows[0].edit_token;
+
+    if (chartOwnerId) {
+      const token = extractToken(request.headers.get('authorization'));
+      if (!token) {
+        return Response.json({ error: 'forbidden' }, { status: 403 });
+      }
+      let decoded;
+      try {
+        decoded = await verifyToken(token, env);
+      } catch (err) {
+        if (err instanceof JWKSFetchError) {
+          return Response.json({ error: 'auth_unavailable' }, { status: 502 });
+        }
+        return Response.json({ error: 'forbidden' }, { status: 403 });
+      }
+      if (decoded.sub !== chartOwnerId) {
+        const perm = await authCheckSql`
+          SELECT permission_level, status FROM chart_permissions
+          WHERE chart_id = ${chartId} AND user_id = ${decoded.sub}
+        ` as { permission_level: string; status: string }[];
+        const ok = perm.length && (
+          perm[0].permission_level === 'owner'
+          || (perm[0].permission_level === 'edit' && perm[0].status === 'approved')
+        );
+        if (!ok) {
+          return Response.json({ error: 'forbidden' }, { status: 403 });
+        }
+      }
+    } else {
+      const headerToken = request.headers.get('x-edit-token');
+      const formTokenRaw = form.get('edit_token');
+      const formToken = typeof formTokenRaw === 'string' ? formTokenRaw : null;
+      const suppliedToken = headerToken || formToken;
+      if (!suppliedToken || suppliedToken !== chartEditToken) {
+        return Response.json({ error: 'forbidden' }, { status: 403 });
+      }
+    }
   }
 
   // Hard size clamp before we hand bytes to Anthropic. Workers enforces its
@@ -133,8 +201,21 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error(
       `[upload-file] Anthropic rejected upload (status=${upstream.status}): ${errText}`
     );
+    // Surface Anthropic's message so the client can render something
+    // actionable (same shape as the pdf_too_many_pages path below).
+    let upstreamMessage: string | undefined;
+    try {
+      const parsed = JSON.parse(errText) as { error?: { message?: string } };
+      upstreamMessage = parsed?.error?.message;
+    } catch {
+      /* non-JSON body */
+    }
     return Response.json(
-      { error: 'anthropic_upload_failed', status: upstream.status },
+      {
+        error: 'anthropic_upload_failed',
+        status: upstream.status,
+        upstream_message: upstreamMessage,
+      },
       { status: 502 }
     );
   }
@@ -182,7 +263,17 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // stream.
   let inputTokens: number | null = null;
   let countTokensFailure: { reason: string; detail?: string; http_status?: number } | null = null;
-  if (mimeType === 'application/pdf') {
+  // Skip count_tokens for PDFs over COUNT_TOKENS_SIZE_LIMIT_BYTES. Turning
+  // a 100+ MB binary into base64 in RAM inside a Workers isolate (256 MB
+  // memory cap) OOMs the request. Rows with NULL input_tokens are treated
+  // as "uncounted" by count-tokens-estimate.ts; the client (Unit E) will
+  // either re-probe or show a less-precise total for these files.
+  if (mimeType === 'application/pdf' && file.size > COUNT_TOKENS_SIZE_LIMIT_BYTES) {
+    countTokensFailure = {
+      reason: 'skipped_large_pdf',
+      detail: `file.size=${file.size} > ${COUNT_TOKENS_SIZE_LIMIT_BYTES}`,
+    };
+  } else if (mimeType === 'application/pdf') {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const b64 = bytes.toBase64();
@@ -272,10 +363,30 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       VALUES (${fileId}, ${chartId}, ${userId}, ${filename}, ${sizeBytes}, ${mimeType}, ${inputTokens})
     `;
   } catch (err) {
-    // File already uploaded at Anthropic but DB insert failed. We can't roll
-    // back the Anthropic side cleanly from here (it would double the latency
-    // and another ctx.waitUntil on a FK-bound row isn't safe). Log loudly so
-    // orphan-cleanup sweeps can catch it; the user-facing upload still failed.
+    // File is at Anthropic but not in our DB — we'd leak an orphan file_id
+    // on every DB failure. Fire-and-forget a DELETE to Anthropic so the
+    // orphan is cleaned up; ctx.waitUntil keeps the delete running after
+    // we return the 500 to the client. We don't await it: the client
+    // should see a fast error, not wait on Anthropic's DELETE latency.
+    ctx.waitUntil(
+      fetch(`https://api.anthropic.com/v1/files/${fileId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'files-api-2025-04-14',
+        },
+      }).then(async (r) => {
+        if (!r.ok && r.status !== 404) {
+          console.error(
+            `[upload-file] Anthropic rollback DELETE returned ${r.status} for file_id=${fileId}:`,
+            await r.text().catch(() => ''),
+          );
+        }
+      }).catch((delErr) => {
+        console.error('[upload-file] Anthropic rollback DELETE fetch failed:', delErr);
+      }),
+    );
     const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     console.error(`[upload-file] DB insert failed for file_id=${fileId}, chart_id=${chartId}:`, err);
 
