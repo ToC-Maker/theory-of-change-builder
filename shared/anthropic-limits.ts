@@ -25,6 +25,9 @@ export const ANTHROPIC_FILE_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
  */
 export const ANTHROPIC_PDF_PAGE_LIMIT = 600;
 
+/** Anthropic usage tier ladder. Indexes `COUNT_TOKENS_RPM_BY_TIER` and friends. */
+export type AnthropicTier = 1 | 2 | 3 | 4;
+
 /**
  * count_tokens dedicated rate limits (requests per minute), indexed by
  * Anthropic usage tier. Separate from Messages API limits: using one does
@@ -32,7 +35,7 @@ export const ANTHROPIC_PDF_PAGE_LIMIT = 600;
  *
  * Source: https://platform.claude.com/docs/en/build-with-claude/token-counting#pricing-and-rate-limits
  */
-export const COUNT_TOKENS_RPM_BY_TIER: Record<1 | 2 | 3 | 4, number> = {
+export const COUNT_TOKENS_RPM_BY_TIER: Record<AnthropicTier, number> = {
   1: 100,
   2: 2_000,
   3: 4_000,
@@ -40,4 +43,4 @@ export const COUNT_TOKENS_RPM_BY_TIER: Record<1 | 2 | 3 | 4, number> = {
 };
 
 /** Our current tier — update when we move up. Drives client-side debounce budgeting. */
-export const CURRENT_ANTHROPIC_TIER = 2 as const;
+export const CURRENT_ANTHROPIC_TIER: AnthropicTier = 2;
