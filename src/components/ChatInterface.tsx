@@ -219,17 +219,24 @@ function TurnstileWidget({
   }, [siteKey, onToken]);
 
   if (!siteKey) return null;
+  // The placeholder sits on top of the widget container via absolute
+  // positioning and matches Turnstile's default widget size (300×65) so the
+  // UI doesn't jump when the iframe paints. `rendered` flips true once
+  // `render()` returns — strictly that's before the iframe is fully drawn,
+  // but CF fills the iframe fast enough that the 50-100ms gap isn't
+  // perceptible; the far slower window is the script-download phase before
+  // render() has even run.
   return (
-    <div className="relative">
+    <div className="relative inline-block min-h-[65px] min-w-[300px]">
       <div ref={containerRef} className="cf-turnstile" />
       {!rendered && (
         <div
-          className="flex items-center gap-2 text-xs text-gray-500 py-2"
+          className="absolute inset-0 flex items-center justify-center gap-2 rounded-md border border-gray-200 bg-gray-50 text-sm text-gray-600"
           role="status"
           aria-live="polite"
         >
           <span
-            className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+            className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"
             aria-hidden
           />
           <span>Loading challenge…</span>
