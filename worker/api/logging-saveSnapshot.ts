@@ -39,6 +39,21 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ error: 'Invalid edit_type' }, { status: 400 });
     }
 
+    // Minimal graph_data shape check: must be an object with a `sections`
+    // array. We deliberately don't validate the full ToC schema — this
+    // table stores JSONB and the shape evolves independently — but at
+    // least reject nonsense early so a typo in the client doesn't fill the
+    // snapshot log with garbage that'd break later diffs.
+    const gd = data.graph_data as unknown;
+    if (
+      !gd
+      || typeof gd !== 'object'
+      || Array.isArray(gd)
+      || !Array.isArray((gd as { sections?: unknown }).sections)
+    ) {
+      return Response.json({ error: 'Invalid graph_data shape' }, { status: 400 });
+    }
+
     const token = extractToken(request.headers.get('authorization'));
     let user_id = null;
 
