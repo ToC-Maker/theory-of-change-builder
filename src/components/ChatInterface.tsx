@@ -736,14 +736,22 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           message: 'A file referenced by this chat is no longer available. Remove it and retry.',
         });
         return;
-      default:
+      default: {
         // database_unavailable / estimation_unavailable /
         // authentication_service_unavailable / invalid_token all fall
-        // through to a generic service banner.
-        setCostErrorBanner({
-          kind: 'service_unavailable',
-          message: COST_ERROR_COPY.service_unavailable,
-        });
+        // through to a generic service banner. When the server included
+        // an upstream_message (e.g. Anthropic's count_tokens 429 reason,
+        // Neon timeout detail, Auth0 JWKS error), surface it so the user
+        // has something specific to try or report rather than just
+        // "something broke."
+        const data = error.data as { upstream_status?: number; upstream_message?: string } | undefined;
+        const upstreamMessage = typeof data?.upstream_message === 'string' ? data.upstream_message : null;
+        const upstreamStatus = typeof data?.upstream_status === 'number' ? data.upstream_status : null;
+        const detail = upstreamMessage
+          ? `${COST_ERROR_COPY.service_unavailable} (${error.type}${upstreamStatus ? ` ${upstreamStatus}` : ''}: ${upstreamMessage})`
+          : `${COST_ERROR_COPY.service_unavailable} (${error.type})`;
+        setCostErrorBanner({ kind: 'service_unavailable', message: detail });
+      }
     }
   }, []);
 

@@ -335,6 +335,38 @@ class ChatService {
       if (expectedTypes && typeof errorType === 'string' && expectedTypes.includes(errorType as CostErrorType)) {
         callbacks.onCostError?.({ type: errorType as CostErrorType, data: errorData });
         ctx?.markError();
+
+        // Persist service-class errors to logging_errors so the original
+        // upstream cause (count_tokens rate-limit reason, Neon timeout,
+        // Auth0 JWKS failure, etc.) makes it into the DB. Cap/quota
+        // errors are expected operational states, not diagnostic noise —
+        // skip those. We rely on the worker to have put the upstream
+        // cause in errorData.upstream_message / upstream_status.
+        const SERVICE_ERROR_TYPES = new Set<CostErrorType>([
+          'database_unavailable',
+          'estimation_unavailable',
+          'authentication_service_unavailable',
+        ]);
+        if (SERVICE_ERROR_TYPES.has(errorType as CostErrorType)) {
+          const upstream = errorData as {
+            upstream_status?: number;
+            upstream_message?: string;
+          } | undefined;
+          loggingService.reportError({
+            error_name: `CostError:${errorType}`,
+            error_message: upstream?.upstream_message ?? `HTTP ${response.status} ${errorType}`,
+            http_status: response.status,
+            request_metadata: {
+              error_type: errorType,
+              upstream_status: upstream?.upstream_status,
+              upstream_message: upstream?.upstream_message,
+              model, mode, messageCount: messages.length,
+              webSearchEnabled, extendedThinkingEnabled,
+              ...(ctx ? ctx.toMetadata().streaming : {}),
+            },
+          });
+        }
+
         // Signal to the caller that this was a terminal cost error; the outer
         // try/catch should not re-enter retry or fall through to onError.
         const err = new Error(`cost_error:${errorType}`);
