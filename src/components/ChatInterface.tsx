@@ -164,10 +164,11 @@ function TurnstileWidget({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
-  // Flips true once window.turnstile.render() returns a widget id. Before
-  // that, the script may still be loading or the widget injecting its
-  // iframe — either way the user sees a blank placeholder, so we show an
-  // inline loading indicator instead.
+  // Flips true when the CF iframe has actually fired its `load` event, i.e.
+  // the challenge UI is drawn and ready for the user. Stays false through
+  // the full loading window: script-download → render() → iframe creation
+  // → iframe paint. A 5s timeout fallback hides the placeholder regardless
+  // in case the load event never fires (offline iframe, adblock quirks).
   const [rendered, setRendered] = useState(false);
 
   useEffect(() => {
@@ -175,6 +176,30 @@ function TurnstileWidget({
 
     let cancelled = false;
     setRendered(false);
+    let mutationObserver: MutationObserver | null = null;
+    let loadListener: ((ev: Event) => void) | null = null;
+    let loadTarget: HTMLIFrameElement | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const markRendered = () => {
+      if (!cancelled) setRendered(true);
+    };
+
+    const attachLoadListener = (iframe: HTMLIFrameElement) => {
+      loadTarget = iframe;
+      loadListener = () => markRendered();
+      iframe.addEventListener('load', loadListener);
+    };
+
+    const waitForIframe = () => {
+      if (!containerRef.current) return false;
+      const iframe = containerRef.current.querySelector('iframe');
+      if (iframe) {
+        attachLoadListener(iframe);
+        return true;
+      }
+      return false;
+    };
 
     const renderWidget = () => {
       if (cancelled || !containerRef.current || !window.turnstile) return;
@@ -184,7 +209,27 @@ function TurnstileWidget({
         'expired-callback': () => onToken(null),
         'error-callback': () => onToken(null),
       });
-      if (widgetIdRef.current) setRendered(true);
+      if (!widgetIdRef.current) return;
+      // render() returns synchronously once the DOM node is queued, but the
+      // iframe isn't always present in this tick and its content needs more
+      // time to paint. Wait for the iframe's load event so the placeholder
+      // covers the full visual gap.
+      if (!waitForIframe() && containerRef.current) {
+        mutationObserver = new MutationObserver(() => {
+          if (waitForIframe()) {
+            mutationObserver?.disconnect();
+            mutationObserver = null;
+          }
+        });
+        mutationObserver.observe(containerRef.current, {
+          childList: true,
+          subtree: true,
+        });
+      }
+      // Safety: if load never fires (adblock, offline iframe shell), hide
+      // the placeholder after 5s so the user sees whatever state the widget
+      // is actually in.
+      fallbackTimer = setTimeout(markRendered, 5_000);
     };
 
     // The explicit render mode requires the script to be loaded once; we
@@ -208,6 +253,17 @@ function TurnstileWidget({
       cancelled = true;
       const widgetId = widgetIdRef.current;
       widgetIdRef.current = null;
+      mutationObserver?.disconnect();
+      mutationObserver = null;
+      if (loadTarget && loadListener) {
+        loadTarget.removeEventListener('load', loadListener);
+      }
+      loadTarget = null;
+      loadListener = null;
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
       // `remove` is idempotent; guard only because `turnstile` may be gone
       // on hot reload.
       try {
