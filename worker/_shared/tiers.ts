@@ -21,6 +21,26 @@ const usdToMicro = (usd: number): bigint => BigInt(usd) * 1_000_000n;
 export const LIFETIME_CAP_USD = 5;
 export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 
+// Server-side overspend tolerance applied ONLY to the mid-stream kill switch.
+// Preflight (composer gating, reserveCost) stays strict at LIFETIME_CAP_USD so
+// users never knowingly start a request that would overrun budget. But the
+// kill switch can't cut mid-sentence cleanly, so a small slack lets large
+// legitimate responses finish rather than being truncated a few cents over.
+// Reconciled actual cost still writes through to user_api_usage, so the cap
+// bar can read e.g. $5.03 of $5.00 after a tolerant-kill stream; the client
+// then blocks further sends via the strict preflight gate.
+export const CAP_OVERSPEND_TOLERANCE_FRACTION = 0.05;
+
+// Number round-trip is safe here: LIFETIME_CAP_MICRO_USD is bounded by the
+// displayed cap (a small-integer µUSD value), so Number(cap) is exact and the
+// tolerance multiplication stays well inside Number.MAX_SAFE_INTEGER. Math.round
+// handles any float residue before converting back to BigInt.
+const CAP_TOLERANCE_MICRO_USD = BigInt(
+  Math.round(Number(LIFETIME_CAP_MICRO_USD) * CAP_OVERSPEND_TOLERANCE_FRACTION),
+);
+export const EFFECTIVE_LIFETIME_CAP_MICRO_USD =
+  LIFETIME_CAP_MICRO_USD + CAP_TOLERANCE_MICRO_USD;
+
 // Re-export the Anthropic-imposed request/file ceilings under the names
 // existing callers use. Single source of truth is shared/anthropic-limits.ts.
 export const BODY_SIZE_LIMIT_BYTES = ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES;

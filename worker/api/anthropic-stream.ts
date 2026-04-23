@@ -12,6 +12,7 @@ import {
 import {
   LIFETIME_CAP_USD,
   LIFETIME_CAP_MICRO_USD,
+  EFFECTIVE_LIFETIME_CAP_MICRO_USD,
   BODY_SIZE_LIMIT_BYTES,
   tierFor,
   isCapped,
@@ -279,14 +280,60 @@ async function claimIdempotencyKey(
 // --- Cost estimate + atomic reservation ---------------------------------
 
 type EstimateResult =
-  | { ok: true; projected: bigint; model: string }
+  | {
+      ok: true;
+      projected: bigint;
+      model: string;
+      inputTokens: number;
+      countBody: Record<string, unknown>;
+    }
   | { ok: false; response: Response };
+
+/**
+ * Build a count_tokens-compatible body from a /v1/messages body.
+ *
+ * count_tokens only accepts a narrow subset of /v1/messages fields
+ * (messages, model, system, tools, tool_choice, thinking, output_config,
+ * cache_control — per the API reference). Anything else (notably
+ * `max_tokens`, `stream`, `metadata`, `temperature`, `top_p`, `top_k`,
+ * `stop_sequences`) returns 400. Whitelist instead of blacklist so we
+ * don't silently break whenever the client adds a new field.
+ *
+ * Also strips server tools (`web_search_*`, `code_execution_*`) — count_tokens
+ * rejects them with "Server tools are not supported in the count_tokens
+ * endpoint. Use the /v1/messages endpoint instead." Undocumented but
+ * observed in production. User-defined function tools are preserved so their
+ * definitions still count toward the token total.
+ */
+function stripToCountTokensBody(body: Record<string, unknown>): Record<string, unknown> {
+  const COUNT_TOKENS_ALLOWED = new Set([
+    'messages', 'model', 'system', 'tools', 'tool_choice',
+    'thinking', 'output_config', 'cache_control',
+  ]);
+  const countBody: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (COUNT_TOKENS_ALLOWED.has(k)) countBody[k] = v;
+  }
+
+  if (Array.isArray(countBody.tools)) {
+    const filtered = (countBody.tools as Array<Record<string, unknown>>).filter((t) => {
+      const type = typeof t?.type === 'string' ? t.type : '';
+      return !type.startsWith('web_search_') && !type.startsWith('code_execution_');
+    });
+    if (filtered.length > 0) countBody.tools = filtered;
+    else delete countBody.tools;
+  }
+  return countBody;
+}
 
 /**
  * Calls /v1/messages/count_tokens with the request body (minus streaming-only
  * fields) to get the exact input-token count. Multiplies by the model's input
  * rate to get projected cost. The actual output cost is reconciled post-stream;
  * the mid-stream kill switch bounds the worst case.
+ *
+ * Also returns the stripped count_tokens body and initial input-token count so
+ * the mid-stream polling kill switch can reuse them without re-stripping.
  */
 async function estimateProjectedCost(
   body: Record<string, unknown>,
@@ -304,35 +351,7 @@ async function estimateProjectedCost(
     };
   }
 
-  // count_tokens only accepts a narrow subset of /v1/messages fields
-  // (messages, model, system, tools, tool_choice, thinking, output_config,
-  // cache_control — per the API reference). Anything else (notably
-  // `max_tokens`, `stream`, `metadata`, `temperature`, `top_p`, `top_k`,
-  // `stop_sequences`) returns 400. Whitelist instead of blacklist so we
-  // don't silently break whenever the client adds a new field.
-  const COUNT_TOKENS_ALLOWED = new Set([
-    'messages', 'model', 'system', 'tools', 'tool_choice',
-    'thinking', 'output_config', 'cache_control',
-  ]);
-  const countBody: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(body)) {
-    if (COUNT_TOKENS_ALLOWED.has(k)) countBody[k] = v;
-  }
-
-  // Strip server tools (web_search_*, code_execution_*) — count_tokens
-  // rejects them with "Server tools are not supported in the count_tokens
-  // endpoint. Use the /v1/messages endpoint instead." Undocumented but
-  // observed in production. Leave user-defined function tools in place so
-  // their definitions still count. If the filtered array is empty, drop
-  // the field entirely rather than sending [].
-  if (Array.isArray(countBody.tools)) {
-    const filtered = (countBody.tools as Array<Record<string, unknown>>).filter((t) => {
-      const type = typeof t?.type === 'string' ? t.type : '';
-      return !type.startsWith('web_search_') && !type.startsWith('code_execution_');
-    });
-    if (filtered.length > 0) countBody.tools = filtered;
-    else delete countBody.tools;
-  }
+  const countBody = stripToCountTokensBody(body);
 
   let resp: Response;
   try {
@@ -387,7 +406,7 @@ async function estimateProjectedCost(
 
   const inputTokens = typeof data.input_tokens === 'number' ? data.input_tokens : 0;
   const projected = BigInt(inputTokens) * BigInt(rate.input);
-  return { ok: true, projected, model };
+  return { ok: true, projected, model, inputTokens, countBody };
 }
 
 type ReserveResult =
@@ -582,6 +601,30 @@ function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void
   }
 }
 
+/**
+ * In-progress assistant-turn content accumulated from SSE `content_block_*`
+ * events. Used by the count_tokens polling kill-switch to estimate output
+ * cost mid-stream. Only text and thinking blocks are reconstructed (they
+ * dominate output cost in practice); tool_use inputs are intentionally
+ * omitted to keep the poll body small, at the cost of a small systematic
+ * undercount that the 5% overspend tolerance absorbs.
+ */
+type StreamingAssistantContent = {
+  /** Block content by SSE `index`; preserves original ordering on flush. */
+  blocks: Map<number, { type: 'text' | 'thinking'; text: string }>;
+  /**
+   * Live count of `server_tool_use` blocks of name `web_search`. The usage
+   * accumulator only picks this up from `message_delta` at end-of-stream,
+   * which is too late for the mid-stream kill; we count them on
+   * `content_block_start` instead.
+   */
+  webSearchCount: number;
+};
+
+function newStreamingAssistantContent(): StreamingAssistantContent {
+  return { blocks: new Map(), webSearchCount: 0 };
+}
+
 type SseTeeContext = {
   accumulator: UsageAccumulator;
   /**
@@ -589,9 +632,10 @@ type SseTeeContext = {
    * the tee synthesizes a `request_cost_ceiling_exceeded` SSE error and aborts.
    *
    * For free/anon tiers this is the remaining_cap measured BEFORE this
-   * request's reservation was deducted (i.e. the lifetime cap minus the user's
-   * prior usage). Since the reservation was already written, `remaining_cap`
-   * bounds what the stream can spend before the cap is truly violated.
+   * request's reservation was deducted (i.e. the effective cap minus the user's
+   * prior usage, where the effective cap includes a small overspend tolerance).
+   * Since the reservation was already written, `remaining_cap` bounds what the
+   * stream can spend before the cap is truly violated.
    *
    * For BYOK this is null — no cap applies to a self-funded request.
    */
@@ -608,7 +652,180 @@ type SseTeeContext = {
   chartId: string | null;
   /** Neon handle for the chart-existence lookup during file-not-found interception. */
   sql: NeonQueryFunction<false, false>;
+  /**
+   * Env for the count_tokens polling kill switch (Anthropic API key). Null on
+   * BYOK where no kill applies, so polling is skipped.
+   */
+  env: Env | null;
+  /**
+   * Stripped count_tokens body (from `stripToCountTokensBody`) minus the
+   * in-progress assistant turn. The poller appends the accumulated assistant
+   * message and POSTs to count_tokens. Null for BYOK (no polling).
+   */
+  countTokensBase: Record<string, unknown> | null;
+  /**
+   * Input-token count returned by pre-stream count_tokens. The poller
+   * subtracts this from each subsequent count_tokens result to derive the
+   * output-token delta for output-cost estimation.
+   */
+  initialInputTokens: number;
+  /** In-progress assistant turn accumulated from content_block_* events. */
+  streamingContent: StreamingAssistantContent;
+  /**
+   * Kill frame queued by the out-of-band poller. The poller can't enqueue
+   * into the TransformStream controller directly (no controller reference
+   * outside transform() callbacks); it sets this + `killed.v` and the next
+   * transform() or flush() emits the frame. Null once emitted or unused.
+   */
+  pendingKillFrame: Uint8Array | null;
+  /**
+   * Sticky flag set when count_tokens returns 429 / network error. Polling
+   * stops silently; the message_delta-based end-of-stream kill still acts as
+   * a backstop. No user-visible error — graceful degradation only.
+   */
+  pollingDisabled: boolean;
 };
+
+/**
+ * Interval between count_tokens polls during streaming. 5s × ~200 tok/s peak
+ * output rate caps the overshoot from one poll to the next at ~1000 output
+ * tokens ≈ $0.025 on Opus, well under the $0.05 overshoot target.
+ */
+const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
+
+/**
+ * Out-of-band cost estimator: POSTs the accumulated assistant turn-so-far to
+ * count_tokens and derives an output-token estimate from the delta against the
+ * pre-stream baseline. When the combined cost would exceed the kill threshold,
+ * sets `teeCtx.pendingKillFrame` + `teeCtx.killed` — the next transform() or
+ * flush() emits the synthesized `request_cost_ceiling_exceeded` event.
+ *
+ * This runs outside the TransformStream controller's lifetime, so it CANNOT
+ * enqueue directly. The polling/transform handshake relies on SSE chunks
+ * continuing to flow — which they do at far higher rate than the 5s poll — so
+ * the emit latency is the inter-chunk gap (~10-50ms).
+ *
+ * Graceful degradation: any non-2xx or network error sets `pollingDisabled`
+ * and silently returns. The original end-of-stream `message_delta` kill still
+ * acts as a backstop. No user-visible error on poll failure.
+ */
+async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
+  if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
+  if (teeCtx.killThresholdMicro === null) return;
+  if (!teeCtx.env || !teeCtx.countTokensBase) return;
+
+  // Reconstruct the in-progress assistant message in Anthropic's content-block
+  // shape. Blocks are keyed by SSE `index`; sort numerically to preserve
+  // ordering if count_tokens weights positional token costs (it shouldn't,
+  // but cheap insurance).
+  const indices = Array.from(teeCtx.streamingContent.blocks.keys()).sort((a, b) => a - b);
+  const assistantBlocks: Array<Record<string, string>> = [];
+  for (const i of indices) {
+    const block = teeCtx.streamingContent.blocks.get(i);
+    if (!block || block.text.length === 0) continue;
+    if (block.type === 'text') assistantBlocks.push({ type: 'text', text: block.text });
+    else assistantBlocks.push({ type: 'thinking', thinking: block.text });
+  }
+  if (assistantBlocks.length === 0) return;
+
+  // Skip if cap is already satisfied without considering output — the
+  // remaining_cap is what we compare against, and input+cache costs are fixed
+  // once message_start arrives. If even zero output would overshoot, the
+  // pre-stream reserve would have rejected; we're defensive but shouldn't
+  // have work to do here.
+  const priorMessages = Array.isArray(teeCtx.countTokensBase.messages)
+    ? teeCtx.countTokensBase.messages
+    : [];
+  const pollBody = {
+    ...teeCtx.countTokensBase,
+    messages: [...priorMessages, { role: 'assistant', content: assistantBlocks }],
+  };
+
+  let resp: Response;
+  try {
+    resp = await fetch(ANTHROPIC_COUNT_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': teeCtx.env.ANTHROPIC_API_KEY,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'anthropic-beta': ANTHROPIC_BETA,
+      },
+      body: JSON.stringify(pollBody),
+    });
+  } catch (e) {
+    console.warn('[kill-poll] count_tokens network error, disabling polling:', e);
+    teeCtx.pollingDisabled = true;
+    return;
+  }
+
+  if (!resp.ok) {
+    // Rate-limit or upstream failure: silently give up on polling. Graceful
+    // degradation — the end-of-stream message_delta kill is still armed.
+    const tag = resp.status === 429 ? 'rate-limited' : `status=${resp.status}`;
+    console.info(`[kill-poll] count_tokens ${tag}; disabling polling`);
+    teeCtx.pollingDisabled = true;
+    return;
+  }
+
+  let data: { input_tokens?: number };
+  try {
+    data = await resp.json() as { input_tokens?: number };
+  } catch (e) {
+    console.warn('[kill-poll] count_tokens JSON parse failed, disabling polling:', e);
+    teeCtx.pollingDisabled = true;
+    return;
+  }
+
+  const totalInputTokens = typeof data.input_tokens === 'number' ? data.input_tokens : 0;
+  // count_tokens counts the entire poll body as input. Our baseline was the
+  // same body without the appended assistant message, so the delta is the
+  // token count of the in-progress assistant content. Clamp to ≥ 0 in case of
+  // counter drift.
+  const outputTokensSoFar = Math.max(0, totalInputTokens - teeCtx.initialInputTokens);
+
+  // Synthesize a usage object with the estimated output tokens and the live
+  // web-search counter (which message_delta only reports at end-of-stream).
+  // Reuse computeCostMicroUsd so cache / multi-component pricing stay in one
+  // place.
+  const usage = accumulatorToUsage(teeCtx.accumulator);
+  usage.output_tokens = outputTokensSoFar;
+  usage.server_tool_use = { web_search_requests: teeCtx.streamingContent.webSearchCount };
+
+  let estimatedMicro: bigint;
+  try {
+    estimatedMicro = computeCostMicroUsd(teeCtx.model, usage);
+  } catch (e) {
+    console.warn('[kill-poll] cost compute failed, disabling polling:', e);
+    teeCtx.pollingDisabled = true;
+    return;
+  }
+
+  if (estimatedMicro > teeCtx.killThresholdMicro) {
+    // Race: if another path (parseFrame kill, abort, etc.) already fired, skip.
+    if (teeCtx.killed.v) return;
+    const payload = JSON.stringify({
+      type: 'request_cost_ceiling_exceeded',
+      limit_usd: microToUsd(teeCtx.killThresholdMicro),
+    });
+    teeCtx.pendingKillFrame = new TextEncoder().encode(`event: error\ndata: ${payload}\n\n`);
+    teeCtx.killed.v = true;
+    console.log(JSON.stringify({
+      event: 'poll_kill_triggered',
+      estimatedCostMicroUsd: estimatedMicro.toString(),
+      thresholdMicroUsd: teeCtx.killThresholdMicro.toString(),
+      outputTokensEst: outputTokensSoFar,
+      webSearches: teeCtx.streamingContent.webSearchCount,
+    }));
+    // Don't abort upstream here — we need the next transform() chunk (or
+    // flush()) to emit pendingKillFrame. Aborting synchronously can race a
+    // pipeThrough error and drop the frame. The next chunk arrives within
+    // the inter-frame gap (typically <50ms at Anthropic's streaming rates);
+    // the transform callback then aborts upstream itself. If the stream
+    // happens to finish naturally before the next chunk, flush() emits the
+    // frame instead.
+  }
+}
 
 /**
  * Pipes the upstream SSE stream through a TransformStream that:
@@ -639,12 +856,51 @@ function createCostTrackingStream(
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => { resolveDone = resolve; });
 
+  // Polling timer for the async count_tokens kill switch. Armed below when
+  // the tier is capped and we have everything the poller needs; cleared on
+  // every exit path so we don't leak timers across Worker isolates.
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollInFlight = false;
+  const clearPollTimer = () => {
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
   // Defensive resolve-on-abort: if the upstream is aborted (either by our
   // client-disconnect propagation or the kill-switch), a pipeThrough error
   // can bypass flush()/cancel() so done would otherwise hang. Promise
   // resolve is idempotent, so double-resolution from the normal path is a
-  // no-op.
-  teeCtx.abortController.signal.addEventListener('abort', () => resolveDone());
+  // no-op. Also clears the poll timer so nothing fires after done resolves.
+  teeCtx.abortController.signal.addEventListener('abort', () => {
+    clearPollTimer();
+    resolveDone();
+  });
+
+  if (
+    teeCtx.killThresholdMicro !== null
+    && teeCtx.env !== null
+    && teeCtx.countTokensBase !== null
+  ) {
+    pollTimer = setInterval(() => {
+      if (teeCtx.killed.v || teeCtx.pollingDisabled) {
+        clearPollTimer();
+        return;
+      }
+      if (pollInFlight) return;
+      pollInFlight = true;
+      pollCostEstimate(teeCtx)
+        .catch((e) => {
+          console.warn('[kill-poll] unexpected, disabling:', e);
+          teeCtx.pollingDisabled = true;
+        })
+        .finally(() => {
+          pollInFlight = false;
+          if (teeCtx.killed.v || teeCtx.pollingDisabled) clearPollTimer();
+        });
+    }, POLL_COUNT_TOKENS_INTERVAL_MS);
+  }
 
   /**
    * Detect Anthropic `not_found_error` inside an SSE `error` frame and, if so,
@@ -731,6 +987,42 @@ function createCostTrackingStream(
 
     const eventType = typeof parsed.type === 'string' ? parsed.type : '';
 
+    // Content-block tracking for the polling kill-switch: text/thinking
+    // accumulated per block index so we can rebuild the assistant turn for
+    // count_tokens. Server tool uses are counted here because message_delta's
+    // web_search_requests counter only lands at end-of-stream.
+    if (eventType === 'content_block_start') {
+      const idx = typeof parsed.index === 'number' ? parsed.index : -1;
+      const cb = parsed.content_block;
+      if (idx >= 0 && cb && typeof cb === 'object' && !Array.isArray(cb)) {
+        const cbr = cb as Record<string, unknown>;
+        const cbType = cbr.type;
+        if (cbType === 'text') {
+          teeCtx.streamingContent.blocks.set(idx, { type: 'text', text: '' });
+        } else if (cbType === 'thinking') {
+          teeCtx.streamingContent.blocks.set(idx, { type: 'thinking', text: '' });
+        } else if (cbType === 'server_tool_use' && cbr.name === 'web_search') {
+          teeCtx.streamingContent.webSearchCount += 1;
+        }
+      }
+      return false;
+    }
+    if (eventType === 'content_block_delta') {
+      const idx = typeof parsed.index === 'number' ? parsed.index : -1;
+      const d = parsed.delta;
+      if (idx >= 0 && d && typeof d === 'object' && !Array.isArray(d)) {
+        const dr = d as Record<string, unknown>;
+        const dtype = dr.type;
+        const existing = teeCtx.streamingContent.blocks.get(idx);
+        if (existing && dtype === 'text_delta' && typeof dr.text === 'string') {
+          existing.text += dr.text;
+        } else if (existing && dtype === 'thinking_delta' && typeof dr.thinking === 'string') {
+          existing.text += dr.thinking;
+        }
+      }
+      return false;
+    }
+
     // message_start: usage on parsed.message.usage
     // message_delta: usage on parsed.usage
     let usageObj: Record<string, unknown> | null = null;
@@ -810,10 +1102,31 @@ function createCostTrackingStream(
     }
   }
 
+  /**
+   * Flush any pending kill frame set by the out-of-band poller. Called at the
+   * top of every transform() tick and from flush() so kill frames emitted by
+   * the 5s poll land on the next chunk boundary (typically <50ms).
+   */
+  function flushPendingKillFrame(controller: TransformStreamDefaultController<Uint8Array>): void {
+    if (teeCtx.pendingKillFrame === null) return;
+    try { controller.enqueue(teeCtx.pendingKillFrame); } catch (e) {
+      console.warn('pending kill frame enqueue failed (controller closed):', e);
+    }
+    teeCtx.pendingKillFrame = null;
+  }
+
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     async transform(chunk, controller) {
       if (teeCtx.killed.v) {
+        flushPendingKillFrame(controller);
         try { controller.terminate(); } catch { /* ignore */ }
+        // Abort upstream so we stop charging ourselves for tokens the client
+        // will never see. The poller sets killed.v but intentionally doesn't
+        // abort — this transform() callback is the safe spot to do so since
+        // we've just enqueued the kill frame.
+        try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+        clearPollTimer();
+        resolveDone();
         return;
       }
 
@@ -827,7 +1140,9 @@ function createCostTrackingStream(
         // killed.v and we must NOT forward the raw Anthropic error too.
         const intercepted = await parseFrame(frame, controller);
         if (teeCtx.killed.v) {
-          // resolveDone was called by parseFrame.
+          flushPendingKillFrame(controller);
+          clearPollTimer();
+          // resolveDone was called by parseFrame (or will be on abort).
           return;
         }
         if (!intercepted) {
@@ -836,17 +1151,20 @@ function createCostTrackingStream(
       }
     },
     flush(controller) {
-      // If there are any trailing bytes after the last `\n\n`, pass them
-      // through as-is. Anthropic always terminates frames with `\n\n`, so this
-      // is empty in the success path; covers truncation / unexpected endings.
+      // Either end-of-stream or the poller-triggered kill reached flush
+      // without a further chunk. Emit the synthesized kill frame (if pending)
+      // before the trailing buffer so the client sees it as the last event.
+      flushPendingKillFrame(controller);
       if (sseBuffer.length > 0) {
         try { controller.enqueue(encoder.encode(sseBuffer)); } catch { /* ignore */ }
       }
+      clearPollTimer();
       resolveDone();
     },
     cancel() {
       // Downstream cancelled (client disconnect) — resolve so reconcile can
       // proceed with the partial accumulator we have.
+      clearPollTimer();
       resolveDone();
     },
   });
@@ -1000,11 +1318,15 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   let projected: bigint = 0n;
   let model = typeof body.model === 'string' ? body.model : DEFAULT_MODEL;
   let postReservationUsage: bigint = 0n;
+  let initialInputTokens = 0;
+  let countTokensBase: Record<string, unknown> | null = null;
   if (isCapped(tier)) {
     const est = await estimateProjectedCost(body, env, altSvcHeaders);
     if (!est.ok) return est.response;
     projected = est.projected;
     model = est.model;
+    initialInputTokens = est.inputTokens;
+    countTokensBase = est.countBody;
 
     const reserve = await reserveCost(sql, actorId, projected, tier, altSvcHeaders);
     if (!reserve.ok) return reserve.response;
@@ -1116,10 +1438,13 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
 
   // Kill threshold: cumulative actual cost must not exceed remaining_cap measured
   // BEFORE this request's reservation was deducted. Since the reservation has
-  // already been debited, that's LIFETIME_CAP - (post_reservation - projected).
+  // already been debited, that's EFFECTIVE_CAP - (post_reservation - projected).
+  // The effective cap includes a small overspend tolerance (see tiers.ts) so
+  // the kill doesn't cut large legitimate responses off mid-sentence for a few
+  // pennies of overshoot; preflight (composer + reserveCost) stays strict.
   // For BYOK the cap doesn't apply — null disables the check in the tee.
   const killThresholdMicro: bigint | null = isCapped(tier)
-    ? (LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected))
+    ? (EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected))
     : null;
 
   const teeCtx: SseTeeContext = {
@@ -1130,6 +1455,14 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     killed,
     chartId,
     sql,
+    // count_tokens polling kill switch: only armed for capped tiers. BYOK
+    // skips it (no cap to enforce) by leaving env + countTokensBase null.
+    env: isCapped(tier) ? env : null,
+    countTokensBase,
+    initialInputTokens,
+    streamingContent: newStreamingAssistantContent(),
+    pendingKillFrame: null,
+    pollingDisabled: false,
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
