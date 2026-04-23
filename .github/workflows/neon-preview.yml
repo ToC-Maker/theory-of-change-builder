@@ -135,6 +135,26 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Coverage report
+        # Runs vitest with V8 coverage; logs the text summary and keeps the
+        # full report as a workflow artifact. Intentionally unguarded for now —
+        # we want a baseline before setting a floor.
+        # TODO: once the baseline is measured, enforce a coverage floor of
+        # ~60% on worker/_shared/ (lines/branches) via vitest's
+        # `coverage.thresholds` config and let this step fail on regression.
+        run: npm run test:coverage
+
+      - name: Upload coverage artifact
+        # Keep reports even if the previous step failed so we can debug
+        # coverage-tool breakage on the branch.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.event.number }}
+          path: coverage/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Schema diff comment
         # Posts the schema delta between the PR preview branch and its parent
         # to the PR as a comment. Useful for reviewing migration impact.
