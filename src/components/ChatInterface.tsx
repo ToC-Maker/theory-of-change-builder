@@ -1683,7 +1683,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       });
       if (!response.ok) {
         const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody?.error ?? `Upload failed (${response.status})`);
+        // Prefer the server's human-readable `upstream_message` over the
+        // machine error code (e.g. "pdf_too_many_pages") — the code is
+        // useful for branching logic but awful as a user-facing error.
+        const friendly =
+          typeof errorBody?.upstream_message === 'string' && errorBody.upstream_message.length > 0
+            ? errorBody.upstream_message
+            : typeof errorBody?.error === 'string'
+              ? errorBody.error
+              : `Upload failed (${response.status})`;
+        throw new Error(friendly);
       }
       return response.json();
     },
