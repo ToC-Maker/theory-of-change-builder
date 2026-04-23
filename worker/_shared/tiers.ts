@@ -13,7 +13,11 @@ import {
 // All caps are declared in USD as the single source of truth; the micro-USD
 // counterparts (used for BigInt arithmetic in cost accounting) are derived.
 // If you change a cap, change the USD value — the micro-USD follows.
-const usdToMicro = (usd: number): bigint => BigInt(usd) * 1_000_000n;
+//
+// Math.round handles non-integer USD values (e.g. $2.50) — a plain
+// `BigInt(usd)` throws on floats. The µUSD grain is fine enough that any
+// residual float wobble (e.g. 0.1 + 0.2) rounds cleanly back to an integer.
+const usdToMicro = (usd: number): bigint => BigInt(Math.round(usd * 1_000_000));
 
 // Per-user lifetime cap across all free-tier users (auth'd + anon).
 // Context: p50 auth-user usage ~45K tokens (~$0.33), p90 ~1M tokens (~$7.22).
@@ -54,7 +58,7 @@ export type Tier = 'anon' | 'free' | 'byok';
 /**
  * Classify an actor into a tier.
  *
- * Anonymous actors (IP-hashed) have IDs prefixed with `anon-`. BYOK presence
+ * Anonymous actors have IDs prefixed with `anon-`. BYOK presence
  * overrides -- a BYOK header makes the request self-funded regardless of
  * whether the actor is authenticated. Callers that want to block BYOK for
  * anon users should consult `allowByok()` against the actor's base identity.
