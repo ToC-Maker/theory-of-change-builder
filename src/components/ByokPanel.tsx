@@ -158,13 +158,13 @@ export function ByokPanel({
               (sign in if prompted).
             </li>
             <li>
-              If you haven&apos;t already, add a payment method under
-              {' '}Billing &rarr; add credit or a card.
-            </li>
-            <li>
               Click <strong>Create Key</strong>, name it (e.g. &ldquo;Theory of
               Change&rdquo;), copy the <code className="font-mono">sk-ant-&hellip;</code>{' '}
               value, and paste it below. The key is only shown once.
+            </li>
+            <li>
+              If you haven&apos;t already, add a payment method under
+              {' '}Billing &rarr; add credit or a card.
             </li>
           </ol>
 

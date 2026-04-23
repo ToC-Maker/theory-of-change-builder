@@ -204,6 +204,16 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
     }
   }, [showDropdown])
 
+  // Listen for a window-level request to open the API-key modal so distant
+  // components (e.g. ChatInterface's cap banners) can trigger it without
+  // threading state or a context through the tree. Paired with
+  // dispatchEvent(new CustomEvent('tocb:openApiKeyModal')) on the caller.
+  useEffect(() => {
+    const handler = () => setShowApiKeyModal(true)
+    window.addEventListener('tocb:openApiKeyModal', handler)
+    return () => window.removeEventListener('tocb:openApiKeyModal', handler)
+  }, [])
+
   if (isLoading) {
     return (
       <div className="w-9 h-9 rounded-full bg-gray-200 animate-pulse" />
@@ -355,6 +365,13 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
       <PrivacyModal
         isOpen={showPrivacyModal}
         onClose={() => setShowPrivacyModal(false)}
+      />
+      {/* API-key modal is rendered here too so the tocb:openApiKeyModal
+          event can open it for anon users — ByokPanel shows the Sign-in
+          variant inside, so the modal is still useful pre-auth. */}
+      <ApiKeyModal
+        isOpen={showApiKeyModal}
+        onClose={() => setShowApiKeyModal(false)}
       />
     </div>
   )

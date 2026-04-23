@@ -15,7 +15,7 @@ import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedG
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
-import { ByokPanel, DonateCta } from './ByokPanel';
+import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
   formatCostUsd,
@@ -42,7 +42,30 @@ import {
   StopIcon,
   SparklesIcon,
   PencilSquareIcon,
+  KeyIcon,
 } from '@heroicons/react/24/outline';
+
+/**
+ * Button that opens AuthButton's API-key settings modal. Dispatches a
+ * window-level CustomEvent which AuthButton listens for (see its
+ * useEffect). Used from cap banners and the Generate-mode key gate so
+ * we don't render the full BYOK instructions inline anymore — they live
+ * in the modal alongside the rest of the key management UI.
+ */
+function AddApiKeyButton() {
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        window.dispatchEvent(new CustomEvent('tocb:openApiKeyModal'))
+      }
+      className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+    >
+      <KeyIcon className="w-4 h-4" aria-hidden />
+      Add your Anthropic API key
+    </button>
+  );
+}
 
 export type AIMode = 'chat' | 'generate';
 
@@ -740,6 +763,19 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // added until the next stream completes.
     void refreshUsage();
   }, [refreshUsage, keyVersion]);
+
+  // When the user adds a verified key via the settings modal, dismiss any
+  // sticky cap banners that require explicit clearing. capAlreadyReached /
+  // wouldExceedCap self-clear through the tier flip when usage refetches
+  // (tier becomes 'byok', `capped` goes false), but `byokPanelMode` is
+  // server-event-driven and used to be cleared by ByokPanel.onSubmitted —
+  // with the inline panel gone, we reconcile here instead.
+  useEffect(() => {
+    if (hasKey && verified && byokPanelMode) {
+      setByokPanelMode(null);
+      setCostErrorBanner(null);
+    }
+  }, [hasKey, verified, byokPanelMode]);
 
   // Classify a streaming error string into a cost/quota category if it
   // matches one of U9's error payloads. Keyword-based detection covers the
@@ -2464,7 +2500,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 {!hasKey || !verified ? (
                   <div className="space-y-3">
                     {/* Generate-specific cost heads-up — separate card so
-                        the BYOK panel stays context-free and reusable. */}
+                        the key affordance stays context-free. */}
                     <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                       Generate runs a deep analysis of your documents. A single run
                       typically costs a few dollars — more for large documents or
@@ -2472,11 +2508,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       is written, so you can stop it at any time if it starts to
                       add up.
                     </div>
-                    <ByokPanel
-                      onSubmitted={() => {
-                        void refreshUsage();
-                      }}
-                    />
+                    <AddApiKeyButton />
                   </div>
                 ) : (
                 <>
@@ -2848,13 +2880,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         Message cut off — your last message used the rest of the free
                         quota. Add your Anthropic API key to keep going.
                       </div>
-                      <ByokPanel
-                        onSubmitted={() => {
-                          setByokPanelMode(null);
-                          setCostErrorBanner(null);
-                          void refreshUsage();
-                        }}
-                      />
+                      <AddApiKeyButton />
                     </div>
                   ) : byokPanelMode === 'global_budget' ? (
                     <div className="space-y-2">
@@ -2862,13 +2888,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         We&apos;ve hit our shared monthly spend cap. Everyone on the free
                         tier is paused until next month&apos;s reset.
                       </div>
-                      <ByokPanel
-                        onSubmitted={() => {
-                          setByokPanelMode(null);
-                          setCostErrorBanner(null);
-                          void refreshUsage();
-                        }}
-                      />
+                      <AddApiKeyButton />
                       <DonateCta />
                     </div>
                   ) : capAlreadyReached ? (
@@ -2877,12 +2897,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}.
                         Add your Anthropic API key to keep going.
                       </div>
-                      <ByokPanel
-                        onSubmitted={() => {
-                          setCostErrorBanner(null);
-                          void refreshUsage();
-                        }}
-                      />
+                      <AddApiKeyButton />
                       <DonateCta />
                     </div>
                   ) : wouldExceedCap ? (
@@ -2898,12 +2913,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         left of the {formatCostUsd(usage!.limit_usd)} free quota. Add
                         your Anthropic API key to continue.
                       </div>
-                      <ByokPanel
-                        onSubmitted={() => {
-                          setCostErrorBanner(null);
-                          void refreshUsage();
-                        }}
-                      />
+                      <AddApiKeyButton />
                     </div>
                   ) : null}
                   {/* File attachment tray + drop target. Stays mounted so
