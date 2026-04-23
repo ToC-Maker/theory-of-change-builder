@@ -1,46 +1,68 @@
-// Types for structured graph edits
+// Types for structured graph edits.
+// `value` is unknown because edits come from untrusted model output; callers
+// validate the shape per-field. The path helpers below walk nested objects
+// or arrays, so internally they treat the current cursor as a loose
+// Record-or-Array<unknown>.
 export type EditInstruction =
-  | { type: "update"; path: string; value: any }
+  | { type: "update"; path: string; value: unknown }
   | { type: "delete"; path: string }
-  | { type: "insert"; path: string; value: any }
-  | { type: "push"; path: string; value: any }; // For adding to arrays
+  | { type: "insert"; path: string; value: unknown }
+  | { type: "push"; path: string; value: unknown }; // For adding to arrays
+
+// Minimal shape the path walker needs: a value that might be an object, an
+// array, or something else entirely. Narrowing happens at each step.
+type PathCursor = Record<string, unknown> | unknown[] | null | undefined;
+
+// Index into a PathCursor with a string key; for arrays this accepts the
+// numeric string the walker receives. Returns undefined on any mismatch so
+// callers can fall through to the "parent missing" path without throwing.
+function indexCursor(cursor: PathCursor, key: string): unknown {
+  if (cursor === null || cursor === undefined) return undefined;
+  if (Array.isArray(cursor)) {
+    const index = Number(key);
+    return Number.isInteger(index) ? cursor[index] : undefined;
+  }
+  if (typeof cursor === 'object') {
+    return (cursor as Record<string, unknown>)[key];
+  }
+  return undefined;
+}
 
 // Apply structured edits to a graph object
-export function applyEdits(graphData: any, edits: EditInstruction[]): any {
+export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
   if (!graphData) {
     throw new Error("Graph data is null or undefined");
   }
-  
+
   if (!Array.isArray(edits)) {
     throw new Error("Edit instructions must be an array");
   }
-  
-  let updated = JSON.parse(JSON.stringify(graphData)); // Deep clone
-  const errors: string[] = [];
 
-  const getAtPath = (obj: any, path: string[]): any => {
-    return path.reduce((acc, key) => {
-      if (acc === null || acc === undefined) return undefined;
-      return acc[key];
-    }, obj);
+  const updated = JSON.parse(JSON.stringify(graphData)) as T; // Deep clone
+
+  const getAtPath = (obj: unknown, path: string[]): unknown => {
+    return path.reduce<unknown>((acc, key) => indexCursor(acc as PathCursor, key), obj);
   };
 
-  const setAtPath = (obj: any, path: string[], value: any): void => {
+  const setAtPath = (obj: unknown, path: string[], value: unknown): void => {
     const lastKey = path[path.length - 1];
     const parentPath = path.slice(0, -1);
-    
-    const target = parentPath.reduce((acc, key) => {
-      if (acc[key] === undefined) {
+
+    const target = parentPath.reduce<PathCursor>((acc, key) => {
+      const current = acc as Record<string, unknown>;
+      if (current[key] === undefined) {
         // If the key is numeric, create an array, otherwise create an object
-        acc[key] = /^\d+$/.test(key) ? [] : {};
+        current[key] = /^\d+$/.test(key) ? [] : {};
       }
-      return acc[key];
-    }, obj);
-    
-    target[lastKey] = value;
+      return current[key] as PathCursor;
+    }, obj as PathCursor);
+
+    if (target && typeof target === 'object') {
+      (target as Record<string, unknown>)[lastKey] = value;
+    }
   };
 
-  const insertAtIndex = (obj: any, path: string[], value: any): void => {
+  const insertAtIndex = (obj: unknown, path: string[], value: unknown): void => {
     if (path.length === 0) return;
 
     const lastKey = path[path.length - 1];
@@ -58,13 +80,13 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
     }
   };
 
-  const deleteAtPath = (obj: any, path: string[]): void => {
+  const deleteAtPath = (obj: unknown, path: string[]): void => {
     if (path.length === 0) return;
-    
+
     const lastKey = path[path.length - 1];
     const parentPath = path.slice(0, -1);
     const target = getAtPath(obj, parentPath);
-    
+
     if (target && typeof target === 'object') {
       if (Array.isArray(target)) {
         const index = parseInt(lastKey);
@@ -72,12 +94,12 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
           target.splice(index, 1);
         }
       } else {
-        delete target[lastKey];
+        delete (target as Record<string, unknown>)[lastKey];
       }
     }
   };
 
-  const pushToPath = (obj: any, path: string[], value: any): void => {
+  const pushToPath = (obj: unknown, path: string[], value: unknown): void => {
     const target = getAtPath(obj, path);
     if (Array.isArray(target)) {
       target.push(value);
@@ -86,9 +108,9 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
       const lastKey = path[path.length - 1];
       const parentPath = path.slice(0, -1);
       const parent = getAtPath(obj, parentPath);
-      
+
       if (parent && typeof parent === 'object') {
-        parent[lastKey] = [value]; // Create new array with the value
+        (parent as Record<string, unknown>)[lastKey] = [value]; // Create new array with the value
       } else {
         console.warn(`Cannot create array at path: ${path.join('.')}, parent doesn't exist`);
       }
@@ -142,7 +164,7 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
     // Validate that the path exists in the current data structure
     try {
       const pathArray = edit.path.split('.');
-      let current = updated;
+      let current: unknown = updated;
 
       for (let i = 0; i < pathArray.length - 1; i++) {
         const segment = pathArray[i];
@@ -157,19 +179,19 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
 
         // For array indices, check if they're within bounds
         if (/^\d+$/.test(segment)) {
-          const index = parseInt(segment);
-          if (Array.isArray(current) && (index < 0 || index >= current.length)) {
-            throw new Error(`Array index ${index} is out of bounds (length: ${current.length})`);
+          const idx = parseInt(segment);
+          if (Array.isArray(current) && (idx < 0 || idx >= current.length)) {
+            throw new Error(`Array index ${idx} is out of bounds (length: ${current.length})`);
           }
         }
 
-        current = current[segment];
+        current = indexCursor(current as PathCursor, segment);
       }
 
       // For delete operations, check that the final target exists
       if (edit.type === 'delete') {
         const lastSegment = pathArray[pathArray.length - 1];
-        if (current === null || current === undefined || !(lastSegment in current)) {
+        if (current === null || current === undefined || typeof current !== 'object' || !(lastSegment in (current as Record<string, unknown>))) {
           throw new Error(`Cannot delete non-existent property "${lastSegment}"`);
         }
       }
@@ -183,61 +205,85 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
       case "update":
         setAtPath(updated, path, edit.value);
         break;
-      case "insert":
+      case "insert": {
         // Ensure nodes have connections array
-        if (edit.value && typeof edit.value === 'object' && 'id' in edit.value && !edit.value.connections) {
-          edit.value.connections = [];
+        const insertValue = edit.value;
+        if (insertValue && typeof insertValue === 'object' && 'id' in insertValue && !(insertValue as Record<string, unknown>).connections) {
+          (insertValue as Record<string, unknown>).connections = [];
         }
-        insertAtIndex(updated, path, edit.value);
+        insertAtIndex(updated, path, insertValue);
         break;
+      }
       case "delete":
         deleteAtPath(updated, path);
         break;
-      case "push":
+      case "push": {
         // Ensure nodes have connections array
-        if (edit.value && typeof edit.value === 'object' && 'id' in edit.value && !edit.value.connections) {
-          edit.value.connections = [];
+        const pushValue = edit.value;
+        if (pushValue && typeof pushValue === 'object' && 'id' in pushValue && !(pushValue as Record<string, unknown>).connections) {
+          (pushValue as Record<string, unknown>).connections = [];
         }
-        pushToPath(updated, path, edit.value);
+        pushToPath(updated, path, pushValue);
         break;
+      }
     }
   });
 
   return updated;
 }
 
+// Local shapes for traversal only — the real ToCData is stricter, but the
+// AI sometimes hands us partial fragments during streaming, so we stay loose.
+interface SummaryNode {
+  id?: string
+  title?: string
+  color?: string
+  width?: number
+  yPosition?: number
+  connections?: Array<{ targetId?: string; confidence?: number; evidence?: string; assumptions?: string }>
+}
+interface SummaryColumn {
+  nodes?: SummaryNode[]
+}
+interface SummarySection {
+  title?: string
+  columns?: SummaryColumn[]
+}
+
 // Generate a summary of the graph for the AI (much smaller than full JSON)
-export function generateGraphSummary(graphData: any): string {
+export function generateGraphSummary(graphData: { sections?: SummarySection[] } | null | undefined): string {
   if (!graphData || !graphData.sections) {
     return "No graph data available.";
   }
 
   let summary = "Graph Summary:\n";
   
-  graphData.sections.forEach((section: any, sectionIndex: number) => {
+  graphData.sections.forEach((section, sectionIndex) => {
     summary += `\nSection ${sectionIndex} (${section.title || 'Untitled'}):\n`;
-    
-    section.columns?.forEach((column: any, columnIndex: number) => {
+
+    section.columns?.forEach((column, columnIndex) => {
       if (column.nodes && column.nodes.length > 0) {
         summary += `  Column ${columnIndex}: ${column.nodes.length} nodes\n`;
-        
+
         // Extract styling info from existing nodes
-        const colors = [...new Set(column.nodes.map((n: any) => n.color).filter(Boolean))];
-        const widths = [...new Set(column.nodes.map((n: any) => n.width).filter(Boolean))];
-        const yPositions = column.nodes.map((n: any) => n.yPosition).filter(n => n !== undefined);
-        
+        const colors = [...new Set(column.nodes.map((n) => n.color).filter(Boolean))];
+        const widths = [...new Set(column.nodes.map((n) => n.width).filter(Boolean))];
+        const yPositions = column.nodes
+          .map((n) => n.yPosition)
+          .filter((y): y is number => y !== undefined);
+
         if (colors.length > 0) summary += `    Column colors: ${colors.join(', ')}\n`;
         if (widths.length > 0) summary += `    Column widths: ${widths.join(', ')}\n`;
         if (yPositions.length > 0) {
           const maxY = Math.max(...yPositions);
           summary += `    Y-positions: ${yPositions.join(', ')} (max: ${maxY})\n`;
         }
-        
-        column.nodes.forEach((node: any, nodeIndex: number) => {
+
+        column.nodes.forEach((node, nodeIndex) => {
           summary += `    - Node ${nodeIndex}: "${node.title}" (id: ${node.id}, y: ${node.yPosition || 'undefined'}, width: ${node.width || 'undefined'}, color: ${node.color || 'undefined'})\n`;
           if (node.connections && node.connections.length > 0) {
             summary += `      Connections:\n`;
-            node.connections.forEach((conn: any, connIndex: number) => {
+            node.connections.forEach((conn, connIndex) => {
               summary += `        ${connIndex}: targetId: "${conn.targetId}", confidence: ${conn.confidence || 'undefined'}, evidence: "${conn.evidence || ''}", assumptions: "${conn.assumptions || ''}"\n`;
             });
           }
