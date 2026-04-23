@@ -406,12 +406,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // seeing a silent re-render.
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
-  // BYOK panel state for 429/402 recovery and voluntary key entry.
-  // 'generate' is handled out-of-band in the Generate tab render; these
-  // are the Chat-side context discriminators for which banner to show
-  // above the shared ByokPanel.
+  // BYOK panel state for 402/kill recovery and voluntary key entry.
+  //
+  // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
+  // is handled by calling refreshUsage(), which flips the derived
+  // `capAlreadyReached` flag and shows the composer-side banner. A
+  // separate mode would double-render the panel.
   const [byokPanelMode, setByokPanelMode] = useState<
-    'cap_reached' | 'request_cut_off' | 'global_budget' | 'voluntary' | null
+    'request_cut_off' | 'global_budget' | 'voluntary' | null
   >(null);
   const [byokMenuOpen, setByokMenuOpen] = useState(false);
 
@@ -702,12 +704,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         // surfacing an error would confuse them.
         return;
       case 'lifetime_cap_reached':
-        // Open the BYOK panel directly; it carries the full explanatory
-        // header + form + donate link.
-        setByokPanelMode('cap_reached');
+        // Server rejected the preflight reservation — our local usage
+        // snapshot was stale. Refresh so `capAlreadyReached` flips and
+        // the composer-side cap banner + ByokPanel + DonateCta appear.
+        // No separate mode state: that would double-render the panel.
         setCostErrorBanner(null);
-        // The server just wrote the blocking projected cost to
-        // user_api_usage (pre-flight reservation); sync UI.
         void refreshUsage();
         return;
       case 'global_budget_exhausted':
@@ -2524,27 +2525,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </div>
                 )}
 
-                {/* Inline BYOK flows for cap/quota failures + voluntary
-                    add-key. Each path has its own context banner above a
-                    shared minimal ByokPanel (sign in OR key form). Donate
-                    CTA is shown only where donations are a viable
-                    alternative (lifetime cap, global cap). */}
-                {byokPanelMode === 'cap_reached' && (
-                  <div className="space-y-2">
-                    <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                      You&apos;ve used the free lifetime quota. Add your Anthropic API
-                      key to keep chatting.
-                    </div>
-                    <ByokPanel
-                      onSubmitted={() => {
-                        setByokPanelMode(null);
-                        setCostErrorBanner(null);
-                        void refreshUsage();
-                      }}
-                    />
-                    <DonateCta />
-                  </div>
-                )}
+                {/* Inline BYOK flows for mid-stream kill, global-budget
+                    exhaustion, and voluntary add-key. Each path has its
+                    own context banner above a shared minimal ByokPanel
+                    (sign in OR key form). Donate CTA is only on
+                    global_budget — request_cut_off can't be unblocked by
+                    donations, and voluntary hasn't hit any cap.
+                    Note: lifetime_cap_reached is handled by the
+                    composer-side `capAlreadyReached` path, not here. */}
                 {byokPanelMode === 'request_cut_off' && (
                   <div className="space-y-2">
                     <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
