@@ -131,10 +131,68 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     } else if (chartId) {
       result = await sql`
-        SELECT id, chart_data FROM charts
+        SELECT id, chart_data, user_id, link_sharing_level FROM charts
         WHERE id = ${chartId}
       `;
-      // Increment view count
+      if (!result || result.length === 0) {
+        return Response.json({ error: 'Chart not found' }, { status: 404 });
+      }
+
+      const chartOwnerId = result[0].user_id;
+      const linkSharingLevel = result[0].link_sharing_level || 'restricted';
+
+      // Owned + restricted: enforce the same approval gate used by the
+      // editToken branch. View-by-chartId previously ignored
+      // link_sharing_level, so anyone with the 6-byte chartId could read a
+      // chart the owner had explicitly locked down.
+      if (chartOwnerId && linkSharingLevel === 'restricted') {
+        const token = extractToken(request.headers.get('authorization'));
+        if (!token) {
+          return Response.json(
+            { error: 'Authentication required. This chart is restricted.' },
+            { status: 403 },
+          );
+        }
+
+        let decodedToken;
+        try {
+          decodedToken = await verifyToken(token, env);
+        } catch (err) {
+          if (err instanceof JWKSFetchError) {
+            return Response.json(
+              { error: 'Authentication service unavailable. Please try again later.' },
+              { status: 502 },
+            );
+          }
+          return Response.json(
+            { error: 'Invalid or expired authentication. Please log in again.' },
+            { status: 401 },
+          );
+        }
+
+        const userId = decodedToken.sub;
+        await tryMigrateDecoded(sql, decodedToken, 'getChart');
+
+        // Re-read owner post-migration so a sub swap doesn't cause a spurious 403.
+        const refreshed = await sql`SELECT user_id FROM charts WHERE id = ${chartId}`;
+        const currentOwnerId = refreshed[0]?.user_id ?? chartOwnerId;
+
+        if (userId !== currentOwnerId) {
+          const perm = await sql`
+            SELECT status FROM chart_permissions
+            WHERE chart_id = ${chartId} AND user_id = ${userId}
+          `;
+          if (!perm.length || perm[0].status !== 'approved') {
+            return Response.json(
+              { error: 'You do not have access to this chart.' },
+              { status: 403 },
+            );
+          }
+        }
+      }
+
+      // Increment view_count only after successful authorization, so a 403
+      // response doesn't pollute analytics.
       await sql`
         UPDATE charts SET view_count = view_count + 1
         WHERE id = ${chartId}

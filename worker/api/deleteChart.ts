@@ -7,15 +7,15 @@ export async function handler(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  let body: { chartId?: string };
+  let body: { chartId?: string; editToken?: string };
   try {
-    body = await request.json() as { chartId?: string };
+    body = await request.json() as { chartId?: string; editToken?: string };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
 
   try {
-    const { chartId } = body;
+    const { chartId, editToken } = body;
 
     if (!chartId) {
       return Response.json({ error: 'Chart ID is required' }, { status: 400 });
@@ -33,9 +33,15 @@ export async function handler(
 
     const chartOwnerId = chartInfo[0].user_id;
 
-    // Authorization: owned charts require JWT + owner permission; anonymous
-    // charts (user_id NULL) are deletable by anyone reaching this endpoint
-    // (mirrors the original contract — the edit token is the gate on those).
+    // Authorization:
+    // - Owned charts: require JWT + owner permission row.
+    // - Anonymous charts (user_id NULL): require the editToken in the body.
+    //   Previously any caller who knew the 6-byte chartId could delete an
+    //   anon chart; now the caller must also know the 36-char edit token
+    //   (the same gate used for updateChart). We still include the editToken
+    //   in the DELETE's WHERE clause so a stale / wrong token yields a 401
+    //   instead of deleting the row.
+    let deleteByEditToken: string | null = null;
     if (chartOwnerId) {
       const token = extractToken(request.headers.get('authorization'));
       if (!token) {
@@ -62,11 +68,41 @@ export async function handler(
       if (!ownerCheck.length || ownerCheck[0].permission_level !== 'owner') {
         return Response.json({ error: 'Only the owner can delete this chart' }, { status: 403 });
       }
+    } else {
+      if (!editToken || typeof editToken !== 'string') {
+        return Response.json({ error: 'Edit token required' }, { status: 401 });
+      }
+      deleteByEditToken = editToken;
     }
 
     // Cascade: collect file_ids and fire Anthropic DELETEs via ctx.waitUntil.
     // FK ON DELETE CASCADE handles chart_files row cleanup.
     const fileRows = await sql`SELECT file_id FROM chart_files WHERE chart_id = ${chartId}`;
+
+    // For anon charts the DELETE must match both id and edit_token so a wrong
+    // token yields a 401 (no-op) rather than wiping the row.
+    const result = deleteByEditToken !== null
+      ? await sql`
+          DELETE FROM charts
+          WHERE id = ${chartId} AND edit_token = ${deleteByEditToken}
+          RETURNING id
+        `
+      : await sql`
+          DELETE FROM charts WHERE id = ${chartId} RETURNING id
+        `;
+
+    if (!result.length) {
+      // If deletion failed on the anon branch, it's because the edit token
+      // didn't match — treat as auth failure, not 404, to avoid leaking the
+      // existence of the chart to random callers.
+      if (deleteByEditToken !== null) {
+        return Response.json({ error: 'Invalid edit token' }, { status: 401 });
+      }
+      return Response.json({ error: 'Chart not found' }, { status: 404 });
+    }
+
+    // Only schedule Anthropic cleanup after the row delete succeeded, so a
+    // failed-auth call doesn't also hit Anthropic for a chart we didn't own.
     for (const row of fileRows) {
       ctx.waitUntil(
         fetch(`https://api.anthropic.com/v1/files/${row.file_id}`, {
@@ -82,14 +118,6 @@ export async function handler(
           }
         }).catch((e) => console.error('[deleteChart] file DELETE fetch error', e)),
       );
-    }
-
-    const result = await sql`
-      DELETE FROM charts WHERE id = ${chartId} RETURNING id
-    `;
-
-    if (!result.length) {
-      return Response.json({ error: 'Chart not found' }, { status: 404 });
     }
 
     return Response.json({ success: true, message: 'Chart deleted successfully' });
