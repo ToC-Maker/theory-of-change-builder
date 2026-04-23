@@ -1,7 +1,10 @@
+import type { ToCData } from '../types'
+
 /**
- * Parse generated Theory of Change JSON from AI response
+ * Parse generated Theory of Change JSON from AI response.
+ * Shape is model-generated so we validate before casting to ToCData.
  */
-export function parseGeneratedGraph(content: string): any | null {
+export function parseGeneratedGraph(content: string): ToCData | null {
   try {
     // Look for JSON delimited by [GRAPH_JSON] ... [/GRAPH_JSON]
     const jsonMatch = content.match(/\[GRAPH_JSON\]([\s\S]*?)\[\/GRAPH_JSON\]/);
@@ -14,21 +17,23 @@ export function parseGeneratedGraph(content: string): any | null {
     const jsonString = jsonMatch[1].trim();
 
     // Parse the JSON
-    const graphData = JSON.parse(jsonString);
+    const graphData: unknown = JSON.parse(jsonString);
 
     // Validate basic structure
-    if (!graphData.sections || !Array.isArray(graphData.sections)) {
+    if (!graphData || typeof graphData !== 'object' || !Array.isArray((graphData as { sections?: unknown }).sections)) {
       console.error('Invalid graph structure: missing sections array', graphData);
       return null;
     }
 
+    const typed = graphData as ToCData;
+
     // Log detailed structure for debugging
     console.log('Successfully parsed generated graph:');
-    console.log('- Title:', graphData.title);
-    console.log('- Sections count:', graphData.sections.length);
-    console.log('- Full structure:', graphData);
+    console.log('- Title:', typed.title);
+    console.log('- Sections count:', typed.sections.length);
+    console.log('- Full structure:', typed);
 
-    return graphData;
+    return typed;
 
   } catch (error) {
     console.error('Error parsing generated graph JSON:', error);

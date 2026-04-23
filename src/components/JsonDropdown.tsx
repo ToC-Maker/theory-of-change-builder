@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 interface JsonDropdownProps {
-  data: any;
+  data: unknown;
   title?: string;
   copyGraphJSON?: () => Promise<void>;
   resetToOriginal?: () => void;
-  onUploadJSON?: (jsonData: any) => void;
+  onUploadJSON?: (jsonData: unknown) => void;
   loading?: boolean;
 }
 
@@ -70,8 +70,10 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
   };
 
   const handleDownloadClick = () => {
+    // data is typed as unknown (the AI/user supplied JSON); only spread when
+    // it's an object so we don't try to merge primitives.
     const graphData = {
-      ...data,
+      ...(data && typeof data === 'object' ? data as Record<string, unknown> : {}),
       _metadata: {
         exportedAt: new Date().toISOString(),
       }
