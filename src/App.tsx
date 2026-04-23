@@ -1161,10 +1161,18 @@ function ToCViewer() {
       // (handleSendMessage / upload → ensureChartExists → navigate with
       // state.skipChartReload). The chart data is already in-memory from
       // the just-completed createChart call, and re-fetching would flash
-      // the loading state unnecessarily. On refresh the location state
-      // is gone, so the normal fetch runs — no stale-skip risk.
+      // the loading state unnecessarily.
+      //
+      // Clear the browser's persisted state afterwards so a later refresh
+      // at this URL goes through the normal fetch path — otherwise reload
+      // restores state.skipChartReload=true and we'd short-circuit with
+      // no data in memory, showing an empty chart. replaceState bypasses
+      // React Router (Router's own location.state stays stale for this
+      // render), but we don't re-read it after this point; the next
+      // effect run keys off fresh location.state.
       const navState = location.state as { skipChartReload?: boolean } | null
       if (navState?.skipChartReload) {
+        window.history.replaceState(null, '', window.location.href)
         return
       }
 
