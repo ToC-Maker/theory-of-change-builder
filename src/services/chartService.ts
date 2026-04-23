@@ -102,7 +102,7 @@ export class ChartService {
       try {
         const errorData = await response.json();
         errorMessage = errorData.error || errorMessage;
-      } catch (e) {
+      } catch {
         // If JSON parsing fails, use status-based messages
         if (response.status === 401) {
           errorMessage = 'Authentication required. Please log in to access this chart.';

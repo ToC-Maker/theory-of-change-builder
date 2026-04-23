@@ -235,7 +235,14 @@ class StreamingContext {
     this.lastChunkTime = this.startTime;
     try {
       if ('connection' in navigator) {
-        const conn = (navigator as any).connection;
+        // Network Information API — still in WICG (not in lib.dom) so we
+        // type the shape we actually touch instead of pulling in globals.
+        interface NavigatorConnectionLike {
+          effectiveType?: string
+          rtt?: number
+          downlink?: number
+        }
+        const conn = (navigator as Navigator & { connection?: NavigatorConnectionLike }).connection;
         if (conn) {
           this.networkInfo = {
             effectiveType: conn.effectiveType ?? 'unknown',
@@ -411,7 +418,7 @@ class ChatService {
 
       const msg = errorData?.error?.message || errorData?.error?.type || errorData?.details || `HTTP error! status: ${response.status}`;
       const err = new Error(msg);
-      (err as any).httpStatus = response.status;
+      (err as Error & { httpStatus?: number }).httpStatus = response.status;
       throw err;
     }
 
@@ -582,7 +589,7 @@ class ChatService {
               // included in the error report. Previously this silently returned
               // after calling onError, losing all transport context.
               const wrapped = e instanceof Error ? e : new Error(String(e));
-              (wrapped as any).isSSEProcessingError = true;
+              (wrapped as Error & { isSSEProcessingError?: boolean }).isSSEProcessingError = true;
               throw wrapped;
             }
           }
