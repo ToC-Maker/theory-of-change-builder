@@ -95,8 +95,8 @@ There are three distinct "where it's needed" categories. Some variables are need
 | `DATABASE_URL` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
 | `ANTHROPIC_API_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
 | `IP_HASH_SALT` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret) |
-| `BYOK_ENCRYPTION_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret). Must be 32 bytes, base64-encoded. Used by `worker/_shared/byok-crypto.ts` to wrap per-user Anthropic keys with AES-GCM. |
-| `TURNSTILE_SECRET_KEY` | yes (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret). Used by `worker/api/anthropic-stream.ts` to verify the Cloudflare Turnstile challenge on anonymous requests. |
+| `BYOK_ENCRYPTION_KEY` | optional (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret). Must be 32 bytes, base64-encoded. Used by `worker/_shared/byok-crypto.ts` to wrap per-user Anthropic keys with AES-GCM. When unset, BYOK is disabled (users cannot save personal keys). |
+| `TURNSTILE_SECRET_KEY` | optional (secret) | no | yes | Dashboard → Variables and Secrets (type: Secret). Used by `worker/api/anthropic-stream.ts` to verify the Cloudflare Turnstile challenge on anonymous requests. When unset, the anon bot-check is disabled (anon AI requests skip Turnstile). |
 | `VITE_AUTH0_DOMAIN` | no (public) | **yes** | yes | `wrangler.jsonc` `vars` + committed `.env.production` |
 | `VITE_AUTH0_CLIENT_ID` | no (public) | **yes** | yes | `wrangler.jsonc` `vars` + committed `.env.production` |
 | `VITE_TURNSTILE_SITE_KEY` | no (public) | **yes** | yes | `wrangler.jsonc` `vars` + committed `.env.production`. Read by the client-side Turnstile widget. |
@@ -118,13 +118,16 @@ For local development, copy `.dev.vars.example` to `.dev.vars` (gitignored) and 
 
 See `database/schema.sql` for full schema. Key tables:
 
-- **charts**: Stores graph data (JSONB), edit tokens, view counts, AI token usage
+- **charts**: Stores graph data (JSONB), edit tokens, view counts. The `total_tokens_used INT` column still exists for backward compatibility but is legacy; authoritative spend lives in `user_api_usage` (micro-USD), not here. Same for `user_token_usage`, which is frozen.
 - **chart_permissions**: User access control with approval workflow
 - **user_api_usage**: Per-user cumulative AI spend, in micro-USD (see Cost accounting below). Replaces the legacy `user_token_usage` table.
 - **global_monthly_usage**: Observability-only table tracking aggregate monthly spend. Enforcement is via the Anthropic Console customer-set cap, not this table.
 - **logging_messages**: AI improvement logs. `cost_micro_usd` column stores per-message cost.
+- **logging_snapshots**: Graph-state snapshots after each AI edit, correlated to the triggering message. Used for replay and eval of AI edit outcomes.
+- **logging_errors**: Client-side error reports plus kill-switch diagnostics and server-side service errors. Each row is stamped with `deployment_host` (inside `request_metadata` JSONB) so staging vs prod can be separated.
 - **user_byok_keys**: Encrypted blobs of user-supplied Anthropic API keys (column `encrypted_key` as `BYTEA`).
 - **chart_files**: Metadata for files uploaded to Anthropic's Files API (`file_id`, `chart_id` FK, original filename, timestamp). `ON DELETE CASCADE` on the FK so chart deletion removes the rows.
+- **idempotency_keys**: 60s replay-dedup window for the `X-Idempotency-Key` header on `/api/anthropic-stream`. Rows inserted before the upstream fetch; periodic cleanup removes entries older than the dedup window.
 
 For migrations, see `database/migrations/`. Always test on staging first.
 
@@ -152,6 +155,8 @@ PDFs and other files attached in Chat are uploaded to Anthropic's Files API (`ht
 
 - **Chart delete** — CASCADE on the FK removes the rows; a follow-up job DELETEs at Anthropic.
 - **Clear Chat button** — `DELETE /api/chart-files?chart_id=X` clears both the local rows and the Anthropic-side files.
+- **Abandoned upload cleanup**: `DELETE /api/files/:id` removes a single file (used when the user attaches then detaches before sending).
+- **Lookup**: `GET /api/files/:id` returns metadata for a single file (ownership check + filename).
 - **GDPR erasure** — manual admin script walks the user's charts and deletes.
 
 Files are not subject to Anthropic's 7-day message retention; they persist at Anthropic until an explicit DELETE. Privacy policy discloses this (see `policies/privacy-policy.md § 2E` and the retention table). The Markdown sources of the privacy policy and LIA live under `policies/` (gitignored — canonical published version is the Google Doc linked from `AuthButton.tsx`).
@@ -170,6 +175,33 @@ Auth0 tokens refresh automatically, but invalid tokens silently fall back to ano
 - Token validated in backend via `verifyToken()` in `worker/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
 
+### Anonymous Identity and Turnstile Session
+
+Anon users are identified by a cookie-pinned UUID, not by IP. Three cookies coordinate this:
+
+- `tocb_actor_id` (1 year): UUIDv4 keying the anon `user_api_usage` row; survives across sessions.
+- `tocb_anon` (24h): HMAC-signed Turnstile session cookie. Set by `/api/verify-turnstile` on solve; checked by `/api/anthropic-stream` on each anon request so the user does not re-solve per message.
+- `tocb_auth_link` (1 year): HMAC-signed cookie binding a browser to an Auth0 `sub`. Survives logout so the same browser + same Auth0 account re-converge to the same `user_api_usage` row (Policy B: cap preservation across sign-out).
+
+On first sign-in, the anon `user_api_usage` row folds into the authenticated row (the anon spend is credited to the authenticated user so users do not lose history by signing in). IP is not used for identity; the earlier IP-hashed scheme (`IP_HASH_SALT`) was dropped during this migration and is no longer load-bearing for identity.
+
+See `worker/_shared/anon-id.ts`, `worker/_shared/turnstile-cookie.ts`.
+
+### Turnstile Failures
+Anon users must solve a Cloudflare Turnstile challenge before the first AI request in a session. If the widget fails to load or verification returns 403:
+- Check `VITE_TURNSTILE_SITE_KEY` is set **at build time** (baked into the bundle by Vite).
+- Check `TURNSTILE_SECRET_KEY` is set as a Worker secret (server-side verification).
+- If `TURNSTILE_SECRET_KEY` is unset, the anon bot-check silently disables; the widget still renders but verification is skipped.
+
+### BYOK Validation Errors
+`POST /api/byok-key` validates the submitted key via Anthropic's `POST /v1/messages/count_tokens` before encrypting and storing. Common failure modes:
+- Key prefix wrong (`sk-ant-` expected).
+- Key tier below required minimum (see `worker/_shared/tiers.ts`).
+- `BYOK_ENCRYPTION_KEY` unset on the Worker (BYOK disabled globally).
+
+### Cost Cap 402 / 429s
+A 402 from `/api/anthropic-stream` means the user hit their per-user lifetime cap in `user_api_usage` (see `worker/_shared/tiers.ts` for caps per tier). Supplying a BYOK key bypasses the lifetime cap; the Anthropic Console customer-set cap still applies globally and will surface as a 429 upstream.
+
 ### PDF Handling
 PDFs are not parsed client-side. `src/utils/fileParser.ts:validatePdf` runs
 a lightweight header scan that extracts `{pageCount, sizeBytes}` from the
@@ -187,15 +219,24 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 
 ## Key Files
 
-- `src/App.tsx` - Main app logic, routing, undo/redo (1,780 lines)
+- `src/App.tsx` - Main app logic, routing, undo/redo
 - `src/components/TheoryOfChangeGraph.tsx` - Graph SVG renderer
 - `src/components/ChatInterface.tsx` - AI assistant UI
 - `src/services/chartService.ts` - API client for CRUD operations
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)
-- `worker/api/anthropic-stream.ts` - AI streaming proxy
+- `worker/api/anthropic-stream.ts` - AI streaming proxy (SSE, usage UPSERT, kill-switch, Turnstile gate)
+- `worker/api/verify-turnstile.ts` - Turnstile challenge verification, issues `tocb_anon` session cookie
+- `worker/api/upload-file.ts` - Anthropic Files API upload proxy, records rows in `chart_files`
+- `worker/api/chart-files.ts` - `chart_files` cleanup (clear-chat and per-chart erasure)
 - `worker/_shared/auth.ts` - Auth0 JWT verification (jose)
+- `worker/_shared/byok-crypto.ts` - AES-GCM wrap/unwrap for per-user BYOK keys
+- `worker/_shared/turnstile-cookie.ts` - HMAC-signed Turnstile session cookie (`tocb_anon`)
+- `worker/_shared/anon-id.ts` - Cookie-pinned anon identity (`tocb_actor_id`) and auth-link (`tocb_auth_link`)
+- `worker/_shared/cost.ts` - Micro-USD cost math (`computeCostMicroUsd`, rate tables)
+- `worker/_shared/tiers.ts` - Tier predicates, per-user caps, infra limits
+- `shared/pricing.ts` - Single source of truth for model pricing, shared client/server
 
 For complex graph editing logic or connection rendering issues, see `ConnectionsComponent.tsx` and `graphEdits.ts`.
 
@@ -205,7 +246,7 @@ For Auth0 integration details or permission system changes, see `worker/_shared/
 
 Run all worker-side unit tests: `npm test`. Tests live under `tests/worker/` and use vitest + `@cloudflare/vitest-pool-workers` to execute in a real Workers runtime. Watch mode: `npm run test:watch`.
 
-Current coverage: `computeCostMicroUsd`, tier predicates, AES-GCM BYOK key round-trip, Turnstile session-cookie HMAC. Add tests for new Worker helpers alongside the code.
+Current coverage: `computeCostMicroUsd`, tier predicates, AES-GCM BYOK key round-trip, Turnstile session-cookie HMAC. Add tests for new Worker helpers alongside the code; especially `anon-id.ts`, the kill-switch logic in `anthropic-stream.ts`, and `reserveCost` race-safety tests.
 
 Manual testing is still needed for end-to-end flows (graph editing, permissions, AI streaming):
 1. Create chart → 2. Edit nodes/connections → 3. Share with different users → 4. Test permission flows
