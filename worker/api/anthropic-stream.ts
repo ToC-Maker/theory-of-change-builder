@@ -714,6 +714,22 @@ type SseTeeContext = {
    * a backstop. No user-visible error — graceful degradation only.
    */
   pollingDisabled: boolean;
+  /**
+   * Diagnostic payload captured when the kill switch fires, for post-hoc
+   * debugging via `logging_errors`. Written during post-stream reconcile
+   * rather than from the kill site itself because ctx.waitUntil is scoped
+   * to the handler. Null if the stream wasn't killed.
+   */
+  killDiagnostic: {
+    source: 'parse_frame' | 'poll';
+    cumulative_micro_usd: string;      // BigInt serialized
+    threshold_micro_usd: string;       // BigInt serialized
+    accumulator_at_kill: UsageAccumulator;
+    live_web_search_count: number;
+    output_tokens_est?: number;        // only set for poll-triggered kills
+    count_tokens_total?: number;       // only set for poll-triggered kills
+    fired_at_ms: number;               // Date.now()
+  } | null;
 };
 
 /**
@@ -858,6 +874,16 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     });
     teeCtx.pendingKillFrame = new TextEncoder().encode(`event: error\ndata: ${payload}\n\n`);
     teeCtx.killed.v = true;
+    teeCtx.killDiagnostic = {
+      source: 'poll',
+      cumulative_micro_usd: estimatedMicro.toString(),
+      threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+      accumulator_at_kill: { ...teeCtx.accumulator },
+      live_web_search_count: teeCtx.streamingContent.webSearchCount,
+      output_tokens_est: outputTokensSoFar,
+      count_tokens_total: totalInputTokens,
+      fired_at_ms: Date.now(),
+    };
     console.log(JSON.stringify({
       event: 'poll_kill_triggered',
       estimatedCostMicroUsd: estimatedMicro.toString(),
@@ -1152,6 +1178,14 @@ function createCostTrackingStream(
     if (cumulativeMicro <= teeCtx.killThresholdMicro) return false;
 
     teeCtx.killed.v = true;
+    teeCtx.killDiagnostic = {
+      source: 'parse_frame',
+      cumulative_micro_usd: cumulativeMicro.toString(),
+      threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+      accumulator_at_kill: { ...teeCtx.accumulator },
+      live_web_search_count: teeCtx.streamingContent.webSearchCount,
+      fired_at_ms: Date.now(),
+    };
     const payload = JSON.stringify({
       type: 'request_cost_ceiling_exceeded',
       limit_usd: microToUsd(teeCtx.killThresholdMicro),
@@ -1556,6 +1590,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     pendingKillFrame: null,
     pendingRunningCostFrame: null,
     pollingDisabled: false,
+    killDiagnostic: null,
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
@@ -1618,6 +1653,49 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
         `;
       } catch (e) {
         console.error('logging_messages cost update failed (non-fatal):', e);
+      }
+    }
+
+    // Persist kill-switch diagnostics to logging_errors so post-hoc debugging
+    // doesn't depend on worker log availability (preview deployments can
+    // have separate log streams). Errors bypass the usage-data opt-out, so
+    // this lands unconditionally. Minimal payload — no message content.
+    if (teeCtx.killDiagnostic) {
+      try {
+        const d = teeCtx.killDiagnostic;
+        const diagnosticMetadata = {
+          source: d.source,
+          cumulative_micro_usd: d.cumulative_micro_usd,
+          threshold_micro_usd: d.threshold_micro_usd,
+          actual_reconciled_micro_usd: actualMicro.toString(),
+          projected_micro_usd: projected.toString(),
+          accumulator_at_kill: d.accumulator_at_kill,
+          accumulator_at_reconcile: accumulator,
+          live_web_search_count: d.live_web_search_count,
+          output_tokens_est: d.output_tokens_est,
+          count_tokens_total: d.count_tokens_total,
+          polling_disabled: teeCtx.pollingDisabled,
+          model,
+          chart_id: chartId,
+          logging_message_id: loggingMessageId,
+        };
+        await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, chart_id,
+            request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'DiagnosticKillSwitchFired',
+            ${`Kill fired from ${d.source}: cumulative=${d.cumulative_micro_usd} µUSD, threshold=${d.threshold_micro_usd} µUSD`},
+            ${actorId},
+            ${chartId ?? null},
+            ${JSON.stringify(diagnosticMetadata)}
+          )
+          ON CONFLICT (error_id) DO NOTHING
+        `;
+      } catch (e) {
+        console.error('kill diagnostic insert failed (non-fatal):', e);
       }
     }
   })());
