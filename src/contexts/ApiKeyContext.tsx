@@ -7,7 +7,7 @@ import {
   ReactNode,
 } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
-import { clearKeySpend } from '../utils/byokSpend';
+import { clearKeySpend, clearAllByokLocalState } from '../utils/byokSpend';
 
 // BYOK (Bring Your Own Key) context. Raw keys live server-side (encrypted);
 // the client only holds verification state and the last-4 for display.
@@ -178,10 +178,19 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
   const clearKey = useCallback(async (): Promise<void> => {
     const authHeaders = await getAuthHeader();
     if (!authHeaders.Authorization) {
-      // Not authenticated: reset local state anyway.
+      // Not authenticated: reset in-memory state AND wipe any BYOK
+      // localStorage the user may have accumulated before logging in. The
+      // server DELETE requires auth, but the local counters/toggle don't —
+      // guarding them would leak state across users sharing a browser.
       setHasKey(false);
-      setKeyLast4(null);
+      setKeyLast4((prev) => {
+        if (prev) clearKeySpend(prev);
+        return null;
+      });
       setVerified(false);
+      setUseForChatState(false);
+      clearAllByokLocalState();
+      setKeyVersion((v) => v + 1);
       return;
     }
 
@@ -201,6 +210,8 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
           return null;
         });
         setVerified(false);
+        setUseForChatState(false);
+        clearAllByokLocalState();
         setKeyVersion((v) => v + 1);
       }
     } catch (err) {

@@ -89,6 +89,27 @@ export function clearKeySpend(keyLast4: string): void {
 }
 
 /**
+ * Remove all BYOK-related state from localStorage: the `byok_use_for_chat`
+ * toggle, plus every `byok-spend-chart-*` and `byok-spend-key-*` counter.
+ * Invoked on logout (user switching identities should not leak another
+ * user's spend totals) and on key removal.
+ */
+export function clearAllByokLocalState(): void {
+  try {
+    localStorage.removeItem('byok_use_for_chat');
+  } catch { /* ignore */ }
+  try {
+    const keys = Object.keys(localStorage);
+    for (const k of keys) {
+      if (k.startsWith(CHART_PREFIX) || k.startsWith(KEY_PREFIX)) {
+        try { localStorage.removeItem(k); } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
+  emitSpendChanged();
+}
+
+/**
  * Custom event fired after any spend mutation so same-tab consumers can
  * re-render without polling. The `storage` event only fires in OTHER tabs,
  * which is why we also listen for this one for same-tab updates.
