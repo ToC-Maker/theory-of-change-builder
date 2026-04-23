@@ -1056,6 +1056,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             input_tokens?: number;
             estimated_cost_usd?: number;
             cached_file_tokens?: number;
+            cached_file_tokens_draft?: number;
+            cached_file_tokens_history?: number;
           };
           const totalTokens = data.input_tokens ?? 0;
           const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
@@ -1064,20 +1066,22 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           // chart_files.input_tokens, counted at upload time). We just need
           // to split the total into draft-side vs history-side for the
           // warm-cache 1.25× / 0.1× multipliers. Char-to-token ratio is
-          // ~4:1 for text; for PDF tokens we trust the server's
-          // cached_file_tokens (which is a count_tokens call from upload
-          // time, not a heuristic).
+          // ~4:1 for text; for PDF tokens we trust the server's per-bucket
+          // split (draft = last message, history = earlier messages) from
+          // count-tokens-estimate.ts.
           const CHAR_PER_TOKEN = 4;
           const draftTextTokensEst = Math.ceil(draftBody.length / CHAR_PER_TOKEN);
-          const pdfTokensEst = data.cached_file_tokens ?? 0;
-          const draftTokensEst = draftTextTokensEst + pdfTokensEst;
+          const draftPdfTokens = data.cached_file_tokens_draft ?? 0;
+          const historyPdfTokens = data.cached_file_tokens_history ?? 0;
+          const draftTokensEst = draftTextTokensEst + draftPdfTokens;
           const historyCharSum =
             systemPrompt.length +
             messages.reduce(
               (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
               0,
             );
-          const historyTokensEst = Math.ceil(historyCharSum / CHAR_PER_TOKEN);
+          const historyTokensEst =
+            Math.ceil(historyCharSum / CHAR_PER_TOKEN) + historyPdfTokens;
           const denom = draftTokensEst + historyTokensEst;
           const draftOnlyTokens =
             totalTokens > 0 && denom > 0
@@ -2869,13 +2873,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   ) : wouldExceedCap ? (
                     <div className="space-y-2">
                       <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                        This message (estimated{' '}
-                        <strong>{formatCostUsd(composerEstimateUsd)}</strong> input) would
-                        take you over the free quota of{' '}
-                        <strong>{formatCostUsd(usage!.limit_usd)}</strong> —{' '}
-                        {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}{' '}
-                        left. Add your Anthropic API key to send it, or shorten it below
-                        the remaining budget.
+                        Your next send — including chat history and any attached files,
+                        not just what you type — is estimated at{' '}
+                        <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but you
+                        only have{' '}
+                        <strong>
+                          {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}
+                        </strong>{' '}
+                        left of the {formatCostUsd(usage!.limit_usd)} free quota. Add
+                        your Anthropic API key to continue.
                       </div>
                       <ByokPanel
                         onSubmitted={() => {

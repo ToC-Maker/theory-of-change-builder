@@ -35,16 +35,27 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   //
   // Collect the stripped file_ids so we can sum their cached input_tokens
   // (populated by upload-file at upload time) and restore a precise total.
-  const strippedFileIds: string[] = [];
+  //
+  // Split by origin: file_ids in the LAST message are "draft-side" (the
+  // user's in-composition turn); earlier messages are "history-side" and
+  // already in Anthropic's cached prefix (billed at cache-read rates, not
+  // cache-write, within the 5m ephemeral TTL). Client uses this split to
+  // price the estimate correctly — previously all file tokens went into
+  // the draft bucket, inflating history-PDF estimates by 12.5×.
+  const draftFileIds: string[] = [];
+  const historyFileIds: string[] = [];
   if (Array.isArray(body.messages)) {
-    body.messages = (body.messages as Array<Record<string, unknown>>).map((msg) => {
+    const msgs = body.messages as Array<Record<string, unknown>>;
+    const lastIdx = msgs.length - 1;
+    body.messages = msgs.map((msg, idx) => {
       if (!Array.isArray(msg.content)) return msg;
+      const bucket = idx === lastIdx ? draftFileIds : historyFileIds;
       const filtered = (msg.content as Array<Record<string, unknown>>).filter((block) => {
         if (block?.type !== 'document') return true;
         const src = block.source as Record<string, unknown> | undefined;
         if (src?.type === 'file') {
           const fid = typeof src.file_id === 'string' ? src.file_id : null;
-          if (fid) strippedFileIds.push(fid);
+          if (fid) bucket.push(fid);
           return false;
         }
         return true;
@@ -52,6 +63,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return { ...msg, content: filtered };
     });
   }
+  const strippedFileIds = [...draftFileIds, ...historyFileIds];
 
   let upstream: Response;
   try {
@@ -116,7 +128,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // count_tokens failure at upload) coalesce to 0 here — those files are
   // invisible to the estimate; the UI should flag the mismatch if the number
   // feels off. The count_tokens failure path at upload is logged.
-  let cachedFileTokens = 0;
+  let cachedFileTokensDraft = 0;
+  let cachedFileTokensHistory = 0;
   let uncountedFileIds = 0;
   const sql = getDb(env);
   if (strippedFileIds.length > 0) {
@@ -126,25 +139,31 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         FROM chart_files
         WHERE file_id = ANY(${strippedFileIds})
       `;
-      // Neon returns BIGINT as a string (safe for values > 2^53). Parse and
-      // validate before adding — any NULL or unparseable value bumps the
-      // uncounted counter instead of silently dropping the file.
+      // Neon returns BIGINT as a string (safe for values > 2^53). Build a
+      // lookup so we can bucket each file_id by whether it was in the draft
+      // (last) message or history.
+      const tokensByFileId = new Map<string, number>();
       for (const row of rows) {
         const n = row.input_tokens == null ? NaN : Number(row.input_tokens);
-        if (Number.isFinite(n) && n >= 0) {
-          cachedFileTokens += n;
-        } else {
-          uncountedFileIds += 1;
-        }
+        if (Number.isFinite(n) && n >= 0) tokensByFileId.set(row.file_id, n);
       }
-      // file_ids not found in chart_files at all: treat as uncounted.
-      uncountedFileIds += strippedFileIds.length - rows.length;
+      for (const fid of draftFileIds) {
+        const n = tokensByFileId.get(fid);
+        if (n === undefined) uncountedFileIds += 1;
+        else cachedFileTokensDraft += n;
+      }
+      for (const fid of historyFileIds) {
+        const n = tokensByFileId.get(fid);
+        if (n === undefined) uncountedFileIds += 1;
+        else cachedFileTokensHistory += n;
+      }
     } catch (err) {
       console.warn('[count-tokens-estimate] chart_files lookup failed:', err);
       uncountedFileIds = strippedFileIds.length;
     }
   }
 
+  const cachedFileTokens = cachedFileTokensDraft + cachedFileTokensHistory;
   const totalInputTokens = inputTokens + cachedFileTokens;
 
   // Fallback rate mirrors Opus input ($5/MTok == 5 µUSD/token). Unknown models
@@ -162,5 +181,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     stripped_file_blocks: strippedFileIds.length,
     uncounted_file_ids: uncountedFileIds,
     cached_file_tokens: cachedFileTokens,
+    // Split so the client can apply cache-write (1.25×) to draft-side PDFs
+    // and cache-read (0.1×) to history-side PDFs already in the prefix.
+    cached_file_tokens_draft: cachedFileTokensDraft,
+    cached_file_tokens_history: cachedFileTokensHistory,
   });
 }
