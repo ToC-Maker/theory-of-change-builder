@@ -1678,6 +1678,12 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
           model,
           chart_id: chartId,
           logging_message_id: loggingMessageId,
+          // Worker hostname of the request that produced this kill. Lets us
+          // tell prod (`theory-of-change-builder.*`) apart from branch
+          // previews (`<branch>-theory-of-change-builder.*`) without a
+          // separate env var — preview URLs have no log streams anyway so
+          // DB rows are the only signal we have.
+          deployment_host: requestUrl.hostname,
         };
         await sql`
           INSERT INTO logging_errors (

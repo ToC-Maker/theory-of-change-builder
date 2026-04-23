@@ -61,6 +61,18 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // No opt-out check: error reports are operational diagnostics, not AI
     // improvement data. They don't contain message content.
 
+    // Stamp the worker hostname + the client's Referer into request_metadata
+    // so we can tell prod-deployment errors apart from preview-branch
+    // errors without a separate env var. Preview URLs have no log streams
+    // (Cloudflare limitation), so the DB is the only signal we get.
+    const deploymentHost = new URL(request.url).hostname;
+    const clientReferer = request.headers.get('referer') ?? null;
+    const augmentedMetadata = {
+      ...(data.request_metadata ?? {}),
+      deployment_host: deploymentHost,
+      client_referer: clientReferer,
+    };
+
     const result = await sql`
       INSERT INTO logging_errors (
         error_id, error_name, error_message, http_status, stack_trace,
@@ -71,7 +83,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         ${data.http_status ?? null}, ${data.stack_trace ?? null},
         ${data.user_agent ?? null}, ${user_id},
         ${data.chart_id ?? null}, ${data.session_id ?? null},
-        ${data.request_metadata ? JSON.stringify(data.request_metadata) : null}
+        ${JSON.stringify(augmentedMetadata)}
       )
       ON CONFLICT (error_id) DO NOTHING
       RETURNING error_id
