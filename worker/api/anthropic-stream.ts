@@ -23,6 +23,7 @@ import {
   tierFor,
   isCapped,
   needTurnstile,
+  allowByok,
   type Tier,
 } from '../_shared/tiers';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
@@ -32,13 +33,14 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
  * cost enforcement. The pipeline, in order:
  *
  *   1. Body-size clamp (reject 413 if > BODY_SIZE_LIMIT_BYTES, currently 32 MB).
- *   2. JWT verify (if Authorization header present) → actor_id = sub or anon-<hmac(ip)>.
+ *   2. JWT verify (if Authorization header present) → actor_id = sub or anon-<uuid>.
  *   3. Tier classification (anon / free / byok). Authenticated users with a row in
  *      user_byok_keys are promoted to the byok tier; header `X-User-Anthropic-Key`
- *      (legacy) still wins if present.
+ *      (legacy) is honored only for authenticated callers — from anon it is
+ *      dropped to prevent bypassing Turnstile and the lifetime cap.
  *   4. Turnstile session cookie check for anon (skipped if TURNSTILE_SECRET_KEY unset).
  *      Cookie is issued by POST /api/verify-turnstile and bound to the caller's
- *      cf-connecting-ip-derived anon_id via HMAC.
+ *      cookie-pinned anon_id.
  *   5. Idempotency de-dup via idempotency_keys table (60s window).
  *   6. Pre-flight cost estimate via /v1/messages/count_tokens.
  *   7. Atomic reservation against user_api_usage (skipped for BYOK).
@@ -231,8 +233,22 @@ async function resolveActor(
       anonSetCookie: resolved.setCookieHeader,
     };
   } catch (e) {
+    // Fail closed: falling through to a shared `anon-unknown` bucket lets one
+    // buggy client DoS every other anon caller through their shared cap row.
+    // A 503 here tells the caller to retry; the next attempt mints a fresh
+    // cookie-pinned id and the problem resolves itself.
     console.error('Failed to resolve anonymous actor:', e);
-    return { ok: true, actorId: 'anon-unknown', authenticated: false };
+    return {
+      ok: false,
+      response: jsonError(
+        {
+          error: 'actor_unavailable',
+          upstream_message: 'anonymous identity could not be resolved, please retry',
+        },
+        503,
+        altSvcHeaders,
+      ),
+    };
   }
 }
 
@@ -1582,10 +1598,20 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   //      Round-2 design: key is stored once, encrypted, and loaded here.
   //   3. Our `ANTHROPIC_API_KEY` fallback for the free/anon tier.
   //
-  // Anonymous actors cannot BYOK — they have no user_id to key the row on.
-  const byokHeaderKey = request.headers.get('x-user-anthropic-key');
+  // Anonymous actors cannot BYOK — they have no user_id to key the row on,
+  // and `allowByok('anon')` is false. Trusting the header from an anon caller
+  // would silently bypass both the Turnstile gate and the lifetime cap, so
+  // we drop it on the floor (with a warn for observability) and proceed as
+  // if the header were never sent.
+  const byokHeaderKeyRaw = request.headers.get('x-user-anthropic-key');
+  const byokHeaderKey = (actor.authenticated && byokHeaderKeyRaw)
+    ? byokHeaderKeyRaw
+    : null;
+  if (byokHeaderKeyRaw && !actor.authenticated) {
+    console.warn('ignoring X-User-Anthropic-Key from anon caller');
+  }
   let byokKey: string | null = byokHeaderKey;
-  let hasByok = !!byokKey;
+  let hasByok = !!byokKey && actor.authenticated;
 
   if (!hasByok && actor.authenticated) {
     let encryptedKey: Uint8Array | ArrayBuffer | null = null;
@@ -1618,6 +1644,18 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     }
   }
 
+  // Defense-in-depth: the BYOK resolution block above already requires
+  // actor.authenticated before setting hasByok, but if that invariant ever
+  // drifts we want a second barrier. Evaluate allowByok against the BASE
+  // tier (ignoring the hasByok override) — allowByok('anon') === false, so
+  // any accidental promotion of an anon caller to 'byok' trips here before
+  // we touch upstream.
+  const baseTier = tierFor(actorId, false);
+  if (hasByok && !allowByok(baseTier)) {
+    console.warn('hasByok set for non-byok-eligible tier; forcing no-BYOK', { baseTier });
+    hasByok = false;
+    byokKey = null;
+  }
   const tier = tierFor(actorId, hasByok);
 
   // Step 4: turnstile session cookie for anon.
