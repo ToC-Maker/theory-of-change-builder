@@ -4,6 +4,18 @@ import { ToCData } from "../types"
 import { getConfidenceStrokeStyle } from "../utils"
 import { EdgePopup } from "./EdgePopup"
 
+export interface EdgePopupState {
+  sourceId: string
+  targetId: string
+  x: number
+  y: number
+  confidence: number
+  minConfidence?: number
+  maxConfidence?: number
+  evidence?: string
+  assumptions?: string
+}
+
 interface ConnectionsComponentProps {
   data: ToCData
   setData: React.Dispatch<React.SetStateAction<ToCData>>
@@ -21,7 +33,7 @@ interface ConnectionsComponentProps {
   onSizeChange: (size: { width: number; height: number }) => void
   onDeleteConnection?: (sourceId: string, targetId: string) => void
   containerRef: React.RefObject<HTMLDivElement>
-  onEdgePopupChange?: (edgePopup: any) => void
+  onEdgePopupChange?: (edgePopup: EdgePopupState | null) => void
   fontFamily?: string
   viewportOffset?: { left: number; top: number; right: number; bottom: number }
   zoomScale?: number
@@ -51,19 +63,9 @@ export function ConnectionsComponent({
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
-  const [edgePopup, setEdgePopupState] = useState<{
-    sourceId: string
-    targetId: string
-    x: number
-    y: number
-    confidence: number
-    minConfidence?: number
-    maxConfidence?: number
-    evidence?: string
-    assumptions?: string
-  } | null>(null)
+  const [edgePopup, setEdgePopupState] = useState<EdgePopupState | null>(null)
 
-  const setEdgePopup = (value: any) => {
+  const setEdgePopup = (value: EdgePopupState | null) => {
     setEdgePopupState(value)
     onEdgePopupChange?.(value)
   }

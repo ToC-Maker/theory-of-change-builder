@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { ToCData, Node } from "../types"
 import { NodeComponent } from "./NodeComponent"
-import { ConnectionsComponent } from "./ConnectionsComponent"
+import { ConnectionsComponent, EdgePopupState } from "./ConnectionsComponent"
 import { EditToolbar } from "./EditToolbar"
 import { Legend } from "./Legend"
 import { NodePopup } from "./NodePopup"
@@ -28,7 +28,6 @@ export function ToC({
   isManualSyncing = false,
   handleManualSync = () => {},
   getTimeAgo = () => "",
-  renderEditToolbar,
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
@@ -49,7 +48,6 @@ export function ToC({
   isManualSyncing?: boolean
   handleManualSync?: () => void
   getTimeAgo?: (date: Date) => string
-  renderEditToolbar?: (props: any) => React.ReactNode
   zoomScale?: number
   camera?: { x: number; y: number; z: number }
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void
@@ -107,7 +105,7 @@ export function ToC({
     title: string
     text: string
   } | null>(null)
-  const [edgePopup, setEdgePopup] = useState<any>(null)
+  const [edgePopup, setEdgePopup] = useState<EdgePopupState | null>(null)
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 })
   const [legendPosition, setLegendPosition] = useState({ x: 340, y: 70 })
   const [isDraggingLegend, setIsDraggingLegend] = useState(false)
@@ -180,14 +178,6 @@ export function ToC({
     }, 50) // Slightly longer delay to ensure DOM updates
   }, [nodeRefs])
 
-  const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsDraggingLegend(true)
-    setLegendDragOffset({
-      x: e.clientX - legendPosition.x,
-      y: e.clientY - legendPosition.y
-    })
-  }, [legendPosition])
-
   const handleLegendMouseMove = useCallback((e: MouseEvent) => {
     if (isDraggingLegend) {
       setLegendPosition({
@@ -248,29 +238,6 @@ export function ToC({
       })
     }
   }, [svgSize.width, svgSize.height])
-
-  const copyGraphJSON = useCallback(async () => {
-    try {
-      const graphData = {
-        ...data,
-        // Include all settings as part of main data
-        textSize,
-        curvature,
-        columnPadding,
-        sectionPadding,
-        fontFamily,
-        // Include additional UI state in metadata
-        _metadata: {
-          exportedAt: new Date().toISOString(),
-          legendPosition,
-        }
-      }
-      await navigator.clipboard.writeText(JSON.stringify(graphData, null, 2))
-      // Could add a toast notification here if desired
-    } catch (err) {
-      console.error('Failed to copy JSON:', err)
-    }
-  }, [data, curvature, textSize, columnPadding, sectionPadding, fontFamily, legendPosition])
 
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
@@ -1025,8 +992,8 @@ export function ToC({
     return connections
   }, [hoveredNode, data])
 
-  // Initialize keyboard shortcuts hook
-  const keyboardShortcuts = useKeyboardShortcuts({
+  // Initialize keyboard shortcuts hook (side effects only — return value unused)
+  useKeyboardShortcuts({
     data,
     setDataAndNotify,
     highlightedNodes,
@@ -1441,21 +1408,24 @@ export function ToC({
         setLayoutMode={setLayoutMode}
         curvature={curvature}
         setCurvature={(value) => {
-          setCurvature(value)
+          const next = typeof value === 'function' ? value(curvature) : value
+          setCurvature(next)
           // Update data with new curvature
-          setDataAndNotify(prev => ({ ...prev, curvature: value }))
+          setDataAndNotify(prev => ({ ...prev, curvature: next }))
         }}
         textSize={textSize}
         setTextSize={(value) => {
-          setTextSize(value)
+          const next = typeof value === 'function' ? value(textSize) : value
+          setTextSize(next)
           // Update data with new text size
-          setDataAndNotify(prev => ({ ...prev, textSize: value }))
+          setDataAndNotify(prev => ({ ...prev, textSize: next }))
         }}
         fontFamily={fontFamily}
         setFontFamily={(value) => {
-          setFontFamily(value)
+          const next = typeof value === 'function' ? value(fontFamily) : value
+          setFontFamily(next)
           // Update data with new font family
-          setDataAndNotify(prev => ({ ...prev, fontFamily: value }))
+          setDataAndNotify(prev => ({ ...prev, fontFamily: next }))
         }}
         nodeWidth={nodeWidth}
         setNodeWidth={setNodeWidth}
@@ -1463,15 +1433,17 @@ export function ToC({
         setNodeColor={setNodeColor}
         columnPadding={columnPadding}
         setColumnPadding={(value) => {
-          setColumnPadding(value)
+          const next = typeof value === 'function' ? value(columnPadding) : value
+          setColumnPadding(next)
           // Update data with new padding
-          setDataAndNotify(prev => ({ ...prev, columnPadding: value }))
+          setDataAndNotify(prev => ({ ...prev, columnPadding: next }))
         }}
         sectionPadding={sectionPadding}
         setSectionPadding={(value) => {
-          setSectionPadding(value)
+          const next = typeof value === 'function' ? value(sectionPadding) : value
+          setSectionPadding(next)
           // Update data with new padding
-          setDataAndNotify(prev => ({ ...prev, sectionPadding: value }))
+          setDataAndNotify(prev => ({ ...prev, sectionPadding: next }))
         }}
         straightenEdges={straightenEdges}
         setData={setDataAndNotify}
@@ -1504,9 +1476,6 @@ export function ToC({
         // This component will continuously update position during interactions
         const ConnectButton = () => {
           const [position, setPosition] = useState({ x: 0, y: 0 })
-          const [smoothUpdates, setSmoothUpdates] = useState(false)
-          const animationFrameRef = useRef<number | null>(null)
-          const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
           const positionCalculatedRef = useRef(false)
 
           // Calculate position only once per button instance
@@ -1530,7 +1499,8 @@ export function ToC({
 
             // Use the same getLocalPosition function as ConnectionsComponent
             const getLocalPosition = (element: HTMLElement) => {
-              let x = 0, y = 0, width = element.offsetWidth, height = element.offsetHeight
+              let x = 0, y = 0
+              const width = element.offsetWidth, height = element.offsetHeight
               let current: HTMLElement | null = element
 
               // Walk up the offset parent chain until we reach the container
