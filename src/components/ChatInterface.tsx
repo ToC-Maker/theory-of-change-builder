@@ -1778,8 +1778,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       // next full reload — so first-message sessions lost their history.
       // The flag tells the route-change effect NOT to wipe the in-memory
       // `messages` state during the transition (messages are mid-flight).
+      // `state.skipChartReload` tells ToCViewer's load effect not to
+      // re-fetch the chart from the server (we just created it, it's
+      // already in memory). Without this, the user sees a brief flash of
+      // the loading state every time auto-create fires — on first
+      // message, on every PDF upload, and after Turnstile if that's the
+      // first send.
       justAutoCreatedRef.current = true;
-      navigate(`/edit/${created.editToken}`, { replace: true });
+      navigate(`/edit/${created.editToken}`, {
+        replace: true,
+        state: { skipChartReload: true },
+      });
       onChartCreated?.(created.editToken, created.chartId);
       return { chartId: created.chartId, editToken: created.editToken };
     } catch (e) {

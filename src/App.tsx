@@ -544,6 +544,7 @@ function ToCViewerOnly() {
 
 function ToCViewer() {
   const { filename, editToken } = useParams<{ filename?: string; editToken?: string }>()
+  const location = useLocation()
   const { getIdTokenClaims, isAuthenticated, isLoading: authLoading, loginWithRedirect } = useAuth0()
   const [data, setData] = useState<ToCData | null>(null)
   const [undoHistory, setUndoHistory] = useState<ToCData[]>([])
@@ -1156,6 +1157,17 @@ function ToCViewer() {
         return;
       }
 
+      // Skip the re-fetch when we just navigated in from an auto-create
+      // (handleSendMessage / upload → ensureChartExists → navigate with
+      // state.skipChartReload). The chart data is already in-memory from
+      // the just-completed createChart call, and re-fetching would flash
+      // the loading state unnecessarily. On refresh the location state
+      // is gone, so the normal fetch runs — no stale-skip risk.
+      const navState = location.state as { skipChartReload?: boolean } | null
+      if (navState?.skipChartReload) {
+        return
+      }
+
       setLoading(true)
       setError(null)
 
@@ -1203,7 +1215,7 @@ function ToCViewer() {
     }
 
     loadData()
-  }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage, authTokenReady, isAuthenticated])
+  }, [filename, editToken, loadFromLocalStorage, saveToLocalStorage, authTokenReady, isAuthenticated, location.state])
 
   // Update document title when data changes
   useEffect(() => {
