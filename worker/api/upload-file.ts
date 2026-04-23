@@ -166,16 +166,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   if (mimeType === 'application/pdf') {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      // Base64 encode via a Blob → FileReader-less path. Cloudflare Workers
-      // doesn't ship FileReader, so we build the base64 string ourselves.
-      // String.fromCharCode.apply(null, bigArray) blows the arg-stack on
-      // large arrays (>65k args) — walk byte-by-byte via a typed-array
-      // loop that never crosses that threshold. Slightly slower but
-      // predictable for 10MB+ PDFs.
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
+      // Base64-encode via TextDecoder('latin1'): the Latin-1 (ISO-8859-1)
+      // encoding maps every byte 0-255 to the same code point 1:1, which
+      // is exactly what btoa wants. Native, O(n), no stack/arg limits,
+      // and works for arbitrarily large buffers. The byte-by-byte string
+      // concat alternative is O(n²) and burns Workers CPU time on 10MB+
+      // PDFs — the upload fails outright with a worker-exception 500
+      // before our catch block can record anything.
+      const binary = new TextDecoder('latin1').decode(bytes);
       const b64 = btoa(binary);
       const countResp = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
         method: 'POST',
