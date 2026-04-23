@@ -569,8 +569,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [additionalInstructions, setAdditionalInstructions] = useState('');
-  const [conversationStarted, setConversationStarted] = useState(false);
-  const [fullConversation, setFullConversation] = useState('');
   const [generatedGraphData, setGeneratedGraphData] = useState<any>(null);
   // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
   // list of {id, file_id} chips so the chip area can render them with the
@@ -1085,10 +1083,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       // 429 at send-time from a "safe-looking" composer number.
       const uploadFiles = chatAttachedFiles.filter(
         (f) => f.kind === 'upload' && f.status === 'ready' && f.fileId,
-      );
-      const uploadPageCount = uploadFiles.reduce(
-        (sum, f) => sum + (f.kind === 'upload' ? f.pageCount : 0),
-        0,
       );
       const userContent: unknown = uploadFiles.length > 0
         ? [
@@ -2204,7 +2198,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent(''); setStreamingThinking('');
-    setConversationStarted(true);
 
     // Extended thinking is always on.
     setIsThinking(true);
@@ -2304,7 +2297,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           setIsStreaming(false);
           setStreamingContent(''); setStreamingThinking('');
           setIsThinking(false);
-          setFullConversation(finalMessage);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
 
