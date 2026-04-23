@@ -90,12 +90,18 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
   let verifyResp: Response;
   try {
+    // 3s cap on the siteverify round-trip. Cloudflare's endpoint normally
+    // responds in ~50ms but has no SLO, and a hang here would tie up the
+    // Worker waiting for a response the user doesn't need. On timeout we
+    // fail-closed (same as a network error) — the existing posture — so
+    // the user just re-solves the widget instead of waiting.
     verifyResp = await fetch(
       'https://challenges.cloudflare.com/turnstile/v0/siteverify',
       {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: form.toString(),
+        signal: AbortSignal.timeout(3000),
       },
     );
   } catch (err) {
