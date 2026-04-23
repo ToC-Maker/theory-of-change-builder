@@ -42,23 +42,18 @@ export function applyEdits(graphData: any, edits: EditInstruction[]): any {
 
   const insertAtIndex = (obj: any, path: string[], value: any): void => {
     if (path.length === 0) return;
-    
+
     const lastKey = path[path.length - 1];
     const parentPath = path.slice(0, -1);
     const target = getAtPath(obj, parentPath);
-    
+
     if (Array.isArray(target) && /^\d+$/.test(lastKey)) {
       const index = parseInt(lastKey);
       target.splice(index, 0, value); // Insert at index without replacing
-    } else if (path.length === 1 && lastKey === 'sections') {
-      // Special case: inserting at root sections array
-      if (Array.isArray(obj.sections)) {
-        obj.sections.splice(0, 0, value); // Insert at beginning
-      } else {
-        console.error('Cannot insert into sections: not an array');
-      }
     } else {
-      // For non-arrays or non-numeric keys, just set the value
+      // For non-arrays or non-numeric keys, just set the value.
+      // The upstream validator (line 131) rejects insert paths that don't end
+      // in a digit, so this fallback is defensive only.
       setAtPath(obj, path, value);
     }
   };
@@ -271,11 +266,13 @@ export function parseEditInstructions(content: string): EditInstruction[] {
     
     const jsonStr = content.substring(startIndex + startMarker.length, endIndex).trim();
     const editInstructions = JSON.parse(jsonStr) as EditInstruction[];
-    
-    console.log('=== PARSED EDIT INSTRUCTIONS ===');
-    console.log(JSON.stringify(editInstructions, null, 2));
-    console.log('=== END PARSED EDITS ===');
-    
+
+    if (import.meta.env.DEV) {
+      console.log('=== PARSED EDIT INSTRUCTIONS ===');
+      console.log(JSON.stringify(editInstructions, null, 2));
+      console.log('=== END PARSED EDITS ===');
+    }
+
     return Array.isArray(editInstructions) ? editInstructions : [];
   } catch (error) {
     console.error('Error parsing edit instructions:', error);
