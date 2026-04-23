@@ -632,8 +632,19 @@ function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void
  * undercount that the 5% overspend tolerance absorbs.
  */
 type StreamingAssistantContent = {
-  /** Block content by SSE `index`; preserves original ordering on flush. */
-  blocks: Map<number, { type: 'text' | 'thinking'; text: string }>;
+  /**
+   * Block content by SSE `index`; preserves original ordering on flush.
+   * Thinking blocks also carry a `signature` captured from `signature_delta`
+   * — Anthropic's count_tokens API rejects any submitted thinking block
+   * lacking its signature ("messages.*.content.*.thinking.signature: Field
+   * required"), which would 400 our polling request and silently disable
+   * the kill poller.
+   */
+  blocks: Map<
+    number,
+    | { type: 'text'; text: string }
+    | { type: 'thinking'; text: string; signature: string }
+  >;
   /**
    * Live count of `server_tool_use` blocks of name `web_search`. The usage
    * accumulator only picks this up from `message_delta` at end-of-stream,
@@ -783,8 +794,20 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   for (const i of indices) {
     const block = teeCtx.streamingContent.blocks.get(i);
     if (!block || block.text.length === 0) continue;
-    if (block.type === 'text') assistantBlocks.push({ type: 'text', text: block.text });
-    else assistantBlocks.push({ type: 'thinking', thinking: block.text });
+    if (block.type === 'text') {
+      assistantBlocks.push({ type: 'text', text: block.text });
+    } else {
+      // thinking blocks need signature; skip if not yet arrived (signature_delta
+      // fires during the block, so a half-streamed thinking block has no
+      // signature yet and Anthropic rejects it). Skipping under-estimates
+      // slightly — acceptable over failing the poll entirely.
+      if (!block.signature) continue;
+      assistantBlocks.push({
+        type: 'thinking',
+        thinking: block.text,
+        signature: block.signature,
+      });
+    }
   }
   if (assistantBlocks.length === 0) return;
 
@@ -1123,7 +1146,7 @@ function createCostTrackingStream(
         if (cbType === 'text') {
           teeCtx.streamingContent.blocks.set(idx, { type: 'text', text: '' });
         } else if (cbType === 'thinking') {
-          teeCtx.streamingContent.blocks.set(idx, { type: 'thinking', text: '' });
+          teeCtx.streamingContent.blocks.set(idx, { type: 'thinking', text: '', signature: '' });
         } else if (cbType === 'server_tool_use' && cbr.name === 'web_search') {
           teeCtx.streamingContent.webSearchCount += 1;
           // Web-search cost alone can push cumulative over the kill threshold
@@ -1144,10 +1167,17 @@ function createCostTrackingStream(
         const dr = d as Record<string, unknown>;
         const dtype = dr.type;
         const existing = teeCtx.streamingContent.blocks.get(idx);
-        if (existing && dtype === 'text_delta' && typeof dr.text === 'string') {
+        if (existing && dtype === 'text_delta' && typeof dr.text === 'string' && existing.type === 'text') {
           existing.text += dr.text;
-        } else if (existing && dtype === 'thinking_delta' && typeof dr.thinking === 'string') {
+        } else if (existing && dtype === 'thinking_delta' && typeof dr.thinking === 'string' && existing.type === 'thinking') {
           existing.text += dr.thinking;
+        } else if (existing && dtype === 'signature_delta' && typeof dr.signature === 'string' && existing.type === 'thinking') {
+          // count_tokens requires submitted thinking blocks to include the
+          // signature Anthropic produced when generating them (anti-forgery).
+          // Without this, the poll request 400s with
+          // "messages.*.content.*.thinking.signature: Field required" and
+          // polling is disabled for the rest of the stream.
+          existing.signature += dr.signature;
         }
       }
       return false;
