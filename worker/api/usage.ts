@@ -2,7 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { LIFETIME_CAP_USD, tierFor } from '../_shared/tiers';
-import { resolveAnonActor } from '../_shared/anon-id';
+import { resolveAnonActor, mergeAnonUsageIntoAuth } from '../_shared/anon-id';
 
 function microToUsd(micro: bigint | number | null | undefined): number {
   if (micro === null || micro === undefined) return 0;
@@ -33,6 +33,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
 
     const sql = getDb(env);
+
+    // Immediately after sign-in the client refreshes usage; running the
+    // anon→auth merge here means the first /api/usage response already
+    // reflects any pre-sign-in anon spend folded into the auth row, rather
+    // than showing $0 and then jumping on the next anthropic-stream call.
+    if (userId) {
+      await mergeAnonUsageIntoAuth(sql, userId, request);
+    }
 
     // Cookie-first anon identity. setCookieHeader is set when the resolver
     // minted or rewrote the cookie (first visit or IP-change migration);

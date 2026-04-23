@@ -3,7 +3,7 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
-import { resolveAnonActor } from '../_shared/anon-id';
+import { resolveAnonActor, mergeAnonUsageIntoAuth } from '../_shared/anon-id';
 import {
   computeCostMicroUsd,
   RATES_MICRO_USD_PER_TOKEN,
@@ -186,6 +186,10 @@ async function resolveActor(
       }
       return { ok: false, response: jsonError({ error: 'invalid_token' }, 401, altSvcHeaders) };
     }
+    // Fold any outstanding anon-cap usage (from a prior session under the
+    // tocb_actor_id cookie) into the authenticated identity so sign-in
+    // isn't a cap reset. Idempotent and non-fatal — see helper comment.
+    await mergeAnonUsageIntoAuth(sql, decoded.sub, request);
     return { ok: true, actorId: decoded.sub, authenticated: true };
   }
 

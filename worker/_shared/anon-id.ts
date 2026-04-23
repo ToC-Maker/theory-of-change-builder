@@ -1,3 +1,5 @@
+import type { NeonQueryFunction } from '@neondatabase/serverless';
+
 // Shared anonymous-actor identity helpers.
 //
 // Anonymous users are identified by `anon-<hash>` where <hash> is the
@@ -183,4 +185,57 @@ export async function resolveAnonActor(
   // No sql access (e.g. called from verify-turnstile): keep cookie
   // identity, let the next capped endpoint migrate when it fires.
   return { userId: `anon-${existing}` };
+}
+
+/**
+ * On an authenticated request that still carries the anon `tocb_actor_id`
+ * cookie, fold any outstanding `anon-<hash>` `user_api_usage` row into the
+ * authenticated user's row, then delete the anon row.
+ *
+ * Idempotent: after the first successful merge the anon row is gone, so
+ * subsequent calls INSERT…SELECT nothing and DELETE matches nothing.
+ *
+ * Closes the "sign in to reset the anon cap" loophole — without this a
+ * user could spend $4.99 as anon, sign in, and immediately get a fresh
+ * $5 quota because the authenticated identity started with no row.
+ *
+ * Non-fatal on error: the reservation path in anthropic-stream still runs
+ * against whatever user_id we were handed, so a failed merge just means
+ * the anon spend stays orphaned rather than crediting into the auth cap.
+ */
+export async function mergeAnonUsageIntoAuth(
+  sql: NeonQueryFunction<false, false>,
+  authUserId: string,
+  request: Request,
+): Promise<void> {
+  const existing = readCookie(request.headers.get('cookie'), ACTOR_COOKIE_NAME);
+  if (!existing || !isValidActorHash(existing)) return;
+  const anonUserId = `anon-${existing}`;
+
+  try {
+    await sql.transaction([
+      // INSERT … SELECT is a no-op when the anon row doesn't exist, so the
+      // common post-first-login case (already merged) pays one empty INSERT
+      // plus one empty DELETE — no separate existence probe needed.
+      sql`INSERT INTO user_api_usage (user_id, input_tokens, output_tokens, cache_create_tokens,
+                                      cache_read_tokens, web_search_uses, cost_micro_usd,
+                                      first_activity_at, last_activity_at)
+          SELECT ${authUserId}, input_tokens, output_tokens, cache_create_tokens,
+                 cache_read_tokens, web_search_uses, cost_micro_usd,
+                 first_activity_at, last_activity_at
+          FROM user_api_usage WHERE user_id = ${anonUserId}
+          ON CONFLICT (user_id) DO UPDATE SET
+            input_tokens        = user_api_usage.input_tokens + EXCLUDED.input_tokens,
+            output_tokens       = user_api_usage.output_tokens + EXCLUDED.output_tokens,
+            cache_create_tokens = user_api_usage.cache_create_tokens + EXCLUDED.cache_create_tokens,
+            cache_read_tokens   = user_api_usage.cache_read_tokens + EXCLUDED.cache_read_tokens,
+            web_search_uses     = user_api_usage.web_search_uses + EXCLUDED.web_search_uses,
+            cost_micro_usd      = user_api_usage.cost_micro_usd + EXCLUDED.cost_micro_usd,
+            first_activity_at   = LEAST(user_api_usage.first_activity_at, EXCLUDED.first_activity_at),
+            last_activity_at    = GREATEST(user_api_usage.last_activity_at, EXCLUDED.last_activity_at)`,
+      sql`DELETE FROM user_api_usage WHERE user_id = ${anonUserId}`,
+    ]);
+  } catch (e) {
+    console.error('[mergeAnonUsageIntoAuth] merge failed (non-fatal):', e);
+  }
 }
