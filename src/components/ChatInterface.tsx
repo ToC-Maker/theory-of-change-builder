@@ -336,8 +336,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Extended thinking is always enabled on Opus 4.7; the server defaults to
   // adaptive thinking when extendedThinkingEnabled is omitted/true.
 
-  // Usage / progress bar state populated from /api/usage. `tier` is 'anon' |
-  // 'authenticated' | 'byok' | 'unlimited'; null until the first fetch returns.
+  // Usage / progress bar state populated from /api/usage. `tier` is one of
+  // 'anon' | 'free' | 'byok' (see worker/_shared/tiers.ts); null until the
+  // first fetch returns.
   const [usage, setUsage] = useState<{
     used_usd: number;
     limit_usd: number;
@@ -369,8 +370,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   //     to avoid the round-trip (and the confusing Turnstile-before-cap
   //     ordering on the server).
   //
-  // BYOK tier skips both — they're self-funded. 'unlimited' likewise.
-  const capped = usage != null && usage.tier !== 'byok' && usage.tier !== 'unlimited';
+  // BYOK tier skips both — they're self-funded.
+  const capped = usage != null && usage.tier !== 'byok';
   const capAlreadyReached = capped && usage.used_usd >= usage.limit_usd;
   const wouldExceedCap =
     capped &&
@@ -2073,11 +2074,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             </div>
 
             {/* Usage / quota indicator. BYOK users see a pill instead of a
-                progress bar (no shared pool is consumed). Unlimited-tier
-                users (e.g. admin grants) also skip the progress bar. Key
-                management (change/remove/use-for-chat) lives in the
-                profile dropdown's "Anthropic API key" modal. */}
-            {usage && usage.tier !== 'unlimited' && (
+                progress bar (no shared pool is consumed). Key management
+                (change/remove) lives in the profile dropdown's "Anthropic
+                API key" modal. */}
+            {usage && (
               <div className="mt-2">
                 {usage.tier === 'byok' ? (
                   <span className="inline-flex items-center gap-1 text-xs text-gray-700">
