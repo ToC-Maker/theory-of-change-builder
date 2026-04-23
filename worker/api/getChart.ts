@@ -35,7 +35,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         if (!token) {
           return Response.json(
             { error: 'Authentication required. Please log in to access this chart.' },
-            { status: 401 }
+            { status: 401 },
           );
         }
 
@@ -46,12 +46,12 @@ export async function handler(request: Request, env: Env): Promise<Response> {
           if (err instanceof JWKSFetchError) {
             return Response.json(
               { error: 'Authentication service unavailable. Please try again later.' },
-              { status: 502 }
+              { status: 502 },
             );
           }
           return Response.json(
             { error: 'Invalid or expired authentication. Please log in again.' },
-            { status: 401 }
+            { status: 401 },
           );
         }
 
@@ -83,21 +83,27 @@ export async function handler(request: Request, env: Env): Promise<Response> {
               VALUES (${result[0].id}, ${userId}, ${userEmail}, ${permissionLevel}, ${currentOwnerId}, 'pending')
             `;
             return Response.json(
-              { error: 'Access request pending. The chart owner needs to approve your request.', pending: true },
-              { status: 403 }
+              {
+                error: 'Access request pending. The chart owner needs to approve your request.',
+                pending: true,
+              },
+              { status: 403 },
             );
           }
         } else {
           const permStatus = existingPermission[0].status;
           if (permStatus === 'pending') {
             return Response.json(
-              { error: 'Access request pending. The chart owner needs to approve your request.', pending: true },
-              { status: 403 }
+              {
+                error: 'Access request pending. The chart owner needs to approve your request.',
+                pending: true,
+              },
+              { status: 403 },
             );
           } else if (permStatus === 'rejected') {
             return Response.json(
               { error: 'Access request was denied by the chart owner.', rejected: true },
-              { status: 403 }
+              { status: 403 },
             );
           }
         }
@@ -125,7 +131,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
               `;
             }
           } catch {
-            console.log('Token verification failed, allowing anonymous access due to link sharing level');
+            console.log(
+              'Token verification failed, allowing anonymous access due to link sharing level',
+            );
           }
         }
       }
@@ -206,10 +214,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({
       chartData: result[0].chart_data,
       chartId: result[0].id,
-      canEdit: !!editToken
+      canEdit: !!editToken,
     });
   } catch (error) {
     console.error('Error fetching chart:', error);
     return Response.json({ error: 'Failed to fetch chart' }, { status: 500 });
   }
-};
+}

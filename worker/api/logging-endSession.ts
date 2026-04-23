@@ -57,4 +57,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error ending session:', error);
     return Response.json({ error: 'Failed to end session' }, { status: 500 });
   }
-};
+}

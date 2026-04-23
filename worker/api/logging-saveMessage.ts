@@ -36,7 +36,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
 
     if (data.role !== 'user' && data.role !== 'assistant') {
-      return Response.json({ error: 'Invalid role. Must be "user" or "assistant"' }, { status: 400 });
+      return Response.json(
+        { error: 'Invalid role. Must be "user" or "assistant"' },
+        { status: 400 },
+      );
     }
 
     // Content must be a non-empty string. The client sends the raw
@@ -92,4 +95,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error saving message:', error);
     return Response.json({ error: 'Failed to save message' }, { status: 500 });
   }
-};
+}

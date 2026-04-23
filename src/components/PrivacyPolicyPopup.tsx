@@ -97,8 +97,8 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
 
         {/* Content */}
         <p className="text-sm text-gray-600 text-center mb-5">
-          To improve the AI assistant, we collect usage data such as chat messages
-          and graph edits. You can change this anytime under Account &gt; Data &amp; Privacy.
+          To improve the AI assistant, we collect usage data such as chat messages and graph edits.
+          You can change this anytime under Account &gt; Data &amp; Privacy.
         </p>
 
         {/* Actions */}
@@ -118,9 +118,7 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
                 onChange={(e) => setShareData(e.target.checked)}
                 className="h-3.5 w-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 focus:ring-offset-0"
               />
-              <span className="text-xs text-gray-500">
-                Help improve AI by sharing usage data
-              </span>
+              <span className="text-xs text-gray-500">Help improve AI by sharing usage data</span>
             </label>
 
             <a

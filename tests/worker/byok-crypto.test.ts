@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { encryptByokKey, decryptByokKey } from '../../worker/_shared/byok-crypto';
 
 // Generate a test master key (32 bytes, base64). Do NOT use in production.
-const TEST_MASTER_KEY = btoa(
-  String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))),
-);
+const TEST_MASTER_KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 
 describe('byok-crypto round-trip', () => {
   it('encrypts and decrypts a key', async () => {

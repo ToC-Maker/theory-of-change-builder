@@ -1,11 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  ReactNode,
-} from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 import { clearKeySpend, clearAllByokLocalState } from '../utils/byokSpend';
 
@@ -22,10 +15,10 @@ export interface SubmitKeyResult {
 }
 
 export interface ApiKeyContextValue {
-  hasKey: boolean;              // server has a stored BYOK key for this user
-  keyLast4: string | null;      // for UI display, null if no key
-  verified: boolean;            // true after most recent successful validation
-  useForChat: boolean;          // user toggle; persisted in localStorage
+  hasKey: boolean; // server has a stored BYOK key for this user
+  keyLast4: string | null; // for UI display, null if no key
+  verified: boolean; // true after most recent successful validation
+  useForChat: boolean; // user toggle; persisted in localStorage
   setUseForChat: (v: boolean) => void;
   submitKey: (raw: string) => Promise<SubmitKeyResult>;
   clearKey: () => Promise<void>;

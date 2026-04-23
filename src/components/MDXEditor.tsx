@@ -11,7 +11,7 @@ import {
   BoldItalicUnderlineToggles,
   ListsToggle,
   BlockTypeSelect,
-  Separator
+  Separator,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
 
@@ -27,10 +27,10 @@ interface MDXEditorComponentProps {
 export function MDXEditorComponent({
   markdown,
   onChange,
-  placeholder = "Enter text...",
+  placeholder = 'Enter text...',
   readOnly = false,
   simple = false,
-  fontFamily
+  fontFamily,
 }: MDXEditorComponentProps) {
   return (
     <div
@@ -47,29 +47,35 @@ export function MDXEditorComponent({
         readOnly={readOnly}
         plugins={[
           // Simple mode for titles - minimal plugins
-          ...(simple ? [] : [
-            headingsPlugin(),
-            listsPlugin(),
-            quotePlugin(),
-            thematicBreakPlugin(),
-            linkPlugin(),
-          ]),
+          ...(simple
+            ? []
+            : [
+                headingsPlugin(),
+                listsPlugin(),
+                quotePlugin(),
+                thematicBreakPlugin(),
+                linkPlugin(),
+              ]),
           ...(readOnly || simple ? [] : [markdownShortcutPlugin()]),
 
           // Toolbar with basic formatting (only if not read-only and not simple)
-          ...(readOnly || simple ? [] : [toolbarPlugin({
-            toolbarContents: () => (
-              <>
-                <UndoRedo />
-                <Separator />
-                <BoldItalicUnderlineToggles />
-                <Separator />
-                <ListsToggle />
-                <Separator />
-                <BlockTypeSelect />
-              </>
-            )
-          })])
+          ...(readOnly || simple
+            ? []
+            : [
+                toolbarPlugin({
+                  toolbarContents: () => (
+                    <>
+                      <UndoRedo />
+                      <Separator />
+                      <BoldItalicUnderlineToggles />
+                      <Separator />
+                      <ListsToggle />
+                      <Separator />
+                      <BlockTypeSelect />
+                    </>
+                  ),
+                }),
+              ]),
         ]}
         contentEditableClassName="mdx-editor-content"
       />

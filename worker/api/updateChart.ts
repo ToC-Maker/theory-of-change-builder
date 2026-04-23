@@ -6,7 +6,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // chartData is round-tripped to JSONB — we don't field-validate it here.
   let body: { editToken?: string; chartData?: unknown };
   try {
-    body = await request.json() as { editToken?: string; chartData?: unknown };
+    body = (await request.json()) as { editToken?: string; chartData?: unknown };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
@@ -20,7 +20,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const sql = getDb(env);
     const chartTitle =
-      (chartData && typeof chartData === 'object' && typeof (chartData as { title?: unknown }).title === 'string')
+      chartData &&
+      typeof chartData === 'object' &&
+      typeof (chartData as { title?: unknown }).title === 'string'
         ? (chartData as { title: string }).title
         : 'Theory of Change';
 
@@ -30,9 +32,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // revoked) could still overwrite the chart as long as they remembered the
     // edit URL. Anon charts (user_id IS NULL) and owned charts with
     // link_sharing_level='editor' still rely on the edit token only.
-    const chartRows = await sql`
+    const chartRows = (await sql`
       SELECT id, user_id, link_sharing_level FROM charts WHERE edit_token = ${editToken}
-    ` as { id: string; user_id: string | null; link_sharing_level: string | null }[];
+    `) as { id: string; user_id: string | null; link_sharing_level: string | null }[];
 
     if (!chartRows || chartRows.length === 0) {
       return Response.json({ error: 'Chart not found or invalid edit token' }, { status: 404 });
@@ -66,10 +68,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
 
       if (decoded.sub !== chart.user_id) {
-        const perm = await sql`
+        const perm = (await sql`
           SELECT status FROM chart_permissions
           WHERE chart_id = ${chart.id} AND user_id = ${decoded.sub}
-        ` as { status: string }[];
+        `) as { status: string }[];
         if (!perm.length || perm[0].status !== 'approved') {
           return Response.json(
             { error: 'You do not have permission to edit this chart.' },
@@ -79,14 +81,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     }
 
-    const result = await sql`
+    const result = (await sql`
       UPDATE charts
       SET chart_data = ${JSON.stringify(chartData)},
           chart_title = ${chartTitle},
           updated_at = NOW()
       WHERE edit_token = ${editToken}
       RETURNING id
-    ` as { id: string }[];
+    `) as { id: string }[];
 
     if (!result || result.length === 0) {
       return Response.json({ error: 'Chart not found or invalid edit token' }, { status: 404 });
@@ -126,4 +128,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error updating chart:', error);
     return Response.json({ error: 'Failed to update chart' }, { status: 500 });
   }
-};
+}

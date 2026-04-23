@@ -51,7 +51,7 @@ export function estimateCostLowBound(inputTokens: number, model: string): number
   if (rate == null) {
     console.warn(
       `[cost] unknown model "${model}" passed to estimateCostLowBound; ` +
-      `falling back to max input rate ($${MAX_INPUT_RATE_USD_PER_MTOK}/MTok)`,
+        `falling back to max input rate ($${MAX_INPUT_RATE_USD_PER_MTOK}/MTok)`,
     );
     return (inputTokens / 1_000_000) * MAX_INPUT_RATE_USD_PER_MTOK;
   }

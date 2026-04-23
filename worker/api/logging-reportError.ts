@@ -32,7 +32,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     if (!data.error_id || !data.error_name || !data.error_message) {
       return Response.json(
         { error: 'Missing required fields: error_id, error_name, error_message' },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -124,4 +124,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error saving error report:', error);
     return Response.json({ error: 'Failed to save error report' }, { status: 500 });
   }
-};
+}

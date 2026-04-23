@@ -127,14 +127,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
               'anthropic-version': '2023-06-01',
               'anthropic-beta': 'files-api-2025-04-14',
             },
-          }
+          },
         );
         // Accept 2xx and 404 (already gone); log anything else but don't fail
         // the client — the row delete below is still the right action.
         if (!upstream.ok && upstream.status !== 404) {
           const errText = await upstream.text().catch(() => '');
           console.error(
-            `[delete-file] Anthropic DELETE returned ${upstream.status} for file_id=${fileId}: ${errText}`
+            `[delete-file] Anthropic DELETE returned ${upstream.status} for file_id=${fileId}: ${errText}`,
           );
         }
       } catch (err) {

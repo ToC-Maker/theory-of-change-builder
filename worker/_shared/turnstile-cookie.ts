@@ -59,7 +59,10 @@ export async function signTurnstileCookie(
   salt: string,
   ttlSeconds: number = TOCB_ANON_COOKIE_TTL_SECONDS,
 ): Promise<string> {
-  const payload = JSON.stringify({ anon_id: anonId, exp: Math.floor(Date.now() / 1000) + ttlSeconds });
+  const payload = JSON.stringify({
+    anon_id: anonId,
+    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+  });
   const payloadB64 = b64urlEncode(payload);
   const sigBytes = await hmacSha256Purpose(salt, 'turnstile', payloadB64);
   const sigB64 = b64urlEncode(sigBytes);
@@ -80,7 +83,8 @@ export async function verifyTurnstileCookie(
   // Constant-time comparison
   if (expectedSigB64.length !== sigB64.length) return 'invalid';
   let diff = 0;
-  for (let i = 0; i < sigB64.length; i++) diff |= expectedSigB64.charCodeAt(i) ^ sigB64.charCodeAt(i);
+  for (let i = 0; i < sigB64.length; i++)
+    diff |= expectedSigB64.charCodeAt(i) ^ sigB64.charCodeAt(i);
   if (diff !== 0) return 'invalid';
   // Defensive JSON.parse — cast to unknown-shaped payload and re-assert
   // every field before use. `JSON.parse` can return anything, and we don't

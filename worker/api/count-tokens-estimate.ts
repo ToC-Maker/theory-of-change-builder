@@ -22,7 +22,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     chartId?: unknown;
   };
   try {
-    body = await request.json() as typeof body;
+    body = (await request.json()) as typeof body;
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
@@ -135,9 +135,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '');
-    console.error(
-      `[count-tokens-estimate] upstream returned ${upstream.status}: ${errText}`,
-    );
+    console.error(`[count-tokens-estimate] upstream returned ${upstream.status}: ${errText}`);
     // Surface Anthropic's own error message so the client can render
     // something actionable — previously the composer just said "service
     // unavailable" for all failure modes, which hid shape-mismatch bugs
@@ -162,7 +160,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
   let parsed: { input_tokens?: number };
   try {
-    parsed = await upstream.json() as typeof parsed;
+    parsed = (await upstream.json()) as typeof parsed;
   } catch (err) {
     console.error('[count-tokens-estimate] JSON parse failed:', err);
     return Response.json({ error: 'estimation_unavailable' }, { status: 503 });
@@ -190,9 +188,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // check. An owned chart + no JWT is refused — returning cache data for
   // a chart the caller can't otherwise read would be an IDOR.
   if (chartId) {
-    const chartRows = await sql`
+    const chartRows = (await sql`
       SELECT user_id FROM charts WHERE id = ${chartId}
-    ` as { user_id: string | null }[];
+    `) as { user_id: string | null }[];
     const chartOwnerId = chartRows[0]?.user_id ?? null;
     if (chartOwnerId) {
       const token = extractToken(request.headers.get('authorization'));
@@ -203,10 +201,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
           if (decoded.sub === chartOwnerId) {
             allowed = true;
           } else {
-            const perm = await sql`
+            const perm = (await sql`
               SELECT status FROM chart_permissions
               WHERE chart_id = ${chartId} AND user_id = ${decoded.sub}
-            ` as { status: string }[];
+            `) as { status: string }[];
             allowed = !!perm.length && perm[0].status === 'approved';
           }
         } catch {
@@ -226,17 +224,19 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       // (older clients) we fall back to the file_id-only query; this is
       // retained for compatibility and will be removed once all clients
       // carry the field.
-      const rows = (chartId
-        ? await sql`
+      const rows = (
+        chartId
+          ? await sql`
             SELECT file_id, input_tokens
             FROM chart_files
             WHERE file_id = ANY(${strippedFileIds}) AND chart_id = ${chartId}
           `
-        : await sql`
+          : await sql`
             SELECT file_id, input_tokens
             FROM chart_files
             WHERE file_id = ANY(${strippedFileIds})
-          `) as { file_id: string; input_tokens: string | number | null }[];
+          `
+      ) as { file_id: string; input_tokens: string | number | null }[];
       // Neon returns BIGINT as a string (safe for values > 2^53). Build a
       // lookup so we can bucket each file_id by whether it was in the draft
       // (last) message or history.

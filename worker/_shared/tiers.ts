@@ -42,8 +42,7 @@ export const CAP_OVERSPEND_TOLERANCE_FRACTION = 0.05;
 const CAP_TOLERANCE_MICRO_USD = BigInt(
   Math.round(Number(LIFETIME_CAP_MICRO_USD) * CAP_OVERSPEND_TOLERANCE_FRACTION),
 );
-export const EFFECTIVE_LIFETIME_CAP_MICRO_USD =
-  LIFETIME_CAP_MICRO_USD + CAP_TOLERANCE_MICRO_USD;
+export const EFFECTIVE_LIFETIME_CAP_MICRO_USD = LIFETIME_CAP_MICRO_USD + CAP_TOLERANCE_MICRO_USD;
 
 // Re-export the Anthropic-imposed request/file ceilings under the names
 // existing callers use. Single source of truth is shared/anthropic-limits.ts.
@@ -69,6 +68,6 @@ export function tierFor(actorId: string, hasByokHeader: boolean): Tier {
   return 'free';
 }
 
-export const isCapped      = (tier: Tier) => tier !== 'byok';
-export const allowByok     = (tier: Tier) => tier !== 'anon';
+export const isCapped = (tier: Tier) => tier !== 'byok';
+export const allowByok = (tier: Tier) => tier !== 'anon';
 export const needTurnstile = (tier: Tier) => tier === 'anon';

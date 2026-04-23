@@ -49,10 +49,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // snapshot log with garbage that'd break later diffs.
     const gd = data.graph_data as unknown;
     if (
-      !gd
-      || typeof gd !== 'object'
-      || Array.isArray(gd)
-      || !Array.isArray((gd as { sections?: unknown }).sections)
+      !gd ||
+      typeof gd !== 'object' ||
+      Array.isArray(gd) ||
+      !Array.isArray((gd as { sections?: unknown }).sections)
     ) {
       return Response.json({ error: 'Invalid graph_data shape' }, { status: 400 });
     }
@@ -109,4 +109,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error saving snapshot:', error);
     return Response.json({ error: 'Failed to save snapshot' }, { status: 500 });
   }
-};
+}

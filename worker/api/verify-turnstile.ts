@@ -47,10 +47,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
     try {
       const status = await verifyTurnstileCookie(cookieValue, anonId, env.IP_HASH_SALT);
-      return new Response(
-        JSON.stringify({ valid: status === 'ok' }),
-        { status: 200, headers: baseHeaders },
-      );
+      return new Response(JSON.stringify({ valid: status === 'ok' }), {
+        status: 200,
+        headers: baseHeaders,
+      });
     } catch (err) {
       console.error('[verify-turnstile] status check failed:', err);
       return new Response(JSON.stringify({ valid: false }), { status: 200, headers: baseHeaders });
@@ -59,20 +59,20 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
   let body: { token?: unknown };
   try {
-    body = await request.json() as { token?: unknown };
+    body = (await request.json()) as { token?: unknown };
   } catch {
-    return new Response(
-      JSON.stringify({ error: 'Invalid JSON in request body' }),
-      { status: 400, headers: baseHeaders },
-    );
+    return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+      status: 400,
+      headers: baseHeaders,
+    });
   }
 
   const token = body.token;
   if (typeof token !== 'string' || !token) {
-    return new Response(
-      JSON.stringify({ error: 'missing_token' }),
-      { status: 400, headers: baseHeaders },
-    );
+    return new Response(JSON.stringify({ error: 'missing_token' }), {
+      status: 400,
+      headers: baseHeaders,
+    });
   }
 
   // Cloudflare's siteverify still gets remoteip as an anti-abuse signal
@@ -95,39 +95,36 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // Worker waiting for a response the user doesn't need. On timeout we
     // fail-closed (same as a network error) — the existing posture — so
     // the user just re-solves the widget instead of waiting.
-    verifyResp = await fetch(
-      'https://challenges.cloudflare.com/turnstile/v0/siteverify',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: form.toString(),
-        signal: AbortSignal.timeout(3000),
-      },
-    );
+    verifyResp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+      signal: AbortSignal.timeout(3000),
+    });
   } catch (err) {
     console.error('[verify-turnstile] siteverify fetch failed:', err);
-    return new Response(
-      JSON.stringify({ error: 'turnstile_failed' }),
-      { status: 401, headers: baseHeaders },
-    );
+    return new Response(JSON.stringify({ error: 'turnstile_failed' }), {
+      status: 401,
+      headers: baseHeaders,
+    });
   }
 
   let result: { success?: boolean; 'error-codes'?: string[] };
   try {
-    result = await verifyResp.json() as typeof result;
+    result = (await verifyResp.json()) as typeof result;
   } catch (err) {
     console.error('[verify-turnstile] siteverify JSON parse failed:', err);
-    return new Response(
-      JSON.stringify({ error: 'turnstile_failed' }),
-      { status: 401, headers: baseHeaders },
-    );
+    return new Response(JSON.stringify({ error: 'turnstile_failed' }), {
+      status: 401,
+      headers: baseHeaders,
+    });
   }
 
   if (!result.success) {
-    return new Response(
-      JSON.stringify({ error: 'turnstile_failed' }),
-      { status: 401, headers: baseHeaders },
-    );
+    return new Response(JSON.stringify({ error: 'turnstile_failed' }), {
+      status: 401,
+      headers: baseHeaders,
+    });
   }
 
   const cookieValue = await signTurnstileCookie(

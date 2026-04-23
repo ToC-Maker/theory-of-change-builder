@@ -79,12 +79,20 @@ export function addByokSpend(
 }
 
 export function clearChartSpend(chartId: string): void {
-  try { localStorage.removeItem(CHART_PREFIX + chartId); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(CHART_PREFIX + chartId);
+  } catch {
+    /* ignore */
+  }
   emitSpendChanged();
 }
 
 export function clearKeySpend(keyLast4: string): void {
-  try { localStorage.removeItem(KEY_PREFIX + keyLast4); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(KEY_PREFIX + keyLast4);
+  } catch {
+    /* ignore */
+  }
   emitSpendChanged();
 }
 
@@ -97,15 +105,23 @@ export function clearKeySpend(keyLast4: string): void {
 export function clearAllByokLocalState(): void {
   try {
     localStorage.removeItem('byok_use_for_chat');
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   try {
     const keys = Object.keys(localStorage);
     for (const k of keys) {
       if (k.startsWith(CHART_PREFIX) || k.startsWith(KEY_PREFIX)) {
-        try { localStorage.removeItem(k); } catch { /* ignore */ }
+        try {
+          localStorage.removeItem(k);
+        } catch {
+          /* ignore */
+        }
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   emitSpendChanged();
 }
 

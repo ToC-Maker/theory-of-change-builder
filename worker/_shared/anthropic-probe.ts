@@ -12,7 +12,7 @@
  */
 export async function probeAnthropicKey(
   userKey: string,
-  logPrefix: string
+  logPrefix: string,
 ): Promise<'verified' | 'invalid' | 'error'> {
   let resp: Response;
   try {
@@ -37,7 +37,11 @@ export async function probeAnthropicKey(
   if (resp.status === 401 || resp.status === 403) return 'invalid';
 
   let detail = '';
-  try { detail = await resp.text(); } catch { /* ignore */ }
+  try {
+    detail = await resp.text();
+  } catch {
+    /* ignore */
+  }
   console.error(`[${logPrefix}] Anthropic probe: unexpected status ${resp.status}`, detail);
   return 'error';
 }

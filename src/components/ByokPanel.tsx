@@ -1,7 +1,13 @@
 import React, { useId, useState } from 'react';
 import { useApiKey } from '../contexts/ApiKeyContext';
 import { useAuth0 } from '@auth0/auth0-react';
-import { KeyIcon, EyeIcon, EyeSlashIcon, CheckCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+import {
+  KeyIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  CheckCircleIcon,
+  ArrowTopRightOnSquareIcon,
+} from '@heroicons/react/24/outline';
 
 export interface ByokPanelProps {
   onSubmitted?: () => void;
@@ -53,8 +59,7 @@ export function ByokPanel({
       const result = await submitKey(trimmed);
       if (!result.verified) {
         setError(
-          result.error ??
-            "This key wasn't accepted by Anthropic. Double-check it and try again."
+          result.error ?? "This key wasn't accepted by Anthropic. Double-check it and try again.",
         );
         return;
       }
@@ -70,17 +75,17 @@ export function ByokPanel({
     }
   };
 
-  const wrapperClass = [
-    'bg-white rounded-lg shadow-sm border border-gray-200 p-4',
-    className ?? '',
-  ]
+  const wrapperClass = ['bg-white rounded-lg shadow-sm border border-gray-200 p-4', className ?? '']
     .filter(Boolean)
     .join(' ');
 
   if (!authLoading && !isAuthenticated) {
     return (
       <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
-        <h3 id={`${inputId}-title`} className="flex items-start gap-2 text-base font-semibold text-gray-900">
+        <h3
+          id={`${inputId}-title`}
+          className="flex items-start gap-2 text-base font-semibold text-gray-900"
+        >
           <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
           <span>Sign in to add your Anthropic API key</span>
         </h3>
@@ -112,7 +117,10 @@ export function ByokPanel({
 
   return (
     <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
-      <h3 id={`${inputId}-title`} className="flex items-start gap-2 text-base font-semibold text-gray-900">
+      <h3
+        id={`${inputId}-title`}
+        className="flex items-start gap-2 text-base font-semibold text-gray-900"
+      >
         <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
         <span>Add your Anthropic API key</span>
       </h3>
@@ -126,7 +134,12 @@ export function ByokPanel({
             <CheckCircleIcon className="w-4 h-4 flex-shrink-0" aria-hidden />
             <span>
               Key verified
-              {confirmationLast4 ? <> &middot; ends in <code className="font-mono">{confirmationLast4}</code></> : null}
+              {confirmationLast4 ? (
+                <>
+                  {' '}
+                  &middot; ends in <code className="font-mono">{confirmationLast4}</code>
+                </>
+              ) : null}
             </span>
           </div>
           <button
@@ -158,13 +171,13 @@ export function ByokPanel({
               (sign in if prompted).
             </li>
             <li>
-              Click <strong>Create Key</strong>, name it (e.g. &ldquo;Theory of
-              Change&rdquo;), copy the <code className="font-mono">sk-ant-&hellip;</code>{' '}
-              value, and paste it below. The key is only shown once.
+              Click <strong>Create Key</strong>, name it (e.g. &ldquo;Theory of Change&rdquo;), copy
+              the <code className="font-mono">sk-ant-&hellip;</code> value, and paste it below. The
+              key is only shown once.
             </li>
             <li>
-              If you haven&apos;t already, add a payment method under
-              {' '}Billing &rarr; add credit or a card.
+              If you haven&apos;t already, add a payment method under Billing &rarr; add credit or a
+              card.
             </li>
           </ol>
 

@@ -98,9 +98,9 @@ export async function handler(
   //   files to a victim's chart (cluttering their Files API usage + quota).
   {
     const authCheckSql = getDb(env);
-    const chartRows = await authCheckSql`
+    const chartRows = (await authCheckSql`
       SELECT user_id, edit_token FROM charts WHERE id = ${chartId}
-    ` as { user_id: string | null; edit_token: string }[];
+    `) as { user_id: string | null; edit_token: string }[];
     if (!chartRows.length) {
       return Response.json({ error: 'chart_not_found' }, { status: 404 });
     }
@@ -122,14 +122,14 @@ export async function handler(
         return Response.json({ error: 'forbidden' }, { status: 403 });
       }
       if (decoded.sub !== chartOwnerId) {
-        const perm = await authCheckSql`
+        const perm = (await authCheckSql`
           SELECT permission_level, status FROM chart_permissions
           WHERE chart_id = ${chartId} AND user_id = ${decoded.sub}
-        ` as { permission_level: string; status: string }[];
-        const ok = perm.length && (
-          perm[0].permission_level === 'owner'
-          || (perm[0].permission_level === 'edit' && perm[0].status === 'approved')
-        );
+        `) as { permission_level: string; status: string }[];
+        const ok =
+          perm.length &&
+          (perm[0].permission_level === 'owner' ||
+            (perm[0].permission_level === 'edit' && perm[0].status === 'approved'));
         if (!ok) {
           return Response.json({ error: 'forbidden' }, { status: 403 });
         }
@@ -155,7 +155,7 @@ export async function handler(
   if (file.size > FILE_UPLOAD_LIMIT_BYTES) {
     return Response.json(
       { error: 'file_too_large', limit_bytes: FILE_UPLOAD_LIMIT_BYTES },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -194,16 +194,13 @@ export async function handler(
     });
   } catch (err) {
     console.error('[upload-file] Upstream fetch failed:', err);
-    return Response.json(
-      { error: 'anthropic_upload_failed', status: 502 },
-      { status: 502 }
-    );
+    return Response.json({ error: 'anthropic_upload_failed', status: 502 }, { status: 502 });
   }
 
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '');
     console.error(
-      `[upload-file] Anthropic rejected upload (status=${upstream.status}): ${errText}`
+      `[upload-file] Anthropic rejected upload (status=${upstream.status}): ${errText}`,
     );
     // Surface Anthropic's message so the client can render something
     // actionable (same shape as the pdf_too_many_pages path below).
@@ -220,7 +217,7 @@ export async function handler(
         status: upstream.status,
         upstream_message: upstreamMessage,
       },
-      { status: 502 }
+      { status: 502 },
     );
   }
 
@@ -231,22 +228,16 @@ export async function handler(
     size_bytes?: number;
   };
   try {
-    upstreamJson = await upstream.json() as typeof upstreamJson;
+    upstreamJson = (await upstream.json()) as typeof upstreamJson;
   } catch (err) {
     console.error('[upload-file] Failed to parse Anthropic response:', err);
-    return Response.json(
-      { error: 'anthropic_upload_failed', status: 502 },
-      { status: 502 }
-    );
+    return Response.json({ error: 'anthropic_upload_failed', status: 502 }, { status: 502 });
   }
 
   const fileId = upstreamJson.id;
   if (!fileId) {
     console.error('[upload-file] Anthropic response missing file id:', upstreamJson);
-    return Response.json(
-      { error: 'anthropic_upload_failed', status: 502 },
-      { status: 502 }
-    );
+    return Response.json({ error: 'anthropic_upload_failed', status: 502 }, { status: 502 });
   }
 
   const filename = upstreamJson.filename ?? file.name;
@@ -305,11 +296,14 @@ export async function handler(
         }),
       });
       if (countResp.ok) {
-        const data = await countResp.json() as { input_tokens?: number };
+        const data = (await countResp.json()) as { input_tokens?: number };
         if (typeof data.input_tokens === 'number' && data.input_tokens >= 0) {
           inputTokens = data.input_tokens;
         } else {
-          countTokensFailure = { reason: 'unexpected_response_shape', detail: JSON.stringify(data).slice(0, 300) };
+          countTokensFailure = {
+            reason: 'unexpected_response_shape',
+            detail: JSON.stringify(data).slice(0, 300),
+          };
         }
       } else {
         const body = await countResp.text().catch(() => '');
@@ -339,7 +333,10 @@ export async function handler(
               },
             });
           } catch (delErr) {
-            console.warn('[upload-file] Failed to delete orphaned file_id after page-limit rejection:', delErr);
+            console.warn(
+              '[upload-file] Failed to delete orphaned file_id after page-limit rejection:',
+              delErr,
+            );
           }
           const headersOut = new Headers({ 'content-type': 'application/json' });
           if (anonSetCookie) headersOut.append('Set-Cookie', anonSetCookie);
@@ -380,19 +377,24 @@ export async function handler(
           'anthropic-version': '2023-06-01',
           'anthropic-beta': 'files-api-2025-04-14',
         },
-      }).then(async (r) => {
-        if (!r.ok && r.status !== 404) {
-          console.error(
-            `[upload-file] Anthropic rollback DELETE returned ${r.status} for file_id=${fileId}:`,
-            await r.text().catch(() => ''),
-          );
-        }
-      }).catch((delErr) => {
-        console.error('[upload-file] Anthropic rollback DELETE fetch failed:', delErr);
-      }),
+      })
+        .then(async (r) => {
+          if (!r.ok && r.status !== 404) {
+            console.error(
+              `[upload-file] Anthropic rollback DELETE returned ${r.status} for file_id=${fileId}:`,
+              await r.text().catch(() => ''),
+            );
+          }
+        })
+        .catch((delErr) => {
+          console.error('[upload-file] Anthropic rollback DELETE fetch failed:', delErr);
+        }),
     );
     const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    console.error(`[upload-file] DB insert failed for file_id=${fileId}, chart_id=${chartId}:`, err);
+    console.error(
+      `[upload-file] DB insert failed for file_id=${fileId}, chart_id=${chartId}:`,
+      err,
+    );
 
     // Persist the exact PG error to logging_errors — preview deploys have
     // no log stream, so DB is our only signal. Try a separate INSERT; if

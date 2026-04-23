@@ -6,7 +6,7 @@ async function requireOwner(
   sql: ReturnType<typeof getDb>,
   chartId: string,
   userId: string,
-  action: string
+  action: string,
 ): Promise<Response | null> {
   const ownerCheck = await sql`
     SELECT permission_level FROM chart_permissions
@@ -74,20 +74,32 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       const chartInfo = await sql`
         SELECT link_sharing_level FROM charts WHERE id = ${chartId}
       `;
-      const linkSharingLevel = chartInfo.length > 0 ? chartInfo[0].link_sharing_level : 'restricted';
+      const linkSharingLevel =
+        chartInfo.length > 0 ? chartInfo[0].link_sharing_level : 'restricted';
 
       return Response.json({ permissions, linkSharingLevel });
     }
 
     // PATCH - Update a user's permission level or approve/reject access
     if (method === 'PATCH') {
-      let patchBody: { chartId?: string; targetUserId?: string; permissionLevel?: string; action?: string };
-      try { patchBody = await request.json() as typeof patchBody; }
-      catch { return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 }); }
+      let patchBody: {
+        chartId?: string;
+        targetUserId?: string;
+        permissionLevel?: string;
+        action?: string;
+      };
+      try {
+        patchBody = (await request.json()) as typeof patchBody;
+      } catch {
+        return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+      }
       const { chartId, targetUserId, permissionLevel, action } = patchBody;
 
       if (!chartId || !targetUserId) {
-        return Response.json({ error: 'Chart ID and target user ID are required' }, { status: 400 });
+        return Response.json(
+          { error: 'Chart ID and target user ID are required' },
+          { status: 400 },
+        );
       }
 
       const denied = await requireOwner(sql, chartId, authenticatedUserId, 'manage permissions');
@@ -108,17 +120,24 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
         return Response.json({
           success: true,
-          message: action === 'approve' ? 'Access approved successfully' : 'Access rejected successfully'
+          message:
+            action === 'approve' ? 'Access approved successfully' : 'Access rejected successfully',
         });
       }
 
       if (permissionLevel) {
         if (!['owner', 'edit'].includes(permissionLevel)) {
-          return Response.json({ error: 'Permission level must be "owner" or "edit"' }, { status: 400 });
+          return Response.json(
+            { error: 'Permission level must be "owner" or "edit"' },
+            { status: 400 },
+          );
         }
 
         if (targetUserId === authenticatedUserId) {
-          return Response.json({ error: 'Cannot change your own permission level' }, { status: 400 });
+          return Response.json(
+            { error: 'Cannot change your own permission level' },
+            { status: 400 },
+          );
         }
 
         const result = await sql`
@@ -135,25 +154,42 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         return Response.json({ success: true, message: 'Permission updated successfully' });
       }
 
-      return Response.json({ error: 'Either permissionLevel or action must be provided' }, { status: 400 });
+      return Response.json(
+        { error: 'Either permissionLevel or action must be provided' },
+        { status: 400 },
+      );
     }
 
     // PUT - Update link sharing settings
     if (method === 'PUT') {
       let putBody: { chartId?: string; linkSharingLevel?: string };
-      try { putBody = await request.json() as typeof putBody; }
-      catch { return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 }); }
+      try {
+        putBody = (await request.json()) as typeof putBody;
+      } catch {
+        return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+      }
       const { chartId, linkSharingLevel } = putBody;
 
       if (!chartId || !linkSharingLevel) {
-        return Response.json({ error: 'Chart ID and link sharing level are required' }, { status: 400 });
+        return Response.json(
+          { error: 'Chart ID and link sharing level are required' },
+          { status: 400 },
+        );
       }
 
       if (!['restricted', 'viewer', 'editor'].includes(linkSharingLevel)) {
-        return Response.json({ error: 'Link sharing level must be "restricted", "viewer", or "editor"' }, { status: 400 });
+        return Response.json(
+          { error: 'Link sharing level must be "restricted", "viewer", or "editor"' },
+          { status: 400 },
+        );
       }
 
-      const denied = await requireOwner(sql, chartId, authenticatedUserId, 'change link sharing settings');
+      const denied = await requireOwner(
+        sql,
+        chartId,
+        authenticatedUserId,
+        'change link sharing settings',
+      );
       if (denied) return denied;
 
       const result = await sql`
@@ -166,18 +202,27 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         return Response.json({ error: 'Chart not found' }, { status: 404 });
       }
 
-      return Response.json({ success: true, message: 'Link sharing settings updated successfully' });
+      return Response.json({
+        success: true,
+        message: 'Link sharing settings updated successfully',
+      });
     }
 
     // DELETE - Remove a permission
     if (method === 'DELETE') {
       let deleteBody: { chartId?: string; targetUserId?: string };
-      try { deleteBody = await request.json() as typeof deleteBody; }
-      catch { return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 }); }
+      try {
+        deleteBody = (await request.json()) as typeof deleteBody;
+      } catch {
+        return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+      }
       const { chartId, targetUserId } = deleteBody;
 
       if (!chartId || !targetUserId) {
-        return Response.json({ error: 'Chart ID and target user ID are required' }, { status: 400 });
+        return Response.json(
+          { error: 'Chart ID and target user ID are required' },
+          { status: 400 },
+        );
       }
 
       const denied = await requireOwner(sql, chartId, authenticatedUserId, 'remove permissions');
@@ -211,4 +256,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error managing permissions:', error);
     return Response.json({ error: 'Failed to manage permissions' }, { status: 500 });
   }
-};
+}

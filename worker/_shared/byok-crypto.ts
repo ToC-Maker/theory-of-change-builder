@@ -13,7 +13,7 @@
  */
 
 function importMasterKey(b64: string): Promise<CryptoKey> {
-  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   if (bytes.byteLength !== 32) {
     throw new Error(`BYOK_ENCRYPTION_KEY must decode to 32 bytes; got ${bytes.byteLength}`);
   }
@@ -47,7 +47,11 @@ export async function decryptByokKey(
   const iv = encrypted.slice(0, 12);
   const ctWithTag = encrypted.slice(12);
   const aad = new TextEncoder().encode(userId);
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad }, key, ctWithTag);
+  const pt = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv, additionalData: aad },
+    key,
+    ctWithTag,
+  );
   return new TextDecoder().decode(pt);
 }
 

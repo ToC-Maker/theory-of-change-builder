@@ -38,14 +38,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       const hasRecord = result.length > 0;
       return Response.json({
         opted_out: hasRecord ? result[0].opted_out : false,
-        has_record: hasRecord
+        has_record: hasRecord,
       });
     }
 
     // POST
     let parsed: { opted_out: boolean };
     try {
-      parsed = await request.json() as { opted_out: boolean };
+      parsed = (await request.json()) as { opted_out: boolean };
     } catch {
       return Response.json({ error: 'Invalid JSON' }, { status: 400 });
     }
@@ -66,4 +66,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('[logging-preference] Error:', error);
     return Response.json({ error: 'Failed to process preference' }, { status: 500 });
   }
-};
+}

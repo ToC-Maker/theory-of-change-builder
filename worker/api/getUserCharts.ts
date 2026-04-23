@@ -45,12 +45,12 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const siteUrl = env.SITE_URL || new URL(request.url).origin;
     interface UserChartRow {
-      chart_id: string
-      chart_title: string | null
-      edit_token: string
-      updated_at: string
-      created_at: string
-      permission_level: string
+      chart_id: string;
+      chart_title: string | null;
+      edit_token: string;
+      updated_at: string;
+      created_at: string;
+      permission_level: string;
     }
     const charts = (result as UserChartRow[]).map((row) => ({
       chartId: row.chart_id,
@@ -59,7 +59,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       viewUrl: `${siteUrl}/chart/${row.chart_id}`,
       updatedAt: row.updated_at,
       createdAt: row.created_at,
-      permissionLevel: row.permission_level
+      permissionLevel: row.permission_level,
     }));
 
     return Response.json({ charts });
@@ -67,4 +67,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error fetching user charts:', error);
     return Response.json({ error: 'Failed to fetch user charts' }, { status: 500 });
   }
-};
+}

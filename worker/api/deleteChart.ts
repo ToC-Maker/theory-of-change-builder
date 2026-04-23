@@ -9,7 +9,7 @@ export async function handler(
 ): Promise<Response> {
   let body: { chartId?: string; editToken?: string };
   try {
-    body = await request.json() as { chartId?: string; editToken?: string };
+    body = (await request.json()) as { chartId?: string; editToken?: string };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
@@ -81,13 +81,14 @@ export async function handler(
 
     // For anon charts the DELETE must match both id and edit_token so a wrong
     // token yields a 401 (no-op) rather than wiping the row.
-    const result = deleteByEditToken !== null
-      ? await sql`
+    const result =
+      deleteByEditToken !== null
+        ? await sql`
           DELETE FROM charts
           WHERE id = ${chartId} AND edit_token = ${deleteByEditToken}
           RETURNING id
         `
-      : await sql`
+        : await sql`
           DELETE FROM charts WHERE id = ${chartId} RETURNING id
         `;
 
@@ -112,11 +113,16 @@ export async function handler(
             'anthropic-version': '2023-06-01',
             'anthropic-beta': 'files-api-2025-04-14',
           },
-        }).then(async (r) => {
-          if (!r.ok && r.status !== 404) {
-            console.error(`[deleteChart] Anthropic file DELETE failed ${r.status}:`, await r.text().catch(() => ''));
-          }
-        }).catch((e) => console.error('[deleteChart] file DELETE fetch error', e)),
+        })
+          .then(async (r) => {
+            if (!r.ok && r.status !== 404) {
+              console.error(
+                `[deleteChart] Anthropic file DELETE failed ${r.status}:`,
+                await r.text().catch(() => ''),
+              );
+            }
+          })
+          .catch((e) => console.error('[deleteChart] file DELETE fetch error', e)),
       );
     }
 
@@ -125,4 +131,4 @@ export async function handler(
     console.error('Error deleting chart:', error);
     return Response.json({ error: 'Failed to delete chart' }, { status: 500 });
   }
-};
+}

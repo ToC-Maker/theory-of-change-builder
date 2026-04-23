@@ -4,10 +4,10 @@
 // or arrays, so internally they treat the current cursor as a loose
 // Record-or-Array<unknown>.
 export type EditInstruction =
-  | { type: "update"; path: string; value: unknown }
-  | { type: "delete"; path: string }
-  | { type: "insert"; path: string; value: unknown }
-  | { type: "push"; path: string; value: unknown }; // For adding to arrays
+  | { type: 'update'; path: string; value: unknown }
+  | { type: 'delete'; path: string }
+  | { type: 'insert'; path: string; value: unknown }
+  | { type: 'push'; path: string; value: unknown }; // For adding to arrays
 
 // Minimal shape the path walker needs: a value that might be an object, an
 // array, or something else entirely. Narrowing happens at each step.
@@ -31,11 +31,11 @@ function indexCursor(cursor: PathCursor, key: string): unknown {
 // Apply structured edits to a graph object
 export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
   if (!graphData) {
-    throw new Error("Graph data is null or undefined");
+    throw new Error('Graph data is null or undefined');
   }
 
   if (!Array.isArray(edits)) {
-    throw new Error("Edit instructions must be an array");
+    throw new Error('Edit instructions must be an array');
   }
 
   const updated = JSON.parse(JSON.stringify(graphData)) as T; // Deep clone
@@ -139,24 +139,28 @@ export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
     // Check for invalid properties - only allow known properties
     const validProperties = ['type', 'path', 'value'];
     const editKeys = Object.keys(edit);
-    const invalidProperties = editKeys.filter(key => !validProperties.includes(key));
+    const invalidProperties = editKeys.filter((key) => !validProperties.includes(key));
     if (invalidProperties.length > 0) {
-      throw new Error(`Edit ${index}: Invalid properties: ${invalidProperties.join(', ')}. Only 'type', 'path', and 'value' are allowed.`);
+      throw new Error(
+        `Edit ${index}: Invalid properties: ${invalidProperties.join(', ')}. Only 'type', 'path', and 'value' are allowed.`,
+      );
     }
 
     // For insert operations, the index should be part of the path, not a separate property
     if (edit.type === 'insert' && edit.path && !edit.path.match(/\.\d+$/)) {
-      throw new Error(`Edit ${index}: Insert operations must specify the index in the path (e.g., "sections.2.columns.0" not "sections.2.columns")`);
+      throw new Error(
+        `Edit ${index}: Insert operations must specify the index in the path (e.g., "sections.2.columns.0" not "sections.2.columns")`,
+      );
     }
 
     // Validate path format
     const path = edit.path.split('.');
-    if (path.length === 0 || path.some(segment => segment.trim() === '')) {
+    if (path.length === 0 || path.some((segment) => segment.trim() === '')) {
       throw new Error(`Edit ${index}: Invalid path format "${edit.path}"`);
     }
 
     // Check for invalid array indices
-    const hasNegativeIndex = path.some(segment => /^-\d+$/.test(segment));
+    const hasNegativeIndex = path.some((segment) => /^-\d+$/.test(segment));
     if (hasNegativeIndex) {
       throw new Error(`Edit ${index}: Negative array indices not allowed in path "${edit.path}"`);
     }
@@ -191,36 +195,52 @@ export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
       // For delete operations, check that the final target exists
       if (edit.type === 'delete') {
         const lastSegment = pathArray[pathArray.length - 1];
-        if (current === null || current === undefined || typeof current !== 'object' || !(lastSegment in (current as Record<string, unknown>))) {
+        if (
+          current === null ||
+          current === undefined ||
+          typeof current !== 'object' ||
+          !(lastSegment in (current as Record<string, unknown>))
+        ) {
           throw new Error(`Cannot delete non-existent property "${lastSegment}"`);
         }
       }
-
     } catch (pathError) {
-      throw new Error(`Edit ${index}: Invalid path "${edit.path}" - ${pathError instanceof Error ? pathError.message : 'Unknown path error'}`);
+      throw new Error(
+        `Edit ${index}: Invalid path "${edit.path}" - ${pathError instanceof Error ? pathError.message : 'Unknown path error'}`,
+      );
     }
 
     // Apply the edit immediately after validation
     switch (edit.type) {
-      case "update":
+      case 'update':
         setAtPath(updated, path, edit.value);
         break;
-      case "insert": {
+      case 'insert': {
         // Ensure nodes have connections array
         const insertValue = edit.value;
-        if (insertValue && typeof insertValue === 'object' && 'id' in insertValue && !(insertValue as Record<string, unknown>).connections) {
+        if (
+          insertValue &&
+          typeof insertValue === 'object' &&
+          'id' in insertValue &&
+          !(insertValue as Record<string, unknown>).connections
+        ) {
           (insertValue as Record<string, unknown>).connections = [];
         }
         insertAtIndex(updated, path, insertValue);
         break;
       }
-      case "delete":
+      case 'delete':
         deleteAtPath(updated, path);
         break;
-      case "push": {
+      case 'push': {
         // Ensure nodes have connections array
         const pushValue = edit.value;
-        if (pushValue && typeof pushValue === 'object' && 'id' in pushValue && !(pushValue as Record<string, unknown>).connections) {
+        if (
+          pushValue &&
+          typeof pushValue === 'object' &&
+          'id' in pushValue &&
+          !(pushValue as Record<string, unknown>).connections
+        ) {
           (pushValue as Record<string, unknown>).connections = [];
         }
         pushToPath(updated, path, pushValue);
@@ -235,29 +255,36 @@ export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
 // Local shapes for traversal only — the real ToCData is stricter, but the
 // AI sometimes hands us partial fragments during streaming, so we stay loose.
 interface SummaryNode {
-  id?: string
-  title?: string
-  color?: string
-  width?: number
-  yPosition?: number
-  connections?: Array<{ targetId?: string; confidence?: number; evidence?: string; assumptions?: string }>
+  id?: string;
+  title?: string;
+  color?: string;
+  width?: number;
+  yPosition?: number;
+  connections?: Array<{
+    targetId?: string;
+    confidence?: number;
+    evidence?: string;
+    assumptions?: string;
+  }>;
 }
 interface SummaryColumn {
-  nodes?: SummaryNode[]
+  nodes?: SummaryNode[];
 }
 interface SummarySection {
-  title?: string
-  columns?: SummaryColumn[]
+  title?: string;
+  columns?: SummaryColumn[];
 }
 
 // Generate a summary of the graph for the AI (much smaller than full JSON)
-export function generateGraphSummary(graphData: { sections?: SummarySection[] } | null | undefined): string {
+export function generateGraphSummary(
+  graphData: { sections?: SummarySection[] } | null | undefined,
+): string {
   if (!graphData || !graphData.sections) {
-    return "No graph data available.";
+    return 'No graph data available.';
   }
 
-  let summary = "Graph Summary:\n";
-  
+  let summary = 'Graph Summary:\n';
+
   graphData.sections.forEach((section, sectionIndex) => {
     summary += `\nSection ${sectionIndex} (${section.title || 'Untitled'}):\n`;
 
@@ -302,14 +329,14 @@ export function parseEditInstructions(content: string): EditInstruction[] {
   try {
     const startMarker = '[EDIT_INSTRUCTIONS]';
     const endMarker = '[/EDIT_INSTRUCTIONS]';
-    
+
     const startIndex = content.indexOf(startMarker);
     const endIndex = content.indexOf(endMarker);
-    
+
     if (startIndex === -1 || endIndex === -1) {
       return [];
     }
-    
+
     const jsonStr = content.substring(startIndex + startMarker.length, endIndex).trim();
     const editInstructions = JSON.parse(jsonStr) as EditInstruction[];
 
@@ -338,7 +365,9 @@ export function cleanResponseContent(content: string): string {
   const editEndIndex = cleanContent.indexOf(editEndMarker);
 
   if (editStartIndex !== -1 && editEndIndex !== -1) {
-    cleanContent = cleanContent.substring(0, editStartIndex) + cleanContent.substring(editEndIndex + editEndMarker.length);
+    cleanContent =
+      cleanContent.substring(0, editStartIndex) +
+      cleanContent.substring(editEndIndex + editEndMarker.length);
   }
 
   // Remove current graph data
@@ -349,7 +378,9 @@ export function cleanResponseContent(content: string): string {
   const graphEndIndex = cleanContent.indexOf(graphEndMarker);
 
   if (graphStartIndex !== -1 && graphEndIndex !== -1) {
-    cleanContent = cleanContent.substring(0, graphStartIndex) + cleanContent.substring(graphEndIndex + graphEndMarker.length);
+    cleanContent =
+      cleanContent.substring(0, graphStartIndex) +
+      cleanContent.substring(graphEndIndex + graphEndMarker.length);
   }
 
   // Remove selected nodes context
@@ -360,7 +391,9 @@ export function cleanResponseContent(content: string): string {
   const nodesEndIndex = cleanContent.indexOf(nodesEndMarker);
 
   if (nodesStartIndex !== -1 && nodesEndIndex !== -1) {
-    cleanContent = cleanContent.substring(0, nodesStartIndex) + cleanContent.substring(nodesEndIndex + nodesEndMarker.length);
+    cleanContent =
+      cleanContent.substring(0, nodesStartIndex) +
+      cleanContent.substring(nodesEndIndex + nodesEndMarker.length);
   }
 
   return cleanContent.trim();

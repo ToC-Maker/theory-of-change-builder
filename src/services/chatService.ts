@@ -1,4 +1,8 @@
-import { type EditInstruction, parseEditInstructions, cleanResponseContent } from '../utils/graphEdits';
+import {
+  type EditInstruction,
+  parseEditInstructions,
+  cleanResponseContent,
+} from '../utils/graphEdits';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
@@ -190,7 +194,12 @@ export type StreamMessageOptions = {
 
 /** HTTP status + error.type combinations that map to a CostError and skip retry/fallthrough. */
 const COST_ERROR_MAP: Record<number, CostErrorType[]> = {
-  401: ['turnstile_required', 'turnstile_failed', 'invalid_token', 'authentication_service_unavailable'],
+  401: [
+    'turnstile_required',
+    'turnstile_failed',
+    'invalid_token',
+    'authentication_service_unavailable',
+  ],
   402: ['global_budget_exhausted'],
   409: ['idempotent_replay'],
   413: ['body_too_large'],
@@ -238,9 +247,9 @@ class StreamingContext {
         // Network Information API — still in WICG (not in lib.dom) so we
         // type the shape we actually touch instead of pulling in globals.
         interface NavigatorConnectionLike {
-          effectiveType?: string
-          rtt?: number
-          downlink?: number
+          effectiveType?: string;
+          rtt?: number;
+          downlink?: number;
         }
         const conn = (navigator as Navigator & { connection?: NavigatorConnectionLike }).connection;
         if (conn) {
@@ -251,7 +260,9 @@ class StreamingContext {
           };
         }
       }
-    } catch { /* network info unavailable */ }
+    } catch {
+      /* network info unavailable */
+    }
   }
 
   markHeadersReceived(): void {
@@ -280,14 +291,19 @@ class StreamingContext {
   private resolveProtocol(): string | null {
     try {
       const resolved = new URL(this.requestUrl, location.origin).href;
-      const entries = performance.getEntriesByName(resolved, 'resource') as PerformanceResourceTiming[];
+      const entries = performance.getEntriesByName(
+        resolved,
+        'resource',
+      ) as PerformanceResourceTiming[];
       if (entries.length > 0) {
         const last = entries[entries.length - 1];
         if (last.nextHopProtocol) {
           return last.nextHopProtocol;
         }
       }
-    } catch { /* Performance API unavailable */ }
+    } catch {
+      /* Performance API unavailable */
+    }
     return null;
   }
 
@@ -315,9 +331,11 @@ class ChatService {
   private authToken: string | null = null;
 
   private static isNetworkError(error: Error): boolean {
-    return error.name === 'TypeError' ||
-           error.message.includes('network') ||
-           error.message.includes('Failed to fetch');
+    return (
+      error.name === 'TypeError' ||
+      error.message.includes('network') ||
+      error.message.includes('Failed to fetch')
+    );
   }
 
   setAuthToken(token: string | null) {
@@ -365,7 +383,7 @@ class ChatService {
       console.error('[ChatService] API Error Response:', {
         status: response.status,
         statusText: response.statusText,
-        errorData
+        errorData,
       });
 
       // Cost/policy errors: surface via onCostError and do NOT enter the generic
@@ -374,7 +392,11 @@ class ChatService {
       const errorType: string | undefined =
         errorData?.error?.type || errorData?.error || errorData?.type;
       const expectedTypes = COST_ERROR_MAP[response.status];
-      if (expectedTypes && typeof errorType === 'string' && expectedTypes.includes(errorType as CostErrorType)) {
+      if (
+        expectedTypes &&
+        typeof errorType === 'string' &&
+        expectedTypes.includes(errorType as CostErrorType)
+      ) {
         callbacks.onCostError?.({ type: errorType as CostErrorType, data: errorData });
         ctx?.markError();
 
@@ -390,10 +412,12 @@ class ChatService {
           'authentication_service_unavailable',
         ]);
         if (SERVICE_ERROR_TYPES.has(errorType as CostErrorType)) {
-          const upstream = errorData as {
-            upstream_status?: number;
-            upstream_message?: string;
-          } | undefined;
+          const upstream = errorData as
+            | {
+                upstream_status?: number;
+                upstream_message?: string;
+              }
+            | undefined;
           loggingService.reportError({
             error_name: `CostError:${errorType}`,
             error_message: upstream?.upstream_message ?? `HTTP ${response.status} ${errorType}`,
@@ -402,8 +426,11 @@ class ChatService {
               error_type: errorType,
               upstream_status: upstream?.upstream_status,
               upstream_message: upstream?.upstream_message,
-              model, mode, messageCount: messages.length,
-              webSearchEnabled, extendedThinkingEnabled,
+              model,
+              mode,
+              messageCount: messages.length,
+              webSearchEnabled,
+              extendedThinkingEnabled,
               ...(ctx ? ctx.toMetadata().streaming : {}),
             },
           });
@@ -416,7 +443,11 @@ class ChatService {
         throw markAsCostError(err);
       }
 
-      const msg = errorData?.error?.message || errorData?.error?.type || errorData?.details || `HTTP error! status: ${response.status}`;
+      const msg =
+        errorData?.error?.message ||
+        errorData?.error?.type ||
+        errorData?.details ||
+        `HTTP error! status: ${response.status}`;
       const err = new Error(msg);
       (err as Error & { httpStatus?: number }).httpStatus = response.status;
       throw err;
@@ -507,32 +538,44 @@ class ChatService {
               }
 
               // Handle web search events
-              if (event.type === 'content_block_start' && event.content_block?.type === 'server_tool_use') {
+              if (
+                event.type === 'content_block_start' &&
+                event.content_block?.type === 'server_tool_use'
+              ) {
                 if (event.content_block.name === 'web_search' && !hasSearched) {
                   callbacks.onSearchStart?.();
                   hasSearched = true;
                 }
-              } else if (event.type === 'content_block_start' && event.content_block?.type === 'web_search_tool_result') {
+              } else if (
+                event.type === 'content_block_start' &&
+                event.content_block?.type === 'web_search_tool_result'
+              ) {
                 const searchResults = event.content_block?.content;
                 if (searchResults && Array.isArray(searchResults)) {
                   const formattedResults = searchResults
-                    .filter(result => result.type === 'web_search_result')
-                    .map(result => ({
+                    .filter((result) => result.type === 'web_search_result')
+                    .map((result) => ({
                       title: result.title || 'No title',
                       content: `Web search result from ${result.page_age || 'recent'} - Content integrated in AI response below.`,
                       url: result.url || '#',
-                      score: 0.9
+                      score: 0.9,
                     }));
                   callbacks.onSearchComplete?.(formattedResults);
                 } else {
                   callbacks.onSearchComplete?.();
                 }
-              } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+              } else if (
+                event.type === 'content_block_delta' &&
+                event.delta?.type === 'text_delta'
+              ) {
                 const chunk = event.delta.text;
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);
-              } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
+              } else if (
+                event.type === 'content_block_delta' &&
+                event.delta?.type === 'thinking_delta'
+              ) {
                 const chunk = typeof event.delta.thinking === 'string' ? event.delta.thinking : '';
                 if (chunk) {
                   fullThinking += chunk;
@@ -558,11 +601,11 @@ class ChatService {
                   const meta = ctx.toMetadata().streaming;
                   console.log(
                     `[ChatService] Stream complete:` +
-                    ` duration=${meta.durationMs}ms` +
-                    ` ttfb=${meta.ttfbMs}ms` +
-                    ` chunks=${meta.chunkCount}` +
-                    ` bytes=${meta.bytesReceived}` +
-                    ` protocol=${meta.protocol ?? '?'}`
+                      ` duration=${meta.durationMs}ms` +
+                      ` ttfb=${meta.ttfbMs}ms` +
+                      ` chunks=${meta.chunkCount}` +
+                      ` bytes=${meta.bytesReceived}` +
+                      ` protocol=${meta.protocol ?? '?'}`,
                   );
                 }
                 const editInstructions = parseEditInstructions(fullContent);
@@ -571,7 +614,12 @@ class ChatService {
                 // Claude produced. Display uses cleanContent; audit uses
                 // rawMessage.
                 try {
-                  callbacks.onComplete?.(cleanContent, editInstructions, usage ?? undefined, fullContent);
+                  callbacks.onComplete?.(
+                    cleanContent,
+                    editInstructions,
+                    usage ?? undefined,
+                    fullContent,
+                  );
                 } catch (callbackErr) {
                   console.error('[ChatService] onComplete callback error:', callbackErr);
                 }
@@ -602,7 +650,7 @@ class ChatService {
     // Stream ended without message_stop — treat as incomplete
     if (ctx && ctx.phase !== 'complete') {
       throw new Error(
-        `Stream ended unexpectedly in phase "${ctx.phase}" after ${ctx.chunkCount} chunks`
+        `Stream ended unexpectedly in phase "${ctx.phase}" after ${ctx.chunkCount} chunks`,
       );
     }
   }
@@ -642,7 +690,9 @@ class ChatService {
       // Normalize highlightedNodes (options type accepts Set or string[]) into
       // a Set for O(1) membership checks below.
       const highlightedSet: Set<string> | undefined = highlightedNodes
-        ? (highlightedNodes instanceof Set ? highlightedNodes : new Set(highlightedNodes))
+        ? highlightedNodes instanceof Set
+          ? highlightedNodes
+          : new Set(highlightedNodes)
         : undefined;
 
       if (processedMessages[lastIndex].role === 'user') {
@@ -653,17 +703,28 @@ class ChatService {
           const dataWithPaths = addNodePaths(currentGraphData as import('../types').ToCData);
           processedMessages[lastIndex] = {
             ...processedMessages[lastIndex],
-            content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
+            content:
+              processedMessages[lastIndex].content +
+              `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`,
           };
         }
 
         // Add selected nodes data after graph data
         if (highlightedSet && highlightedSet.size > 0 && currentGraphData) {
-          interface GraphNodeLike { id?: string; [k: string]: unknown }
-          interface GraphColumnLike { nodes?: GraphNodeLike[] }
-          interface GraphSectionLike { columns?: GraphColumnLike[] }
-          interface GraphLike { sections?: GraphSectionLike[] }
-          const selectedNodesJson: Array<GraphNodeLike & { path: string }> = []
+          interface GraphNodeLike {
+            id?: string;
+            [k: string]: unknown;
+          }
+          interface GraphColumnLike {
+            nodes?: GraphNodeLike[];
+          }
+          interface GraphSectionLike {
+            columns?: GraphColumnLike[];
+          }
+          interface GraphLike {
+            sections?: GraphSectionLike[];
+          }
+          const selectedNodesJson: Array<GraphNodeLike & { path: string }> = [];
           const graph = currentGraphData as GraphLike;
 
           graph.sections?.forEach((section, sectionIndex) => {
@@ -673,19 +734,19 @@ class ChatService {
                   // Create a copy with path added
                   const nodeWithPath = {
                     ...node,
-                    path: `sections.${sectionIndex}.columns.${columnIndex}.nodes.${nodeIndex}`
-                  }
-                  selectedNodesJson.push(nodeWithPath)
+                    path: `sections.${sectionIndex}.columns.${columnIndex}.nodes.${nodeIndex}`,
+                  };
+                  selectedNodesJson.push(nodeWithPath);
                 }
-              })
-            })
-          })
+              });
+            });
+          });
 
           if (selectedNodesJson.length > 0) {
             const selectedNodesContent = `\n\n[SELECTED_NODES]\n${JSON.stringify(selectedNodesJson, null, 2)}\n[/SELECTED_NODES]`;
             processedMessages[lastIndex] = {
               ...processedMessages[lastIndex],
-              content: processedMessages[lastIndex].content + selectedNodesContent
+              content: processedMessages[lastIndex].content + selectedNodesContent,
             };
           }
         }
@@ -700,9 +761,10 @@ class ChatService {
       }
 
       // Combine with mode-specific prompt
-      const systemPrompt = mode === 'generate'
-        ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
-        : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
+      const systemPrompt =
+        mode === 'generate'
+          ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
+          : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
       // Build messages. For every user turn that had files attached —
       // whether it's the message currently being sent (last index) or a
@@ -712,19 +774,15 @@ class ChatService {
       // the file blocks only got attached to the latest message, and past
       // messages serialized as plain strings.
       const outgoingMessages = processedMessages.map((msg, i) => {
-        const fileIds =
-          i === lastIndex ? attachedFileIds : (msg.attachedFileIds ?? []);
+        const fileIds = i === lastIndex ? attachedFileIds : (msg.attachedFileIds ?? []);
         if (msg.role === 'user' && fileIds.length > 0) {
-          const docBlocks = fileIds.map(file_id => ({
+          const docBlocks = fileIds.map((file_id) => ({
             type: 'document',
             source: { type: 'file', file_id },
           }));
           return {
             role: msg.role as 'user' | 'assistant',
-            content: [
-              ...docBlocks,
-              { type: 'text', text: msg.content },
-            ],
+            content: [...docBlocks, { type: 'text', text: msg.content }],
           };
         }
         return {
@@ -736,17 +794,20 @@ class ChatService {
       // Create request body for streaming API. max_tokens is per-model
       // (Opus 128K, Sonnet/Haiku 64K) — sourced from shared/pricing.ts so
       // it stays in sync with the models-overview docs.
-      const maxOutputTokens = MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.max_output_tokens ?? 64_000;
+      const maxOutputTokens =
+        MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.max_output_tokens ?? 64_000;
       requestBody = {
         model,
         max_tokens: maxOutputTokens,
-        system: [{
-          type: "text",
-          text: systemPrompt,
-          cache_control: { type: "ephemeral" }
-        }],
+        system: [
+          {
+            type: 'text',
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
         messages: outgoingMessages,
-        stream: true
+        stream: true,
       };
 
       // Mode-conditional top-level cache_control (per v2 spec, Subtask 5):
@@ -763,16 +824,20 @@ class ChatService {
       // Some models accept an output_config.effort; others reject the field.
       // Capability flag lives in shared/pricing.ts so it stays in sync with
       // the models-overview docs.
-      if (MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.supports_output_config_effort) {
+      if (
+        MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.supports_output_config_effort
+      ) {
         requestBody.output_config = { effort: 'xhigh' };
       }
 
       // Add web search with dynamic filtering (auto-injects code_execution)
       if (webSearchEnabled) {
-        requestBody.tools = [{
-          type: "web_search_20260209",
-          name: "web_search"
-        }];
+        requestBody.tools = [
+          {
+            type: 'web_search_20260209',
+            name: 'web_search',
+          },
+        ];
       }
 
       // Add adaptive thinking if enabled (Claude decides how much to think).
@@ -780,8 +845,8 @@ class ChatService {
       // can render a compact progress indicator rather than raw reasoning.
       if (extendedThinkingEnabled) {
         requestBody.thinking = {
-          type: "adaptive",
-          display: "summarized"
+          type: 'adaptive',
+          display: 'summarized',
         };
       }
 
@@ -844,7 +909,8 @@ class ChatService {
         if (isCostError(err)) return;
 
         let httpStatus = (err as { httpStatus?: number }).httpStatus;
-        let isSSEProcessingError = (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
+        let isSSEProcessingError =
+          (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
 
         let isNetworkErr = ChatService.isNetworkError(err);
 
@@ -872,8 +938,11 @@ class ChatService {
             http_status: httpStatus,
             stack_trace: err.stack,
             request_metadata: {
-              model, mode, messageCount: messages.length,
-              webSearchEnabled, extendedThinkingEnabled,
+              model,
+              mode,
+              messageCount: messages.length,
+              webSearchEnabled,
+              extendedThinkingEnabled,
               ...streamingMeta,
             },
           });
@@ -883,7 +952,7 @@ class ChatService {
           // Retry with HTTP/2 fallback
           const retryCtx = new StreamingContext(
             serializedBody.length,
-            this.STREAM_API_URL + '?force-h2=1'
+            this.STREAM_API_URL + '?force-h2=1',
           );
           retryCtx.retryAttempt = 1;
 
@@ -917,33 +986,43 @@ class ChatService {
 
             // Retry also failed — update context for error reporting below
             retryCtx.markError();
-            try { streamingMeta = retryCtx.toMetadata(); } catch { /* ignore */ }
+            try {
+              streamingMeta = retryCtx.toMetadata();
+            } catch {
+              /* ignore */
+            }
             // Re-assign err for the reporting below (narrow unknown → Error).
             err = retryError instanceof Error ? retryError : new Error(String(retryError));
             // Recompute flags for the retry error
             httpStatus = (err as { httpStatus?: number }).httpStatus;
-            isSSEProcessingError = (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
+            isSSEProcessingError =
+              (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
             isNetworkErr = ChatService.isNetworkError(err);
             // Fall through to normal error handling
           }
         }
 
-        const errorMessage = err.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
-                           err.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
-                           err.message.includes('insufficient_quota') ? "Insufficient API quota." :
-                           isSSEProcessingError ? "Failed to process the AI response. Please try again." :
-                           isNetworkErr ? "Network error. Please check your connection." :
-                           "An error occurred. Please try again.";
+        const errorMessage = err.message.includes('rate_limit')
+          ? 'Rate limit exceeded. Please wait and try again.'
+          : err.message.includes('invalid_api_key')
+            ? 'Invalid API key. Please check your settings.'
+            : err.message.includes('insufficient_quota')
+              ? 'Insufficient API quota.'
+              : isSSEProcessingError
+                ? 'Failed to process the AI response. Please try again.'
+                : isNetworkErr
+                  ? 'Network error. Please check your connection.'
+                  : 'An error occurred. Please try again.';
 
         // One-liner for quick scanning in text logs; structured object below for DevTools drill-down
         const streamMeta = (streamingMeta as { streaming?: Record<string, unknown> }).streaming;
         console.error(
           `[ChatService] Request failed: ${err.name}: ${err.message}` +
-          ` | phase=${streamMeta?.phase ?? 'unknown'}` +
-          ` protocol=${streamMeta?.protocol ?? 'unknown'}` +
-          ` duration=${streamMeta?.durationMs ?? '?'}ms` +
-          ` chunks=${streamMeta?.chunkCount ?? '?'}` +
-          ` http=${httpStatus ?? 'none'}`
+            ` | phase=${streamMeta?.phase ?? 'unknown'}` +
+            ` protocol=${streamMeta?.protocol ?? 'unknown'}` +
+            ` duration=${streamMeta?.durationMs ?? '?'}ms` +
+            ` chunks=${streamMeta?.chunkCount ?? '?'}` +
+            ` http=${httpStatus ?? 'none'}`,
         );
         console.error('[ChatService] Request details:', {
           errorName: err.name,
@@ -985,7 +1064,7 @@ class ChatService {
             ...streamingMeta,
           },
         });
-        callbacks.onError?.("An error occurred. Please try again.");
+        callbacks.onError?.('An error occurred. Please try again.');
       }
     }
   }

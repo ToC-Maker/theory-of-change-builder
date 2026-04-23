@@ -51,7 +51,11 @@ export class ChartService {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.authToken) {
       headers['Authorization'] = `Bearer ${this.authToken}`;
-      console.log('[ChartService] Creating chart with auth token (length:', this.authToken.length, ')');
+      console.log(
+        '[ChartService] Creating chart with auth token (length:',
+        this.authToken.length,
+        ')',
+      );
     } else {
       console.log('[ChartService] Creating chart without auth token (user not authenticated)');
     }
@@ -59,7 +63,7 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/createChart`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ chartData })
+      body: JSON.stringify({ chartData }),
     });
 
     if (!response.ok) {
@@ -93,7 +97,7 @@ export class ChartService {
     params.append('editToken', editToken);
 
     const response = await fetch(`${API_BASE}/getChart?${params}`, {
-      headers
+      headers,
     });
 
     if (!response.ok) {
@@ -131,7 +135,7 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/updateChart`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ editToken, chartData })
+      body: JSON.stringify({ editToken, chartData }),
     });
 
     if (!response.ok) {
@@ -193,7 +197,9 @@ export class ChartService {
   }
 
   // Get permissions for a chart (owner only)
-  static async getChartPermissions(chartId: string): Promise<{ permissions: Permission[]; linkSharingLevel?: 'restricted' | 'viewer' | 'editor' }> {
+  static async getChartPermissions(
+    chartId: string,
+  ): Promise<{ permissions: Permission[]; linkSharingLevel?: 'restricted' | 'viewer' | 'editor' }> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -203,8 +209,8 @@ export class ChartService {
 
     const response = await fetch(`${API_BASE}/managePermissions?${params}`, {
       headers: {
-        'Authorization': `Bearer ${this.authToken}`
-      }
+        Authorization: `Bearer ${this.authToken}`,
+      },
     });
 
     if (!response.ok) {
@@ -218,10 +224,7 @@ export class ChartService {
   }
 
   // Remove permission from a user (owner only)
-  static async removePermission(
-    chartId: string,
-    targetUserId: string
-  ): Promise<void> {
+  static async removePermission(chartId: string, targetUserId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -230,9 +233,9 @@ export class ChartService {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId })
+      body: JSON.stringify({ chartId, targetUserId }),
     });
 
     if (!response.ok) {
@@ -245,7 +248,7 @@ export class ChartService {
   static async updatePermissionLevel(
     chartId: string,
     targetUserId: string,
-    permissionLevel: 'owner' | 'edit'
+    permissionLevel: 'owner' | 'edit',
   ): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
@@ -255,9 +258,9 @@ export class ChartService {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId, permissionLevel })
+      body: JSON.stringify({ chartId, targetUserId, permissionLevel }),
     });
 
     if (!response.ok) {
@@ -269,7 +272,7 @@ export class ChartService {
   // Update link sharing settings (owner only)
   static async updateLinkSharing(
     chartId: string,
-    linkSharingLevel: 'restricted' | 'viewer' | 'editor'
+    linkSharingLevel: 'restricted' | 'viewer' | 'editor',
   ): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
@@ -279,9 +282,9 @@ export class ChartService {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, linkSharingLevel })
+      body: JSON.stringify({ chartId, linkSharingLevel }),
     });
 
     if (!response.ok) {
@@ -291,10 +294,7 @@ export class ChartService {
   }
 
   // Approve a pending access request (owner only)
-  static async approveAccessRequest(
-    chartId: string,
-    targetUserId: string
-  ): Promise<void> {
+  static async approveAccessRequest(chartId: string, targetUserId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -303,9 +303,9 @@ export class ChartService {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId, action: 'approve' })
+      body: JSON.stringify({ chartId, targetUserId, action: 'approve' }),
     });
 
     if (!response.ok) {
@@ -315,10 +315,7 @@ export class ChartService {
   }
 
   // Reject a pending access request (owner only)
-  static async rejectAccessRequest(
-    chartId: string,
-    targetUserId: string
-  ): Promise<void> {
+  static async rejectAccessRequest(chartId: string, targetUserId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -327,9 +324,9 @@ export class ChartService {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId, action: 'reject' })
+      body: JSON.stringify({ chartId, targetUserId, action: 'reject' }),
     });
 
     if (!response.ok) {
@@ -341,7 +338,7 @@ export class ChartService {
   // Delete a chart (owner only, or anyone for anonymous charts)
   static async deleteChart(chartId: string): Promise<void> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     };
 
     // Add auth header if available (for owned charts)
@@ -352,7 +349,7 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/deleteChart`, {
       method: 'DELETE',
       headers,
-      body: JSON.stringify({ chartId })
+      body: JSON.stringify({ chartId }),
     });
 
     if (!response.ok) {

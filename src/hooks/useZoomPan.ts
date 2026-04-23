@@ -92,7 +92,7 @@ export function useZoomPan({
       setFitToScreenZoom(newFitZoom);
       fitToScreenZoomRef.current = newFitZoom;
 
-      setCamera(prev => {
+      setCamera((prev) => {
         if (prev.z < newFitZoom) {
           const newCam = { x: 0, y: 0, z: newFitZoom };
           cameraRef.current = newCam;
@@ -147,7 +147,7 @@ export function useZoomPan({
     return {
       x: baseOffsetX + cam.x * cam.z,
       y: baseOffsetY + cam.y * cam.z,
-      scale: cam.z
+      scale: cam.z,
     };
   }, [getAvailableViewport]);
 
@@ -207,7 +207,7 @@ export function useZoomPan({
           newCam = {
             x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
             y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
-            z: newZoom
+            z: newZoom,
           };
         }
 
@@ -233,7 +233,7 @@ export function useZoomPan({
         const newCam = {
           ...prev,
           x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
-          y: Math.max(-maxPanY, Math.min(maxPanY, newPanY))
+          y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
         };
 
         cameraRef.current = newCam;
@@ -285,7 +285,7 @@ export function useZoomPan({
       const newCam = {
         ...prev,
         x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
-        y: Math.max(-maxPanY, Math.min(maxPanY, newPanY))
+        y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
       };
 
       cameraRef.current = newCam;
@@ -417,7 +417,7 @@ export function useZoomPan({
             newCam = {
               x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
               y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
-              z: newZoom
+              z: newZoom,
             };
           }
 
@@ -427,7 +427,12 @@ export function useZoomPan({
 
         lastTouchDistanceRef.current = currentDistance;
         lastTouchCenterRef.current = currentCenter;
-      } else if (e.touches.length === 1 && isPanningRef.current && panStartRef.current && panStartCameraRef.current) {
+      } else if (
+        e.touches.length === 1 &&
+        isPanningRef.current &&
+        panStartRef.current &&
+        panStartCameraRef.current
+      ) {
         // Single finger pan
         e.preventDefault();
 
@@ -445,7 +450,7 @@ export function useZoomPan({
         const newCam = {
           ...prev,
           x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
-          y: Math.max(-maxPanY, Math.min(maxPanY, newPanY))
+          y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
         };
 
         cameraRef.current = newCam;
@@ -542,7 +547,7 @@ export function useZoomPan({
     const newCam = {
       x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
       y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
-      z: newZoom
+      z: newZoom,
     };
 
     cameraRef.current = newCam;
@@ -595,7 +600,7 @@ export function useZoomPan({
     const newCam = {
       x: Math.max(-maxPanX, Math.min(maxPanX, newPanX)),
       y: Math.max(-maxPanY, Math.min(maxPanY, newPanY)),
-      z: newZoom
+      z: newZoom,
     };
 
     cameraRef.current = newCam;

@@ -1,7 +1,11 @@
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import {
-  JWTClaimValidationFailed, JWTExpired, JWTInvalid,
-  JWSInvalid, JWSSignatureVerificationFailed, JWKSNoMatchingKey,
+  JWTClaimValidationFailed,
+  JWTExpired,
+  JWTInvalid,
+  JWSInvalid,
+  JWSSignatureVerificationFailed,
+  JWKSNoMatchingKey,
 } from 'jose/errors';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { Env } from './types';
@@ -15,9 +19,7 @@ let cachedDomain: string;
 
 function getJWKS(domain: string) {
   if (!cachedJWKS || cachedDomain !== domain) {
-    cachedJWKS = createRemoteJWKSet(
-      new URL(`https://${domain}/.well-known/jwks.json`)
-    );
+    cachedJWKS = createRemoteJWKSet(new URL(`https://${domain}/.well-known/jwks.json`));
     cachedDomain = domain;
   }
   return cachedJWKS;
@@ -42,10 +44,7 @@ export interface DecodedToken {
   [key: string]: unknown;
 }
 
-export async function verifyToken(
-  token: string,
-  env: Env
-): Promise<DecodedToken> {
+export async function verifyToken(token: string, env: Env): Promise<DecodedToken> {
   let payload;
   try {
     ({ payload } = await jwtVerify(token, getJWKS(env.VITE_AUTH0_DOMAIN), {
@@ -58,12 +57,13 @@ export async function verifyToken(
     // Known token errors mean the JWT itself is bad; everything else
     // (JWKS timeout, DNS failure, non-200 JWKS response, etc.) is an
     // infrastructure problem where the token may actually be valid.
-    const isTokenError = err instanceof JWTClaimValidationFailed
-      || err instanceof JWTExpired
-      || err instanceof JWTInvalid
-      || err instanceof JWSInvalid
-      || err instanceof JWSSignatureVerificationFailed
-      || err instanceof JWKSNoMatchingKey;
+    const isTokenError =
+      err instanceof JWTClaimValidationFailed ||
+      err instanceof JWTExpired ||
+      err instanceof JWTInvalid ||
+      err instanceof JWSInvalid ||
+      err instanceof JWSSignatureVerificationFailed ||
+      err instanceof JWKSNoMatchingKey;
     if (!isTokenError) {
       throw new JWKSFetchError(err);
     }
@@ -87,7 +87,7 @@ export function extractToken(authHeader: string | null): string | null {
 export async function tryMigrateDecoded(
   sql: NeonQueryFunction<false, false>,
   decodedToken: { sub: string; email?: string },
-  logPrefix: string
+  logPrefix: string,
 ): Promise<void> {
   if (!decodedToken?.email) return;
 
@@ -105,7 +105,7 @@ export async function tryMigrateUser(
   sql: NeonQueryFunction<false, false>,
   authHeader: string | null,
   logPrefix: string,
-  env: Env
+  env: Env,
 ): Promise<void> {
   const token = extractToken(authHeader);
   if (!token) return;
@@ -128,7 +128,7 @@ export async function tryMigrateUser(
 async function migrateUserIfNeeded(
   sql: NeonQueryFunction<false, false>,
   newUserId: string,
-  email: string
+  email: string,
 ) {
   const old = await sql`
     SELECT DISTINCT user_id FROM chart_permissions

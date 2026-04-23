@@ -66,4 +66,4 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error('Error creating session:', error);
     return Response.json({ error: 'Failed to create session' }, { status: 500 });
   }
-};
+}

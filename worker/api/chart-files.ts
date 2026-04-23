@@ -19,7 +19,7 @@ function extractFileIdFromFilesPath(pathname: string): string | null {
 
 async function requireAuthorizedUser(
   request: Request,
-  env: Env
+  env: Env,
 ): Promise<{ userId: string } | Response> {
   const token = extractToken(request.headers.get('authorization'));
   if (!token) {
@@ -39,7 +39,7 @@ async function requireAuthorizedUser(
 async function hasChartAccess(
   sql: ReturnType<typeof getDb>,
   chartId: string,
-  userId: string
+  userId: string,
 ): Promise<boolean> {
   // Owners always pass; edit-permission users with status=approved also pass.
   const rows = await sql`
@@ -48,8 +48,7 @@ async function hasChartAccess(
   `;
   if (!rows.length) return false;
   const { permission_level, status } = rows[0];
-  return permission_level === 'owner'
-    || (permission_level === 'edit' && status === 'approved');
+  return permission_level === 'owner' || (permission_level === 'edit' && status === 'approved');
 }
 
 // GET /api/files/:file_id — exists-check for client rehydration.
@@ -61,11 +60,7 @@ async function hasChartAccess(
 // enough: if it exists, Anthropic still has the file (barring admin cleanup
 // that also dropped the row). If Anthropic later reports not_found mid-stream,
 // the anthropic-stream handler synthesizes a file_unavailable error.
-async function handleGetFile(
-  request: Request,
-  env: Env,
-  fileId: string
-): Promise<Response> {
+async function handleGetFile(request: Request, env: Env, fileId: string): Promise<Response> {
   const authResult = await requireAuthorizedUser(request, env);
   if (authResult instanceof Response) return authResult;
   const { userId } = authResult;
@@ -104,7 +99,7 @@ async function handleGetFile(
 async function handleBulkDelete(
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
   const chartId = url.searchParams.get('chart_id');
@@ -164,12 +159,12 @@ async function handleBulkDelete(
               'anthropic-version': '2023-06-01',
               'anthropic-beta': 'files-api-2025-04-14',
             },
-          }
+          },
         );
         if (!upstream.ok && upstream.status !== 404) {
           const errText = await upstream.text().catch(() => '');
           console.error(
-            `[chart-files] Anthropic DELETE ${upstream.status} for file_id=${fid}: ${errText}`
+            `[chart-files] Anthropic DELETE ${upstream.status} for file_id=${fid}: ${errText}`,
           );
         }
       } catch (err) {
@@ -177,12 +172,14 @@ async function handleBulkDelete(
       }
     };
 
-    ctx.waitUntil((async () => {
-      for (let i = 0; i < fileIds.length; i += CONCURRENCY) {
-        const chunk = fileIds.slice(i, i + CONCURRENCY);
-        await Promise.all(chunk.map(deleteOne));
-      }
-    })());
+    ctx.waitUntil(
+      (async () => {
+        for (let i = 0; i < fileIds.length; i += CONCURRENCY) {
+          const chunk = fileIds.slice(i, i + CONCURRENCY);
+          await Promise.all(chunk.map(deleteOne));
+        }
+      })(),
+    );
   }
 
   // Delete DB rows and return a count. RETURNING-based count avoids a racy
@@ -197,7 +194,7 @@ async function handleBulkDelete(
 export async function handler(
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
 

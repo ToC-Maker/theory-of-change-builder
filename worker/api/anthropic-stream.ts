@@ -90,7 +90,9 @@ function microToUsd(micro: bigint): number {
 
 function firstOfNextMonthUtcIso(): string {
   const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0)).toISOString();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0),
+  ).toISOString();
 }
 
 function isUuidish(v: string): boolean {
@@ -113,12 +115,12 @@ function isUuidish(v: string): boolean {
 async function readBodyWithSizeClamp(
   request: Request,
   altSvcHeaders: Record<string, string>,
-): Promise<
-  | { ok: true; body: Record<string, unknown> }
-  | { ok: false; response: Response }
-> {
+): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: Response }> {
   if (!request.body) {
-    return { ok: false, response: jsonError({ error: 'Invalid JSON in request body' }, 400, altSvcHeaders) };
+    return {
+      ok: false,
+      response: jsonError({ error: 'Invalid JSON in request body' }, 400, altSvcHeaders),
+    };
   }
 
   const reader = request.body.getReader();
@@ -130,7 +132,11 @@ async function readBodyWithSizeClamp(
     if (!value) continue;
     total += value.byteLength;
     if (total > BODY_SIZE_LIMIT_BYTES) {
-      try { await reader.cancel(); } catch { /* ignore */ }
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
       return {
         ok: false,
         response: jsonError(
@@ -157,11 +163,17 @@ async function readBodyWithSizeClamp(
     const text = new TextDecoder().decode(merged);
     const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { ok: false, response: jsonError({ error: 'Invalid JSON in request body' }, 400, altSvcHeaders) };
+      return {
+        ok: false,
+        response: jsonError({ error: 'Invalid JSON in request body' }, 400, altSvcHeaders),
+      };
     }
     return { ok: true, body: parsed as Record<string, unknown> };
   } catch {
-    return { ok: false, response: jsonError({ error: 'Invalid JSON in request body' }, 400, altSvcHeaders) };
+    return {
+      ok: false,
+      response: jsonError({ error: 'Invalid JSON in request body' }, 400, altSvcHeaders),
+    };
   }
 }
 
@@ -198,7 +210,10 @@ async function resolveActor(
       decoded = await verifyToken(token, env);
     } catch (err) {
       if (err instanceof JWKSFetchError) {
-        return { ok: false, response: jsonError({ error: 'authentication_service_unavailable' }, 503, altSvcHeaders) };
+        return {
+          ok: false,
+          response: jsonError({ error: 'authentication_service_unavailable' }, 503, altSvcHeaders),
+        };
       }
       return { ok: false, response: jsonError({ error: 'invalid_token' }, 401, altSvcHeaders) };
     }
@@ -254,7 +269,13 @@ async function resolveActor(
 
 // --- Turnstile session cookie ------------------------------------------
 
-type TurnstileResult = 'ok' | 'missing' | 'expired' | 'actor_mismatch' | 'invalid' | 'not-configured';
+type TurnstileResult =
+  | 'ok'
+  | 'missing'
+  | 'expired'
+  | 'actor_mismatch'
+  | 'invalid'
+  | 'not-configured';
 
 /**
  * Verify the Turnstile session cookie issued by POST /api/verify-turnstile.
@@ -361,8 +382,13 @@ function stripToCountTokensBody(body: Record<string, unknown>): Record<string, u
   // conservative upper bound; cache discounts apply at billing time, not
   // estimation time. (We also strip nested cache_control markers below.)
   const COUNT_TOKENS_ALLOWED = new Set([
-    'messages', 'model', 'system', 'tools', 'tool_choice',
-    'thinking', 'output_config',
+    'messages',
+    'model',
+    'system',
+    'tools',
+    'tool_choice',
+    'thinking',
+    'output_config',
   ]);
   const countBody: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(body)) {
@@ -404,16 +430,17 @@ function stripToCountTokensBody(body: Record<string, unknown>): Record<string, u
   // of the PDF's contribution — post-stream reconcile captures the real
   // cost from Anthropic's message_delta usage fields either way.
   if (Array.isArray(withoutCacheControl.messages)) {
-    withoutCacheControl.messages = (withoutCacheControl.messages as Array<Record<string, unknown>>)
-      .map((msg) => {
-        if (!Array.isArray(msg.content)) return msg;
-        const filtered = (msg.content as Array<Record<string, unknown>>).filter((block) => {
-          if (block?.type !== 'document') return true;
-          const src = block.source as Record<string, unknown> | undefined;
-          return src?.type !== 'file';
-        });
-        return { ...msg, content: filtered };
+    withoutCacheControl.messages = (
+      withoutCacheControl.messages as Array<Record<string, unknown>>
+    ).map((msg) => {
+      if (!Array.isArray(msg.content)) return msg;
+      const filtered = (msg.content as Array<Record<string, unknown>>).filter((block) => {
+        if (block?.type !== 'document') return true;
+        const src = block.source as Record<string, unknown> | undefined;
+        return src?.type !== 'file';
       });
+      return { ...msg, content: filtered };
+    });
   }
 
   return withoutCacheControl;
@@ -487,11 +514,17 @@ async function estimateProjectedCost(
     try {
       const parsed = JSON.parse(text) as { error?: { message?: string } };
       upstreamMessage = parsed?.error?.message;
-    } catch { /* non-JSON body; leave undefined */ }
+    } catch {
+      /* non-JSON body; leave undefined */
+    }
     return {
       ok: false,
       response: jsonError(
-        { error: 'estimation_unavailable', upstream_status: resp.status, upstream_message: upstreamMessage },
+        {
+          error: 'estimation_unavailable',
+          upstream_status: resp.status,
+          upstream_message: upstreamMessage,
+        },
         503,
         altSvcHeaders,
       ),
@@ -500,10 +533,13 @@ async function estimateProjectedCost(
 
   let data: { input_tokens?: number };
   try {
-    data = await resp.json() as { input_tokens?: number };
+    data = (await resp.json()) as { input_tokens?: number };
   } catch (e) {
     console.error('[estimate] count_tokens JSON parse failed:', e);
-    return { ok: false, response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders) };
+    return {
+      ok: false,
+      response: jsonError({ error: 'estimation_unavailable' }, 503, altSvcHeaders),
+    };
   }
 
   const baseInputTokens = typeof data.input_tokens === 'number' ? data.input_tokens : 0;
@@ -515,11 +551,11 @@ async function estimateProjectedCost(
   let cachedFileTokens = 0;
   if (strippedFileIds.length > 0) {
     try {
-      const rows = await sql`
+      const rows = (await sql`
         SELECT file_id, input_tokens
         FROM chart_files
         WHERE file_id = ANY(${strippedFileIds})
-      ` as { file_id: string; input_tokens: string | number | null }[];
+      `) as { file_id: string; input_tokens: string | number | null }[];
       // Neon returns BIGINT as a string; parse before summing.
       for (const r of rows) {
         const n = r.input_tokens == null ? NaN : Number(r.input_tokens);
@@ -566,9 +602,7 @@ function extractDocumentFileIds(body: Record<string, unknown>): string[] {
   return out;
 }
 
-type ReserveResult =
-  | { ok: true; postReservationUsage: bigint }
-  | { ok: false; response: Response };
+type ReserveResult = { ok: true; postReservationUsage: bigint } | { ok: false; response: Response };
 
 /**
  * Atomically reserve `projected` µUSD against user_api_usage. Either:
@@ -593,17 +627,20 @@ async function reserveCost(
 
   let updateRows: { cost_micro_usd: bigint | number | string }[];
   try {
-    updateRows = await sql`
+    updateRows = (await sql`
       UPDATE user_api_usage
       SET cost_micro_usd = cost_micro_usd + ${projStr}::bigint,
           last_activity_at = NOW()
       WHERE user_id = ${userId}
         AND cost_micro_usd + ${projStr}::bigint <= ${capStr}::bigint
       RETURNING cost_micro_usd
-    ` as { cost_micro_usd: bigint | number | string }[];
+    `) as { cost_micro_usd: bigint | number | string }[];
   } catch (e) {
     console.error('[reserve] UPDATE user_api_usage failed:', e);
-    return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
+    return {
+      ok: false,
+      response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders),
+    };
   }
 
   if (updateRows.length > 0) {
@@ -615,15 +652,18 @@ async function reserveCost(
   // exists, INSERT is a no-op (and we know the existing row is over cap).
   let insertRows: { cost_micro_usd: bigint | number | string }[];
   try {
-    insertRows = await sql`
+    insertRows = (await sql`
       INSERT INTO user_api_usage (user_id, cost_micro_usd, first_activity_at, last_activity_at)
       VALUES (${userId}, ${projStr}::bigint, NOW(), NOW())
       ON CONFLICT (user_id) DO NOTHING
       RETURNING cost_micro_usd
-    ` as { cost_micro_usd: bigint | number | string }[];
+    `) as { cost_micro_usd: bigint | number | string }[];
   } catch (e) {
     console.error('[reserve] INSERT user_api_usage failed:', e);
-    return { ok: false, response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders) };
+    return {
+      ok: false,
+      response: jsonError({ error: 'database_unavailable' }, 503, altSvcHeaders),
+    };
   }
 
   if (insertRows.length > 0) {
@@ -633,9 +673,9 @@ async function reserveCost(
   // Cap is actually exceeded — read current cost to produce a useful error body.
   let usedMicro: bigint = 0n;
   try {
-    const rows = await sql`
+    const rows = (await sql`
       SELECT cost_micro_usd FROM user_api_usage WHERE user_id = ${userId}
-    ` as { cost_micro_usd: bigint | number | string }[];
+    `) as { cost_micro_usd: bigint | number | string }[];
     if (rows.length > 0) usedMicro = toBigInt(rows[0].cost_micro_usd);
   } catch (e) {
     console.error('read-used lookup failed (non-fatal):', e);
@@ -680,7 +720,7 @@ function toBigInt(v: bigint | number | string | null | undefined): bigint {
 function createKeepaliveStream(
   source: ReadableStream<Uint8Array>,
   signal: AbortSignal,
-  intervalMs = 25000
+  intervalMs = 25000,
 ): ReadableStream<Uint8Array> {
   const keepaliveBytes = new TextEncoder().encode(': keepalive\n\n');
   let intervalId: ReturnType<typeof setInterval>;
@@ -699,8 +739,12 @@ function createKeepaliveStream(
     transform(chunk, controller) {
       controller.enqueue(chunk);
     },
-    flush() { clearInterval(intervalId); },
-    cancel() { clearInterval(intervalId); },
+    flush() {
+      clearInterval(intervalId);
+    },
+    cancel() {
+      clearInterval(intervalId);
+    },
   });
 
   return source.pipeThrough(transform);
@@ -777,8 +821,7 @@ type StreamingAssistantContent = {
    */
   blocks: Map<
     number,
-    | { type: 'text'; text: string }
-    | { type: 'thinking'; text: string; signature: string }
+    { type: 'text'; text: string } | { type: 'thinking'; text: string; signature: string }
   >;
   /**
    * Live count of `server_tool_use` blocks of name `web_search`. The usage
@@ -883,15 +926,15 @@ type SseTeeContext = {
      * Absent / undefined means the ordinary over-threshold path fired.
      */
     reason?: 'kill_compute_error';
-    cumulative_micro_usd: string;      // BigInt serialized
-    threshold_micro_usd: string;       // BigInt serialized
+    cumulative_micro_usd: string; // BigInt serialized
+    threshold_micro_usd: string; // BigInt serialized
     accumulator_at_kill: UsageAccumulator;
     live_web_search_count: number;
-    output_tokens_est?: number;        // only set for poll-triggered kills
-    count_tokens_total?: number;       // only set for poll-triggered kills
+    output_tokens_est?: number; // only set for poll-triggered kills
+    count_tokens_total?: number; // only set for poll-triggered kills
     /** Only set when reason === 'kill_compute_error'. */
     compute_error_message?: string;
-    fired_at_ms: number;               // Date.now()
+    fired_at_ms: number; // Date.now()
   } | null;
   /**
    * Diagnostic for the first time polling gets disabled, written to
@@ -901,7 +944,12 @@ type SseTeeContext = {
    * debugging overshoot.
    */
   pollDisableDiagnostic: {
-    reason: 'network_error' | 'upstream_error' | 'rate_limited' | 'json_parse_failed' | 'cost_compute_failed';
+    reason:
+      | 'network_error'
+      | 'upstream_error'
+      | 'rate_limited'
+      | 'json_parse_failed'
+      | 'cost_compute_failed';
     http_status?: number;
     upstream_body?: string;
     error_message?: string;
@@ -1014,12 +1062,14 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     // backstop, but that's often too late to avoid overshoot — so log the
     // body so we can tell what killed polling.
     const bodyText = await resp.text().catch(() => '');
-    console.warn(JSON.stringify({
-      event: 'kill_poll_disabled',
-      status: resp.status,
-      reason: resp.status === 429 ? 'rate_limited' : 'upstream_error',
-      upstream_body: bodyText.slice(0, 500),
-    }));
+    console.warn(
+      JSON.stringify({
+        event: 'kill_poll_disabled',
+        status: resp.status,
+        reason: resp.status === 429 ? 'rate_limited' : 'upstream_error',
+        upstream_body: bodyText.slice(0, 500),
+      }),
+    );
     if (!teeCtx.pollDisableDiagnostic) {
       teeCtx.pollDisableDiagnostic = {
         reason: resp.status === 429 ? 'rate_limited' : 'upstream_error',
@@ -1034,7 +1084,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
 
   let data: { input_tokens?: number };
   try {
-    data = await resp.json() as { input_tokens?: number };
+    data = (await resp.json()) as { input_tokens?: number };
   } catch (e) {
     console.warn('[kill-poll] count_tokens JSON parse failed, disabling polling:', e);
     if (!teeCtx.pollDisableDiagnostic) {
@@ -1110,13 +1160,15 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       count_tokens_total: totalInputTokens,
       fired_at_ms: Date.now(),
     };
-    console.log(JSON.stringify({
-      event: 'poll_kill_triggered',
-      estimatedCostMicroUsd: estimatedMicro.toString(),
-      thresholdMicroUsd: teeCtx.killThresholdMicro.toString(),
-      outputTokensEst: outputTokensSoFar,
-      webSearches: teeCtx.streamingContent.webSearchCount,
-    }));
+    console.log(
+      JSON.stringify({
+        event: 'poll_kill_triggered',
+        estimatedCostMicroUsd: estimatedMicro.toString(),
+        thresholdMicroUsd: teeCtx.killThresholdMicro.toString(),
+        outputTokensEst: outputTokensSoFar,
+        webSearches: teeCtx.streamingContent.webSearchCount,
+      }),
+    );
     // Don't abort upstream here — we need the next transform() chunk (or
     // flush()) to emit pendingKillFrame. Aborting synchronously can race a
     // pipeThrough error and drop the frame. The next chunk arrives within
@@ -1154,7 +1206,9 @@ function createCostTrackingStream(
   const encoder = new TextEncoder();
   let sseBuffer = '';
   let resolveDoneInner!: () => void;
-  const done = new Promise<void>((resolve) => { resolveDoneInner = resolve; });
+  const done = new Promise<void>((resolve) => {
+    resolveDoneInner = resolve;
+  });
   // Idempotent: first call sets streamDone + resolves the promise; subsequent
   // calls are no-ops. Centralizing the set-and-resolve pair here keeps the
   // poll-race fix correct no matter which exit path runs first.
@@ -1186,9 +1240,9 @@ function createCostTrackingStream(
   });
 
   if (
-    teeCtx.killThresholdMicro !== null
-    && teeCtx.env !== null
-    && teeCtx.countTokensBase !== null
+    teeCtx.killThresholdMicro !== null &&
+    teeCtx.env !== null &&
+    teeCtx.countTokensBase !== null
   ) {
     pollTimer = setInterval(() => {
       if (teeCtx.killed.v || teeCtx.pollingDisabled) {
@@ -1239,7 +1293,8 @@ function createCostTrackingStream(
     // chart that was garbage-collected. If the lookup errors, surface that
     // honestly as classification_unavailable so the UI can prompt a reload
     // instead of sending the user after a non-existent file.
-    let kind: 'chart_deleted' | 'file_unavailable' | 'classification_unavailable' = 'file_unavailable';
+    let kind: 'chart_deleted' | 'file_unavailable' | 'classification_unavailable' =
+      'file_unavailable';
     if (teeCtx.chartId) {
       try {
         const rows = await teeCtx.sql`SELECT 1 FROM charts WHERE id = ${teeCtx.chartId} LIMIT 1`;
@@ -1265,12 +1320,22 @@ function createCostTrackingStream(
       };
     }
     const frame = encoder.encode(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
-    try { controller.enqueue(frame); } catch (e) {
+    try {
+      controller.enqueue(frame);
+    } catch (e) {
       console.warn('not-found synthesized enqueue failed (controller closed):', e);
     }
     teeCtx.killed.v = true;
-    try { controller.terminate(); } catch { /* ignore */ }
-    try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+    try {
+      controller.terminate();
+    } catch {
+      /* ignore */
+    }
+    try {
+      teeCtx.abortController.abort();
+    } catch {
+      /* ignore */
+    }
     resolveDone();
     return true;
   }
@@ -1345,11 +1410,26 @@ function createCostTrackingStream(
         const dr = d as Record<string, unknown>;
         const dtype = dr.type;
         const existing = teeCtx.streamingContent.blocks.get(idx);
-        if (existing && dtype === 'text_delta' && typeof dr.text === 'string' && existing.type === 'text') {
+        if (
+          existing &&
+          dtype === 'text_delta' &&
+          typeof dr.text === 'string' &&
+          existing.type === 'text'
+        ) {
           existing.text += dr.text;
-        } else if (existing && dtype === 'thinking_delta' && typeof dr.thinking === 'string' && existing.type === 'thinking') {
+        } else if (
+          existing &&
+          dtype === 'thinking_delta' &&
+          typeof dr.thinking === 'string' &&
+          existing.type === 'thinking'
+        ) {
           existing.text += dr.thinking;
-        } else if (existing && dtype === 'signature_delta' && typeof dr.signature === 'string' && existing.type === 'thinking') {
+        } else if (
+          existing &&
+          dtype === 'signature_delta' &&
+          typeof dr.signature === 'string' &&
+          existing.type === 'thinking'
+        ) {
           // count_tokens requires submitted thinking blocks to include the
           // signature Anthropic produced when generating them (anti-forgery).
           // Without this, the poll request 400s with
@@ -1384,11 +1464,13 @@ function createCostTrackingStream(
     // whether cache_creation/cache_read land immediately (as the kill switch
     // assumes) or only at message_delta at end-of-stream. One log per stream.
     if (eventType === 'message_start') {
-      console.log(JSON.stringify({
-        event: 'message_start_usage',
-        model: teeCtx.model,
-        usage: usageObj,
-      }));
+      console.log(
+        JSON.stringify({
+          event: 'message_start_usage',
+          model: teeCtx.model,
+          usage: usageObj,
+        }),
+      );
     }
 
     mergeUsage(teeCtx.accumulator, usageObj);
@@ -1413,10 +1495,7 @@ function createCostTrackingStream(
 
     let cumulativeMicro: bigint;
     try {
-      cumulativeMicro = computeCostMicroUsd(
-        teeCtx.model,
-        accumulatorToUsage(teeCtx.accumulator),
-      );
+      cumulativeMicro = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(teeCtx.accumulator));
     } catch (e) {
       // A cost-table bug must not silently disable the kill switch — that
       // leaves spend unbounded. Fail closed: synthesize a kill with a
@@ -1439,11 +1518,21 @@ function createCostTrackingStream(
         limit_usd: microToUsd(teeCtx.killThresholdMicro),
       });
       const killFrame = encoder.encode(`event: error\ndata: ${payload}\n\n`);
-      try { controller.enqueue(killFrame); } catch (enqueueErr) {
+      try {
+        controller.enqueue(killFrame);
+      } catch (enqueueErr) {
         console.warn('kill-compute-error enqueue failed (controller closed):', enqueueErr);
       }
-      try { controller.terminate(); } catch { /* ignore */ }
-      try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+      try {
+        controller.terminate();
+      } catch {
+        /* ignore */
+      }
+      try {
+        teeCtx.abortController.abort();
+      } catch {
+        /* ignore */
+      }
       resolveDone();
       return true;
     }
@@ -1479,8 +1568,16 @@ function createCostTrackingStream(
     } catch (e) {
       console.warn('kill-switch enqueue failed (controller closed):', e);
     }
-    try { controller.terminate(); } catch { /* ignore */ }
-    try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+    try {
+      controller.terminate();
+    } catch {
+      /* ignore */
+    }
+    try {
+      teeCtx.abortController.abort();
+    } catch {
+      /* ignore */
+    }
     // terminate() doesn't run flush(); resolve done directly so reconcile
     // doesn't hang waiting for a flush that never comes.
     resolveDone();
@@ -1493,7 +1590,10 @@ function createCostTrackingStream(
    * had a chance to swallow the frame — so the client never sees Anthropic's
    * raw `not_found_error` followed by our synthesized variant.
    */
-  function forwardFrame(frame: string, controller: TransformStreamDefaultController<Uint8Array>): void {
+  function forwardFrame(
+    frame: string,
+    controller: TransformStreamDefaultController<Uint8Array>,
+  ): void {
     if (frame.length === 0) return;
     try {
       controller.enqueue(encoder.encode(frame + '\n\n'));
@@ -1509,15 +1609,21 @@ function createCostTrackingStream(
    * running-cost frame goes first so the kill (if present) is the final
    * event the client sees before termination.
    */
-  function flushPendingPollerFrames(controller: TransformStreamDefaultController<Uint8Array>): void {
+  function flushPendingPollerFrames(
+    controller: TransformStreamDefaultController<Uint8Array>,
+  ): void {
     if (teeCtx.pendingRunningCostFrame !== null) {
-      try { controller.enqueue(teeCtx.pendingRunningCostFrame); } catch (e) {
+      try {
+        controller.enqueue(teeCtx.pendingRunningCostFrame);
+      } catch (e) {
         console.warn('pending running-cost frame enqueue failed (controller closed):', e);
       }
       teeCtx.pendingRunningCostFrame = null;
     }
     if (teeCtx.pendingKillFrame !== null) {
-      try { controller.enqueue(teeCtx.pendingKillFrame); } catch (e) {
+      try {
+        controller.enqueue(teeCtx.pendingKillFrame);
+      } catch (e) {
         console.warn('pending kill frame enqueue failed (controller closed):', e);
       }
       teeCtx.pendingKillFrame = null;
@@ -1528,12 +1634,20 @@ function createCostTrackingStream(
     async transform(chunk, controller) {
       if (teeCtx.killed.v) {
         flushPendingPollerFrames(controller);
-        try { controller.terminate(); } catch { /* ignore */ }
+        try {
+          controller.terminate();
+        } catch {
+          /* ignore */
+        }
         // Abort upstream so we stop charging ourselves for tokens the client
         // will never see. The poller sets killed.v but intentionally doesn't
         // abort — this transform() callback is the safe spot to do so since
         // we've just enqueued the kill frame.
-        try { teeCtx.abortController.abort(); } catch { /* ignore */ }
+        try {
+          teeCtx.abortController.abort();
+        } catch {
+          /* ignore */
+        }
         clearPollTimer();
         resolveDone();
         return;
@@ -1565,7 +1679,11 @@ function createCostTrackingStream(
       // before the trailing buffer so the client sees it as the last event.
       flushPendingPollerFrames(controller);
       if (sseBuffer.length > 0) {
-        try { controller.enqueue(encoder.encode(sseBuffer)); } catch { /* ignore */ }
+        try {
+          controller.enqueue(encoder.encode(sseBuffer));
+        } catch {
+          /* ignore */
+        }
       }
       clearPollTimer();
       resolveDone();
@@ -1587,8 +1705,12 @@ function createCostTrackingStream(
   // end-of-stream, downstream cancel, or readable-side error propagated
   // through the pipe — fires it exactly once (resolveDone is idempotent).
   const tail = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) { controller.enqueue(chunk); },
-    flush() { resolveDone(); },
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    },
+    flush() {
+      resolveDone();
+    },
     cancel(reason) {
       if (reason) {
         console.warn('[cost-tracking] tail cancelled:', reason);
@@ -1608,8 +1730,7 @@ function looksLikeBillingError(status: number, errorBody: unknown): boolean {
   if (!e || typeof e !== 'object') return false;
   const err = e as { type?: unknown; message?: unknown };
   if (status === 402 && err.type === 'billing_error') return true;
-  if (status === 429 && typeof err.message === 'string'
-      && /spend|cap|limit/i.test(err.message)) {
+  if (status === 429 && typeof err.message === 'string' && /spend|cap|limit/i.test(err.message)) {
     return true;
   }
   return false;
@@ -1643,7 +1764,11 @@ async function classifyNotFound(
 
 // --- Main handler -------------------------------------------------------
 
-export async function handler(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handler(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   // HTTP/2 fallback: when SSE streaming fails over HTTP/3 (QUIC), the client
   // retries with ?force-h2=1. The response includes Alt-Svc: clear (RFC 7838)
   // to tell the browser to stop using H3 for this origin.
@@ -1700,9 +1825,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   // we drop it on the floor (with a warn for observability) and proceed as
   // if the header were never sent.
   const byokHeaderKeyRaw = request.headers.get('x-user-anthropic-key');
-  const byokHeaderKey = (actor.authenticated && byokHeaderKeyRaw)
-    ? byokHeaderKeyRaw
-    : null;
+  const byokHeaderKey = actor.authenticated && byokHeaderKeyRaw ? byokHeaderKeyRaw : null;
   if (byokHeaderKeyRaw && !actor.authenticated) {
     console.warn('ignoring X-User-Anthropic-Key from anon caller');
   }
@@ -1712,9 +1835,9 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   if (!hasByok && actor.authenticated) {
     let encryptedKey: Uint8Array | ArrayBuffer | null = null;
     try {
-      const rows = await sql`
+      const rows = (await sql`
         SELECT encrypted_key FROM user_byok_keys WHERE user_id = ${actorId} LIMIT 1
-      ` as { encrypted_key: Uint8Array | ArrayBuffer | null }[];
+      `) as { encrypted_key: Uint8Array | ArrayBuffer | null }[];
       encryptedKey = rows[0]?.encrypted_key ?? null;
     } catch (e) {
       console.error('[anthropic-stream] BYOK lookup Neon error', e);
@@ -1728,9 +1851,8 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
         return jsonError({ error: 'byok_not_configured' }, 503, altSvcHeaders);
       }
       try {
-        const stored = encryptedKey instanceof Uint8Array
-          ? encryptedKey
-          : new Uint8Array(encryptedKey);
+        const stored =
+          encryptedKey instanceof Uint8Array ? encryptedKey : new Uint8Array(encryptedKey);
         byokKey = await decryptByokKey(stored, actorId, env.BYOK_ENCRYPTION_KEY);
         hasByok = true;
       } catch (e) {
@@ -1819,13 +1941,19 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   // is already gone from the browser in that case, so aborting is a strict
   // improvement over keeping the bill running.
   request.signal.addEventListener('abort', () => {
-    console.log(JSON.stringify({
-      event: 'client_disconnect',
-      timestamp: new Date().toISOString(),
-      userId: actorId,
-      tier,
-    }));
-    try { abortController.abort(); } catch { /* ignore */ }
+    console.log(
+      JSON.stringify({
+        event: 'client_disconnect',
+        timestamp: new Date().toISOString(),
+        userId: actorId,
+        tier,
+      }),
+    );
+    try {
+      abortController.abort();
+    } catch {
+      /* ignore */
+    }
   });
   let upstream: Response;
   try {
@@ -1844,7 +1972,9 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     console.error('Upstream fetch failed:', e);
     if (isCapped(tier)) {
       revertReservation(ctx, sql, actorId, projected, {
-        model, chartId, deploymentHost: requestUrl.hostname,
+        model,
+        chartId,
+        deploymentHost: requestUrl.hostname,
       });
     }
     return jsonError(
@@ -1859,13 +1989,19 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
     console.error(`Anthropic API error (${upstream.status}):`, errorText);
     if (isCapped(tier)) {
       revertReservation(ctx, sql, actorId, projected, {
-        model, chartId, deploymentHost: requestUrl.hostname,
+        model,
+        chartId,
+        deploymentHost: requestUrl.hostname,
       });
     }
 
     // Detect global budget exhaustion (Anthropic Console cap).
     let parsedError: unknown;
-    try { parsedError = JSON.parse(errorText); } catch { /* non-JSON body */ }
+    try {
+      parsedError = JSON.parse(errorText);
+    } catch {
+      /* non-JSON body */
+    }
     if (looksLikeBillingError(upstream.status, parsedError)) {
       return jsonError(
         {
@@ -1917,7 +2053,9 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   if (!upstream.body) {
     if (isCapped(tier)) {
       revertReservation(ctx, sql, actorId, projected, {
-        model, chartId, deploymentHost: requestUrl.hostname,
+        model,
+        chartId,
+        deploymentHost: requestUrl.hostname,
       });
     }
     return jsonError({ error: 'AI service returned empty response' }, 502, altSvcHeaders);
@@ -1935,7 +2073,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   // pennies of overshoot; preflight (composer + reserveCost) stays strict.
   // For BYOK the cap doesn't apply — null disables the check in the tee.
   const killThresholdMicro: bigint | null = isCapped(tier)
-    ? (EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected))
+    ? EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected)
     : null;
 
   const teeCtx: SseTeeContext = {
@@ -1969,41 +2107,42 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   // reconcile), but always try to write logging_messages.cost_micro_usd when
   // a message_id was supplied — it's the per-chart attribution key and is
   // independent of tier.
-  ctx.waitUntil((async () => {
-    // Wait for the SSE stream to finish (natural end, kill-switch, or
-    // client-cancel). Once `tracked.done` resolves, the accumulator is
-    // stable — no further transform() callbacks will mutate it.
-    await tracked.done;
+  ctx.waitUntil(
+    (async () => {
+      // Wait for the SSE stream to finish (natural end, kill-switch, or
+      // client-cancel). Once `tracked.done` resolves, the accumulator is
+      // stable — no further transform() callbacks will mutate it.
+      await tracked.done;
 
-    // When the stream is killed mid-flight, Anthropic's message_delta never
-    // arrives — which means the accumulator's `web_search_requests` stays 0
-    // even though server_tool_use blocks actually fired on the upstream.
-    // We've been counting those live in streamingContent.webSearchCount
-    // (incremented on each content_block_start of type server_tool_use
-    // name=web_search). If that live count is higher than the accumulator's
-    // snapshot, trust the live count — Anthropic will bill us for those
-    // searches whether message_delta confirms them or not.
-    const reconciledWebSearch = Math.max(
-      accumulator.web_search_requests,
-      teeCtx.streamingContent.webSearchCount,
-    );
-    const reconciledAccumulator: UsageAccumulator = {
-      ...accumulator,
-      web_search_requests: reconciledWebSearch,
-    };
+      // When the stream is killed mid-flight, Anthropic's message_delta never
+      // arrives — which means the accumulator's `web_search_requests` stays 0
+      // even though server_tool_use blocks actually fired on the upstream.
+      // We've been counting those live in streamingContent.webSearchCount
+      // (incremented on each content_block_start of type server_tool_use
+      // name=web_search). If that live count is higher than the accumulator's
+      // snapshot, trust the live count — Anthropic will bill us for those
+      // searches whether message_delta confirms them or not.
+      const reconciledWebSearch = Math.max(
+        accumulator.web_search_requests,
+        teeCtx.streamingContent.webSearchCount,
+      );
+      const reconciledAccumulator: UsageAccumulator = {
+        ...accumulator,
+        web_search_requests: reconciledWebSearch,
+      };
 
-    let actualMicro: bigint;
-    try {
-      actualMicro = computeCostMicroUsd(model, accumulatorToUsage(reconciledAccumulator));
-    } catch (e) {
-      console.error('Post-stream cost computation failed:', e);
-      return;
-    }
-
-    if (isCapped(tier)) {
-      const deltaMicro = actualMicro - projected;
+      let actualMicro: bigint;
       try {
-        await sql`
+        actualMicro = computeCostMicroUsd(model, accumulatorToUsage(reconciledAccumulator));
+      } catch (e) {
+        console.error('Post-stream cost computation failed:', e);
+        return;
+      }
+
+      if (isCapped(tier)) {
+        const deltaMicro = actualMicro - projected;
+        try {
+          await sql`
           UPDATE user_api_usage
           SET cost_micro_usd        = cost_micro_usd + ${deltaMicro.toString()}::bigint,
               input_tokens          = input_tokens + ${reconciledAccumulator.input_tokens},
@@ -2014,21 +2153,21 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
               last_activity_at      = NOW()
           WHERE user_id = ${actorId}
         `;
-        await sql`
+          await sql`
           INSERT INTO global_monthly_usage (month_start, cost_micro_usd)
           VALUES (DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date, ${actualMicro.toString()}::bigint)
           ON CONFLICT (month_start) DO UPDATE
           SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
         `;
-      } catch (e) {
-        // Reconcile drift silently accumulates when we only console.error.
-        // Persist enough metadata for a manual replay: the projected figure
-        // we've already reserved, the delta we intended to apply, and the
-        // exception that blocked the write. Best-effort — if this INSERT
-        // also fails, the outer catch logs and we stop there.
-        console.error('Post-stream reconcile failed:', e);
-        try {
-          await sql`
+        } catch (e) {
+          // Reconcile drift silently accumulates when we only console.error.
+          // Persist enough metadata for a manual replay: the projected figure
+          // we've already reserved, the delta we intended to apply, and the
+          // exception that blocked the write. Best-effort — if this INSERT
+          // also fails, the outer catch logs and we stop there.
+          console.error('Post-stream reconcile failed:', e);
+          try {
+            await sql`
             INSERT INTO logging_errors (
               error_id, error_name, error_message, user_id, chart_id,
               request_metadata
@@ -2052,37 +2191,37 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
             )
             ON CONFLICT (error_id) DO NOTHING
           `;
-        } catch (innerErr) {
-          console.error('reconcile-failure diagnostic insert also failed:', innerErr);
+          } catch (innerErr) {
+            console.error('reconcile-failure diagnostic insert also failed:', innerErr);
+          }
         }
       }
-    }
 
-    // Per-message attribution: populate logging_messages.cost_micro_usd so
-    // per-chart cost queries can JOIN + SUM without a separate aggregate. Only
-    // runs if the client passed X-Logging-Message-Id. Fire-and-forget.
-    if (loggingMessageId && actualMicro > 0n) {
-      try {
-        await sql`
+      // Per-message attribution: populate logging_messages.cost_micro_usd so
+      // per-chart cost queries can JOIN + SUM without a separate aggregate. Only
+      // runs if the client passed X-Logging-Message-Id. Fire-and-forget.
+      if (loggingMessageId && actualMicro > 0n) {
+        try {
+          await sql`
           UPDATE logging_messages
           SET cost_micro_usd = ${actualMicro.toString()}::bigint
           WHERE message_id = ${loggingMessageId}
         `;
-      } catch (e) {
-        console.error('logging_messages cost update failed (non-fatal):', e);
+        } catch (e) {
+          console.error('logging_messages cost update failed (non-fatal):', e);
+        }
       }
-    }
 
-    // Persist first-time poll-disable reason to logging_errors. The poller
-    // going silent is a primary cause of overshoot (parse_frame kill only
-    // fires on usage-event boundaries, so without polling the window between
-    // message_start and message_delta is kill-blind for output tokens). We
-    // need to know WHY — rate limit vs upstream 5xx vs shape change — to
-    // tune.
-    if (teeCtx.pollDisableDiagnostic) {
-      try {
-        const p = teeCtx.pollDisableDiagnostic;
-        await sql`
+      // Persist first-time poll-disable reason to logging_errors. The poller
+      // going silent is a primary cause of overshoot (parse_frame kill only
+      // fires on usage-event boundaries, so without polling the window between
+      // message_start and message_delta is kill-blind for output tokens). We
+      // need to know WHY — rate limit vs upstream 5xx vs shape change — to
+      // tune.
+      if (teeCtx.pollDisableDiagnostic) {
+        try {
+          const p = teeCtx.pollDisableDiagnostic;
+          await sql`
           INSERT INTO logging_errors (
             error_id, error_name, error_message, user_id, chart_id,
             http_status, request_metadata
@@ -2106,41 +2245,41 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
           )
           ON CONFLICT (error_id) DO NOTHING
         `;
-      } catch (e) {
-        console.error('poll-disable diagnostic insert failed (non-fatal):', e);
+        } catch (e) {
+          console.error('poll-disable diagnostic insert failed (non-fatal):', e);
+        }
       }
-    }
 
-    // Persist kill-switch diagnostics to logging_errors so post-hoc debugging
-    // doesn't depend on worker log availability. Errors bypass the usage-data
-    // opt-out, so this lands unconditionally. Minimal payload — no message
-    // content.
-    if (teeCtx.killDiagnostic) {
-      try {
-        const d = teeCtx.killDiagnostic;
-        const diagnosticMetadata = {
-          source: d.source,
-          cumulative_micro_usd: d.cumulative_micro_usd,
-          threshold_micro_usd: d.threshold_micro_usd,
-          actual_reconciled_micro_usd: actualMicro.toString(),
-          projected_micro_usd: projected.toString(),
-          accumulator_at_kill: d.accumulator_at_kill,
-          accumulator_at_reconcile: accumulator,
-          live_web_search_count: d.live_web_search_count,
-          output_tokens_est: d.output_tokens_est,
-          count_tokens_total: d.count_tokens_total,
-          polling_disabled: teeCtx.pollingDisabled,
-          model,
-          chart_id: chartId,
-          logging_message_id: loggingMessageId,
-          // Worker hostname of the request that produced this kill. Lets us
-          // tell prod (`theory-of-change-builder.*`) apart from branch
-          // previews (`<branch>-theory-of-change-builder.*`) without a
-          // separate env var — preview URLs have no log streams anyway so
-          // DB rows are the only signal we have.
-          deployment_host: requestUrl.hostname,
-        };
-        await sql`
+      // Persist kill-switch diagnostics to logging_errors so post-hoc debugging
+      // doesn't depend on worker log availability. Errors bypass the usage-data
+      // opt-out, so this lands unconditionally. Minimal payload — no message
+      // content.
+      if (teeCtx.killDiagnostic) {
+        try {
+          const d = teeCtx.killDiagnostic;
+          const diagnosticMetadata = {
+            source: d.source,
+            cumulative_micro_usd: d.cumulative_micro_usd,
+            threshold_micro_usd: d.threshold_micro_usd,
+            actual_reconciled_micro_usd: actualMicro.toString(),
+            projected_micro_usd: projected.toString(),
+            accumulator_at_kill: d.accumulator_at_kill,
+            accumulator_at_reconcile: accumulator,
+            live_web_search_count: d.live_web_search_count,
+            output_tokens_est: d.output_tokens_est,
+            count_tokens_total: d.count_tokens_total,
+            polling_disabled: teeCtx.pollingDisabled,
+            model,
+            chart_id: chartId,
+            logging_message_id: loggingMessageId,
+            // Worker hostname of the request that produced this kill. Lets us
+            // tell prod (`theory-of-change-builder.*`) apart from branch
+            // previews (`<branch>-theory-of-change-builder.*`) without a
+            // separate env var — preview URLs have no log streams anyway so
+            // DB rows are the only signal we have.
+            deployment_host: requestUrl.hostname,
+          };
+          await sql`
           INSERT INTO logging_errors (
             error_id, error_name, error_message, user_id, chart_id,
             request_metadata
@@ -2155,11 +2294,12 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
           )
           ON CONFLICT (error_id) DO NOTHING
         `;
-      } catch (e) {
-        console.error('kill diagnostic insert failed (non-fatal):', e);
+        } catch (e) {
+          console.error('kill diagnostic insert failed (non-fatal):', e);
+        }
       }
-    }
-  })());
+    })(),
+  );
 
   return new Response(keepaliveStream, {
     status: 200,
@@ -2189,21 +2329,22 @@ function revertReservation(
 ): void {
   if (projected === 0n) return;
   const minusProj = (-projected).toString();
-  ctx.waitUntil((async () => {
-    try {
-      await sql`
+  ctx.waitUntil(
+    (async () => {
+      try {
+        await sql`
         UPDATE user_api_usage
         SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + ${minusProj}::bigint)
         WHERE user_id = ${userId}
       `;
-    } catch (e) {
-      // A silent revert failure leaves an over-reservation permanently on
-      // the user's row with no breadcrumb. Persist the metadata a human
-      // needs to reconcile later: the user, the µUSD we failed to return,
-      // and the error that blocked the UPDATE.
-      console.error('Reservation revert failed (leaves a small over-reservation):', e);
-      try {
-        await sql`
+      } catch (e) {
+        // A silent revert failure leaves an over-reservation permanently on
+        // the user's row with no breadcrumb. Persist the metadata a human
+        // needs to reconcile later: the user, the µUSD we failed to return,
+        // and the error that blocked the UPDATE.
+        console.error('Reservation revert failed (leaves a small over-reservation):', e);
+        try {
+          await sql`
           INSERT INTO logging_errors (
             error_id, error_name, error_message, user_id, chart_id,
             request_metadata
@@ -2225,9 +2366,10 @@ function revertReservation(
           )
           ON CONFLICT (error_id) DO NOTHING
         `;
-      } catch (innerErr) {
-        console.error('revert-failure diagnostic insert also failed:', innerErr);
+        } catch (innerErr) {
+          console.error('revert-failure diagnostic insert also failed:', innerErr);
+        }
       }
-    }
-  })());
+    })(),
+  );
 }

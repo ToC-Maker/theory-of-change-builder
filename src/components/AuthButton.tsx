@@ -1,11 +1,17 @@
-import { useAuth0 } from "@auth0/auth0-react"
-import { useState, useRef, useEffect, useId, type ReactNode } from "react"
-import { UserCircleIcon, ShieldCheckIcon, XMarkIcon, KeyIcon, TrashIcon } from "@heroicons/react/24/outline"
-import { loggingService } from "../services/loggingService"
-import { ByokPanel } from "./ByokPanel"
-import { useApiKey } from "../contexts/ApiKeyContext"
-import { useKeyByokSpendUsd, clearAllByokLocalState } from "../utils/byokSpend"
-import { formatCostUsd } from "../utils/cost"
+import { useAuth0 } from '@auth0/auth0-react';
+import { useState, useRef, useEffect, useId, type ReactNode } from 'react';
+import {
+  UserCircleIcon,
+  ShieldCheckIcon,
+  XMarkIcon,
+  KeyIcon,
+  TrashIcon,
+} from '@heroicons/react/24/outline';
+import { loggingService } from '../services/loggingService';
+import { ByokPanel } from './ByokPanel';
+import { useApiKey } from '../contexts/ApiKeyContext';
+import { useKeyByokSpendUsd, clearAllByokLocalState } from '../utils/byokSpend';
+import { formatCostUsd } from '../utils/cost';
 
 // Shared accessible modal shell: role=dialog, Escape to close, focus the first
 // focusable element on open, restore focus on close, trap focus inside on Tab.
@@ -18,86 +24,90 @@ function AccessibleModal({
   children,
   cardClassName,
 }: {
-  isOpen: boolean
-  onClose: () => void
-  labelledBy: string
-  children: ReactNode
-  cardClassName?: string
+  isOpen: boolean;
+  onClose: () => void;
+  labelledBy: string;
+  children: ReactNode;
+  cardClassName?: string;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null)
-  const previouslyFocused = useRef<HTMLElement | null>(null)
+  const cardRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) return;
 
     previouslyFocused.current =
-      typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
+      typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
 
     // Focus the first focusable element inside the modal on open so keyboard
     // users land inside the dialog (defaults to the card itself if no
     // focusable children). Deferred a tick so late-mounted inputs are found.
     const focusFrame = window.requestAnimationFrame(() => {
-      const card = cardRef.current
-      if (!card) return
+      const card = cardRef.current;
+      if (!card) return;
       const focusable = card.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
       if (focusable.length > 0) {
-        focusable[0].focus()
+        focusable[0].focus();
       } else {
-        card.focus()
+        card.focus();
       }
-    })
+    });
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-        return
+        e.stopPropagation();
+        onClose();
+        return;
       }
       if (e.key === 'Tab') {
-        const card = cardRef.current
-        if (!card) return
+        const card = cardRef.current;
+        if (!card) return;
         const focusable = Array.from(
           card.querySelectorAll<HTMLElement>(
-            'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
           ),
-        ).filter((el) => !el.hasAttribute('aria-hidden'))
+        ).filter((el) => !el.hasAttribute('aria-hidden'));
         if (focusable.length === 0) {
-          e.preventDefault()
-          return
+          e.preventDefault();
+          return;
         }
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        const active = document.activeElement as HTMLElement | null
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement as HTMLElement | null;
         if (e.shiftKey) {
           if (active === first || !card.contains(active)) {
-            e.preventDefault()
-            last.focus()
+            e.preventDefault();
+            last.focus();
           }
         } else {
           if (active === last) {
-            e.preventDefault()
-            first.focus()
+            e.preventDefault();
+            first.focus();
           }
         }
       }
-    }
+    };
 
-    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.cancelAnimationFrame(focusFrame)
-      document.removeEventListener('keydown', handleKeyDown)
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleKeyDown);
       // Restore focus to the element that had it before the modal opened so
       // screen-reader / keyboard flow returns to where the user triggered from.
-      const prev = previouslyFocused.current
+      const prev = previouslyFocused.current;
       if (prev && typeof prev.focus === 'function') {
-        try { prev.focus() } catch { /* element may be detached */ }
+        try {
+          prev.focus();
+        } catch {
+          /* element may be detached */
+        }
       }
-    }
-  }, [isOpen, onClose])
+    };
+  }, [isOpen, onClose]);
 
-  if (!isOpen) return null
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
@@ -108,12 +118,12 @@ function AccessibleModal({
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className={cardClassName ?? "relative bg-white rounded-lg shadow-xl max-w-sm w-full p-5"}
+        className={cardClassName ?? 'relative bg-white rounded-lg shadow-xl max-w-sm w-full p-5'}
       >
         {children}
       </div>
     </div>
-  )
+  );
 }
 
 // Privacy Settings Modal
@@ -122,35 +132,35 @@ function PrivacyModal({
   onClose,
   onLoggingEnabled,
 }: {
-  isOpen: boolean
-  onClose: () => void
-  onLoggingEnabled?: () => void
+  isOpen: boolean;
+  onClose: () => void;
+  onLoggingEnabled?: () => void;
 }) {
   // Read current state fresh each time modal opens
-  const [loggingEnabled, setLoggingEnabled] = useState(false)
-  const [hasAcceptedPrivacy, setHasAcceptedPrivacy] = useState(false)
-  const headingId = useId()
+  const [loggingEnabled, setLoggingEnabled] = useState(false);
+  const [hasAcceptedPrivacy, setHasAcceptedPrivacy] = useState(false);
+  const headingId = useId();
 
   // Sync state when modal opens
   useEffect(() => {
     if (isOpen) {
-      setHasAcceptedPrivacy(localStorage.getItem('privacyPolicyAccepted') === 'true')
+      setHasAcceptedPrivacy(localStorage.getItem('privacyPolicyAccepted') === 'true');
       // Check actual opt-out value, not isOptedOut() which also checks privacy acceptance
-      const isOptedOut = localStorage.getItem('usageLoggingOptOut') === 'true'
-      setLoggingEnabled(!isOptedOut)
+      const isOptedOut = localStorage.getItem('usageLoggingOptOut') === 'true';
+      setLoggingEnabled(!isOptedOut);
     }
-  }, [isOpen])
+  }, [isOpen]);
 
-  if (!isOpen) return null
+  if (!isOpen) return null;
 
   const handleToggle = () => {
-    const newValue = !loggingEnabled
-    setLoggingEnabled(newValue)
-    loggingService.setOptOut(!newValue)
+    const newValue = !loggingEnabled;
+    setLoggingEnabled(newValue);
+    loggingService.setOptOut(!newValue);
     if (newValue) {
-      onLoggingEnabled?.()
+      onLoggingEnabled?.();
     }
-  }
+  };
 
   return (
     <AccessibleModal isOpen={isOpen} onClose={onClose} labelledBy={headingId}>
@@ -168,7 +178,9 @@ function PrivacyModal({
         <div className="p-2 bg-blue-100 rounded-full">
           <ShieldCheckIcon className="w-5 h-5 text-blue-600" />
         </div>
-        <h3 id={headingId} className="text-lg font-semibold text-gray-900">Data & Privacy</h3>
+        <h3 id={headingId} className="text-lg font-semibold text-gray-900">
+          Data & Privacy
+        </h3>
       </div>
 
       {/* Content */}
@@ -212,26 +224,26 @@ function PrivacyModal({
         </a>
       </div>
     </AccessibleModal>
-  )
+  );
 }
 
 // API key management modal. Uses AccessibleModal for role=dialog + Escape
 // handling + focus trap + focus restore. Interior is ByokPanel which
 // self-renders the add/change/confirm state based on ApiKeyContext.
 function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { hasKey, keyLast4, clearKey } = useApiKey()
-  const keyLifetimeSpendUsd = useKeyByokSpendUsd(keyLast4)
-  const [clearing, setClearing] = useState(false)
-  const headingId = useId()
+  const { hasKey, keyLast4, clearKey } = useApiKey();
+  const keyLifetimeSpendUsd = useKeyByokSpendUsd(keyLast4);
+  const [clearing, setClearing] = useState(false);
+  const headingId = useId();
 
   const handleClear = async () => {
-    setClearing(true)
+    setClearing(true);
     try {
-      await clearKey()
+      await clearKey();
     } finally {
-      setClearing(false)
+      setClearing(false);
     }
-  }
+  };
 
   return (
     <AccessibleModal
@@ -252,12 +264,14 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
         <div className="p-2 bg-blue-100 rounded-full">
           <KeyIcon className="w-5 h-5 text-blue-600" />
         </div>
-        <h3 id={headingId} className="text-lg font-semibold text-gray-900">Anthropic API key</h3>
+        <h3 id={headingId} className="text-lg font-semibold text-gray-900">
+          Anthropic API key
+        </h3>
       </div>
 
       <p className="text-sm text-gray-600 mb-4">
-        When a key is set, your messages are billed to your Anthropic account
-        instead of our shared free pool.
+        When a key is set, your messages are billed to your Anthropic account instead of our shared
+        free pool.
       </p>
 
       <ByokPanel />
@@ -270,9 +284,7 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
               the key is removed. */}
           <div className="flex items-center justify-between text-sm">
             <span className="text-gray-600">Spent on this key (via this app)</span>
-            <span className="font-medium text-gray-900">
-              {formatCostUsd(keyLifetimeSpendUsd)}
-            </span>
+            <span className="font-medium text-gray-900">{formatCostUsd(keyLifetimeSpendUsd)}</span>
           </div>
           <button
             onClick={handleClear}
@@ -285,45 +297,43 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
         </div>
       )}
     </AccessibleModal>
-  )
+  );
 }
 
 const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => {
-  const { user, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0()
-  const { clearKey } = useApiKey()
-  const [showDropdown, setShowDropdown] = useState(false)
-  const [showPrivacyModal, setShowPrivacyModal] = useState(false)
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
+  const { user, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0();
+  const { clearKey } = useApiKey();
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setShowDropdown(false)
+        setShowDropdown(false);
       }
-    }
+    };
 
     if (showDropdown) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showDropdown])
+  }, [showDropdown]);
 
   // Listen for a window-level request to open the API-key modal so distant
   // components (e.g. ChatInterface's cap banners) can trigger it without
   // threading state or a context through the tree. Paired with
   // dispatchEvent(new CustomEvent('tocb:openApiKeyModal')) on the caller.
   useEffect(() => {
-    const handler = () => setShowApiKeyModal(true)
-    window.addEventListener('tocb:openApiKeyModal', handler)
-    return () => window.removeEventListener('tocb:openApiKeyModal', handler)
-  }, [])
+    const handler = () => setShowApiKeyModal(true);
+    window.addEventListener('tocb:openApiKeyModal', handler);
+    return () => window.removeEventListener('tocb:openApiKeyModal', handler);
+  }, []);
 
   if (isLoading) {
-    return (
-      <div className="w-9 h-9 rounded-full bg-gray-200 animate-pulse" />
-    )
+    return <div className="w-9 h-9 rounded-full bg-gray-200 animate-pulse" />;
   }
 
   if (isAuthenticated && user) {
@@ -374,8 +384,8 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
             <div className="p-2 space-y-1">
               <button
                 onClick={() => {
-                  setShowDropdown(false)
-                  setShowApiKeyModal(true)
+                  setShowDropdown(false);
+                  setShowApiKeyModal(true);
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
               >
@@ -384,8 +394,8 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
               </button>
               <button
                 onClick={() => {
-                  setShowDropdown(false)
-                  setShowPrivacyModal(true)
+                  setShowDropdown(false);
+                  setShowPrivacyModal(true);
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
               >
@@ -394,7 +404,7 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
               </button>
               <button
                 onClick={async () => {
-                  setShowDropdown(false)
+                  setShowDropdown(false);
                   // Wipe BYOK state before handing control to Auth0. If the
                   // user signs in as someone else on the same browser we
                   // must not leak the previous account's spend counters or
@@ -404,17 +414,22 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
                   // removed. clearAllByokLocalState() is belt-and-braces
                   // in case clearKey throws before its localStorage wipe.
                   try {
-                    await clearKey()
+                    await clearKey();
                   } catch (err) {
-                    console.error('[AuthButton] clearKey on logout failed:', err)
+                    console.error('[AuthButton] clearKey on logout failed:', err);
                   }
-                  clearAllByokLocalState()
-                  logout({ logoutParams: { returnTo: window.location.origin } })
+                  clearAllByokLocalState();
+                  logout({ logoutParams: { returnTo: window.location.origin } });
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                  />
                 </svg>
                 Sign out
               </button>
@@ -427,12 +442,9 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
           onClose={() => setShowPrivacyModal(false)}
           onLoggingEnabled={onLoggingEnabled}
         />
-        <ApiKeyModal
-          isOpen={showApiKeyModal}
-          onClose={() => setShowApiKeyModal(false)}
-        />
+        <ApiKeyModal isOpen={showApiKeyModal} onClose={() => setShowApiKeyModal(false)} />
       </div>
-    )
+    );
   }
 
   // Anonymous user - show dropdown with sign in and privacy settings
@@ -452,25 +464,30 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
           <div className="p-2 space-y-1">
             <button
               onClick={() => {
-                setShowDropdown(false)
+                setShowDropdown(false);
                 // Preserve current URL across Auth0 redirect so the user
                 // lands back on their chart (localStorage chat history is
                 // keyed by URL). Matches Auth0RedirectHandler in App.tsx.
-                const returnTo = window.location.pathname + window.location.search
-                localStorage.setItem('auth0_returnTo', returnTo)
-                void loginWithRedirect({ appState: { returnTo } })
+                const returnTo = window.location.pathname + window.location.search;
+                localStorage.setItem('auth0_returnTo', returnTo);
+                void loginWithRedirect({ appState: { returnTo } });
               }}
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"
+                />
               </svg>
               Sign in
             </button>
             <button
               onClick={() => {
-                setShowDropdown(false)
-                setShowPrivacyModal(true)
+                setShowDropdown(false);
+                setShowPrivacyModal(true);
               }}
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
             >
@@ -482,19 +499,13 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
       )}
 
       {/* Privacy Modal */}
-      <PrivacyModal
-        isOpen={showPrivacyModal}
-        onClose={() => setShowPrivacyModal(false)}
-      />
+      <PrivacyModal isOpen={showPrivacyModal} onClose={() => setShowPrivacyModal(false)} />
       {/* API-key modal is rendered here too so the tocb:openApiKeyModal
           event can open it for anon users — ByokPanel shows the Sign-in
           variant inside, so the modal is still useful pre-auth. */}
-      <ApiKeyModal
-        isOpen={showApiKeyModal}
-        onClose={() => setShowApiKeyModal(false)}
-      />
+      <ApiKeyModal isOpen={showApiKeyModal} onClose={() => setShowApiKeyModal(false)} />
     </div>
-  )
-}
+  );
+};
 
-export default AuthButton
+export default AuthButton;

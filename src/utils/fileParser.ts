@@ -116,9 +116,7 @@ export async function parseFile(file: File): Promise<ParsedFile> {
  * NOT validate or reject uploads. Anthropic's Files API enforces its own
  * size and page-count ceilings at upload time.
  */
-export async function validatePdf(
-  file: File,
-): Promise<{ pageCount: number; sizeBytes: number }> {
+export async function validatePdf(file: File): Promise<{ pageCount: number; sizeBytes: number }> {
   const sizeBytes = file.size;
 
   const chunk = await file.slice(0, PDF_HEADER_SCAN_BYTES).arrayBuffer();

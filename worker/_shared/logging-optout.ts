@@ -9,7 +9,7 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
  */
 export async function isUserOptedOut(
   sql: NeonQueryFunction<false, false>,
-  user_id: string | null
+  user_id: string | null,
 ): Promise<boolean> {
   if (!user_id) return false;
 

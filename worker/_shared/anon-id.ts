@@ -307,7 +307,8 @@ export async function verifyAuthLinkCookie(
   // Constant-time compare of the base64url signatures (same technique as
   // the turnstile cookie verifier — no subtle.timingSafeEqual in Workers).
   let diff = 0;
-  for (let i = 0; i < sigB64.length; i++) diff |= expectedSigB64.charCodeAt(i) ^ sigB64.charCodeAt(i);
+  for (let i = 0; i < sigB64.length; i++)
+    diff |= expectedSigB64.charCodeAt(i) ^ sigB64.charCodeAt(i);
   if (diff !== 0) return null;
   try {
     const payload = JSON.parse(b64urlDecode(payloadB64)) as { sub?: unknown; exp?: unknown };

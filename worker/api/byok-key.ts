@@ -28,7 +28,7 @@ async function handlePost(request: Request, env: Env): Promise<Response> {
 
   let body: { key?: unknown };
   try {
-    body = await request.json() as { key?: unknown };
+    body = (await request.json()) as { key?: unknown };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }

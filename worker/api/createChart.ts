@@ -6,7 +6,9 @@ function randomBase64Url(byteCount: number): string {
   const bytes = new Uint8Array(byteCount);
   crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -14,7 +16,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // no field-level checks here, so unknown keeps the shape honest.
   let body: { chartData?: unknown };
   try {
-    body = await request.json() as { chartData?: unknown };
+    body = (await request.json()) as { chartData?: unknown };
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
@@ -35,7 +37,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     await tryMigrateUser(sql, authHeader, 'createChart', env);
 
     const chartTitle =
-      (chartData && typeof chartData === 'object' && typeof (chartData as { title?: unknown }).title === 'string')
+      chartData &&
+      typeof chartData === 'object' &&
+      typeof (chartData as { title?: unknown }).title === 'string'
         ? (chartData as { title: string }).title
         : 'Theory of Change';
     let userId = null;
@@ -70,10 +74,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       editToken,
       viewUrl: `${siteUrl}/chart/${chartId}`,
       editUrl: `${siteUrl}/edit/${editToken}`,
-      message: 'Chart created successfully'
+      message: 'Chart created successfully',
     });
   } catch (error) {
     console.error('Error creating chart:', error);
     return Response.json({ error: 'Failed to create chart' }, { status: 500 });
   }
-};
+}

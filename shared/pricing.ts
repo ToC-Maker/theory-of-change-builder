@@ -23,10 +23,10 @@ export interface ModelPricing {
 // while actually returning `undefined` at runtime for unknown keys — a
 // correctness trap.
 export const MODEL_PRICING = {
-  'claude-opus-4-7':   { input_usd_per_mtok: 5, output_usd_per_mtok: 25 },
-  'claude-opus-4-6':   { input_usd_per_mtok: 5, output_usd_per_mtok: 25 },
+  'claude-opus-4-7': { input_usd_per_mtok: 5, output_usd_per_mtok: 25 },
+  'claude-opus-4-6': { input_usd_per_mtok: 5, output_usd_per_mtok: 25 },
   'claude-sonnet-4-6': { input_usd_per_mtok: 3, output_usd_per_mtok: 15 },
-  'claude-haiku-4-5':  { input_usd_per_mtok: 1, output_usd_per_mtok: 5  },
+  'claude-haiku-4-5': { input_usd_per_mtok: 1, output_usd_per_mtok: 5 },
 } as const satisfies Record<string, ModelPricing>;
 
 /** Union of all known model IDs. Derived from `MODEL_PRICING` keys. */
@@ -46,10 +46,30 @@ export interface ModelCapabilities {
 // Keyed by `ModelId` so adding a model to `MODEL_PRICING` forces a matching
 // capabilities entry (TS error on the `satisfies` clause otherwise).
 export const MODEL_CAPABILITIES = {
-  'claude-opus-4-7':   { context_window_tokens: 1_000_000, max_output_tokens: 128_000, supports_extended_thinking: true,  supports_output_config_effort: true  },
-  'claude-opus-4-6':   { context_window_tokens: 1_000_000, max_output_tokens: 128_000, supports_extended_thinking: true,  supports_output_config_effort: false },
-  'claude-sonnet-4-6': { context_window_tokens: 1_000_000, max_output_tokens:  64_000, supports_extended_thinking: true,  supports_output_config_effort: false },
-  'claude-haiku-4-5':  { context_window_tokens:   200_000, max_output_tokens:  64_000, supports_extended_thinking: true,  supports_output_config_effort: false },
+  'claude-opus-4-7': {
+    context_window_tokens: 1_000_000,
+    max_output_tokens: 128_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: true,
+  },
+  'claude-opus-4-6': {
+    context_window_tokens: 1_000_000,
+    max_output_tokens: 128_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: false,
+  },
+  'claude-sonnet-4-6': {
+    context_window_tokens: 1_000_000,
+    max_output_tokens: 64_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: false,
+  },
+  'claude-haiku-4-5': {
+    context_window_tokens: 200_000,
+    max_output_tokens: 64_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: false,
+  },
 } as const satisfies Record<ModelId, ModelCapabilities>;
 
 // Ephemeral prompt-cache multipliers applied to the input rate.

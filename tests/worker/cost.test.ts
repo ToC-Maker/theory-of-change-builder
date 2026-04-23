@@ -15,20 +15,23 @@ describe('computeCostMicroUsd', () => {
   });
 
   it('sonnet 4.6: cache write 100K = 100_000 × 3 × 1.25 = 375_000 μUSD', () => {
-    expect(
-      computeCostMicroUsd('claude-sonnet-4-6', { cache_creation_input_tokens: 100_000 }),
-    ).toBe(375_000n);
+    expect(computeCostMicroUsd('claude-sonnet-4-6', { cache_creation_input_tokens: 100_000 })).toBe(
+      375_000n,
+    );
   });
 
   it('sonnet 4.6: cache read 100K = 100_000 × 3 × 0.1 = 30_000 μUSD', () => {
-    expect(
-      computeCostMicroUsd('claude-sonnet-4-6', { cache_read_input_tokens: 100_000 }),
-    ).toBe(30_000n);
+    expect(computeCostMicroUsd('claude-sonnet-4-6', { cache_read_input_tokens: 100_000 })).toBe(
+      30_000n,
+    );
   });
 
   it('haiku 4.5: 1M input + 1M output = 1_000_000 + 5_000_000 = 6_000_000 μUSD', () => {
     expect(
-      computeCostMicroUsd('claude-haiku-4-5', { input_tokens: 1_000_000, output_tokens: 1_000_000 }),
+      computeCostMicroUsd('claude-haiku-4-5', {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
     ).toBe(6_000_000n);
   });
 

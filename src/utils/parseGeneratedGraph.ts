@@ -1,4 +1,4 @@
-import type { ToCData } from '../types'
+import type { ToCData } from '../types';
 
 /**
  * Parse generated Theory of Change JSON from AI response.
@@ -20,7 +20,11 @@ export function parseGeneratedGraph(content: string): ToCData | null {
     const graphData: unknown = JSON.parse(jsonString);
 
     // Validate basic structure
-    if (!graphData || typeof graphData !== 'object' || !Array.isArray((graphData as { sections?: unknown }).sections)) {
+    if (
+      !graphData ||
+      typeof graphData !== 'object' ||
+      !Array.isArray((graphData as { sections?: unknown }).sections)
+    ) {
       console.error('Invalid graph structure: missing sections array', graphData);
       return null;
     }
@@ -34,7 +38,6 @@ export function parseGeneratedGraph(content: string): ToCData | null {
     console.log('- Full structure:', typed);
 
     return typed;
-
   } catch (error) {
     console.error('Error parsing generated graph JSON:', error);
     return null;

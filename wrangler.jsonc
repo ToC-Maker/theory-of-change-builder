@@ -10,13 +10,13 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
   },
   "observability": {
     "logs": {
       "enabled": true,
-      "invocation_logs": true
-    }
+      "invocation_logs": true,
+    },
   },
   // Public Auth0 config (intended to be client-exposed — ends up in the Vite bundle).
   // Also accessed at runtime by worker/_shared/auth.ts for JWT verification.
@@ -26,6 +26,6 @@
   "vars": {
     "VITE_AUTH0_DOMAIN": "dev-zy7obc7gqpztqadk.us.auth0.com",
     "VITE_AUTH0_CLIENT_ID": "eGHWLKnz44EPGWfmCdcVvYY5SBSMX01B",
-    "VITE_TURNSTILE_SITE_KEY": "0x4AAAAAADA7hqLrQ0ppcrNW"
-  }
+    "VITE_TURNSTILE_SITE_KEY": "0x4AAAAAADA7hqLrQ0ppcrNW",
+  },
 }

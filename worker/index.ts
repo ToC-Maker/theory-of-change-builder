@@ -76,7 +76,7 @@ const securityHeaders: Record<string, string> = {
 const blockedPaths = ['/wp-admin/', '/wordpress/', '/xmlrpc.php', '/wp-includes/', '/wp-content/'];
 
 function isBlocked(pathname: string): boolean {
-  return blockedPaths.some(p => pathname.startsWith(p));
+  return blockedPaths.some((p) => pathname.startsWith(p));
 }
 
 function addHeaders(response: Response, headers: Record<string, string>): Response {
@@ -113,7 +113,7 @@ export default {
             console.error(`Error in ${request.method} ${path}:`, err);
             return addHeaders(
               Response.json({ error: 'Internal server error' }, { status: 500 }),
-              corsHeaders
+              corsHeaders,
             );
           }
         }
@@ -124,14 +124,11 @@ export default {
       if (pathExists) {
         return addHeaders(
           Response.json({ error: 'Method not allowed' }, { status: 405 }),
-          corsHeaders
+          corsHeaders,
         );
       }
 
-      return addHeaders(
-        Response.json({ error: 'Not found' }, { status: 404 }),
-        corsHeaders
-      );
+      return addHeaders(Response.json({ error: 'Not found' }, { status: 404 }), corsHeaders);
     }
 
     // Static assets (served by Workers Static Assets with SPA fallback)

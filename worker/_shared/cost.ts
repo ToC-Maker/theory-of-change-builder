@@ -76,15 +76,24 @@ export function parseAnthropicUsage(raw: unknown): AnthropicUsage {
     }
     const svcObj = rawSvc as Record<string, unknown>;
     serverToolUse = {
-      web_search_requests: ensureNonNegInt('server_tool_use.web_search_requests', svcObj.web_search_requests),
+      web_search_requests: ensureNonNegInt(
+        'server_tool_use.web_search_requests',
+        svcObj.web_search_requests,
+      ),
     };
   }
 
   return {
     input_tokens: ensureNonNegInt('input_tokens', obj.input_tokens),
     output_tokens: ensureNonNegInt('output_tokens', obj.output_tokens),
-    cache_creation_input_tokens: ensureNonNegInt('cache_creation_input_tokens', obj.cache_creation_input_tokens),
-    cache_read_input_tokens: ensureNonNegInt('cache_read_input_tokens', obj.cache_read_input_tokens),
+    cache_creation_input_tokens: ensureNonNegInt(
+      'cache_creation_input_tokens',
+      obj.cache_creation_input_tokens,
+    ),
+    cache_read_input_tokens: ensureNonNegInt(
+      'cache_read_input_tokens',
+      obj.cache_read_input_tokens,
+    ),
     server_tool_use: serverToolUse,
   };
 }
@@ -140,12 +149,14 @@ export function computeCostMicroUsd(model: string, usage: AnthropicUsage): bigin
   const inputRate = BigInt(r.input);
   const outputRate = BigInt(r.output);
 
-  const input       = BigInt(usage.input_tokens ?? 0) * inputRate;
-  const cacheCreate = (BigInt(usage.cache_creation_input_tokens ?? 0) * inputRate * CACHE_WRITE_NUM) / CACHE_DENOM;
-  const cacheRead   = (BigInt(usage.cache_read_input_tokens ?? 0)     * inputRate * CACHE_READ_NUM)  / CACHE_DENOM;
-  const output      = BigInt(usage.output_tokens ?? 0) * outputRate;
-  const webSearch   = BigInt(usage.server_tool_use?.web_search_requests ?? 0)
-    * BigInt(WEB_SEARCH_MICRO_USD_PER_USE);
+  const input = BigInt(usage.input_tokens ?? 0) * inputRate;
+  const cacheCreate =
+    (BigInt(usage.cache_creation_input_tokens ?? 0) * inputRate * CACHE_WRITE_NUM) / CACHE_DENOM;
+  const cacheRead =
+    (BigInt(usage.cache_read_input_tokens ?? 0) * inputRate * CACHE_READ_NUM) / CACHE_DENOM;
+  const output = BigInt(usage.output_tokens ?? 0) * outputRate;
+  const webSearch =
+    BigInt(usage.server_tool_use?.web_search_requests ?? 0) * BigInt(WEB_SEARCH_MICRO_USD_PER_USE);
 
   return input + cacheCreate + cacheRead + output + webSearch;
 }

@@ -94,7 +94,7 @@ export function AttachedFilesBar({
       dragDepthRef.current += 1;
       setIsDragging(true);
     },
-    [acceptsDrop]
+    [acceptsDrop],
   );
 
   const handleDragOver = useCallback(
@@ -104,7 +104,7 @@ export function AttachedFilesBar({
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     },
-    [acceptsDrop]
+    [acceptsDrop],
   );
 
   const handleDragLeave = useCallback(
@@ -114,7 +114,7 @@ export function AttachedFilesBar({
       dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
       if (dragDepthRef.current === 0) setIsDragging(false);
     },
-    [acceptsDrop]
+    [acceptsDrop],
   );
 
   const handleDrop = useCallback(
@@ -126,7 +126,7 @@ export function AttachedFilesBar({
       const dropped = Array.from(e.dataTransfer.files ?? []);
       if (dropped.length > 0) onDropFiles(dropped);
     },
-    [acceptsDrop, onDropFiles]
+    [acceptsDrop, onDropFiles],
   );
 
   const liveStatus = useMemo(() => {
@@ -167,12 +167,7 @@ export function AttachedFilesBar({
     >
       <div className="flex flex-wrap items-center gap-2">
         {files.map((file) => (
-          <FileChip
-            key={file.id}
-            file={file}
-            onRemove={onRemove}
-            onRetry={onRetry}
-          />
+          <FileChip key={file.id} file={file} onRemove={onRemove} onRetry={onRetry} />
         ))}
       </div>
 
@@ -224,33 +219,22 @@ function FileChip({ file, onRemove, onRetry }: FileChipProps) {
     file.status === 'error'
       ? 'bg-red-50 border-red-200 text-red-800'
       : file.status === 'uploading'
-      ? 'bg-gray-100 border-gray-200 text-gray-700'
-      : 'bg-gray-100 border-gray-200 text-gray-800';
+        ? 'bg-gray-100 border-gray-200 text-gray-700'
+        : 'bg-gray-100 border-gray-200 text-gray-800';
 
   return (
-    <span
-      className={`${baseClass} ${statusClass}`}
-      title={file.filename}
-      data-status={file.status}
-    >
+    <span className={`${baseClass} ${statusClass}`} title={file.filename} data-status={file.status}>
       <span aria-hidden className="text-base leading-none">
         {icon}
       </span>
       <span className="max-w-[14rem] truncate">{truncated}</span>
-      {size && file.status === 'ready' && (
-        <span className="text-xs text-gray-500">{size}</span>
-      )}
+      {size && file.status === 'ready' && <span className="text-xs text-gray-500">{size}</span>}
 
-      {file.status === 'uploading' && (
-        <UploadIndicator progress={file.progress} />
-      )}
+      {file.status === 'uploading' && <UploadIndicator progress={file.progress} />}
 
       {file.status === 'error' && (
         <span className="flex items-center gap-1.5">
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full bg-red-500"
-            aria-hidden
-          />
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" aria-hidden />
           {/* Error text moved out of the chip — see the list below the
               chip row. Keeping the chip compact lets long error messages
               wrap naturally instead of truncating with ellipsis. */}
@@ -287,8 +271,7 @@ interface UploadIndicatorProps {
 }
 
 function UploadIndicator({ progress }: UploadIndicatorProps) {
-  const clamped =
-    typeof progress === 'number' ? Math.max(0, Math.min(100, progress)) : undefined;
+  const clamped = typeof progress === 'number' ? Math.max(0, Math.min(100, progress)) : undefined;
   return (
     <span
       className="inline-flex items-center gap-1 text-xs text-gray-500"
