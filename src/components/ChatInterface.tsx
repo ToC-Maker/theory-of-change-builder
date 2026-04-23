@@ -281,7 +281,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
 });
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set(), onChartCreated }: ChatInterfaceProps) {
-  const { hasKey, keyLast4, verified, useForChat, setUseForChat, clearKey } = useApiKey();
+  const { hasKey, keyLast4, verified } = useApiKey();
   const { isAuthenticated, getIdTokenClaims } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
@@ -406,16 +406,16 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // seeing a silent re-render.
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
-  // BYOK panel state for 402/kill recovery and voluntary key entry.
+  // BYOK panel state for 402/kill recovery.
   //
   // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
   // is handled by calling refreshUsage(), which flips the derived
   // `capAlreadyReached` flag and shows the composer-side banner. A
-  // separate mode would double-render the panel.
+  // separate mode would double-render the panel. Voluntary key entry
+  // now lives in the profile-dropdown modal, not inline.
   const [byokPanelMode, setByokPanelMode] = useState<
-    'request_cut_off' | 'global_budget' | 'voluntary' | null
+    'request_cut_off' | 'global_budget' | null
   >(null);
-  const [byokMenuOpen, setByokMenuOpen] = useState(false);
 
   // Files attached in Chat mode (separate from Generate-mode `files`). These
   // can be inline text (content in-memory) or Anthropic Files API uploads
@@ -2074,57 +2074,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
 
             {/* Usage / quota indicator. BYOK users see a pill instead of a
                 progress bar (no shared pool is consumed). Unlimited-tier
-                users (e.g. admin grants) also skip the progress bar. */}
+                users (e.g. admin grants) also skip the progress bar. Key
+                management (change/remove/use-for-chat) lives in the
+                profile dropdown's "Anthropic API key" modal. */}
             {usage && usage.tier !== 'unlimited' && (
               <div className="mt-2">
                 {usage.tier === 'byok' ? (
-                  <div className="relative flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1 text-xs text-gray-700">
-                      <span aria-hidden>🔑</span>
-                      <span>BYOK{keyLast4 ? ` · ...${keyLast4}` : ''}</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setByokMenuOpen((v) => !v)}
-                      className="text-xs text-gray-500 hover:text-gray-700 px-1 rounded"
-                      title="BYOK options"
-                    >
-                      Options
-                    </button>
-                    {byokMenuOpen && (
-                      <div className="absolute right-0 top-6 z-40 w-56 bg-white border border-gray-200 rounded-lg shadow-lg p-2 space-y-1 text-xs">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            setByokMenuOpen(false);
-                            await clearKey();
-                            await refreshUsage();
-                          }}
-                          className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700"
-                        >
-                          Clear key
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setByokMenuOpen(false);
-                            setByokPanelMode('voluntary');
-                          }}
-                          className="w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700"
-                        >
-                          Change key
-                        </button>
-                        <label className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-gray-700 cursor-pointer">
-                          <span>Use for Chat too</span>
-                          <input
-                            type="checkbox"
-                            checked={useForChat}
-                            onChange={(e) => setUseForChat(e.target.checked)}
-                          />
-                        </label>
-                      </div>
-                    )}
-                  </div>
+                  <span className="inline-flex items-center gap-1 text-xs text-gray-700">
+                    <span aria-hidden>🔑</span>
+                    <span>BYOK{keyLast4 ? ` · ...${keyLast4}` : ''}</span>
+                  </span>
                 ) : (
                   <div>
                     <div
@@ -2562,21 +2521,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       }}
                     />
                     <DonateCta />
-                  </div>
-                )}
-                {byokPanelMode === 'voluntary' && (
-                  <div className="space-y-2">
-                    <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded px-3 py-2">
-                      When a key is set, your messages are billed to your Anthropic
-                      account instead of our shared free pool.
-                    </div>
-                    <ByokPanel
-                      onSubmitted={() => {
-                        setByokPanelMode(null);
-                        setCostErrorBanner(null);
-                        void refreshUsage();
-                      }}
-                    />
                   </div>
                 )}
 

@@ -1,7 +1,9 @@
 import { useAuth0 } from "@auth0/auth0-react"
 import { useState, useRef, useEffect } from "react"
-import { UserCircleIcon, ShieldCheckIcon, XMarkIcon } from "@heroicons/react/24/outline"
+import { UserCircleIcon, ShieldCheckIcon, XMarkIcon, KeyIcon, TrashIcon } from "@heroicons/react/24/outline"
 import { loggingService } from "../services/loggingService"
+import { ByokPanel } from "./ByokPanel"
+import { useApiKey } from "../contexts/ApiKeyContext"
 
 // Privacy Settings Modal
 function PrivacyModal({
@@ -107,10 +109,72 @@ function PrivacyModal({
   )
 }
 
+// API key management modal. Mirrors PrivacyModal structure: backdrop + card,
+// closes on backdrop click or X. Interior is ByokPanel which self-renders
+// the add/change/confirm state based on ApiKeyContext.
+function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const { hasKey, clearKey } = useApiKey()
+  const [clearing, setClearing] = useState(false)
+
+  if (!isOpen) return null
+
+  const handleClear = async () => {
+    setClearing(true)
+    try {
+      await clearKey()
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black bg-opacity-50" onClick={onClose} />
+      <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-5">
+        <button
+          onClick={onClose}
+          className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+          aria-label="Close"
+        >
+          <XMarkIcon className="w-5 h-5" />
+        </button>
+
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-blue-100 rounded-full">
+            <KeyIcon className="w-5 h-5 text-blue-600" />
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900">Anthropic API key</h3>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-4">
+          When a key is set, your messages are billed to your Anthropic account
+          instead of our shared free pool.
+        </p>
+
+        <ByokPanel />
+
+        {hasKey && (
+          <div className="mt-4 pt-3 border-t border-gray-100">
+            <button
+              onClick={handleClear}
+              disabled={clearing}
+              className="inline-flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 disabled:opacity-50"
+            >
+              <TrashIcon className="w-4 h-4" />
+              {clearing ? 'Removing…' : 'Remove key'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => {
   const { user, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0()
   const [showDropdown, setShowDropdown] = useState(false)
   const [showPrivacyModal, setShowPrivacyModal] = useState(false)
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   // Close dropdown when clicking outside
@@ -182,6 +246,16 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
               <button
                 onClick={() => {
                   setShowDropdown(false)
+                  setShowApiKeyModal(true)
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                <KeyIcon className="w-4 h-4" />
+                Anthropic API key
+              </button>
+              <button
+                onClick={() => {
+                  setShowDropdown(false)
                   setShowPrivacyModal(true)
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
@@ -205,11 +279,14 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
           </div>
         )}
 
-        {/* Privacy Modal */}
         <PrivacyModal
           isOpen={showPrivacyModal}
           onClose={() => setShowPrivacyModal(false)}
           onLoggingEnabled={onLoggingEnabled}
+        />
+        <ApiKeyModal
+          isOpen={showApiKeyModal}
+          onClose={() => setShowApiKeyModal(false)}
         />
       </div>
     )

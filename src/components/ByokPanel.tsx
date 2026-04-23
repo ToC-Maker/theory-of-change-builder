@@ -34,6 +34,9 @@ export function ByokPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSubmittedLast4, setJustSubmittedLast4] = useState<string | null>(null);
+  // `editing` overrides the verified-pill view so the user can replace an
+  // existing key. Confirmation flips it back on successful verification.
+  const [editing, setEditing] = useState(false);
 
   const inputId = useId();
 
@@ -58,6 +61,7 @@ export function ByokPanel({
       setJustSubmittedLast4(result.last4 ?? null);
       setRawKey('');
       setShowKey(false);
+      setEditing(false);
       onSubmitted?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
@@ -93,7 +97,7 @@ export function ByokPanel({
     );
   }
 
-  const showConfirmation = justSubmittedLast4 !== null || (hasKey && !error);
+  const showConfirmation = !editing && (justSubmittedLast4 !== null || (hasKey && !error));
   const confirmationLast4 = justSubmittedLast4 ?? keyLast4 ?? null;
 
   return (
@@ -104,15 +108,28 @@ export function ByokPanel({
       </h3>
 
       {showConfirmation ? (
-        <div
-          className="mt-3 flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800"
-          role="status"
-        >
-          <CheckCircleIcon className="w-4 h-4 flex-shrink-0" aria-hidden />
-          <span>
-            Key verified
-            {confirmationLast4 ? <> &middot; ends in <code className="font-mono">{confirmationLast4}</code></> : null}
-          </span>
+        <div className="mt-3 space-y-2">
+          <div
+            className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800"
+            role="status"
+          >
+            <CheckCircleIcon className="w-4 h-4 flex-shrink-0" aria-hidden />
+            <span>
+              Key verified
+              {confirmationLast4 ? <> &middot; ends in <code className="font-mono">{confirmationLast4}</code></> : null}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(true);
+              setError(null);
+              setJustSubmittedLast4(null);
+            }}
+            className="text-sm text-blue-600 hover:text-blue-800 underline"
+          >
+            Change key
+          </button>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="mt-3 space-y-3" noValidate>
@@ -188,19 +205,38 @@ export function ByokPanel({
             </p>
           )}
 
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-          >
-            {submitting && (
-              <span
-                className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
-                aria-hidden
-              />
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            >
+              {submitting && (
+                <span
+                  className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+                  aria-hidden
+                />
+              )}
+              {submitting ? 'Verifying…' : 'Verify and continue'}
+            </button>
+            {/* Cancel is only meaningful when we're editing an existing key;
+                without one there's no prior state to fall back to. */}
+            {editing && hasKey && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(false);
+                  setRawKey('');
+                  setShowKey(false);
+                  setError(null);
+                }}
+                className="text-sm text-gray-600 hover:text-gray-800"
+                disabled={submitting}
+              >
+                Cancel
+              </button>
             )}
-            {submitting ? 'Verifying…' : 'Verify and continue'}
-          </button>
+          </div>
         </form>
       )}
     </section>
