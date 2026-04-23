@@ -4,7 +4,7 @@ import { useParams, useLocation } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage, type CostError } from '../services/chatService';
 import { ChartService } from '../services/chartService';
-import { applyEdits } from '../utils/graphEdits';
+import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/ApiKeyContext';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
@@ -40,7 +40,8 @@ import {
   DocumentTextIcon,
   MagnifyingGlassCircleIcon,
   StopIcon,
-  SparklesIcon
+  SparklesIcon,
+  PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 
 export type AIMode = 'chat' | 'generate' | 'search';
@@ -2440,27 +2441,46 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </div>
                 )}
 
-                {/* Streaming message */}
-                {isStreaming && streamingContent && (
-                  <div className="flex justify-start">
-                    <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
-                      <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-                        <ReactMarkdown>{streamingContent}</ReactMarkdown>
-                      </div>
-                      <div className="text-xs mt-1 opacity-70 text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
-                          <span>Streaming...</span>
-                          {runningCostUsd != null && (
-                            <span className="ml-2 text-gray-600">
-                              · {formatCostUsd(runningCostUsd)} so far
-                            </span>
-                          )}
+                {/* Streaming message. prepareStreamingDisplay hides any
+                    in-progress [EDIT_INSTRUCTIONS]...[/EDIT_INSTRUCTIONS]
+                    block whose closing tag hasn't arrived yet, and returns
+                    generatingEdits=true so we can render a dedicated
+                    indicator under the prose rather than leaking raw JSON
+                    into the bubble. Once the closing tag arrives upstream,
+                    cleanResponseContent in chatService removes the block
+                    and this becomes a no-op. */}
+                {isStreaming && streamingContent && (() => {
+                  const { display, generatingEdits } = prepareStreamingDisplay(streamingContent);
+                  if (!display && !generatingEdits) return null;
+                  return (
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
+                        {display && (
+                          <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
+                            <ReactMarkdown>{display}</ReactMarkdown>
+                          </div>
+                        )}
+                        {generatingEdits && (
+                          <div className={`flex items-center gap-2 text-xs text-amber-800 ${display ? 'mt-2' : ''}`}>
+                            <PencilSquareIcon className="w-4 h-4 animate-pulse text-amber-600" aria-hidden />
+                            <span>Generating edits to the graph…</span>
+                          </div>
+                        )}
+                        <div className="text-xs mt-1 opacity-70 text-gray-500">
+                          <div className="flex items-center gap-1">
+                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
+                            <span>Streaming...</span>
+                            {runningCostUsd != null && (
+                              <span className="ml-2 text-gray-600">
+                                · {formatCostUsd(runningCostUsd)} so far
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Cost-error banner: rendered under the last user message
                     in lieu of toast-style popups, so we preserve chat

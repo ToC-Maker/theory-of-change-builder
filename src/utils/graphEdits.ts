@@ -322,3 +322,51 @@ export function cleanResponseContent(content: string): string {
 
   return cleanContent.trim();
 }
+
+/**
+ * Prepare content for the live streaming bubble. Differs from
+ * `cleanResponseContent` in how it handles markers whose closing tag
+ * hasn't arrived yet:
+ *
+ *   - Closed `[EDIT_INSTRUCTIONS]…[/EDIT_INSTRUCTIONS]` blocks: already
+ *     stripped upstream by `cleanResponseContent`.
+ *   - Open-without-close `[EDIT_INSTRUCTIONS]…` (mid-stream): strip from
+ *     the opener to end-of-string AND report `generatingEdits: true` so
+ *     the UI can render a "Generating edits…" indicator instead of
+ *     leaking the half-built JSON to the user.
+ *   - Same strip-without-flag behaviour for hallucinated `[CURRENT_GRAPH_DATA]`
+ *     / `[SELECTED_NODES]` openers.
+ *
+ * Once the closing tag arrives in a subsequent delta, `cleanResponseContent`
+ * upstream removes the whole block and this helper is a no-op.
+ */
+export function prepareStreamingDisplay(content: string): {
+  display: string;
+  generatingEdits: boolean;
+} {
+  let display = content;
+  let generatingEdits = false;
+
+  const openOnlyStrip = (startMarker: string, endMarker: string): boolean => {
+    const startIdx = display.indexOf(startMarker);
+    if (startIdx === -1) return false;
+    const endIdx = display.indexOf(endMarker, startIdx + startMarker.length);
+    if (endIdx !== -1) {
+      // A closed pair — cleanResponseContent upstream should have handled
+      // it, but strip defensively in case this helper runs against raw
+      // content somewhere.
+      display = display.substring(0, startIdx) + display.substring(endIdx + endMarker.length);
+      return false;
+    }
+    display = display.substring(0, startIdx);
+    return true;
+  };
+
+  if (openOnlyStrip('[EDIT_INSTRUCTIONS]', '[/EDIT_INSTRUCTIONS]')) {
+    generatingEdits = true;
+  }
+  openOnlyStrip('[CURRENT_GRAPH_DATA]', '[/CURRENT_GRAPH_DATA]');
+  openOnlyStrip('[SELECTED_NODES]', '[/SELECTED_NODES]');
+
+  return { display: display.trim(), generatingEdits };
+}
