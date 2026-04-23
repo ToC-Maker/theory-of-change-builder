@@ -65,9 +65,12 @@ export function ConnectionsComponent({
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null)
   const [edgePopup, setEdgePopupState] = useState<EdgePopupState | null>(null)
 
-  const setEdgePopup = (value: EdgePopupState | null) => {
-    setEdgePopupState(value)
-    onEdgePopupChange?.(value)
+  const setEdgePopup: React.Dispatch<React.SetStateAction<EdgePopupState | null>> = (value) => {
+    setEdgePopupState((prev) => {
+      const next = typeof value === 'function' ? value(prev) : value
+      onEdgePopupChange?.(next)
+      return next
+    })
   }
   const [smoothUpdates, setSmoothUpdates] = useState(false)
   const [refreshCounter, setRefreshCounter] = useState(0)
@@ -429,7 +432,8 @@ export function ConnectionsComponent({
 
         // Calculate local positions relative to container
         const getLocalPosition = (element: HTMLElement) => {
-          let x = 0, y = 0, width = element.offsetWidth, height = element.offsetHeight
+          let x = 0, y = 0
+          const width = element.offsetWidth, height = element.offsetHeight
           let current: HTMLElement | null = element
 
           // Walk up the offset parent chain until we reach the container
@@ -639,7 +643,8 @@ export function ConnectionsComponent({
 
         // Use the same getLocalPosition function as normal edges
         const getLocalPosition = (element: HTMLElement) => {
-          let x = 0, y = 0, width = element.offsetWidth, height = element.offsetHeight
+          let x = 0, y = 0
+          const width = element.offsetWidth, height = element.offsetHeight
           let current: HTMLElement | null = element
 
           // Walk up the offset parent chain until we reach the container

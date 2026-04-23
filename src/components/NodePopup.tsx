@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react"
+import React, { useState, useEffect } from "react"
 import { MDXEditorComponent } from './MDXEditor'
 import { PencilIcon } from '@heroicons/react/24/outline'
 
@@ -9,33 +9,31 @@ interface NodePopupProps {
     text: string
   }
   setNodePopup: React.Dispatch<React.SetStateAction<{ id: string; title: string; text: string } | null>>
-  svgSize: { width: number; height: number }
+  /** Reserved: currently unused, kept for layout hooks. */
+  svgSize?: { width: number; height: number }
   editMode?: boolean
   onUpdateNode?: (nodeId: string, title: string, text: string) => void
+  /** Reserved: currently unused — deletion happens via the graph-level toolbar. */
   onDeleteNode?: (nodeId: string) => void
   fontFamily?: string
   onClearSelection?: () => void
   viewportOffset?: { left: number; top: number; right: number; bottom: number }
+  /** Reserved: currently unused, the backdrop uses absolute viewport units. */
   zoomScale?: number
 }
 
 export function NodePopup({
   nodePopup,
   setNodePopup,
-  svgSize,
   editMode = false,
   onUpdateNode,
-  onDeleteNode,
   fontFamily,
   onClearSelection,
   viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
-  zoomScale = 1,
 }: NodePopupProps) {
   const [editTitle, setEditTitle] = useState(nodePopup.title)
   const [editText, setEditText] = useState(nodePopup.text)
   const [isEditing, setIsEditing] = useState(editMode)
-  const titleInputRef = useRef<HTMLTextAreaElement>(null)
-  const textAreaRef = useRef<HTMLTextAreaElement>(null)
   const [windowSize, setWindowSize] = useState({ width: typeof window !== 'undefined' ? window.innerWidth : 1000, height: typeof window !== 'undefined' ? window.innerHeight : 800 })
 
   // Update window size on resize
@@ -61,14 +59,6 @@ export function NodePopup({
     setIsEditing(editMode)
   }, [nodePopup, editMode])
 
-  const handleTitleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newTitle = e.target.value
-    setEditTitle(newTitle)
-    if (onUpdateNode) {
-      onUpdateNode(nodePopup.id, newTitle, editText)
-    }
-  }
-
   const handleTextChange = (newText: string) => {
     setEditText(newText)
     // Don't save immediately - let MDXEditor handle undo/redo internally
@@ -77,13 +67,6 @@ export function NodePopup({
   const saveChanges = () => {
     if (onUpdateNode && (editTitle !== nodePopup.title || editText !== nodePopup.text)) {
       onUpdateNode(nodePopup.id, editTitle, editText)
-    }
-  }
-
-  const handleDeleteNode = () => {
-    if (onDeleteNode) {
-      onDeleteNode(nodePopup.id)
-      setNodePopup(null)
     }
   }
 

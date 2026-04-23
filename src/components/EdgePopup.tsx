@@ -2,29 +2,22 @@ import React, { useState, useEffect } from "react"
 import { TrashIcon, PencilIcon } from "@heroicons/react/24/outline"
 import { getContrastTextColor } from "../utils"
 import { MDXEditorComponent } from './MDXEditor'
+import type { EdgePopupState } from './ConnectionsComponent'
 
 interface EdgePopupProps {
-  edgePopup: {
-    sourceId: string
-    targetId: string
-    x: number
-    y: number
-    confidence: number
-    minConfidence?: number
-    maxConfidence?: number
-    evidence?: string
-    assumptions?: string
-  }
-  setEdgePopup: React.Dispatch<React.SetStateAction<any>>
+  edgePopup: EdgePopupState
+  setEdgePopup: React.Dispatch<React.SetStateAction<EdgePopupState | null>>
   updateConfidence: (sourceId: string, targetId: string, newConfidence: number) => void
   findNodeTitle: (nodeId: string) => string
   findNodeColor: (nodeId: string) => string
-  svgSize: { width: number; height: number }
+  /** Reserved: currently unused, kept for layout/debugging hooks. */
+  svgSize?: { width: number; height: number }
   editMode?: boolean
   onUpdateConnection?: (sourceId: string, targetId: string, evidence: string, assumptions: string) => void
   onDeleteConnection?: (sourceId: string, targetId: string) => void
   fontFamily?: string
   viewportOffset?: { left: number; top: number; right: number; bottom: number }
+  /** Reserved: currently unused, the backdrop uses absolute viewport units. */
   zoomScale?: number
 }
 
@@ -34,13 +27,11 @@ export function EdgePopup({
   updateConfidence,
   findNodeTitle,
   findNodeColor,
-  svgSize,
   editMode = false,
   onUpdateConnection,
   onDeleteConnection,
   fontFamily,
   viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
-  zoomScale = 1,
 }: EdgePopupProps) {
   const [editEvidence, setEditEvidence] = useState(edgePopup.evidence || '')
   const [editAssumptions, setEditAssumptions] = useState(edgePopup.assumptions || '')
