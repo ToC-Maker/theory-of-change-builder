@@ -17,13 +17,77 @@ import {
   WEB_SEARCH_USD_PER_USE,
 } from '../../shared/pricing';
 
-export type AnthropicUsage = {
+/**
+ * Shape of Anthropic's `usage` payload at the SSE event boundary.
+ *
+ * `readonly` markers reflect that this type mirrors the upstream response
+ * object — callers should treat it as immutable and never mutate in place
+ * (if you need a tweaked version, build a new object).
+ *
+ * Numeric fields are `number | undefined` because Anthropic omits fields
+ * that are zero. `computeCostMicroUsd` uses `?? 0`. Callers reading
+ * untrusted JSON off the wire should route through `parseAnthropicUsage`
+ * first to reject floats / negatives / non-numbers with a clear error,
+ * rather than letting `BigInt(float)` throw mid-reconcile.
+ */
+export type AnthropicUsage = Readonly<{
   input_tokens?: number;
   output_tokens?: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
-  server_tool_use?: { web_search_requests?: number };
-};
+  server_tool_use?: Readonly<{ web_search_requests?: number }>;
+}>;
+
+/**
+ * Validate and normalize an untrusted `usage` object parsed off an
+ * Anthropic SSE payload. Rejects non-integer, negative, or non-number
+ * values with a clear error so we fail loudly instead of letting
+ * `BigInt(float)` throw a TypeError deep inside cost reconciliation.
+ *
+ * Absent / undefined fields remain undefined (callers default to 0 via
+ * `?? 0`); this function does not inject zeros, it only guards the
+ * values that are present.
+ */
+export function parseAnthropicUsage(raw: unknown): AnthropicUsage {
+  if (raw === null || typeof raw !== 'object') {
+    throw new Error('parseAnthropicUsage: expected object, got ' + typeof raw);
+  }
+  const obj = raw as Record<string, unknown>;
+
+  const ensureNonNegInt = (field: string, v: unknown): number | undefined => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      throw new Error(`parseAnthropicUsage: ${field} must be a finite number, got ${String(v)}`);
+    }
+    if (!Number.isInteger(v)) {
+      throw new Error(`parseAnthropicUsage: ${field} must be an integer, got ${v}`);
+    }
+    if (v < 0) {
+      throw new Error(`parseAnthropicUsage: ${field} must be non-negative, got ${v}`);
+    }
+    return v;
+  };
+
+  let serverToolUse: Readonly<{ web_search_requests?: number }> | undefined;
+  const rawSvc = obj.server_tool_use;
+  if (rawSvc !== undefined && rawSvc !== null) {
+    if (typeof rawSvc !== 'object') {
+      throw new Error('parseAnthropicUsage: server_tool_use must be an object');
+    }
+    const svcObj = rawSvc as Record<string, unknown>;
+    serverToolUse = {
+      web_search_requests: ensureNonNegInt('server_tool_use.web_search_requests', svcObj.web_search_requests),
+    };
+  }
+
+  return {
+    input_tokens: ensureNonNegInt('input_tokens', obj.input_tokens),
+    output_tokens: ensureNonNegInt('output_tokens', obj.output_tokens),
+    cache_creation_input_tokens: ensureNonNegInt('cache_creation_input_tokens', obj.cache_creation_input_tokens),
+    cache_read_input_tokens: ensureNonNegInt('cache_read_input_tokens', obj.cache_read_input_tokens),
+    server_tool_use: serverToolUse,
+  };
+}
 
 /**
  * Per-model rates in µUSD per token, derived from `shared/pricing.ts`.
