@@ -14,6 +14,7 @@ import { LoggingServiceClass, loggingService } from "./services/loggingService"
 import { useLoggingSession } from "./hooks/useLoggingSession"
 import { PlusIcon, MinusIcon, ArrowsPointingOutIcon, DocumentDuplicateIcon } from "@heroicons/react/24/outline"
 import AuthButton from "./components/AuthButton"
+import type { ToCData } from "./types"
 import "./App.css"
 
 // Default empty template with 4 sections
@@ -69,22 +70,8 @@ const emptyTemplate: ToCData = {
 
 };
 
-interface ToCData {
-  sections: any[]
-  textSize?: number
-  curvature?: number
-  columnPadding?: number
-  sectionPadding?: number
-}
-
-// Constants
-const EMBED_PADDING = 32; // 16px on each side
-const MIN_SCALE = 0.1;
-const MAX_SCALE = 5;
-
 function ToCViewerOnly() {
   const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>()
-  const location = useLocation()
   const { loginWithRedirect, isAuthenticated, isLoading: authLoading, getIdTokenClaims } = useAuth0()
   const [data, setData] = useState<ToCData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -96,7 +83,6 @@ function ToCViewerOnly() {
 
   // Use shared zoom/pan hook
   const {
-    camera,
     isPanning,
     isZoomedIn,
     getTransformPosition,
@@ -775,32 +761,34 @@ function ToCViewer() {
     return null;
   }, [filename]);
 
-  const handleUploadJSON = useCallback((jsonData: any) => {
+  const handleUploadJSON = useCallback((jsonData: unknown) => {
     // Validate that the uploaded data has the expected structure
     if (!jsonData || typeof jsonData !== 'object') {
       alert('Invalid JSON file: Data must be an object');
       return;
     }
 
-    if (!jsonData.sections || !Array.isArray(jsonData.sections)) {
+    const candidate = jsonData as { sections?: unknown };
+    if (!candidate.sections || !Array.isArray(candidate.sections)) {
       alert('Invalid JSON file: Missing or invalid sections array');
       return;
     }
 
-    console.log('Uploading JSON data:', jsonData);
-    
+    const validData = jsonData as ToCData;
+    console.log('Uploading JSON data:', validData);
+
     // Save current state to history before updating
     if (data) {
       saveToHistory(data);
     }
-    
+
     // Clear redo history when new changes are made
     setRedoHistory([]);
-    
+
     // Set the uploaded data
-    setData(jsonData);
-    pendingChangesRef.current = jsonData;
-    saveToLocalStorage(jsonData);
+    setData(validData);
+    pendingChangesRef.current = validData;
+    saveToLocalStorage(validData);
 
     // Trigger debounced database save for JSON upload
     if (currentEditToken) {
@@ -924,7 +912,6 @@ function ToCViewer() {
       setUndoHistory(newUndoHistory);
 
       // Use handleDataChange to trigger debounced save, but skip history management
-      const skipHistory = true;
       setData(previousState);
       pendingChangesRef.current = previousState;
       saveToLocalStorage(previousState);
@@ -1442,10 +1429,6 @@ function ToCViewer() {
       </div>
     )
   }
-
-  const title = filename 
-    ? filename.replace('.json', '').replace(/([A-Z])/g, ' $1').trim()
-    : 'Charity Entrepreneurship'
 
   // Get transform position from the hook
   const { x: offsetX, y: offsetY, scale } = getTransformPosition();
