@@ -131,13 +131,9 @@ See `database/schema.sql` for full schema. Key tables:
 
 For migrations, see `database/migrations/`. Always test on staging first.
 
-## Database migrations & CI preview branches
+## Database migrations
 
-`.github/workflows/neon-preview.yml` creates a Neon branch per PR, applies every file in `database/migrations/`, runs build/lint/test, posts a schema diff, and tears down on PR close. Uses the Neon GitHub App's `NEON_API_KEY` secret + `NEON_PROJECT_ID` var.
-
-**Migrations must be idempotent.** `create-branch-action@v5` reuses the branch across `synchronize` events, so the same migrations re-apply on every push. Use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT ... ON CONFLICT`. For ADD CONSTRAINT (no `IF NOT EXISTS` in Postgres), wrap in a `DO` block with a `pg_constraint` lookup — see `freeze-user-token-usage.sql`.
-
-For local smoke testing against a preview branch, grab the connection string from the Neon dashboard (Branches → the PR's branch → Connect).
+Migrations in `database/migrations/` are applied manually against staging and prod (no per-PR preview branches). **Keep them idempotent** so re-running the same file is safe: use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT ... ON CONFLICT`. For `ADD CONSTRAINT` (no `IF NOT EXISTS` in Postgres), wrap in a `DO` block with a `pg_constraint` lookup — see `freeze-user-token-usage.sql`.
 
 ## Cost Accounting
 
