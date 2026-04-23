@@ -271,7 +271,6 @@ export function useZoomPan({
       const deltaX = e.clientX - panStartRef.current.x;
       const deltaY = e.clientY - panStartRef.current.y;
 
-      const offset = viewportOffsetRef.current;
       const { width: availableWidth, height: availableHeight } = getAvailableViewport();
       const cWidth = containerSizeRef.current.width + EMBED_PADDING;
       const cHeight = containerSizeRef.current.height + EMBED_PADDING;

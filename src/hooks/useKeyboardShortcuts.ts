@@ -28,7 +28,9 @@ export function useKeyboardShortcuts({
   moveNodeVertically,
   nodeHeights
 }: UseKeyboardShortcutsProps) {
-  const [copiedNodes, setCopiedNodes] = useState<Node[]>([])
+  // copiedNodes is referenced in the returned object and effect deps for
+  // future paste support; the setter is intentionally unused right now.
+  const [copiedNodes, _setCopiedNodes] = useState<Node[]>([])
   const [currentTabIndex, setCurrentTabIndex] = useState(-1)
 
   // Find node location helper
@@ -83,7 +85,7 @@ export function useKeyboardShortcuts({
     const allNodes = getAllNodesInOrder()
     if (allNodes.length === 0) return
 
-    let newIndex = direction === 'next' 
+    const newIndex = direction === 'next'
       ? (currentTabIndex + 1) % allNodes.length
       : (currentTabIndex - 1 + allNodes.length) % allNodes.length
 
