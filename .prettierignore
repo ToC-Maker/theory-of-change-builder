@@ -7,3 +7,6 @@ coverage
 storybook-static
 package-lock.json
 policies
+# Human-maintained docs (prettier's markdown table expansion is intrusive).
+CLAUDE.md
+README.md
