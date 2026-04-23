@@ -118,14 +118,26 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // feels off. The count_tokens failure path at upload is logged.
   let cachedFileTokens = 0;
   let uncountedFileIds = 0;
+  const diag: {
+    stripped_file_ids: string[];
+    rows_returned: number;
+    rows_sample: Array<{ file_id: string; input_tokens: number | null }>;
+    error?: string;
+  } = {
+    stripped_file_ids: strippedFileIds,
+    rows_returned: 0,
+    rows_sample: [],
+  };
+  const sql = getDb(env);
   if (strippedFileIds.length > 0) {
     try {
-      const sql = getDb(env);
       const rows = await sql<{ file_id: string; input_tokens: number | null }>`
         SELECT file_id, input_tokens
         FROM chart_files
         WHERE file_id = ANY(${strippedFileIds})
       `;
+      diag.rows_returned = rows.length;
+      diag.rows_sample = rows.slice(0, 5);
       for (const row of rows) {
         if (typeof row.input_tokens === 'number' && row.input_tokens >= 0) {
           cachedFileTokens += row.input_tokens;
@@ -136,8 +148,35 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       // file_ids not found in chart_files at all: treat as uncounted.
       uncountedFileIds += strippedFileIds.length - rows.length;
     } catch (err) {
+      diag.error = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       console.warn('[count-tokens-estimate] chart_files lookup failed:', err);
       uncountedFileIds = strippedFileIds.length;
+    }
+
+    // Temporary: persist what the query saw so we can tell if the array
+    // binding is silently sending wrong values, or if the rows ARE there
+    // but the subsequent code is mis-categorising them as uncounted.
+    // Preview deploys have no log stream, so logging_errors is our only
+    // way to see server-side state.
+    if (strippedFileIds.length > 0 && cachedFileTokens === 0) {
+      try {
+        await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, chart_id, request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'DiagnosticCountTokensFileLookupEmpty',
+            ${`count-tokens-estimate: ${strippedFileIds.length} file_ids stripped, ${diag.rows_returned} rows returned, ${cachedFileTokens} cachedFileTokens`},
+            ${null},
+            ${null},
+            ${JSON.stringify(diag)}
+          )
+          ON CONFLICT (error_id) DO NOTHING
+        `;
+      } catch (logErr) {
+        console.warn('[count-tokens-estimate] diagnostic insert failed:', logErr);
+      }
     }
   }
 
