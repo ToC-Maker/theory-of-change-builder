@@ -18,6 +18,7 @@ import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
 import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
+import type { ToCData } from '../types';
 import {
   formatCostUsd,
   estimateCostLowBound,
@@ -81,8 +82,8 @@ interface ChatInterfaceProps {
   height?: number;
   isCollapsed: boolean;
   onToggle: () => void;
-  graphData?: any;
-  onGraphUpdate?: (newGraphData: any) => void;
+  graphData?: ToCData | null;
+  onGraphUpdate?: (newGraphData: ToCData) => void;
   highlightedNodes?: Set<string>;
   // Called when an action in Chat/Generate (e.g. auto-saving the chart on
   // first file upload) creates a new chart row. The parent uses this to
@@ -386,7 +387,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
   );
 });
 
-export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set(), onChartCreated }: ChatInterfaceProps) {
+export function ChatInterface({ isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set(), onChartCreated }: ChatInterfaceProps) {
   const { hasKey, keyLast4, verified, keyVersion } = useApiKey();
   const { isAuthenticated, getIdTokenClaims } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
@@ -425,9 +426,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const storageKey = getStorageKey();
       const savedMessages = localStorage.getItem(storageKey);
       if (savedMessages) {
-        const parsed = JSON.parse(savedMessages);
+        type StoredMessage = Omit<ChatMessage, 'timestamp'> & { timestamp: string };
+        const parsed = JSON.parse(savedMessages) as StoredMessage[];
         // Convert timestamp strings back to Date objects
-        return parsed.map((msg: any) => ({
+        return parsed.map((msg) => ({
           ...msg,
           timestamp: new Date(msg.timestamp)
         }));
@@ -569,13 +571,13 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [additionalInstructions, setAdditionalInstructions] = useState('');
-  const [generatedGraphData, setGeneratedGraphData] = useState<any>(null);
+  const [generatedGraphData, setGeneratedGraphData] = useState<ToCData | null>(null);
   // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
   // list of {id, file_id} chips so the chip area can render them with the
   // same AttachedFilesBar as Chat mode. Text/markdown files continue to be
   // inlined via the existing `files` state.
   const [generateAttachedChips, setGenerateAttachedChips] = useState<
-    Array<AttachedFile & { fileId?: string; raw?: File }>
+    Array<AttachedFile & { kind?: 'upload'; fileId?: string; raw?: File }>
   >([]);
   const generateAttachedFileIds = React.useMemo(
     () =>
@@ -601,9 +603,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
     const nodes: Array<{id: string, title: string, path: string}> = []
 
-    graphData.sections?.forEach((section: any, sectionIndex: number) => {
-      section.columns?.forEach((column: any, columnIndex: number) => {
-        column.nodes?.forEach((node: any) => {
+    graphData.sections?.forEach((section, sectionIndex) => {
+      section.columns?.forEach((column, columnIndex) => {
+        column.nodes?.forEach((node) => {
           if (highlightedNodes.has(node.id)) {
             const sectionTitle = section.title || `Section ${sectionIndex + 1}`
             const path = `${sectionTitle} → Column ${columnIndex + 1}`
@@ -695,9 +697,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       const storageKey = getStorageKey();
       const savedMessages = localStorage.getItem(storageKey);
       if (savedMessages) {
-        const parsed = JSON.parse(savedMessages);
+        type StoredMessage = Omit<ChatMessage, 'timestamp'> & { timestamp: string };
+        const parsed = JSON.parse(savedMessages) as StoredMessage[];
         // Convert timestamp strings back to Date objects
-        const loadedMessages = parsed.map((msg: any) => ({
+        const loadedMessages: ChatMessage[] = parsed.map((msg) => ({
           ...msg,
           timestamp: new Date(msg.timestamp)
         }));
@@ -1472,7 +1475,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           onThinking: (_chunk: string, fullThinking: string) => {
             setStreamingThinking(fullThinking);
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any, rawMessage?: string) => {
+          onComplete: (finalMessage, editInstructions, usage, rawMessage) => {
           const assistantMessage: ChatMessage = {
             id: assistantMessageId,
             role: 'assistant',
@@ -2276,7 +2279,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               streamingMessageRef.current.content = fullContent;
             }
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
+          onComplete: (finalMessage, editInstructions, usage) => {
           const assistantMessage: ChatMessage = {
             id: generationAssistantId,
             role: 'assistant',

@@ -11,6 +11,23 @@ import {
 } from '../utils/cost';
 import { MODEL_CAPABILITIES } from '../../shared/pricing';
 
+export interface AnthropicUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  server_tool_use?: {
+    web_search_requests?: number;
+  };
+}
+
+export interface WebSearchResult {
+  url: string;
+  title?: string;
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -121,7 +138,7 @@ export interface StreamCallbacks {
   onComplete?: (
     message: string,
     editInstructions?: EditInstruction[],
-    usage?: any,
+    usage?: AnthropicUsage,
     /** Raw pre-cleaned reply (before cleanResponseContent strips
      *  [EDIT_INSTRUCTIONS] / [CURRENT_GRAPH_DATA] / [SELECTED_NODES]).
      *  Use this for logging so the audit trail captures exactly what
@@ -131,7 +148,7 @@ export interface StreamCallbacks {
   ) => void;
   onError?: (error: string) => void;
   onSearchStart?: () => void;
-  onSearchComplete?: (results?: any[]) => void;
+  onSearchComplete?: (results?: WebSearchResult[]) => void;
   /** Fires on each `message_delta.usage` SSE event with the running USD estimate. */
   onCostUpdate?: (runningCostUsd: number) => void;
   /**
@@ -302,7 +319,7 @@ class ChatService {
 
   private async streamFromApi(
     url: string,
-    requestBody: any,
+    requestBody: unknown,
     callbacks: StreamCallbacks,
     signal?: AbortSignal,
     ctx?: StreamingContext,
@@ -410,7 +427,7 @@ class ChatService {
     let buffer = '';
     let fullContent = '';
     let fullThinking = '';
-    let usage: any = null;
+    let usage: AnthropicUsage | null = null;
     let hasSearched = false;
 
     // Running cost accumulators for onCostUpdate. Anthropic's message_delta.usage
@@ -429,7 +446,7 @@ class ChatService {
       (runningCacheRead / 1_000_000) * inputRate * 0.1 +
       (runningOutput / 1_000_000) * outputRate +
       runningWebSearch * WEB_SEARCH_USD_PER_USE;
-    const updateUsage = (u: any) => {
+    const updateUsage = (u: Partial<AnthropicUsage>) => {
       runningInput = Math.max(runningInput, u.input_tokens ?? 0);
       runningOutput = Math.max(runningOutput, u.output_tokens ?? 0);
       runningCacheCreate = Math.max(runningCacheCreate, u.cache_creation_input_tokens ?? 0);
@@ -518,7 +535,7 @@ class ChatService {
                 usage = event.message.usage;
                 updateUsage(event.message.usage);
               } else if (event.type === 'message_delta' && event.usage) {
-                usage = { ...usage, ...event.usage };
+                usage = { ...(usage ?? {}), ...event.usage } as AnthropicUsage;
                 updateUsage(event.usage);
               } else if (event.type === 'running_cost' && typeof event.cost_usd === 'number') {
                 // Worker-synthesized event: the server-side count_tokens
@@ -547,7 +564,7 @@ class ChatService {
                 // Claude produced. Display uses cleanContent; audit uses
                 // rawMessage.
                 try {
-                  callbacks.onComplete?.(cleanContent, editInstructions, usage, fullContent);
+                  callbacks.onComplete?.(cleanContent, editInstructions, usage ?? undefined, fullContent);
                 } catch (callbackErr) {
                   console.error('[ChatService] onComplete callback error:', callbackErr);
                 }
@@ -603,7 +620,7 @@ class ChatService {
     } = options;
 
     let ctx: StreamingContext | undefined;
-    let requestBody: any;
+    let requestBody: Record<string, unknown> = {};
     // Initialize to empty string so TS can prove it's assigned before use in
     // the catch-block retry guard. The real value is set before streamFromApi.
     let serializedBody = '';
@@ -624,10 +641,9 @@ class ChatService {
       if (processedMessages[lastIndex].role === 'user') {
         // Add graph data - create a copy to avoid modifying the original message.
         // Shape is intentionally loose here (options.currentGraphData is `unknown`
-        // per the public interface); inner access is typed as `any` because the
-        // real shape lives in utils/addNodePaths and graph components.
+        // per the public interface); cast to ToCData because addNodePaths expects it.
         if (currentGraphData) {
-          const dataWithPaths = addNodePaths(currentGraphData as any);
+          const dataWithPaths = addNodePaths(currentGraphData as import('../types').ToCData);
           processedMessages[lastIndex] = {
             ...processedMessages[lastIndex],
             content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
@@ -636,13 +652,17 @@ class ChatService {
 
         // Add selected nodes data after graph data
         if (highlightedSet && highlightedSet.size > 0 && currentGraphData) {
-          const selectedNodesJson: any[] = []
-          const graph = currentGraphData as any;
+          interface GraphNodeLike { id?: string; [k: string]: unknown }
+          interface GraphColumnLike { nodes?: GraphNodeLike[] }
+          interface GraphSectionLike { columns?: GraphColumnLike[] }
+          interface GraphLike { sections?: GraphSectionLike[] }
+          const selectedNodesJson: Array<GraphNodeLike & { path: string }> = []
+          const graph = currentGraphData as GraphLike;
 
-          graph.sections?.forEach((section: any, sectionIndex: number) => {
-            section.columns?.forEach((column: any, columnIndex: number) => {
-              column.nodes?.forEach((node: any, nodeIndex: number) => {
-                if (highlightedSet.has(node.id)) {
+          graph.sections?.forEach((section, sectionIndex) => {
+            section.columns?.forEach((column, columnIndex) => {
+              column.nodes?.forEach((node, nodeIndex) => {
+                if (node.id && highlightedSet.has(node.id)) {
                   // Create a copy with path added
                   const nodeWithPath = {
                     ...node,
