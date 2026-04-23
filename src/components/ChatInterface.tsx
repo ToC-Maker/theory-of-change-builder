@@ -2229,9 +2229,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         the BYOK panel stays context-free and reusable. */}
                     <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                       Generate runs a deep analysis of your documents. A single run
-                      typically costs a few dollars on your Anthropic account — more
-                      for large documents or heavy web searching. Live cost streams
-                      so you can stop if it runs long.
+                      typically costs a few dollars — more for large documents or
+                      heavy web searching. The running cost is shown as the answer
+                      is written, so you can stop it at any time if it starts to
+                      add up.
                     </div>
                     <ByokPanel
                       onSubmitted={() => {
