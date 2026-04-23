@@ -3,6 +3,7 @@ import {
   signTurnstileCookie,
   verifyTurnstileCookie,
   extractTurnstileCookie,
+  TOCB_ANON_COOKIE_TTL_SECONDS,
 } from '../_shared/turnstile-cookie';
 import { resolveAnonActor } from '../_shared/anon-id';
 
@@ -123,12 +124,16 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  const cookieValue = await signTurnstileCookie(anonId, env.IP_HASH_SALT, 86400);
+  const cookieValue = await signTurnstileCookie(
+    anonId,
+    env.IP_HASH_SALT,
+    TOCB_ANON_COOKIE_TTL_SECONDS,
+  );
 
   const headers = new Headers(baseHeaders);
   headers.append(
     'Set-Cookie',
-    `tocb_anon=${cookieValue}; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=Lax`,
+    `tocb_anon=${cookieValue}; Path=/; Max-Age=${TOCB_ANON_COOKIE_TTL_SECONDS}; Secure; HttpOnly; SameSite=Lax`,
   );
 
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers });

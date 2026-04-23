@@ -43,10 +43,26 @@ export function extractTurnstileCookie(cookieHeader: string | null): string | nu
   return null;
 }
 
+/**
+ * Lifetime of the `tocb_anon` Turnstile-session cookie.
+ *
+ * This cookie ONLY proves the visitor solved a Turnstile challenge — it is
+ * not the cap-accounting identity. The anon user_id (key for
+ * user_api_usage) lives in the separate `tocb_actor_id` cookie (1 year)
+ * handled in `anon-id.ts`; that one is what preserves cumulative spend
+ * across IP changes via the resolveAnonActor migration path.
+ *
+ * 24 hours is a deliberate abuse-resistance floor — a visitor trying to
+ * sidestep the cap by rotating IPs has to re-solve the widget at least
+ * daily. Longer cookie buys nothing for cap preservation (already pinned
+ * by the actor cookie) and weakens the automation-resistance gate.
+ */
+export const TOCB_ANON_COOKIE_TTL_SECONDS = 24 * 60 * 60;
+
 export async function signTurnstileCookie(
   anonId: string,
   salt: string,
-  ttlSeconds: number = 86400,
+  ttlSeconds: number = TOCB_ANON_COOKIE_TTL_SECONDS,
 ): Promise<string> {
   const payload = JSON.stringify({ anon_id: anonId, exp: Math.floor(Date.now() / 1000) + ttlSeconds });
   const payloadB64 = b64urlEncode(payload);
