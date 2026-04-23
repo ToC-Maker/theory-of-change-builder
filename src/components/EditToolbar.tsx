@@ -459,6 +459,9 @@ export function EditToolbar({
   useEffect(() => {
     if (!currentEditToken || !isAuthenticated) return;
 
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
     // First get the chartId from the edit token if we don't have shareData
     const loadAndPoll = async () => {
       try {
@@ -479,13 +482,23 @@ export function EditToolbar({
 
         // Load permissions with the chartId
         const result = await ChartService.getChartPermissions(chartId);
+        if (cancelled) return;
         setPermissions(result.permissions || result);
         if (result.linkSharingLevel) {
           setLinkSharingLevel(result.linkSharingLevel);
         }
       } catch (err) {
-        // Silently fail for polling - don't spam errors
-        console.error('Failed to poll permissions:', err);
+        // Silently fail for polling — but STOP the interval after the
+        // first error. The common case is `403 Only the owner can view
+        // permissions` (we're on a chart we don't own), and retrying every
+        // 30s just spams the network tab with identical 403s for the rest
+        // of the session. Any transient failure mode gets one attempt;
+        // user can refresh to retry.
+        console.error('Failed to poll permissions (stopping poll):', err);
+        if (interval !== null) {
+          clearInterval(interval);
+          interval = null;
+        }
       }
     };
 
@@ -493,11 +506,14 @@ export function EditToolbar({
     loadAndPoll();
 
     // Then poll every 30 seconds to check for new requests
-    const interval = setInterval(() => {
+    interval = setInterval(() => {
       loadAndPoll();
     }, 30000);
 
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      if (interval !== null) clearInterval(interval);
+    };
   }, [currentEditToken, isAuthenticated, shareData])
 
   // Auto-expand permissions section if there are pending requests
