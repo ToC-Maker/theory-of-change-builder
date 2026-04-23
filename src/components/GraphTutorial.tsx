@@ -81,9 +81,11 @@ export function GraphTutorial() {
       // Check if clicked on an SVG path (edge)
       const svg = document.querySelector('svg')
       if (svg) {
-        // Check if the click was on a path element
-        let element: HTMLElement | null = target
-        while (element && element !== svg) {
+        // Check if the click was on a path element. Walk up parents until we
+        // reach the SVG root; DOM types for HTMLElement vs SVGSVGElement are
+        // disjoint in TS, so compare via Node.
+        let element: (HTMLElement | SVGElement) | null = target
+        while (element && (element as globalThis.Node) !== (svg as globalThis.Node)) {
           if (element.tagName === 'path') {
             // Don't prevent default - let the edge popup show
             handleClose()
@@ -178,21 +180,18 @@ export function GraphTutorial() {
     } else if (currentStep === 2) {
       // Step 3: Find an edge/connection
       // Find all SVG elements and look for the one with connection paths
-      const allSvgs = document.querySelectorAll('svg')
+      const allSvgs = Array.from(document.querySelectorAll('svg'))
       console.log('Total SVGs found:', allSvgs.length)
 
-      let svg: SVGSVGElement | null = null
-      let maxPaths = 0
-
-      // Find the SVG with the most paths (that's the connections SVG)
-      allSvgs.forEach((svgElement, index) => {
+      // Find the SVG with the most paths (that's the connections SVG).
+      // Use reduce instead of forEach + mutable accumulator so TS keeps a
+      // non-`never` type for `svg` after the narrowing guard below.
+      const svg = allSvgs.reduce<SVGSVGElement | null>((best, svgElement, index) => {
         const pathCount = svgElement.querySelectorAll('path[d]').length
+        const bestCount = best ? best.querySelectorAll('path[d]').length : 0
         console.log(`SVG ${index}: ${pathCount} paths`)
-        if (pathCount > maxPaths) {
-          maxPaths = pathCount
-          svg = svgElement
-        }
-      })
+        return pathCount > bestCount ? svgElement : best
+      }, null)
 
       if (!svg) {
         console.log('No SVG with paths found')

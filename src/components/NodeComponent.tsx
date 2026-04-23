@@ -46,7 +46,8 @@ export function NodeComponent({
 }: NodeComponentProps) {
   const nodeRef = useRef<HTMLDivElement>(null)
   const cursorPositionedRef = useRef(false)
-  const titleEditRef = useRef<HTMLDivElement>(null)
+  // Mutable (not RefObject) because we assign to .current from a ref callback.
+  const titleEditRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     updateNodeRef(node.id, nodeRef.current)
