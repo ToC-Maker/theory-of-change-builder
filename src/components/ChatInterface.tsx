@@ -633,6 +633,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const streamingMessageRef = useRef<ChatMessage | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+  // Set to true by ensureChartExists right before it navigates to the new
+  // /edit/<token> URL. The route-change effect reads + clears it; when
+  // set, it skips the usual "load from localStorage" step so the user's
+  // in-flight messages (e.g. the message they just sent that triggered
+  // auto-create) aren't wiped mid-flight. ensureChartExists separately
+  // migrates the old URL's localStorage key to the new one so a later
+  // refresh also finds the history.
+  const justAutoCreatedRef = useRef(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
 
   const scrollToBottom = () => {
@@ -656,6 +664,15 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Reload chat history when route changes
   useEffect(() => {
     try {
+      // Auto-create navigation (handleSendMessage → ensureChartExists →
+      // navigate /edit/<newToken>): the user's messages are mid-flight and
+      // belong to this chart. Skip the load-from-localStorage branch so we
+      // don't wipe them; ensureChartExists already migrated the previous
+      // storage key to the new one for the refresh case.
+      if (justAutoCreatedRef.current) {
+        justAutoCreatedRef.current = false;
+        return;
+      }
       // At the root path (new ToC), start with an empty in-memory chat but
       // DON'T touch localStorage. Previously this branch did a
       // `removeItem(chatHistory_root)`, which wiped the session of any user
@@ -1357,7 +1374,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       id: userMessageId,
       role: 'user',
       content: userMessageBody,
-      timestamp: new Date()
+      timestamp: new Date(),
+      // Attach file_ids to the message so they persist with chat history
+      // (localStorage round-trip) and follow-up turns re-emit document
+      // blocks to Anthropic for the full conversation context.
+      attachedFileIds: attachedFileIds.length > 0 ? attachedFileIds : undefined,
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -1734,12 +1755,30 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       ChartService.saveEditToken(created.chartId, created.editToken);
       autosavedEditTokenRef.current = created.editToken;
       autosavedChartIdRef.current = created.chartId;
+      // Migrate any chat history already persisted under the pre-navigation
+      // URL's storage key to the new chart's key. Covers the refresh-after-
+      // send case (user sends a message on `/`, we auto-create a chart, the
+      // message gets saved under `chatHistory_root` by the save-effect
+      // before we navigate — without this migration it'd be stranded
+      // there after the URL transitions to `/edit/<token>`).
+      const oldKey = getStorageKey();
+      const newKey = `chatHistory_edit_${created.editToken}`;
+      if (oldKey !== newKey) {
+        const existing = localStorage.getItem(oldKey);
+        if (existing) {
+          localStorage.setItem(newKey, existing);
+          localStorage.removeItem(oldKey);
+        }
+      }
       // Use React Router's navigate instead of window.history.replaceState
       // so useParams()/useLocation() stay in sync with the URL bar. Raw
       // replaceState bypasses the router, leaving params.editToken stale,
       // which caused the save-chat effect to keep writing to
       // chatHistory_root instead of chatHistory_edit_<token> until the
       // next full reload — so first-message sessions lost their history.
+      // The flag tells the route-change effect NOT to wipe the in-memory
+      // `messages` state during the transition (messages are mid-flight).
+      justAutoCreatedRef.current = true;
       navigate(`/edit/${created.editToken}`, { replace: true });
       onChartCreated?.(created.editToken, created.chartId);
       return { chartId: created.chartId, editToken: created.editToken };

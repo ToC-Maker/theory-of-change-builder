@@ -16,6 +16,13 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  /**
+   * Anthropic Files-API `file_id`s attached to this specific turn. Kept on
+   * the message (not just in composer state) so follow-up turns re-emit
+   * document content blocks for the full history — otherwise Anthropic
+   * only sees the PDF on the turn it was uploaded, not subsequent ones.
+   */
+  attachedFileIds?: string[];
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -666,17 +673,18 @@ class ChatService {
         ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
         : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
 
-      // Build messages: prior turns stay as strings (Anthropic accepts both
-      // shapes; keeping strings minimizes diff and leaves history stable).
-      // The current (last) user turn becomes an array of content blocks so we
-      // can prepend document blocks for attached files ahead of the text.
+      // Build messages. For every user turn that had files attached —
+      // whether it's the message currently being sent (last index) or a
+      // prior turn in history — re-emit `document` content blocks ahead of
+      // the text so Anthropic sees the PDF context on every follow-up.
+      // Without this, PDFs uploaded on turn 1 were invisible to turn 2+:
+      // the file blocks only got attached to the latest message, and past
+      // messages serialized as plain strings.
       const outgoingMessages = processedMessages.map((msg, i) => {
-        if (
-          i === lastIndex &&
-          msg.role === 'user' &&
-          attachedFileIds.length > 0
-        ) {
-          const docBlocks = attachedFileIds.map(file_id => ({
+        const fileIds =
+          i === lastIndex ? attachedFileIds : (msg.attachedFileIds ?? []);
+        if (msg.role === 'user' && fileIds.length > 0) {
+          const docBlocks = fileIds.map(file_id => ({
             type: 'document',
             source: { type: 'file', file_id },
           }));

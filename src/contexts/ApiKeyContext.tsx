@@ -116,9 +116,16 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
       const data: UsageResponse = await response.json();
       const isByok = data.tier === 'byok';
       setHasKey(isByok);
+      // Server-stored keys are validated at POST /api/byok-key time — a
+      // tier of 'byok' here means the key survived that probe, so
+      // `verified` should flip true. Previously only submitKey set this;
+      // a post-login refresh left `verified=false` even though the key
+      // had been submitted on a prior session, so the UI kept gating
+      // Generate behind "Add your Anthropic API key" until the user
+      // re-submitted.
+      setVerified(isByok);
       if (!isByok) {
         setKeyLast4(null);
-        setVerified(false);
       }
       // Note: /api/usage doesn't return last4. keyLast4 is set by submitKey
       // on success; on refresh we preserve whatever submitKey last set, or
