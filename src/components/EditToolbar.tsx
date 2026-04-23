@@ -5,6 +5,7 @@ import { ChartService, CreateChartResponse, UserChart } from "../services/chartS
 import { shortcuts } from "../utils/keyboardShortcuts"
 import { Tooltip } from 'react-tooltip'
 import { useAuth0 } from "@auth0/auth0-react"
+import { useNavigate } from "react-router-dom"
 import { clearChartSpend } from "../utils/byokSpend"
 
 interface EditToolbarProps {
@@ -108,6 +109,7 @@ export function EditToolbar({
 
   // Auth0 hook
   const { user, isAuthenticated, isLoading: authLoading } = useAuth0()
+  const navigate = useNavigate()
 
 
   // Tooltip state
@@ -299,8 +301,12 @@ export function EditToolbar({
           localStorage.setItem('recentEditCharts', JSON.stringify(recentCharts))
         }
 
-        // Update the URL to the edit URL
-        window.history.replaceState(null, '', `/edit/${response.editToken}`)
+        // Update the URL to the edit URL. Use navigate (not raw
+        // replaceState) so React Router's useParams()/useLocation() pick
+        // up the new editToken — otherwise the per-chart localStorage
+        // keys (chat history, etc.) stay stuck at their pre-navigation
+        // values until a full reload.
+        navigate(`/edit/${response.editToken}`, { replace: true })
         // Notify parent component about the new chart
         if (onChartCreated) {
           onChartCreated(response.editToken, response.chartId)

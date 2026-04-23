@@ -1,6 +1,6 @@
 import React, { useCallback, useState, useRef, useEffect, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { useParams, useLocation } from 'react-router-dom';
+import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { chatService, ChatMessage, type CostError } from '../services/chatService';
 import { ChartService } from '../services/chartService';
@@ -345,6 +345,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // BYOK spend displayed in the sidebar pill. Derived from localStorage via a
   // custom event subscription, so it updates live as streams credit spend.
@@ -605,11 +606,19 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Reload chat history when route changes
   useEffect(() => {
     try {
-      // Clear chat when navigating to root path (new ToC)
+      // At the root path (new ToC), start with an empty in-memory chat but
+      // DON'T touch localStorage. Previously this branch did a
+      // `removeItem(chatHistory_root)`, which wiped the session of any user
+      // who'd been chatting on `/` while a chart was auto-created underneath
+      // via replaceState (React Router's `params.editToken` stayed `undefined`
+      // until a reload, so the save effect was writing to chatHistory_root).
+      // The transient visit to `/` after an Auth0 redirect would then destroy
+      // their chat. With replaceState fixed (see ensureChartExists), saves
+      // never land in chatHistory_root in the first place — but we still
+      // avoid wiping any stray entry: it's harmless to leave around and
+      // destructive to delete on a route change alone.
       if (location.pathname === '/') {
         setMessages([]);
-        const storageKey = getStorageKey();
-        localStorage.removeItem(storageKey);
         return;
       }
 
@@ -1662,14 +1671,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       ChartService.saveEditToken(created.chartId, created.editToken);
       autosavedEditTokenRef.current = created.editToken;
       autosavedChartIdRef.current = created.chartId;
-      window.history.replaceState(null, '', `/edit/${created.editToken}`);
+      // Use React Router's navigate instead of window.history.replaceState
+      // so useParams()/useLocation() stay in sync with the URL bar. Raw
+      // replaceState bypasses the router, leaving params.editToken stale,
+      // which caused the save-chat effect to keep writing to
+      // chatHistory_root instead of chatHistory_edit_<token> until the
+      // next full reload — so first-message sessions lost their history.
+      navigate(`/edit/${created.editToken}`, { replace: true });
       onChartCreated?.(created.editToken, created.chartId);
       return { chartId: created.chartId, editToken: created.editToken };
     } catch (e) {
       console.error('[ChatInterface] ensureChartExists failed:', e);
       return null;
     }
-  }, [params.chartId, params.editToken, graphData, onChartCreated]);
+  }, [params.chartId, params.editToken, graphData, onChartCreated, navigate]);
 
   const uploadPdfToFilesApi = useCallback(
     async (
