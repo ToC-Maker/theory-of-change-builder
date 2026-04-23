@@ -4,6 +4,8 @@ import { UserCircleIcon, ShieldCheckIcon, XMarkIcon, KeyIcon, TrashIcon } from "
 import { loggingService } from "../services/loggingService"
 import { ByokPanel } from "./ByokPanel"
 import { useApiKey } from "../contexts/ApiKeyContext"
+import { useKeyByokSpendUsd } from "../utils/byokSpend"
+import { formatCostUsd } from "../utils/cost"
 
 // Privacy Settings Modal
 function PrivacyModal({
@@ -113,7 +115,8 @@ function PrivacyModal({
 // closes on backdrop click or X. Interior is ByokPanel which self-renders
 // the add/change/confirm state based on ApiKeyContext.
 function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { hasKey, clearKey } = useApiKey()
+  const { hasKey, keyLast4, clearKey } = useApiKey()
+  const keyLifetimeSpendUsd = useKeyByokSpendUsd(keyLast4)
   const [clearing, setClearing] = useState(false)
 
   if (!isOpen) return null
@@ -154,7 +157,17 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
         <ByokPanel />
 
         {hasKey && (
-          <div className="mt-4 pt-3 border-t border-gray-100">
+          <div className="mt-4 pt-3 border-t border-gray-100 space-y-3">
+            {/* Lifetime total for the currently-stored key. Counted
+                client-side in localStorage as a rough UX signal; Anthropic's
+                dashboard is the source of truth for billing. Resets when
+                the key is removed. */}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-600">Spent on this key (via this app)</span>
+              <span className="font-medium text-gray-900">
+                {formatCostUsd(keyLifetimeSpendUsd)}
+              </span>
+            </div>
             <button
               onClick={handleClear}
               disabled={clearing}

@@ -7,6 +7,7 @@ import {
   ReactNode,
 } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
+import { clearKeySpend } from '../utils/byokSpend';
 
 // BYOK (Bring Your Own Key) context. Raw keys live server-side (encrypted);
 // the client only holds verification state and the last-4 for display.
@@ -29,6 +30,13 @@ export interface ApiKeyContextValue {
   submitKey: (raw: string) => Promise<SubmitKeyResult>;
   clearKey: () => Promise<void>;
   refresh: () => Promise<void>;
+  /**
+   * Monotonically increasing counter that bumps on every key change (submit
+   * success or clear). Consumers that depend on server-side tier changes
+   * (e.g. ChatInterface's /api/usage fetch) can add this to a useEffect
+   * dependency list to re-query after the user flips BYOK state.
+   */
+  keyVersion: number;
 }
 
 interface UsageResponse {
@@ -63,6 +71,7 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
   const [keyLast4, setKeyLast4] = useState<string | null>(null);
   const [verified, setVerified] = useState(false);
   const [useForChat, setUseForChatState] = useState<boolean>(readUseForChat);
+  const [keyVersion, setKeyVersion] = useState(0);
 
   // One-time migration: retire the old client-stored raw key scheme. We don't
   // migrate the value; user re-enters via the new flow so the key lands in
@@ -143,6 +152,7 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
           setHasKey(true);
           setKeyLast4(data.last4 ?? null);
           setVerified(true);
+          setKeyVersion((v) => v + 1);
           return { verified: true, last4: data.last4 };
         }
 
@@ -175,8 +185,16 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
       });
       if (response.ok) {
         setHasKey(false);
-        setKeyLast4(null);
+        // Clean up the per-key spend counter for the key being removed.
+        // Use the state updater to capture the current last4 (closure would
+        // otherwise be stale). Returns null to clear the state after the
+        // side effect.
+        setKeyLast4((prev) => {
+          if (prev) clearKeySpend(prev);
+          return null;
+        });
         setVerified(false);
+        setKeyVersion((v) => v + 1);
       }
     } catch (err) {
       console.error('[ApiKeyContext] clearKey failed:', err);
@@ -206,6 +224,7 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
     submitKey,
     clearKey,
     refresh,
+    keyVersion,
   };
 
   return <ApiKeyContext.Provider value={value}>{children}</ApiKeyContext.Provider>;

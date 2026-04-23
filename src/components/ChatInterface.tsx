@@ -14,6 +14,7 @@ import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
+import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
 import { ByokPanel, DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
@@ -281,7 +282,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
 });
 
 export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set(), onChartCreated }: ChatInterfaceProps) {
-  const { hasKey, keyLast4, verified } = useApiKey();
+  const { hasKey, keyLast4, verified, keyVersion } = useApiKey();
   const { isAuthenticated, getIdTokenClaims } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
@@ -289,6 +290,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
   const location = useLocation();
+
+  // BYOK spend displayed in the sidebar pill. Derived from localStorage via a
+  // custom event subscription, so it updates live as streams credit spend.
+  const chartByokSpendUsd = useChartByokSpendUsd(
+    params.chartId ?? params.editToken ?? null,
+  );
 
   // Create a unique storage key based on the current route
   const getStorageKey = () => {
@@ -347,6 +354,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
   // Running cost for the in-flight assistant turn (updated via onCostUpdate).
   const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
+  // Ref-mirror so onComplete can read the latest cost — the closure captured
+  // at handleSend time would otherwise see a stale value.
+  const runningCostUsdRef = useRef<number | null>(null);
+  // Running tally of BYOK spend (in µUSD) already credited to the
+  // chart/key buckets for the current turn. Each onCostUpdate computes a
+  // delta against this ref so aborted streams still capture the portion
+  // that was actually billed. Reset to 0 at the start of each handleSend.
+  const turnLastAppliedMicroRef = useRef<number>(0);
 
 
   // Pre-send cost estimates (input-only lower bound from count_tokens).
@@ -662,8 +677,12 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   }, [getAuthHeaders]);
 
   useEffect(() => {
+    // Re-fetch on mount and whenever the user adds/removes their BYOK key
+    // (keyVersion bumps in ApiKeyContext). Without the keyVersion trigger,
+    // the sidebar still shows the free-tier progress bar after a key is
+    // added until the next stream completes.
     void refreshUsage();
-  }, [refreshUsage]);
+  }, [refreshUsage, keyVersion]);
 
   // Classify a streaming error string into a cost/quota category if it
   // matches one of U9's error payloads. Keyword-based detection covers the
@@ -1180,6 +1199,15 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
+    // Snapshot BYOK + chart identifiers at stream start so onCostUpdate can
+    // credit partial spend to the right bucket even if state changes mid-stream
+    // (e.g. user navigates away). Use delta accumulation so aborted streams
+    // still record the portion that was billed.
+    const streamChartId = params.chartId ?? params.editToken ?? null;
+    const streamKeyLast4 = keyLast4;
+    const streamUsesByok = hasKey;
+    turnLastAppliedMicroRef.current = 0;
+
     try {
       await chatService.streamMessage({
         messages: [...messages, userMessage],
@@ -1327,6 +1355,18 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           streamingMessageRef.current = null;
         },
         onCostUpdate: (runningUsd: number) => {
+          // Delta-credit the per-chart and per-key BYOK buckets during the
+          // stream so partial costs (aborted, errored, or killed streams)
+          // still record whatever the user was billed up to that point.
+          if (streamUsesByok) {
+            const newMicro = Math.round(runningUsd * 1_000_000);
+            const deltaMicro = newMicro - turnLastAppliedMicroRef.current;
+            if (deltaMicro > 0) {
+              addByokSpend(streamChartId, streamKeyLast4, deltaMicro / 1_000_000);
+              turnLastAppliedMicroRef.current = newMicro;
+            }
+          }
+          runningCostUsdRef.current = runningUsd;
           setRunningCostUsd(runningUsd);
         },
         onCostError: (error) => {
@@ -1809,6 +1849,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
+    // See chat-path comment above; Generate is always BYOK (hasKey required
+    // to render the panel) but still snapshot for parity and to survive the
+    // unlikely case of a key swap mid-stream.
+    const streamChartId = params.chartId ?? params.editToken ?? null;
+    const streamKeyLast4 = keyLast4;
+    const streamUsesByok = hasKey;
+    turnLastAppliedMicroRef.current = 0;
+
     try {
       await chatService.streamMessage({
         messages: [generationMessage],
@@ -1917,6 +1965,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           streamingMessageRef.current = null;
         },
         onCostUpdate: (runningUsd: number) => {
+          // Delta-credit the per-chart and per-key BYOK buckets during the
+          // stream so partial costs (aborted, errored, or killed streams)
+          // still record whatever the user was billed up to that point.
+          if (streamUsesByok) {
+            const newMicro = Math.round(runningUsd * 1_000_000);
+            const deltaMicro = newMicro - turnLastAppliedMicroRef.current;
+            if (deltaMicro > 0) {
+              addByokSpend(streamChartId, streamKeyLast4, deltaMicro / 1_000_000);
+              turnLastAppliedMicroRef.current = newMicro;
+            }
+          }
+          runningCostUsdRef.current = runningUsd;
           setRunningCostUsd(runningUsd);
         },
         onCostError: (error) => {
@@ -2076,13 +2136,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             {/* Usage / quota indicator. BYOK users see a pill instead of a
                 progress bar (no shared pool is consumed). Key management
                 (change/remove) lives in the profile dropdown's "Anthropic
-                API key" modal. */}
+                API key" modal. The per-chart spend figure is a best-effort
+                client-side tally (localStorage); Anthropic's dashboard is
+                the source of truth for billing. */}
             {usage && (
               <div className="mt-2">
                 {usage.tier === 'byok' ? (
                   <span className="inline-flex items-center gap-1 text-xs text-gray-700">
                     <span aria-hidden>🔑</span>
-                    <span>BYOK{keyLast4 ? ` · ...${keyLast4}` : ''}</span>
+                    <span>
+                      BYOK{keyLast4 ? ` · ...${keyLast4}` : ''}
+                      {chartByokSpendUsd > 0 && (
+                        <> &middot; {formatCostUsd(chartByokSpendUsd)} this chart</>
+                      )}
+                    </span>
                   </span>
                 ) : (
                   <div>

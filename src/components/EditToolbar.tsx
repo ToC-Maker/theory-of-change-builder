@@ -5,6 +5,7 @@ import { ChartService, CreateChartResponse, UserChart } from "../services/chartS
 import { shortcuts } from "../utils/keyboardShortcuts"
 import { Tooltip } from 'react-tooltip'
 import { useAuth0 } from "@auth0/auth0-react"
+import { clearChartSpend } from "../utils/byokSpend"
 
 interface EditToolbarProps {
   editMode: boolean
@@ -411,6 +412,10 @@ export function EditToolbar({
   const handleDeleteChart = async (chartId: string, chartTitle: string) => {
     try {
       await ChartService.deleteChart(chartId)
+      // Remove the BYOK spend counter for this chart so it doesn't leak into
+      // localStorage forever. The key-lifetime counter is unaffected — the
+      // user's total for their key persists across chart deletions.
+      clearChartSpend(chartId)
 
       // For anonymous users, remove from localStorage
       if (!isAuthenticated) {
