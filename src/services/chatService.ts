@@ -104,6 +104,13 @@ function newIdempotencyKey(): string {
 
 export interface StreamCallbacks {
   onContent?: (chunk: string, fullContent: string) => void;
+  /**
+   * Fires on each `thinking_delta` within a `thinking` content block so the
+   * client can show the model's reasoning alongside the streamed reply.
+   * Arguments mirror onContent: the incremental chunk plus the running
+   * accumulation for convenience.
+   */
+  onThinking?: (chunk: string, fullThinking: string) => void;
   onComplete?: (
     message: string,
     editInstructions?: EditInstruction[],
@@ -391,6 +398,7 @@ class ChatService {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullContent = '';
+    let fullThinking = '';
     let usage: any = null;
     let hasSearched = false;
 
@@ -489,6 +497,12 @@ class ChatService {
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);
+              } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta') {
+                const chunk = typeof event.delta.thinking === 'string' ? event.delta.thinking : '';
+                if (chunk) {
+                  fullThinking += chunk;
+                  callbacks.onThinking?.(chunk, fullThinking);
+                }
               } else if (event.type === 'message_start' && event.message?.usage) {
                 usage = event.message.usage;
                 updateUsage(event.message.usage);

@@ -45,7 +45,7 @@ import {
   PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 
-export type AIMode = 'chat' | 'generate' | 'search';
+export type AIMode = 'chat' | 'generate';
 
 interface UploadedFile {
   file: File;
@@ -398,6 +398,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  // Live thinking text from Anthropic's extended-thinking blocks. Rendered
+  // as a collapsible summary alongside the streamed reply so users can see
+  // the model's reasoning rather than just a "Thinking…" spinner.
+  const [streamingThinking, setStreamingThinking] = useState('');
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
@@ -1160,7 +1165,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       abortControllerRef.current = null;
       setIsStreaming(false);
       setIsLoading(false);
-      setStreamingContent('');
+      setStreamingContent(''); setStreamingThinking('');
       setIsSearching(false);
       setIsThinking(false);
 
@@ -1237,7 +1242,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setChatAttachedFiles([]);
     setIsLoading(true);
     setIsStreaming(true);
-    setStreamingContent('');
+    setStreamingContent(''); setStreamingThinking('');
     setCostErrorBanner(null);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
@@ -1316,6 +1321,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               streamingMessageRef.current.content = fullContent;
             }
           },
+          onThinking: (_chunk: string, fullThinking: string) => {
+            setStreamingThinking(fullThinking);
+          },
           onComplete: (finalMessage: string, editInstructions?: any, usage?: any, rawMessage?: string) => {
           const assistantMessage: ChatMessage = {
             id: assistantMessageId,
@@ -1335,7 +1343,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
           setMessages(prev => [...prev, assistantMessage]);
           setIsStreaming(false);
-          setStreamingContent('');
+          setStreamingContent(''); setStreamingThinking('');
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
@@ -1428,7 +1436,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
             setMessages(prev => [...prev, errorMessage]);
           }
           setIsStreaming(false);
-          setStreamingContent('');
+          setStreamingContent(''); setStreamingThinking('');
           setIsSearching(false);
           setIsThinking(false);
           setRunningCostUsd(null);
@@ -1470,7 +1478,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
           }
           handleCostError(error);
           setIsStreaming(false);
-          setStreamingContent('');
+          setStreamingContent(''); setStreamingThinking('');
           setIsSearching(false);
           setIsThinking(false);
           setRunningCostUsd(null);
@@ -1504,7 +1512,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         setMessages(prev => [...prev, errorMessage]);
       }
       setIsStreaming(false);
-      setStreamingContent('');
+      setStreamingContent(''); setStreamingThinking('');
       setIsSearching(false);
       setIsThinking(false);
       setRunningCostUsd(null);
@@ -1933,7 +1941,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
     setIsLoading(true);
     setIsStreaming(true);
-    setStreamingContent('');
+    setStreamingContent(''); setStreamingThinking('');
     setConversationStarted(true);
 
     // Extended thinking is always on.
@@ -2032,7 +2040,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
 
           setMessages(prev => [...prev, assistantMessage]);
           setIsStreaming(false);
-          setStreamingContent('');
+          setStreamingContent(''); setStreamingThinking('');
           setIsThinking(false);
           setFullConversation(finalMessage);
           setRunningCostUsd(null);
@@ -2102,7 +2110,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             setMessages(prev => [...prev, errorMessage]);
           }
           setIsStreaming(false);
-          setStreamingContent('');
+          setStreamingContent(''); setStreamingThinking('');
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
@@ -2141,7 +2149,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           }
           handleCostError(error);
           setIsStreaming(false);
-          setStreamingContent('');
+          setStreamingContent(''); setStreamingThinking('');
           setIsThinking(false);
           setRunningCostUsd(null);
           streamingMessageRef.current = null;
@@ -2174,7 +2182,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         setMessages(prev => [...prev, errorMessage]);
       }
       setIsStreaming(false);
-      setStreamingContent('');
+      setStreamingContent(''); setStreamingThinking('');
       setIsThinking(false);
       setRunningCostUsd(null);
       streamingMessageRef.current = null;
@@ -2235,18 +2243,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           <div className="p-3 border-b border-gray-200">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                {((currentMode === 'chat' && messages.length > 0) || (currentMode === 'search' && searchResults.length > 0)) && (
+                {currentMode === 'chat' && messages.length > 0 && (
                   <button
                     onClick={() => {
-                      if (currentMode === 'chat') clearChat();
-                      if (currentMode === 'search') {
-                        setSearchResults([]);
-                        setSearchAnswer('');
-                        setSearchQuery('');
+                      // Destructive: wipes the in-memory chat + attached files +
+                      // any uploaded file chips from the server. Confirm first so
+                      // a mis-click can't silently delete a long conversation.
+                      if (window.confirm(
+                        'Clear the entire chat? This removes all messages and any files attached in Chat. Your chart and Generate state are unaffected.',
+                      )) {
+                        clearChat();
                       }
                     }}
                     className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
-                    title={currentMode === 'chat' ? 'Clear chat' : 'Clear search'}
+                    title="Clear chat"
                   >
                     Clear
                   </button>
@@ -2278,17 +2288,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               >
                 <DocumentTextIcon className="w-4 h-4" />
                 <span>Generate</span>
-              </button>
-              <button
-                onClick={() => setCurrentMode('search')}
-                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
-                  currentMode === 'search'
-                    ? 'bg-white text-green-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-800'
-                }`}
-              >
-                <MagnifyingGlassCircleIcon className="w-4 h-4" />
-                <span>Search Results</span>
               </button>
             </div>
 
@@ -2576,98 +2575,31 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 </>
                 )}
               </div>
-            ) : currentMode === 'search' ? (
-              <div className="space-y-4">
-                {searchResults.length === 0 && !searchAnswer ? (
-                  <div className="text-center text-gray-500 text-sm py-4">
-                    <div className="mb-2"><MagnifyingGlassCircleIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
-                    <p>Web search results will appear here</p>
-                    <p className="mt-2 text-xs">Use the chat to search for current information</p>
-                  </div>
-                ) : null}
-
-                {/* Search Results */}
-                {searchAnswer && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                    <h4 className="text-sm font-medium text-blue-800 mb-2">AI Summary:</h4>
-                    <div className="text-sm text-blue-700">
-                      <ReactMarkdown>{searchAnswer}</ReactMarkdown>
-                    </div>
-                  </div>
-                )}
-
-                {searchResults.length > 0 && (
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-medium text-gray-700">Search Results:</h4>
-                    {searchResults.map((result, index) => (
-                      <div key={index} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                        <h5 className="text-sm font-medium text-gray-800 mb-1">
-                          <a
-                            href={result.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-blue-600 hover:underline"
-                          >
-                            {result.title}
-                          </a>
-                        </h5>
-                        <p className="text-xs text-gray-500 mb-2">{result.url}</p>
-                        <p className="text-sm text-gray-600">{result.content}</p>
-                        <div className="text-xs text-gray-400 mt-2">Score: {result.score.toFixed(2)}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {isSearching && (
-                  <div className="text-center py-4">
-                    <div className="flex items-center justify-center gap-2 text-blue-600">
-                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-sm">Searching...</span>
-                    </div>
-                  </div>
-                )}
-              </div>
             ) : null}
 
             {/* Chat mode streaming indicators */}
             {currentMode === 'chat' && (
               <>
-                {/* Search indicator */}
-                {isSearching && (
-                  <div className="flex justify-start">
-                    <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
-                      <div className="flex items-center gap-2">
-                        <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
-                        <span className="text-blue-700">Searching the web for current information...</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Thinking indicator */}
-                {isThinking && !isSearching && (
-                  <div className="flex justify-start">
-                    <div className="bg-purple-50 text-purple-800 rounded-lg rounded-bl-sm p-2 text-sm border border-purple-200">
-                      <div className="flex items-center gap-2">
-                        <SparklesIcon className="w-4 h-4 animate-pulse text-purple-600" />
-                        <span className="text-purple-700">Thinking about your request...</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Streaming message. prepareStreamingDisplay hides any
-                    in-progress [EDIT_INSTRUCTIONS]...[/EDIT_INSTRUCTIONS]
-                    block whose closing tag hasn't arrived yet, and returns
-                    generatingEdits=true so we can render a dedicated
-                    indicator under the prose rather than leaking raw JSON
-                    into the bubble. Once the closing tag arrives upstream,
-                    cleanResponseContent in chatService removes the block
-                    and this becomes a no-op. */}
-                {isStreaming && streamingContent && (() => {
-                  const { display, generatingEdits } = prepareStreamingDisplay(streamingContent);
-                  if (!display && !generatingEdits) return null;
+                {/* In-flight assistant turn. Ordering is deliberate:
+                      1. Streaming text bubble (main response)
+                      2. Thinking summary (collapsible) — the model's
+                         reasoning, rendered muted below the answer so
+                         users can expand when curious without it
+                         dominating the conversation view
+                      3. Searching / Thinking status chips BELOW the
+                         bubble — they represent "still working on it,"
+                         which is more legible after the partial text
+                         than crowding above it.
+                    prepareStreamingDisplay hides any in-progress
+                    [EDIT_INSTRUCTIONS]...[/EDIT_INSTRUCTIONS] block whose
+                    closing tag hasn't arrived yet and returns
+                    generatingEdits=true for the dedicated indicator. */}
+                {isStreaming && (streamingContent || streamingThinking) && (() => {
+                  const { display, generatingEdits } = streamingContent
+                    ? prepareStreamingDisplay(streamingContent)
+                    : { display: '', generatingEdits: false };
+                  const hasAnything = display || generatingEdits || streamingThinking;
+                  if (!hasAnything) return null;
                   return (
                     <div className="flex justify-start">
                       <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
@@ -2681,6 +2613,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <PencilSquareIcon className="w-4 h-4 animate-pulse text-amber-600" aria-hidden />
                             <span>Generating edits to the graph…</span>
                           </div>
+                        )}
+                        {streamingThinking && (
+                          <details
+                            className={`text-xs text-gray-500 ${display || generatingEdits ? 'mt-2 pt-2 border-t border-gray-200' : ''}`}
+                            open={thinkingExpanded}
+                            onToggle={(e) => setThinkingExpanded((e.target as HTMLDetailsElement).open)}
+                          >
+                            <summary className="cursor-pointer select-none text-gray-600 hover:text-gray-800 inline-flex items-center gap-1">
+                              <SparklesIcon className="w-3.5 h-3.5 text-purple-500" aria-hidden />
+                              <span>{thinkingExpanded ? 'Hide thinking' : 'Show thinking'}</span>
+                            </summary>
+                            <div className="mt-1 whitespace-pre-wrap italic text-gray-600 leading-relaxed">
+                              {streamingThinking}
+                            </div>
+                          </details>
                         )}
                         <div className="text-xs mt-1 opacity-70 text-gray-500">
                           <div className="flex items-center gap-1">
@@ -2697,6 +2644,30 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   );
                 })()}
+
+                {/* Status chips BELOW the streaming bubble — tells the user
+                    "still working on it" next to the partial text, not
+                    above it where they'd scroll past to find it. */}
+                {isSearching && (
+                  <div className="flex justify-start">
+                    <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
+                      <div className="flex items-center gap-2">
+                        <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
+                        <span className="text-blue-700">Searching the web for current information...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {isThinking && !isSearching && (
+                  <div className="flex justify-start">
+                    <div className="bg-purple-50 text-purple-800 rounded-lg rounded-bl-sm p-2 text-sm border border-purple-200">
+                      <div className="flex items-center gap-2">
+                        <SparklesIcon className="w-4 h-4 animate-pulse text-purple-600" />
+                        <span className="text-purple-700">Thinking about your request...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Cost-error banner for non-cap errors that don't merit
                     the full BYOK panel (body-too-large, chart-deleted,
