@@ -43,8 +43,16 @@ DATABASE_URL=postgresql://...              # Neon connection string
 VITE_AUTH0_DOMAIN=your-domain.auth0.com    # Auth0 domain (public, client-side)
 VITE_AUTH0_CLIENT_ID=your-client-id        # Auth0 client ID (public, client-side)
 ANTHROPIC_API_KEY=sk-ant-...               # Anthropic API key (server-side only)
-IP_HASH_SALT=your-random-salt              # Salt for IP hashing (server-side only)
+IP_HASH_SALT=your-random-salt              # Legacy salt, no longer used for identity; keep for backfill
+
+# Optional (features auto-disable if unset)
+BYOK_ENCRYPTION_KEY=base64-32-bytes        # 32 random bytes, base64-encoded; wraps per-user Anthropic keys (worker/_shared/byok-crypto.ts). Unset disables BYOK.
+TURNSTILE_SECRET_KEY=0x...                 # Cloudflare Turnstile secret (dashboard); server-side verification of the anon bot-check. Unset disables the anon bot-check.
+VITE_TURNSTILE_SITE_KEY=0x...              # Cloudflare Turnstile site key (dashboard); rendered by the client widget. Build-time (Vite inlines).
+SITE_URL=https://localhost:8787            # Optional; falls back to the request origin if unset.
 ```
+
+Generate a `BYOK_ENCRYPTION_KEY` with: `openssl rand -base64 32`.
 
 ### Database Setup
 
