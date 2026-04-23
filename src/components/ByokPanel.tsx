@@ -45,7 +45,7 @@ export function ByokPanel({
   className,
 }: ByokPanelProps) {
   const { hasKey, keyLast4, submitKey } = useApiKey();
-  const { isAuthenticated, isLoading: authLoading } = useAuth0();
+  const { isAuthenticated, isLoading: authLoading, loginWithRedirect } = useAuth0();
 
   const [rawKey, setRawKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -94,21 +94,38 @@ export function ByokPanel({
     .join(' ');
 
   // Anonymous-user fallback: we bind the stored key to the user's auth0 sub,
-  // so key entry requires a signed-in account. Explain what Generate needs
-  // and why, rather than a bare "please sign in".
+  // so key entry requires a signed-in account. Two variants:
+  //  - `generate` mode is the first-entry explainer (why Generate needs a
+  //    key). The surrounding UI has no other context, so the body carries
+  //    the "deep analysis, more than free tier covers" framing.
+  //  - All cap/BYOK modes (cap_reached, request_cut_off, global_budget,
+  //    voluntary) are shown AFTER a cap-triggered banner that already
+  //    explains the problem. Keep this short and action-oriented so the
+  //    two don't overlap.
   if (!authLoading && !isAuthenticated) {
+    const isGenerate = mode === 'generate';
+    const title = isGenerate
+      ? 'Sign in to use Generate with your Anthropic API key'
+      : 'Sign in to add your Anthropic API key';
+    const body = isGenerate
+      ? 'Generate runs a deep analysis of your documents; a single run often costs more than the free tier covers.'
+      : 'API keys are bound to your account — signing in lets you keep chatting on your own key.';
     return (
       <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
         <h3 id={`${inputId}-title`} className="flex items-start gap-2 text-base font-semibold text-gray-900">
           <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
-          <span>Sign in to use Generate with your Anthropic API key</span>
+          <span>{title}</span>
         </h3>
-        <p className="mt-2 text-sm text-gray-700 leading-relaxed">
-          Generate runs a deep analysis of your documents; a single run
-          often costs more than the free tier covers. To use it, sign in
-          and add your own Anthropic API key; usage is billed directly to your
-          Anthropic account.
-        </p>
+        <p className="mt-2 text-sm text-gray-700 leading-relaxed">{body}</p>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => { void loginWithRedirect(); }}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+          >
+            Sign in
+          </button>
+        </div>
       </section>
     );
   }
