@@ -166,15 +166,13 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   if (mimeType === 'application/pdf') {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      // Base64-encode via TextDecoder('latin1'): the Latin-1 (ISO-8859-1)
-      // encoding maps every byte 0-255 to the same code point 1:1, which
-      // is exactly what btoa wants. Native, O(n), no stack/arg limits,
-      // and works for arbitrarily large buffers. The byte-by-byte string
-      // concat alternative is O(n²) and burns Workers CPU time on 10MB+
-      // PDFs — the upload fails outright with a worker-exception 500
-      // before our catch block can record anything.
-      const binary = new TextDecoder('latin1').decode(bytes);
-      const b64 = btoa(binary);
+      // `Uint8Array.prototype.toBase64()` is the TC39 typed-array base64
+      // method (V8 12.8+, in Workerd as of 2024). Native, O(n), no
+      // stack/arg limits or string-concat pitfalls. Falls back to the
+      // Latin-1 / btoa idiom on runtimes that don't yet have it.
+      const b64 = typeof (bytes as unknown as { toBase64?: () => string }).toBase64 === 'function'
+        ? (bytes as unknown as { toBase64: () => string }).toBase64()
+        : btoa(new TextDecoder('latin1').decode(bytes));
       const countResp = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
         method: 'POST',
         headers: {
