@@ -17,9 +17,9 @@ describe('turnstile-cookie round-trip', () => {
   it('missing cookie returns missing', async () => {
     expect(await verifyTurnstileCookie(null, TEST_ANON, TEST_SALT)).toBe('missing');
   });
-  it('anon_id mismatch returns ip_mismatch', async () => {
+  it('anon_id mismatch returns actor_mismatch', async () => {
     const cookie = await signTurnstileCookie(TEST_ANON, TEST_SALT);
-    expect(await verifyTurnstileCookie(cookie, 'different-anon', TEST_SALT)).toBe('ip_mismatch');
+    expect(await verifyTurnstileCookie(cookie, 'different-anon', TEST_SALT)).toBe('actor_mismatch');
   });
   it('tampered signature returns invalid', async () => {
     const cookie = await signTurnstileCookie(TEST_ANON, TEST_SALT);
