@@ -420,7 +420,7 @@ export function EditToolbar({
   }
 
   // Delete chart
-  const handleDeleteChart = async (chartId: string, _chartTitle: string) => {
+  const handleDeleteChart = async (chartId: string) => {
     try {
       await ChartService.deleteChart(chartId)
       // Remove the BYOK spend counter for this chart so it doesn't leak into
@@ -1392,7 +1392,7 @@ export function EditToolbar({
                         <button
                           onClick={() => {
                             if (confirm(`Are you sure you want to delete "${data.title || 'this chart'}"? This action cannot be undone.`)) {
-                              handleDeleteChart(shareData.chartId, data.title || 'this chart');
+                              handleDeleteChart(shareData.chartId);
                             }
                           }}
                           className="w-full px-4 py-2 text-sm font-medium text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors flex items-center justify-center gap-2"

@@ -28,9 +28,6 @@ export function useKeyboardShortcuts({
   moveNodeVertically,
   nodeHeights
 }: UseKeyboardShortcutsProps) {
-  // copiedNodes is referenced in the returned object and effect deps for
-  // future paste support; the setter is intentionally unused right now.
-  const [copiedNodes, _setCopiedNodes] = useState<Node[]>([])
   const [currentTabIndex, setCurrentTabIndex] = useState(-1)
 
   // Find node location helper
@@ -283,11 +280,10 @@ export function useKeyboardShortcuts({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [editMode, highlightedNodes, moveNodeVertically, moveNodeHorizontally, selectAllNodes, navigateNodes, clearSelections, copySelectedNodes, pasteNodes, deleteSelectedNodes, copiedNodes.length])
+  }, [editMode, highlightedNodes, moveNodeVertically, moveNodeHorizontally, selectAllNodes, navigateNodes, clearSelections, copySelectedNodes, pasteNodes, deleteSelectedNodes])
 
   return {
     // State
-    copiedNodes,
     currentTabIndex,
     
     // Functions
