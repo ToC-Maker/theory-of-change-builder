@@ -407,7 +407,9 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
   // BYOK panel state for 429/402 recovery and voluntary key entry.
-  const [byokPanelMode, setByokPanelMode] = useState<'generate' | 'cap_reached' | 'voluntary' | null>(null);
+  const [byokPanelMode, setByokPanelMode] = useState<
+    'generate' | 'cap_reached' | 'request_cut_off' | 'global_budget' | 'voluntary' | null
+  >(null);
   const [byokMenuOpen, setByokMenuOpen] = useState(false);
 
   // Files attached in Chat mode (separate from Generate-mode `files`). These
@@ -697,20 +699,27 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         // surfacing an error would confuse them.
         return;
       case 'lifetime_cap_reached':
-        setCostErrorBanner({ kind: 'lifetime_cap', message: COST_ERROR_COPY.lifetime_cap });
+        // Open the BYOK panel directly; it carries the full explanatory
+        // header + form + donate link.
+        setByokPanelMode('cap_reached');
+        setCostErrorBanner(null);
+        // The server just wrote the blocking projected cost to
+        // user_api_usage (pre-flight reservation); sync UI.
+        void refreshUsage();
         return;
       case 'global_budget_exhausted':
-        setCostErrorBanner({ kind: 'global_budget', message: COST_ERROR_COPY.global_budget });
+        setByokPanelMode('global_budget');
+        setCostErrorBanner(null);
         return;
       case 'request_cost_ceiling_exceeded':
-        // Re-use the cap-reached copy + BYOK remedy; the cause is different
-        // (per-request ceiling rather than lifetime cap) but the user action
-        // is identical: pay with your own key or shorten the prompt.
-        setCostErrorBanner({
-          kind: 'lifetime_cap',
-          message:
-            'This request would exceed the per-request cost ceiling. Try a shorter prompt or use your own key.',
-        });
+        // Mid-stream kill: the message already ran part-way, the reconcile
+        // path is writing the actual cost to the DB right now. Surface the
+        // cut-off-specific ByokPanel header and refresh usage so the cap
+        // bar reflects reality — otherwise it stays at the pre-stream
+        // snapshot until manual reload.
+        setByokPanelMode('request_cut_off');
+        setCostErrorBanner(null);
+        void refreshUsage();
         return;
       case 'body_too_large':
         setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
@@ -2482,36 +2491,23 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   );
                 })()}
 
-                {/* Cost-error banner: rendered under the last user message
-                    in lieu of toast-style popups, so we preserve chat
-                    history across quota/cap failures (plan decision 8). */}
+                {/* Cost-error banner for non-cap errors that don't merit
+                    the full BYOK panel (body-too-large, chart-deleted,
+                    service-unavailable, etc.). Cap/quota errors go
+                    straight to the inline ByokPanel below via
+                    handleCostError. */}
                 {costErrorBanner && (
                   <div className="flex justify-start">
                     <div className="max-w-[85%] p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-900">
-                      <div className="mb-2">{costErrorBanner.message}</div>
-                      {(costErrorBanner.kind === 'lifetime_cap' ||
-                        costErrorBanner.kind === 'global_budget') && (
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                            onClick={() => setByokPanelMode('cap_reached')}
-                          >
-                            Bring your own key
-                          </button>
-                          <a
-                            href="#donate"
-                            className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Donate
-                          </a>
-                        </div>
-                      )}
+                      {costErrorBanner.message}
                     </div>
                   </div>
                 )}
 
-                {/* Inline BYOK panel for cap_reached / voluntary flows */}
+                {/* Inline BYOK panel. Used for every cap/quota failure
+                    (cap_reached, request_cut_off, global_budget) and the
+                    voluntary add-key flow. Generate mode has its own render
+                    earlier in the file. */}
                 {byokPanelMode && byokPanelMode !== 'generate' && (
                   <ByokPanel
                     mode={byokPanelMode}
@@ -2519,9 +2515,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       setByokPanelMode(null);
                       setCostErrorBanner(null);
                       void refreshUsage();
-                      // In cap_reached mode, let the user hit send again;
-                      // we don't auto-retry since the chat composer still
-                      // holds their last message context.
+                      // In cap_reached / request_cut_off mode, let the user
+                      // hit send again; we don't auto-retry since the chat
+                      // composer still holds their last message context.
                     }}
                   />
                 )}

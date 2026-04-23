@@ -3,7 +3,12 @@ import { useApiKey } from '../contexts/ApiKeyContext';
 import { useAuth0 } from '@auth0/auth0-react';
 import { KeyIcon, EyeIcon, EyeSlashIcon, CheckCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 
-export type ByokPanelMode = 'generate' | 'cap_reached' | 'voluntary';
+export type ByokPanelMode =
+  | 'generate'
+  | 'cap_reached'         // pre-flight 429: prior cumulative usage already ≥ cap
+  | 'request_cut_off'     // mid-stream kill: this message went over remaining budget
+  | 'global_budget'       // 402: our shared monthly AI spend cap hit
+  | 'voluntary';
 
 export interface ByokPanelProps {
   mode: ByokPanelMode;
@@ -112,7 +117,7 @@ export function ByokPanel({
   // pill instead of re-rendering an empty input. In generate mode the caller
   // typically unmounts us via onSubmitted.
   const showConfirmation =
-    (mode === 'voluntary' || mode === 'cap_reached') && (justSubmittedLast4 || (hasKey && !error));
+    (mode === 'voluntary' || mode === 'cap_reached' || mode === 'request_cut_off' || mode === 'global_budget') && (justSubmittedLast4 || (hasKey && !error));
   const confirmationLast4 = justSubmittedLast4 ?? keyLast4 ?? null;
 
   return (
@@ -225,7 +230,12 @@ export function ByokPanel({
               )}
               {submitting ? 'Verifying…' : 'Verify and continue'}
             </button>
-            {mode === 'cap_reached' && (
+            {/* Donate makes sense when the user has hit the overall free
+                tier ('cap_reached') or when the global pool is exhausted
+                ('global_budget') — donations help keep or raise the pool.
+                For 'request_cut_off' (one message went over), donate is
+                a non-sequitur; hide it there. */}
+            {(mode === 'cap_reached' || mode === 'global_budget') && (
               <a
                 href={donateUrl}
                 className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800"
@@ -264,6 +274,18 @@ function renderHeader(
         title: "You've used the free lifetime quota",
         body:
           'To keep chatting, add your own Anthropic API key; usage is billed directly to your Anthropic account. You can also donate to help us raise the cap and keep this tool sustainable.',
+      };
+    case 'request_cut_off':
+      return {
+        title: 'Message cut off — free quota exhausted',
+        body:
+          "Your last message used the rest of your free quota and was stopped mid-response. Add your Anthropic API key to keep going; future messages will keep working on your own account.",
+      };
+    case 'global_budget':
+      return {
+        title: "We've hit our shared monthly spend cap",
+        body:
+          "Everyone on the free tier is paused until next month's reset. Add your Anthropic API key to keep going, or donate to help us raise the cap.",
       };
     case 'voluntary':
       return {
