@@ -4,6 +4,16 @@ import { verifyToken, extractToken } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
 import { resolveAnonActor } from '../_shared/anon-id';
 
+// TC39 typed-array base64 methods (stage 4 / in V8 12.8+, Workerd runs V8
+// 14+). TypeScript's lib definitions don't include them yet, so augment
+// `Uint8Array` here rather than casting at each call site. Narrow to only
+// the methods we actually use.
+declare global {
+  interface Uint8Array {
+    toBase64(): string;
+  }
+}
+
 // Auth0 sub if the token verifies, otherwise the cookie-pinned anon id
 // (hmac-of-IP, migrated on IP change). setCookie is the Set-Cookie header
 // value to echo on the response when the resolver minted or rewrote the
@@ -166,13 +176,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   if (mimeType === 'application/pdf') {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      // `Uint8Array.prototype.toBase64()` is the TC39 typed-array base64
-      // method (V8 12.8+, in Workerd as of 2024). Native, O(n), no
-      // stack/arg limits or string-concat pitfalls. Falls back to the
-      // Latin-1 / btoa idiom on runtimes that don't yet have it.
-      const b64 = typeof (bytes as unknown as { toBase64?: () => string }).toBase64 === 'function'
-        ? (bytes as unknown as { toBase64: () => string }).toBase64()
-        : btoa(new TextDecoder('latin1').decode(bytes));
+      const b64 = bytes.toBase64();
       const countResp = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
         method: 'POST',
         headers: {
