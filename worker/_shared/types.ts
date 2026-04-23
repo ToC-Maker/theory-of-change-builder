@@ -1,4 +1,7 @@
-export interface Env {
+// Worker runtime bindings (env). Wrapped in `Readonly<>` so middleware
+// can't accidentally mutate secrets or swap out bindings mid-request —
+// Workers' env is effectively immutable once the isolate boots.
+export type Env = Readonly<{
   ASSETS: Fetcher;
   DATABASE_URL: string;
   ANTHROPIC_API_KEY: string;
@@ -10,4 +13,4 @@ export interface Env {
   // Turnstile secret for anonymous bot verification in anthropic-stream.
   // When unset, the anon bot check is skipped (useful for local dev).
   TURNSTILE_SECRET_KEY?: string;
-}
+}>;
