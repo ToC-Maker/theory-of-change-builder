@@ -3,7 +3,12 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
-import { resolveAnonActor, mergeAnonUsageIntoAuth } from '../_shared/anon-id';
+import {
+  resolveAnonActor,
+  mergeAnonUsageIntoAuth,
+  signAuthLinkCookie,
+  buildAuthLinkCookieHeader,
+} from '../_shared/anon-id';
 import {
   computeCostMicroUsd,
   RATES_MICRO_USD_PER_TOKEN,
@@ -161,7 +166,16 @@ async function readBodyWithSizeClamp(
 // --- Actor / tier resolution --------------------------------------------
 
 type ActorResult =
-  | { ok: true; actorId: string; authenticated: boolean; anonSetCookie?: string }
+  | {
+      ok: true;
+      actorId: string;
+      authenticated: boolean;
+      /** Set when resolveAnonActor minted a fresh tocb_actor_id cookie. */
+      anonSetCookie?: string;
+      /** Set when the JWT verified and we (re-)signed the tocb_auth_link
+       *  cookie. Caller must append both to the outbound response. */
+      authLinkSetCookie?: string;
+    }
   | { ok: false; response: Response };
 
 // Email verification is enforced upstream in Auth0 via a Post-Login Action
@@ -190,15 +204,26 @@ async function resolveActor(
     // tocb_actor_id cookie) into the authenticated identity so sign-in
     // isn't a cap reset. Idempotent and non-fatal — see helper comment.
     await mergeAnonUsageIntoAuth(sql, decoded.sub, request);
-    return { ok: true, actorId: decoded.sub, authenticated: true };
+    // Mint/refresh the tocb_auth_link cookie so post-logout anon traffic
+    // on this browser continues to resolve to this auth sub's cap row
+    // (closes the "log out to reset cap" path). Refresh on every auth'd
+    // request so an active user's cookie stays well inside its 1y TTL.
+    const authLinkSetCookie = buildAuthLinkCookieHeader(
+      await signAuthLinkCookie(decoded.sub, env.IP_HASH_SALT),
+    );
+    return {
+      ok: true,
+      actorId: decoded.sub,
+      authenticated: true,
+      authLinkSetCookie,
+    };
   }
 
-  // Anonymous path: cookie-first identity (hmac-of-IP), with on-the-fly
-  // migration when the cookie's hash differs from the current IP hash.
-  // sql is passed so resolveAnonActor can migrate the user_api_usage row
-  // during an IP change instead of losing the cap.
+  // Anonymous path: cookie-first identity. resolveAnonActor itself checks
+  // tocb_auth_link before tocb_actor_id, so a post-logout browser still
+  // resolves to its prior auth sub's cap row.
   try {
-    const resolved = await resolveAnonActor(request, env, sql);
+    const resolved = await resolveAnonActor(request, env);
     return {
       ok: true,
       actorId: resolved.userId,
@@ -1538,11 +1563,14 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   const actor = await resolveActor(request, env, altSvcHeaders, sql);
   if (!actor.ok) return actor.response;
   const actorId = actor.actorId;
-  // If the anon resolver set or rewrote the actor cookie (first visit OR
-  // post-IP-change migration), echo the Set-Cookie on every response path
-  // below via altSvcHeaders.
-  if (actor.anonSetCookie) {
-    altSvcHeaders['Set-Cookie'] = actor.anonSetCookie;
+  // Auth'd path mints tocb_auth_link; anon path may mint tocb_actor_id.
+  // The two are mutually exclusive on any given request (one of
+  // authenticated=true or =false), so a single Set-Cookie slot on
+  // altSvcHeaders covers both and propagates to every jsonError / stream
+  // response built below.
+  const setCookie = actor.anonSetCookie ?? actor.authLinkSetCookie;
+  if (setCookie) {
+    altSvcHeaders['Set-Cookie'] = setCookie;
   }
 
   // Step 3: BYOK resolution.

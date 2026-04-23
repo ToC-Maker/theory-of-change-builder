@@ -2,7 +2,11 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
-import { resolveAnonActor } from '../_shared/anon-id';
+import {
+  resolveAnonActor,
+  signAuthLinkCookie,
+  buildAuthLinkCookieHeader,
+} from '../_shared/anon-id';
 import { ANTHROPIC_PDF_PAGE_LIMIT } from '../../shared/anthropic-limits';
 
 // TC39 typed-array base64 methods (stage 4 / in V8 12.8+, Workerd runs V8
@@ -22,13 +26,17 @@ declare global {
 async function resolveActorId(
   request: Request,
   env: Env,
-  sql: ReturnType<typeof getDb>,
 ): Promise<{ userId: string; setCookie?: string }> {
   const token = extractToken(request.headers.get('authorization'));
   if (token) {
     try {
       const decoded = await verifyToken(token, env);
-      return { userId: decoded.sub };
+      // Refresh tocb_auth_link so post-logout uploads attribute to this
+      // same auth sub's cap row via resolveAnonActor's link-cookie path.
+      const setCookie = buildAuthLinkCookieHeader(
+        await signAuthLinkCookie(decoded.sub, env.IP_HASH_SALT),
+      );
+      return { userId: decoded.sub, setCookie };
     } catch (err) {
       // Invalid token — fall through to anon. anthropic-stream.ts takes the
       // same posture: a bad token silently drops us into anon tracking, rather
@@ -38,7 +46,7 @@ async function resolveActorId(
   }
 
   try {
-    const resolved = await resolveAnonActor(request, env, sql);
+    const resolved = await resolveAnonActor(request, env);
     return { userId: resolved.userId, setCookie: resolved.setCookieHeader };
   } catch (err) {
     console.error('[upload-file] Failed to resolve anon actor:', err);
@@ -89,7 +97,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   }
 
   const sql = getDb(env);
-  const { userId, setCookie: anonSetCookie } = await resolveActorId(request, env, sql);
+  const { userId, setCookie: anonSetCookie } = await resolveActorId(request, env);
 
   // Forward the file to Anthropic. We rebuild the FormData rather than piping
   // the original — Workers' FormData instance is single-use (consumed above)

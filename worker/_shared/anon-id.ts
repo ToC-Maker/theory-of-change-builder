@@ -2,37 +2,42 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
 
 // Shared anonymous-actor identity helpers.
 //
-// Anonymous users are identified by `anon-<hash>` where <hash> is the
-// hex-encoded HMAC-SHA256 of the caller's cf-connecting-ip under
-// env.IP_HASH_SALT. The SAME value is persisted in a first-party
-// `tocb_actor_id` cookie. Four cases:
+// Anonymous users are identified by `anon-<id>` where <id> is a random
+// UUIDv4 persisted in a first-party `tocb_actor_id` cookie. Identity is
+// strictly per-browser — an actor row is created the first time the
+// cookie is missing, and re-used every visit after. Clearing cookies
+// produces a fresh identity with a fresh cap. Two users behind the same
+// NAT / CGNAT / corporate IP each get their own cap (each browser has
+// its own cookie).
 //
-//   - Cookie absent, first visit: identity = hash(current_ip). Cookie is
-//     set to that hash.
-//   - Cookie absent, same IP as a prior visit: hash(current_ip) matches
-//     the prior row → cap preserved across the cookie clear.
-//   - Cookie present, matches current hash(ip): normal path, no work.
-//   - Cookie present, DOESN'T match current hash(ip) (IP changed): the
-//     `user_api_usage` row is migrated from the old id to the new one
-//     (UPDATE … WHERE user_id = old), the cookie is rewritten to the
-//     current hash, and the caller proceeds under the new identity with
-//     its cap preserved. If the new id already has a row (rare hash
-//     collision), migration is skipped and the caller stays on the old
-//     cookie identity to avoid merging two users' data.
+// Rationale for dropping the previous IP-derived scheme:
+//   - Shared IPs are very common (office NAT, campus wifi, CGNAT, VPNs),
+//     and lumping every visitor behind the same public IP into a shared
+//     $5 cap meant colleagues at the same org would lock each other out.
+//   - The only thing the IP tie added was an anti-abuse floor against
+//     cookie-clearing. Turnstile still gates bots, and the Anthropic
+//     Console monthly cap is the authoritative damage ceiling. A human
+//     who manually clears cookies repeatedly still has to solve a
+//     Turnstile for each reset — not a cheap attack.
 //
-// Only both resets at once — cleared cookie AND changed IP — produce a
-// fresh identity with a fresh cap. Any single reset preserves the cap.
+// Cookie precedence in resolveAnonActor:
+//   1. `tocb_auth_link` valid → return the linked auth sub (closes the
+//      "log out to reset cap" path after a prior sign-in on this browser).
+//   2. `tocb_actor_id` valid → return `anon-<cookie-value>`.
+//   3. Neither → mint a fresh UUID, return `anon-<uuid>` + Set-Cookie.
 //
-// Keep this derivation identical across every call site — any drift means
+// Keep derivation identical across every call site — any drift means
 // the same user looks like different actors to different endpoints.
 
 export const ACTOR_COOKIE_NAME = 'tocb_actor_id';
 /** 1 year — effectively permanent for a browser profile. */
 export const ACTOR_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 
-/** 64-char lowercase hex (SHA-256 output). Guards against garbage cookie values. */
-function isValidActorHash(s: string): boolean {
-  return /^[0-9a-f]{64}$/.test(s);
+/** UUIDv4 string. Any other shape (including the pre-Policy-B IP-hash hex)
+ * is rejected so we mint a fresh UUID instead. Only preview-branch testing
+ * ever produced the legacy format, so no real users get reset by this. */
+function isValidActorId(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s);
 }
 
 function readCookie(cookieHeader: string | null, name: string): string | null {
@@ -96,95 +101,47 @@ function buildCookieHeader(value: string): string {
 }
 
 /**
- * Generic typing for the Neon sql template — accepts either the strict
- * or loose array type from `@neondatabase/serverless`. Kept narrow (only
- * the template-tag shape used below) so callers don't have to import
- * NeonQueryFunction for a trivial parameter type.
- */
-type SqlTag = <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: unknown[]) => Promise<T[]>;
-
-/**
  * Resolve the anonymous actor for a request.
  *
- * Behavior:
- *   - No cookie: identity = hashIP(cf-connecting-ip, salt). Cookie is
- *     set to that value.
- *   - Cookie matches current IP hash: use cookie value as identity.
- *   - Cookie mismatches current IP hash: migrate
- *     `user_api_usage.user_id` from the old value to the new one, rewrite
- *     the cookie to the new value, and return the new identity. If the
- *     target row already exists the migration is skipped and the caller
- *     stays on the cookie's value — preserves the old cap rather than
- *     merging two users' rows.
+ *   1. If a valid `tocb_auth_link` cookie is present, the browser has
+ *      previously been signed in as an auth user — resolve to that sub
+ *      so post-logout anon traffic still attributes to the same cap row.
+ *      Closes the "log out to reset cap" path.
+ *   2. Else if a valid `tocb_actor_id` cookie is present (UUID or legacy
+ *      hex), resolve to `anon-<cookie-value>`.
+ *   3. Else mint a fresh UUID, return `anon-<uuid>` plus a Set-Cookie
+ *      header the caller should append to the outbound response.
  *
- * Pass `sql` when migration should run (anthropic-stream, usage,
- * upload-file — anything that actually consults user_api_usage). Endpoints
- * that don't need cap-aware identity (verify-turnstile on its own) can
- * omit it; then IP mismatches leave the cookie value untouched.
+ * No sql parameter — the old migration path (`anon-<hash>` →
+ * `anon-<hash>` on IP change) was dropped along with the IP-derived
+ * cookie scheme. Callers can stop threading their db handle through.
  */
 export async function resolveAnonActor(
   request: Request,
   env: { IP_HASH_SALT: string },
-  sql?: SqlTag,
 ): Promise<AnonActorResolution> {
-  const currentHash = await hashIP(extractIP(request), env.IP_HASH_SALT);
-  const existing = readCookie(request.headers.get('cookie'), ACTOR_COOKIE_NAME);
+  const cookieHeader = request.headers.get('cookie');
 
-  // No valid cookie → first visit (or cookie cleared). Use the IP hash
-  // directly. If the user is on the same IP they had before the clear,
-  // the DB row under anon-<ipHash> is already theirs: cap preserved.
-  if (!existing || !isValidActorHash(existing)) {
-    return {
-      userId: `anon-${currentHash}`,
-      setCookieHeader: buildCookieHeader(currentHash),
-    };
+  // (1) Auth-link cookie wins — this browser was authenticated before
+  // and we want the cap to follow, even after sign-out.
+  const linkCookie = readCookie(cookieHeader, AUTH_LINK_COOKIE_NAME);
+  if (linkCookie) {
+    const linked = await verifyAuthLinkCookie(linkCookie, env.IP_HASH_SALT);
+    if (linked) return { userId: linked };
   }
 
-  // Cookie matches current IP hash → no-op fast path.
-  if (existing === currentHash) {
+  // (2) Existing actor cookie.
+  const existing = readCookie(cookieHeader, ACTOR_COOKIE_NAME);
+  if (existing && isValidActorId(existing)) {
     return { userId: `anon-${existing}` };
   }
 
-  // Cookie mismatches current IP. IP has changed since the cookie was
-  // set. Migrate the user_api_usage row to the new id and rewrite the
-  // cookie; if the target row already exists, fall back to cookie
-  // identity to avoid merging two users' data.
-  if (sql) {
-    const oldId = `anon-${existing}`;
-    const newId = `anon-${currentHash}`;
-    try {
-      const migrated = await sql<{ user_id: string }>`
-        UPDATE user_api_usage
-        SET user_id = ${newId}
-        WHERE user_id = ${oldId}
-          AND NOT EXISTS (SELECT 1 FROM user_api_usage WHERE user_id = ${newId})
-        RETURNING user_id
-      `;
-      if (migrated.length > 0) {
-        return { userId: newId, setCookieHeader: buildCookieHeader(currentHash) };
-      }
-      // No row migrated: either the user has no prior usage (no source
-      // row) or the target already exists. Check which.
-      const targetRows = await sql<{ user_id: string }>`
-        SELECT user_id FROM user_api_usage WHERE user_id = ${newId} LIMIT 1
-      `;
-      if (targetRows.length > 0) {
-        // Target exists — stay on cookie identity to protect their cap.
-        return { userId: oldId };
-      }
-      // No source and no target: nothing to migrate, safe to roll forward.
-      return { userId: newId, setCookieHeader: buildCookieHeader(currentHash) };
-    } catch (e) {
-      // Migration failed — stay on cookie identity so usage still tracks
-      // against the row the user previously established.
-      console.error('[resolveAnonActor] migration failed; keeping cookie identity:', e);
-      return { userId: oldId };
-    }
-  }
-
-  // No sql access (e.g. called from verify-turnstile): keep cookie
-  // identity, let the next capped endpoint migrate when it fires.
-  return { userId: `anon-${existing}` };
+  // (3) Fresh visit (no cookies / garbage cookie) → new identity.
+  const fresh = crypto.randomUUID();
+  return {
+    userId: `anon-${fresh}`,
+    setCookieHeader: buildCookieHeader(fresh),
+  };
 }
 
 /**
@@ -209,7 +166,7 @@ export async function mergeAnonUsageIntoAuth(
   request: Request,
 ): Promise<void> {
   const existing = readCookie(request.headers.get('cookie'), ACTOR_COOKIE_NAME);
-  if (!existing || !isValidActorHash(existing)) return;
+  if (!existing || !isValidActorId(existing)) return;
   const anonUserId = `anon-${existing}`;
 
   try {
@@ -238,4 +195,96 @@ export async function mergeAnonUsageIntoAuth(
   } catch (e) {
     console.error('[mergeAnonUsageIntoAuth] merge failed (non-fatal):', e);
   }
+}
+
+// --- tocb_auth_link cookie -------------------------------------------------
+//
+// Server-signed cookie that remembers "this browser has been signed in as
+// <auth_sub>." Minted on every successful JWT verification (refresh each
+// time to keep it alive) and consumed by resolveAnonActor so a post-logout
+// request still resolves to the auth sub's `user_api_usage` row — cap stays
+// put across sign-out, just like the anon cookie survives a sign-in via
+// mergeAnonUsageIntoAuth.
+//
+// Format mirrors tocb_anon (the Turnstile session cookie): HMAC-SHA256 of
+// the base64url(payload) using env.IP_HASH_SALT as the signing key, payload
+// = JSON {sub, exp}. Verified constant-time. HttpOnly + Secure +
+// SameSite=Lax.
+//
+// Trust model: a valid auth-link cookie is treated as proof of identity for
+// cap attribution only — NOT for BYOK, not for permission checks, not as a
+// substitute for a JWT anywhere else. Reading the cap row under someone
+// else's sub is the maximum leak if an attacker were to forge one, and the
+// HMAC makes forging infeasible without the salt.
+
+export const AUTH_LINK_COOKIE_NAME = 'tocb_auth_link';
+/** 1 year; refreshed on every auth'd request, so this is the idle ceiling. */
+export const AUTH_LINK_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
+
+function b64urlEncode(bytes: Uint8Array | string): string {
+  const str = typeof bytes === 'string' ? bytes : String.fromCharCode(...bytes);
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecode(str: string): string {
+  const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+  return atob(str.replace(/-/g, '+').replace(/_/g, '/') + pad);
+}
+
+async function hmacSha256(key: string, data: string): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(data));
+  return new Uint8Array(sig);
+}
+
+export async function signAuthLinkCookie(
+  authSub: string,
+  salt: string,
+  ttlSeconds: number = AUTH_LINK_COOKIE_MAX_AGE,
+): Promise<string> {
+  const payload = JSON.stringify({ sub: authSub, exp: Math.floor(Date.now() / 1000) + ttlSeconds });
+  const payloadB64 = b64urlEncode(payload);
+  const sigBytes = await hmacSha256(salt, payloadB64);
+  return `${payloadB64}.${b64urlEncode(sigBytes)}`;
+}
+
+/**
+ * Returns the verified auth sub on success, null otherwise. Null covers
+ * missing / malformed / expired / bad-signature — callers don't
+ * distinguish; they just fall through to the anon-cookie path.
+ */
+export async function verifyAuthLinkCookie(
+  cookie: string | null,
+  salt: string,
+): Promise<string | null> {
+  if (!cookie) return null;
+  const parts = cookie.split('.');
+  if (parts.length !== 2) return null;
+  const [payloadB64, sigB64] = parts;
+  const expectedSigBytes = await hmacSha256(salt, payloadB64);
+  const expectedSigB64 = b64urlEncode(expectedSigBytes);
+  if (expectedSigB64.length !== sigB64.length) return null;
+  // Constant-time compare of the base64url signatures (same technique as
+  // the turnstile cookie verifier — no subtle.timingSafeEqual in Workers).
+  let diff = 0;
+  for (let i = 0; i < sigB64.length; i++) diff |= expectedSigB64.charCodeAt(i) ^ sigB64.charCodeAt(i);
+  if (diff !== 0) return null;
+  try {
+    const payload = JSON.parse(b64urlDecode(payloadB64)) as { sub?: unknown; exp?: unknown };
+    if (typeof payload.sub !== 'string' || !payload.sub) return null;
+    if (typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload.sub;
+  } catch {
+    return null;
+  }
+}
+
+export function buildAuthLinkCookieHeader(value: string): string {
+  return `${AUTH_LINK_COOKIE_NAME}=${value}; Path=/; Max-Age=${AUTH_LINK_COOKIE_MAX_AGE}; Secure; HttpOnly; SameSite=Lax`;
 }

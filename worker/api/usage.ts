@@ -2,7 +2,12 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { LIFETIME_CAP_USD, tierFor } from '../_shared/tiers';
-import { resolveAnonActor, mergeAnonUsageIntoAuth } from '../_shared/anon-id';
+import {
+  resolveAnonActor,
+  mergeAnonUsageIntoAuth,
+  signAuthLinkCookie,
+  buildAuthLinkCookieHeader,
+} from '../_shared/anon-id';
 
 function microToUsd(micro: bigint | number | null | undefined): number {
   if (micro === null || micro === undefined) return 0;
@@ -38,17 +43,22 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // anon→auth merge here means the first /api/usage response already
     // reflects any pre-sign-in anon spend folded into the auth row, rather
     // than showing $0 and then jumping on the next anthropic-stream call.
+    // Also mint/refresh the tocb_auth_link cookie so a subsequent logout
+    // doesn't reset the cap (see helper comment in anon-id.ts).
+    let authLinkSetCookie: string | undefined;
     if (userId) {
       await mergeAnonUsageIntoAuth(sql, userId, request);
+      authLinkSetCookie = buildAuthLinkCookieHeader(
+        await signAuthLinkCookie(userId, env.IP_HASH_SALT),
+      );
     }
 
     // Cookie-first anon identity. setCookieHeader is set when the resolver
-    // minted or rewrote the cookie (first visit or IP-change migration);
-    // surface it on the response.
+    // minted a fresh UUID (no prior cookie); surface it on the response.
     let anonSetCookie: string | undefined;
     if (!userId) {
       try {
-        const resolved = await resolveAnonActor(request, env, sql);
+        const resolved = await resolveAnonActor(request, env);
         userId = resolved.userId;
         anonSetCookie = resolved.setCookieHeader;
       } catch (e) {
@@ -79,6 +89,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // response when a stream fails upstream.
     const headers = new Headers({ 'content-type': 'application/json' });
     if (anonSetCookie) headers.append('Set-Cookie', anonSetCookie);
+    if (authLinkSetCookie) headers.append('Set-Cookie', authLinkSetCookie);
     return new Response(
       JSON.stringify({
         used_usd: microToUsd(userMicro),
