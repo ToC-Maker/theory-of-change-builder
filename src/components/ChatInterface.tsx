@@ -429,6 +429,10 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   // estimate can update independently; both are debounced to avoid
   // hammering /api/count-tokens-estimate on every keystroke.
   const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
+  // Last upstream message from /api/count-tokens-estimate when it fails.
+  // Rendered inline so shape issues (file_id unresolvable, etc.) surface
+  // to the user instead of silently falling back to a char-based estimate.
+  const [composerEstimateError, setComposerEstimateError] = useState<string | null>(null);
   const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
 
   // Derived cap-gate flags, computed from the cached usage snapshot +
@@ -528,17 +532,6 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   );
 
   // First-upload privacy notice. Persisted across sessions via localStorage
-  // so a returning user doesn't see it again after dismissing. We render
-  // the banner above the chip area on the first upload of either mode and
-  // hide it once the user clicks "Got it".
-  const [showFileUploadNotice, setShowFileUploadNotice] = useState<boolean>(
-    () => localStorage.getItem('tocb_file_upload_notice_shown') !== 'true',
-  );
-  const dismissFileUploadNotice = useCallback(() => {
-    localStorage.setItem('tocb_file_upload_notice_shown', 'true');
-    setShowFileUploadNotice(false);
-  }, []);
-
   // Settings modal state
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [customSystemPrompt, setCustomSystemPrompt] = useState<string>(
@@ -1038,7 +1031,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               messages: messagesForEstimate,
             }),
           });
-          if (!response.ok) throw new Error(`status ${response.status}`);
+          if (!response.ok) {
+            // Surface upstream detail so shape issues (e.g. file_id
+            // unresolvable in count_tokens, beta header mismatch) are
+            // diagnosable from the composer instead of silently falling
+            // back to the local char estimate.
+            let upstreamMessage: string | null = null;
+            try {
+              const body = await response.json() as { upstream_message?: string };
+              if (typeof body.upstream_message === 'string') upstreamMessage = body.upstream_message;
+            } catch { /* non-JSON body */ }
+            setComposerEstimateError(upstreamMessage);
+            throw new Error(`status ${response.status}`);
+          }
+          setComposerEstimateError(null);
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
@@ -1141,7 +1147,20 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
               messages: [{ role: 'user', content: assembled }],
             }),
           });
-          if (!response.ok) throw new Error(`status ${response.status}`);
+          if (!response.ok) {
+            // Surface upstream detail so shape issues (e.g. file_id
+            // unresolvable in count_tokens, beta header mismatch) are
+            // diagnosable from the composer instead of silently falling
+            // back to the local char estimate.
+            let upstreamMessage: string | null = null;
+            try {
+              const body = await response.json() as { upstream_message?: string };
+              if (typeof body.upstream_message === 'string') upstreamMessage = body.upstream_message;
+            } catch { /* non-JSON body */ }
+            setComposerEstimateError(upstreamMessage);
+            throw new Error(`status ${response.status}`);
+          }
+          setComposerEstimateError(null);
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
@@ -2444,26 +2463,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </p>
                 </div>
 
-                {/* First-upload privacy notice. Rendered above the file list
-                    on the first file pick in either mode; persists across
-                    sessions via the localStorage flag. */}
-                {showFileUploadNotice &&
-                  (files.length > 0 || generateAttachedChips.length > 0) && (
-                    <div className="flex items-start gap-2 p-2 rounded-md border border-blue-200 bg-blue-50 text-xs text-blue-900">
-                      <div className="flex-1">
-                        Files are uploaded to Anthropic and kept until you remove them or delete
-                        the chart. Not used to train AI models.
-                      </div>
-                      <button
-                        type="button"
-                        onClick={dismissFileUploadNotice}
-                        className="ml-2 inline-flex items-center px-2 py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
-                      >
-                        Got it
-                      </button>
-                    </div>
-                  )}
-
                 {/* Generate-mode PDF chips (Files API uploads). */}
                 {generateAttachedChips.length > 0 && (
                   <AttachedFilesBar
@@ -2851,24 +2850,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       />
                     </div>
                   ) : null}
-                  {/* First-upload privacy notice. Shown on the first chip
-                      attachment in either mode; dismissed for good via the
-                      localStorage flag. */}
-                  {showFileUploadNotice && chatAttachedFiles.length > 0 && (
-                    <div className="flex items-start gap-2 p-2 rounded-md border border-blue-200 bg-blue-50 text-xs text-blue-900">
-                      <div className="flex-1">
-                        Files are uploaded to Anthropic and kept until you remove them or delete
-                        the chart. Not used to train AI models.
-                      </div>
-                      <button
-                        type="button"
-                        onClick={dismissFileUploadNotice}
-                        className="ml-2 inline-flex items-center px-2 py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
-                      >
-                        Got it
-                      </button>
-                    </div>
-                  )}
                   {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
                   <AttachedFilesBar
@@ -2935,6 +2916,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       ) : (
                         <span className="text-gray-400">Estimating…</span>
                       )}
+                    </div>
+                  )}
+                  {composerEstimateError && (
+                    <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                      Estimation failed: {composerEstimateError}. Fell back to a
+                      rough local estimate; the actual reservation may differ.
                     </div>
                   )}
                   <div className="flex items-center justify-between">
@@ -3017,7 +3004,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           // capAlreadyReached / wouldExceedCap disable here
                           // as a visual cue; handleSendMessage also early-
                           // returns on both.
-                          disabled={inputValue.length === 0 || isLoading || capAlreadyReached || wouldExceedCap}
+                          disabled={
+                            inputValue.length === 0
+                            || isLoading
+                            || capAlreadyReached
+                            || wouldExceedCap
+                            // Block while any attached file is still uploading;
+                            // send would early-return server-side, but a
+                            // greyed button is clearer than a silent no-op.
+                            || chatAttachedFiles.some((f) => f.status === 'uploading')
+                          }
                           className="p-2 bg-blue-500 text-white rounded-lg enabled:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           title="Send message"
                         >

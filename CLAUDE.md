@@ -154,7 +154,7 @@ PDFs and other files attached in Chat are uploaded to Anthropic's Files API (`ht
 - **Clear Chat button** — `DELETE /api/chart-files?chart_id=X` clears both the local rows and the Anthropic-side files.
 - **GDPR erasure** — manual admin script walks the user's charts and deletes.
 
-Files are not subject to Anthropic's 7-day message retention; they persist at Anthropic until an explicit DELETE. Privacy policy discloses this (see `privacy-policy.md § 2E` and the retention table).
+Files are not subject to Anthropic's 7-day message retention; they persist at Anthropic until an explicit DELETE. Privacy policy discloses this (see `policies/privacy-policy.md § 2E` and the retention table). The Markdown sources of the privacy policy and LIA live under `policies/` (gitignored — canonical published version is the Google Doc linked from `AuthButton.tsx`).
 
 ## Common Issues
 

@@ -46,7 +46,26 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     console.error(
       `[count-tokens-estimate] upstream returned ${upstream.status}: ${errText}`,
     );
-    return Response.json({ error: 'estimation_unavailable' }, { status: 503 });
+    // Surface Anthropic's own error message so the client can render
+    // something actionable — previously the composer just said "service
+    // unavailable" for all failure modes, which hid shape-mismatch bugs
+    // (e.g. file_id not resolvable, beta header mismatch) for good since
+    // preview deploys have no log stream.
+    let upstreamMessage: string | undefined;
+    try {
+      const parsed = JSON.parse(errText) as { error?: { message?: string } };
+      upstreamMessage = parsed?.error?.message;
+    } catch {
+      /* non-JSON body */
+    }
+    return Response.json(
+      {
+        error: 'estimation_unavailable',
+        upstream_status: upstream.status,
+        upstream_message: upstreamMessage,
+      },
+      { status: 503 },
+    );
   }
 
   let parsed: { input_tokens?: number };

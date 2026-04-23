@@ -41,5 +41,11 @@ test-database.js
 # Internal planning
 plans/
 
+# Legal/privacy documents — Markdown source lives here for editing;
+# canonical published version is the Google Doc linked from AuthButton.
+# Kept out of git so branch/PR history doesn't expose drafts that may
+# be ahead of the published version.
+policies/
+
 # Storybook build
 storybook-static/
