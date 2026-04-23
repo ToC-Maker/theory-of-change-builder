@@ -268,10 +268,47 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     // back the Anthropic side cleanly from here (it would double the latency
     // and another ctx.waitUntil on a FK-bound row isn't safe). Log loudly so
     // orphan-cleanup sweeps can catch it; the user-facing upload still failed.
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     console.error(`[upload-file] DB insert failed for file_id=${fileId}, chart_id=${chartId}:`, err);
-    return Response.json(
-      { error: 'db_insert_failed' },
-      { status: 500 }
+
+    // Persist the exact PG error to logging_errors — preview deploys have
+    // no log stream, so DB is our only signal. Try a separate INSERT; if
+    // THAT fails too, at least the client gets the detail via
+    // upstream_message below.
+    try {
+      await sql`
+        INSERT INTO logging_errors (
+          error_id, error_name, error_message, user_id, chart_id, request_metadata
+        )
+        VALUES (
+          ${crypto.randomUUID()},
+          'DiagnosticChartFileInsertFailed',
+          ${`chart_files INSERT failed: ${detail}`},
+          ${userId},
+          ${chartId},
+          ${JSON.stringify({
+            file_id: fileId,
+            filename,
+            size_bytes: sizeBytes,
+            mime_type: mimeType,
+            input_tokens: inputTokens,
+            deployment_host: new URL(request.url).hostname,
+          })}
+        )
+        ON CONFLICT (error_id) DO NOTHING
+      `;
+    } catch (logErr) {
+      console.error('[upload-file] failed to log chart_files insert diagnostic:', logErr);
+    }
+
+    const headersOut = new Headers({ 'content-type': 'application/json' });
+    if (anonSetCookie) headersOut.append('Set-Cookie', anonSetCookie);
+    return new Response(
+      JSON.stringify({
+        error: 'db_insert_failed',
+        upstream_message: `Couldn't record the upload in our database: ${detail}`,
+      }),
+      { status: 500, headers: headersOut },
     );
   }
 
