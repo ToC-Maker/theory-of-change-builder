@@ -2260,7 +2260,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           {/* Content Area */}
           <div
             ref={chatContainerRef}
-            className="flex-1 overflow-y-auto p-3 space-y-3"
+            className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3"
             onScroll={handleScroll}
           >
             {currentMode === 'chat' ? (
