@@ -3,45 +3,27 @@ import { useApiKey } from '../contexts/ApiKeyContext';
 import { useAuth0 } from '@auth0/auth0-react';
 import { KeyIcon, EyeIcon, EyeSlashIcon, CheckCircleIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 
-export type ByokPanelMode =
-  | 'generate'
-  | 'cap_reached'         // pre-flight 429: prior cumulative usage already ≥ cap
-  | 'request_cut_off'     // mid-stream kill: this message went over remaining budget
-  | 'global_budget'       // 402: our shared monthly AI spend cap hit
-  | 'voluntary';
-
 export interface ByokPanelProps {
-  mode: ByokPanelMode;
   onSubmitted?: () => void;
   anthropicKeyHelpUrl?: string;
-  donateUrl?: string;
   className?: string;
 }
 
 const DEFAULT_HELP_URL = 'https://platform.claude.com/settings/keys';
-const DEFAULT_DONATE_URL = '#donate';
 
 /**
- * Inline panel for Bring-Your-Own-Key (BYOK) Anthropic API key entry.
+ * Single "Add your Anthropic API key" card. Three render states:
+ *  - anon: title + Sign in button (keys are bound to an auth0 sub).
+ *  - auth'd, no key: step-by-step instructions + key input + Verify.
+ *  - auth'd, key set: green verified pill.
  *
- * Rendered in three contexts:
- * - `'generate'`: replaces the Generate panel when the user triggers Generate
- *   without a verified key.
- * - `'cap_reached'`: shown beneath the last assistant message after the $5
- *   lifetime free cap is hit.
- * - `'voluntary'`: launched from the settings menu for users adding or
- *   changing a key on their own.
- *
- * The caller passes `onSubmitted` to re-trigger whatever action the user was
- * attempting (e.g. resume Generate). Anonymous visitors should never reach
- * this panel (they're routed to sign-in first); the component still renders
- * a gentle fallback for robustness.
+ * The panel is intentionally context-free. Callers explain WHY a key is
+ * needed (Chat cap banner, Generate cost warning, settings menu) via their
+ * own inline copy; this component is just the key-entry affordance.
  */
 export function ByokPanel({
-  mode,
   onSubmitted,
   anthropicKeyHelpUrl = DEFAULT_HELP_URL,
-  donateUrl = DEFAULT_DONATE_URL,
   className,
 }: ByokPanelProps) {
   const { hasKey, keyLast4, submitKey } = useApiKey();
@@ -54,7 +36,6 @@ export function ByokPanel({
   const [justSubmittedLast4, setJustSubmittedLast4] = useState<string | null>(null);
 
   const inputId = useId();
-  const disclosureId = useId();
 
   const trimmed = rawKey.trim();
   const looksValid = trimmed.startsWith('sk-ant-');
@@ -85,7 +66,6 @@ export function ByokPanel({
     }
   };
 
-  const header = renderHeader(mode);
   const wrapperClass = [
     'bg-white rounded-lg shadow-sm border border-gray-200 p-4',
     className ?? '',
@@ -93,30 +73,13 @@ export function ByokPanel({
     .filter(Boolean)
     .join(' ');
 
-  // Anonymous-user fallback: we bind the stored key to the user's auth0 sub,
-  // so key entry requires a signed-in account. Two variants:
-  //  - `generate` mode is the first-entry explainer (why Generate needs a
-  //    key). The surrounding UI has no other context, so the body carries
-  //    the "deep analysis, more than free tier covers" framing.
-  //  - All cap/BYOK modes (cap_reached, request_cut_off, global_budget,
-  //    voluntary) are shown AFTER a cap-triggered banner that already
-  //    explains the problem. Keep this short and action-oriented so the
-  //    two don't overlap.
   if (!authLoading && !isAuthenticated) {
-    const isGenerate = mode === 'generate';
-    const title = isGenerate
-      ? 'Sign in to use Generate with your Anthropic API key'
-      : 'Sign in to add your Anthropic API key';
-    const body = isGenerate
-      ? 'Generate runs a deep analysis of your documents; a single run often costs more than the free tier covers.'
-      : 'API keys are bound to your account — signing in lets you keep chatting on your own key.';
     return (
       <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
         <h3 id={`${inputId}-title`} className="flex items-start gap-2 text-base font-semibold text-gray-900">
           <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
-          <span>{title}</span>
+          <span>Sign in to add your Anthropic API key</span>
         </h3>
-        <p className="mt-2 text-sm text-gray-700 leading-relaxed">{body}</p>
         <div className="mt-3">
           <button
             type="button"
@@ -130,22 +93,15 @@ export function ByokPanel({
     );
   }
 
-  // Confirmation state: in voluntary / cap_reached modes, show a success
-  // pill instead of re-rendering an empty input. In generate mode the caller
-  // typically unmounts us via onSubmitted.
-  const showConfirmation =
-    (mode === 'voluntary' || mode === 'cap_reached' || mode === 'request_cut_off' || mode === 'global_budget') && (justSubmittedLast4 || (hasKey && !error));
+  const showConfirmation = justSubmittedLast4 !== null || (hasKey && !error);
   const confirmationLast4 = justSubmittedLast4 ?? keyLast4 ?? null;
 
   return (
     <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
       <h3 id={`${inputId}-title`} className="flex items-start gap-2 text-base font-semibold text-gray-900">
         <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
-        <span>{header.title}</span>
+        <span>Add your Anthropic API key</span>
       </h3>
-      {header.body && (
-        <p className="mt-2 text-sm text-gray-700 leading-relaxed">{header.body}</p>
-      )}
 
       {showConfirmation ? (
         <div
@@ -200,7 +156,6 @@ export function ByokPanel({
                 setRawKey(e.target.value);
                 if (error) setError(null);
               }}
-              aria-describedby={disclosureId}
               aria-invalid={error ? true : undefined}
               className="w-full pr-10 px-3 py-2 text-sm font-mono border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
               disabled={submitting}
@@ -233,84 +188,42 @@ export function ByokPanel({
             </p>
           )}
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-            >
-              {submitting && (
-                <span
-                  className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
-                  aria-hidden
-                />
-              )}
-              {submitting ? 'Verifying…' : 'Verify and continue'}
-            </button>
-            {/* Donate makes sense when the user has hit the overall free
-                tier ('cap_reached') or when the global pool is exhausted
-                ('global_budget') — donations help keep or raise the pool.
-                For 'request_cut_off' (one message went over), donate is
-                a non-sequitur; hide it there. */}
-            {(mode === 'cap_reached' || mode === 'global_budget') && (
-              <a
-                href={donateUrl}
-                className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800"
-              >
-                Donate instead
-              </a>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+          >
+            {submitting && (
+              <span
+                className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+                aria-hidden
+              />
             )}
-          </div>
-
-          {mode === 'generate' && (
-            <p id={disclosureId} className="text-xs text-gray-600">
-              A Generate run usually costs <strong>a few dollars</strong> on your
-              Anthropic account, and can be more for large documents or
-              heavy web searching. The live cost is shown as the response
-              streams so you can stop it if it runs long.
-            </p>
-          )}
+            {submitting ? 'Verifying…' : 'Verify and continue'}
+          </button>
         </form>
       )}
     </section>
   );
 }
 
-function renderHeader(
-  mode: ByokPanelMode
-): { title: React.ReactNode; body: React.ReactNode | null } {
-  switch (mode) {
-    case 'generate':
-      return {
-        title: 'Add your Anthropic API key to use Generate',
-        body:
-          'Generate runs a deep analysis of your documents; a single run often costs more than the free tier covers. Use your own Anthropic API key to run it; usage is billed directly to your Anthropic account.',
-      };
-    case 'cap_reached':
-      return {
-        title: "You've used the free lifetime quota",
-        body:
-          'To keep chatting, add your own Anthropic API key; usage is billed directly to your Anthropic account. You can also donate to help us raise the cap and keep this tool sustainable.',
-      };
-    case 'request_cut_off':
-      return {
-        title: 'Message cut off — free quota exhausted',
-        body:
-          "Your last message used the rest of your free quota and was stopped mid-response. Add your Anthropic API key to keep going; future messages will keep working on your own account.",
-      };
-    case 'global_budget':
-      return {
-        title: "We've hit our shared monthly spend cap",
-        body:
-          "Everyone on the free tier is paused until next month's reset. Add your Anthropic API key to keep going, or donate to help us raise the cap.",
-      };
-    case 'voluntary':
-      return {
-        title: 'Add your Anthropic API key',
-        body:
-          "When a key is set, your messages are billed to your Anthropic account instead of our shared free pool.",
-      };
-  }
+/**
+ * Small inline CTA linking to the donation page. Kept separate from
+ * ByokPanel so callers can render it only when donations are relevant —
+ * cap-hit paths (user lifetime cap, global monthly cap) where raising the
+ * pool is a viable alternative to BYOK. NOT for mid-stream kills
+ * (request_cut_off) where donation wouldn't unblock the user's specific
+ * request, or voluntary key-entry where no cap has been hit.
+ */
+export function DonateCta({ donateUrl = '#donate' }: { donateUrl?: string }) {
+  return (
+    <a
+      href={donateUrl}
+      className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800 underline"
+    >
+      Donate to help raise the cap
+    </a>
+  );
 }
 
 export default ByokPanel;

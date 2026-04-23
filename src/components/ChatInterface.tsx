@@ -14,7 +14,7 @@ import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
-import { ByokPanel } from './ByokPanel';
+import { ByokPanel, DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
   formatCostUsd,
@@ -407,8 +407,11 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
   // BYOK panel state for 429/402 recovery and voluntary key entry.
+  // 'generate' is handled out-of-band in the Generate tab render; these
+  // are the Chat-side context discriminators for which banner to show
+  // above the shared ByokPanel.
   const [byokPanelMode, setByokPanelMode] = useState<
-    'generate' | 'cap_reached' | 'request_cut_off' | 'global_budget' | 'voluntary' | null
+    'cap_reached' | 'request_cut_off' | 'global_budget' | 'voluntary' | null
   >(null);
   const [byokMenuOpen, setByokMenuOpen] = useState(false);
 
@@ -2194,12 +2197,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     verified key, hasKey flips and the full panel renders
                     below. */}
                 {!hasKey || !verified ? (
-                  <ByokPanel
-                    mode="generate"
-                    onSubmitted={() => {
-                      void refreshUsage();
-                    }}
-                  />
+                  <div className="space-y-3">
+                    {/* Generate-specific cost heads-up — separate card so
+                        the BYOK panel stays context-free and reusable. */}
+                    <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                      Generate runs a deep analysis of your documents. A single run
+                      typically costs a few dollars on your Anthropic account — more
+                      for large documents or heavy web searching. Live cost streams
+                      so you can stop if it runs long.
+                    </div>
+                    <ByokPanel
+                      onSubmitted={() => {
+                        void refreshUsage();
+                      }}
+                    />
+                  </div>
                 ) : (
                 <>
                 <div className="text-center text-gray-500 text-sm py-4">
@@ -2512,22 +2524,72 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </div>
                 )}
 
-                {/* Inline BYOK panel. Used for every cap/quota failure
-                    (cap_reached, request_cut_off, global_budget) and the
-                    voluntary add-key flow. Generate mode has its own render
-                    earlier in the file. */}
-                {byokPanelMode && byokPanelMode !== 'generate' && (
-                  <ByokPanel
-                    mode={byokPanelMode}
-                    onSubmitted={() => {
-                      setByokPanelMode(null);
-                      setCostErrorBanner(null);
-                      void refreshUsage();
-                      // In cap_reached / request_cut_off mode, let the user
-                      // hit send again; we don't auto-retry since the chat
-                      // composer still holds their last message context.
-                    }}
-                  />
+                {/* Inline BYOK flows for cap/quota failures + voluntary
+                    add-key. Each path has its own context banner above a
+                    shared minimal ByokPanel (sign in OR key form). Donate
+                    CTA is shown only where donations are a viable
+                    alternative (lifetime cap, global cap). */}
+                {byokPanelMode === 'cap_reached' && (
+                  <div className="space-y-2">
+                    <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                      You&apos;ve used the free lifetime quota. Add your Anthropic API
+                      key to keep chatting.
+                    </div>
+                    <ByokPanel
+                      onSubmitted={() => {
+                        setByokPanelMode(null);
+                        setCostErrorBanner(null);
+                        void refreshUsage();
+                      }}
+                    />
+                    <DonateCta />
+                  </div>
+                )}
+                {byokPanelMode === 'request_cut_off' && (
+                  <div className="space-y-2">
+                    <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                      Message cut off — your last message used the rest of the free
+                      quota. Add your Anthropic API key to keep going.
+                    </div>
+                    <ByokPanel
+                      onSubmitted={() => {
+                        setByokPanelMode(null);
+                        setCostErrorBanner(null);
+                        void refreshUsage();
+                      }}
+                    />
+                  </div>
+                )}
+                {byokPanelMode === 'global_budget' && (
+                  <div className="space-y-2">
+                    <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                      We&apos;ve hit our shared monthly spend cap. Everyone on the free
+                      tier is paused until next month&apos;s reset.
+                    </div>
+                    <ByokPanel
+                      onSubmitted={() => {
+                        setByokPanelMode(null);
+                        setCostErrorBanner(null);
+                        void refreshUsage();
+                      }}
+                    />
+                    <DonateCta />
+                  </div>
+                )}
+                {byokPanelMode === 'voluntary' && (
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+                      When a key is set, your messages are billed to your Anthropic
+                      account instead of our shared free pool.
+                    </div>
+                    <ByokPanel
+                      onSubmitted={() => {
+                        setByokPanelMode(null);
+                        setCostErrorBanner(null);
+                        void refreshUsage();
+                      }}
+                    />
+                  </div>
                 )}
 
                 {isLoading && !isStreaming && !isSearching && (
@@ -2623,12 +2685,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         Add your Anthropic API key to keep going.
                       </div>
                       <ByokPanel
-                        mode="cap_reached"
                         onSubmitted={() => {
                           setCostErrorBanner(null);
                           void refreshUsage();
                         }}
                       />
+                      <DonateCta />
                     </div>
                   ) : wouldExceedCap ? (
                     <div className="space-y-2">
@@ -2642,7 +2704,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         the remaining budget.
                       </div>
                       <ByokPanel
-                        mode="cap_reached"
                         onSubmitted={() => {
                           setCostErrorBanner(null);
                           void refreshUsage();
