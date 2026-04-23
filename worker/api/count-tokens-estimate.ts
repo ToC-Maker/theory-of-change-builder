@@ -124,7 +124,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       const rows = await sql<{ file_id: string; input_tokens: number | null }>`
         SELECT file_id, input_tokens
         FROM chart_files
-        WHERE file_id = ANY(${strippedFileIds}::text[])
+        WHERE file_id = ANY(${strippedFileIds})
       `;
       for (const row of rows) {
         if (typeof row.input_tokens === 'number' && row.input_tokens >= 0) {

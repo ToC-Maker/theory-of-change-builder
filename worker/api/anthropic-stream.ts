@@ -471,7 +471,7 @@ async function estimateProjectedCost(
       const rows = await sql`
         SELECT file_id, input_tokens
         FROM chart_files
-        WHERE file_id = ANY(${strippedFileIds}::text[])
+        WHERE file_id = ANY(${strippedFileIds})
       ` as { file_id: string; input_tokens: number | null }[];
       for (const r of rows) {
         if (typeof r.input_tokens === 'number' && r.input_tokens >= 0) {
