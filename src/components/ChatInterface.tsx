@@ -951,7 +951,14 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
         .reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
       const draftChars = deferredInputValue.length + attachedChars;
-      if (draftChars === 0 && messages.length === 0) {
+      // File uploads count as draft content even without any typed text —
+      // a PDF alone can be 100k+ tokens and the composer should show that
+      // BEFORE the user starts typing. Previously this early-return hid
+      // the estimate until the user typed a character.
+      const hasUploadedFiles = chatAttachedFiles.some(
+        (f) => f.kind === 'upload' && f.status === 'ready' && f.fileId,
+      );
+      if (draftChars === 0 && messages.length === 0 && !hasUploadedFiles) {
         setComposerEstimateUsd(0);
         setEstimatingCost(false);
         return;

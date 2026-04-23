@@ -157,18 +157,24 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // preflight, polling) sum this column instead of a pageCount heuristic.
   //
   // Only attempted for PDFs; for other mime types the document block isn't
-  // applicable. NULL in the DB means "not counted" and the downstream UI falls
-  // back to a rough estimate.
+  // applicable. NULL in the DB means "not counted" and the downstream UI
+  // treats as 0. Failure path logs a DiagnosticCountTokensAtUploadFailed
+  // row to logging_errors so we can see why — preview deploys have no log
+  // stream.
   let inputTokens: number | null = null;
+  let countTokensFailure: { reason: string; detail?: string; http_status?: number } | null = null;
   if (mimeType === 'application/pdf') {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      // Base64 encode in chunks so we don't hit a stack overflow from
-      // String.fromCharCode.apply on large PDFs.
+      // Base64 encode via a Blob → FileReader-less path. Cloudflare Workers
+      // doesn't ship FileReader, so we build the base64 string ourselves.
+      // String.fromCharCode.apply(null, bigArray) blows the arg-stack on
+      // large arrays (>65k args) — walk byte-by-byte via a typed-array
+      // loop that never crosses that threshold. Slightly slower but
+      // predictable for 10MB+ PDFs.
       let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
       }
       const b64 = btoa(binary);
       const countResp = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
@@ -198,14 +204,25 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         const data = await countResp.json() as { input_tokens?: number };
         if (typeof data.input_tokens === 'number' && data.input_tokens >= 0) {
           inputTokens = data.input_tokens;
+        } else {
+          countTokensFailure = { reason: 'unexpected_response_shape', detail: JSON.stringify(data).slice(0, 300) };
         }
       } else {
         const body = await countResp.text().catch(() => '');
+        countTokensFailure = {
+          reason: 'upstream_error',
+          http_status: countResp.status,
+          detail: body.slice(0, 500),
+        };
         console.warn(
           `[upload-file] count_tokens failed at upload (status=${countResp.status}): ${body.slice(0, 300)}`,
         );
       }
     } catch (err) {
+      countTokensFailure = {
+        reason: 'exception',
+        detail: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      };
       console.warn('[upload-file] count_tokens attempt failed (non-fatal, continuing):', err);
     }
   }
@@ -225,6 +242,41 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       { error: 'db_insert_failed' },
       { status: 500 }
     );
+  }
+
+  // Persist count_tokens failure (if any) to logging_errors so we can see
+  // from DB why a file is landing with NULL input_tokens. Preview deploys
+  // have no log stream; this is our only signal. Runs after the chart_files
+  // insert so the row exists for the FK.
+  if (countTokensFailure) {
+    try {
+      await sql`
+        INSERT INTO logging_errors (
+          error_id, error_name, error_message, http_status, user_id, chart_id,
+          request_metadata
+        )
+        VALUES (
+          ${crypto.randomUUID()},
+          'DiagnosticCountTokensAtUploadFailed',
+          ${`count_tokens failed at upload: ${countTokensFailure.reason}${countTokensFailure.detail ? ` — ${countTokensFailure.detail}` : ''}`},
+          ${countTokensFailure.http_status ?? null},
+          ${userId},
+          ${chartId},
+          ${JSON.stringify({
+            reason: countTokensFailure.reason,
+            http_status: countTokensFailure.http_status,
+            detail: countTokensFailure.detail,
+            file_id: fileId,
+            size_bytes: sizeBytes,
+            filename,
+            deployment_host: new URL(request.url).hostname,
+          })}
+        )
+        ON CONFLICT (error_id) DO NOTHING
+      `;
+    } catch (logErr) {
+      console.error('[upload-file] failed to log count_tokens diagnostic:', logErr);
+    }
   }
 
   const headers = new Headers({ 'content-type': 'application/json' });
