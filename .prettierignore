@@ -1,3 +1,9 @@
-# Ignore artifacts:
+node_modules
+dist
+dist-ssr
 build
 coverage
+.wrangler
+storybook-static
+package-lock.json
+policies
