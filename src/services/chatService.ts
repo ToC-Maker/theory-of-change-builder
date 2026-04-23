@@ -307,7 +307,11 @@ class ChatService {
     signal?: AbortSignal,
     ctx?: StreamingContext,
     extraHeaders?: Record<string, string>,
-    model: string = 'claude-opus-4-7'
+    model: string = 'claude-opus-4-7',
+    mode: 'chat' | 'generate' = 'chat',
+    messages: ChatMessage[] = [],
+    webSearchEnabled: boolean = false,
+    extendedThinkingEnabled: boolean = false,
   ): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -783,7 +787,11 @@ class ChatService {
         signal,
         ctx,
         extraHeaders,
-        model
+        model,
+        mode,
+        messages,
+        webSearchEnabled,
+        extendedThinkingEnabled,
       );
     } catch (caughtError: unknown) {
       // Narrow caughtError once. Non-Error throws (strings, plain objects) are
@@ -866,7 +874,11 @@ class ChatService {
               signal,
               retryCtx,
               retryHeaders,
-              model
+              model,
+              mode,
+              messages,
+              webSearchEnabled,
+              extendedThinkingEnabled,
             );
             return; // Retry succeeded, callbacks already fired
           } catch (retryError: unknown) {
