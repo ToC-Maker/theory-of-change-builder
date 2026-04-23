@@ -117,36 +117,7 @@ export function GraphTutorial() {
     }
   }, []);
 
-  useEffect(() => {
-    if (isVisible) {
-      updateTooltipPosition();
-      // Add global click listener
-      document.addEventListener('click', handleGlobalClick, true);
-
-      // Add position tracking for step 1 (when tooltip is on the info button)
-      let positionUpdateInterval: NodeJS.Timeout | null = null;
-      if (currentStep === 1) {
-        positionUpdateInterval = setInterval(() => {
-          updateTooltipPosition();
-        }, 100); // Update position every 100ms
-      }
-
-      // Also update on scroll/resize
-      window.addEventListener('scroll', updateTooltipPosition, true);
-      window.addEventListener('resize', updateTooltipPosition);
-
-      return () => {
-        document.removeEventListener('click', handleGlobalClick, true);
-        window.removeEventListener('scroll', updateTooltipPosition, true);
-        window.removeEventListener('resize', updateTooltipPosition);
-        if (positionUpdateInterval) {
-          clearInterval(positionUpdateInterval);
-        }
-      };
-    }
-  }, [currentStep, isVisible, targetNode, handleGlobalClick]);
-
-  const updateTooltipPosition = () => {
+  const updateTooltipPosition = useCallback(() => {
     if (currentStep === 0) {
       // Step 1: Find a random node
       const nodes = document.querySelectorAll('[id^="node-"]');
@@ -268,7 +239,36 @@ export function GraphTutorial() {
         });
       }
     }
-  };
+  }, [currentStep, targetNode]);
+
+  useEffect(() => {
+    if (isVisible) {
+      updateTooltipPosition();
+      // Add global click listener
+      document.addEventListener('click', handleGlobalClick, true);
+
+      // Add position tracking for step 1 (when tooltip is on the info button)
+      let positionUpdateInterval: NodeJS.Timeout | null = null;
+      if (currentStep === 1) {
+        positionUpdateInterval = setInterval(() => {
+          updateTooltipPosition();
+        }, 100); // Update position every 100ms
+      }
+
+      // Also update on scroll/resize
+      window.addEventListener('scroll', updateTooltipPosition, true);
+      window.addEventListener('resize', updateTooltipPosition);
+
+      return () => {
+        document.removeEventListener('click', handleGlobalClick, true);
+        window.removeEventListener('scroll', updateTooltipPosition, true);
+        window.removeEventListener('resize', updateTooltipPosition);
+        if (positionUpdateInterval) {
+          clearInterval(positionUpdateInterval);
+        }
+      };
+    }
+  }, [currentStep, isVisible, targetNode, handleGlobalClick, updateTooltipPosition]);
 
   if (!isVisible || !tooltipPosition) return null;
 
