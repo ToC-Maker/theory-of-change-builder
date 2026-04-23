@@ -1,5 +1,5 @@
 import React, { useId, useState } from 'react';
-import { useApiKey } from '../contexts/ApiKeyContext';
+import { useApiKey } from '../contexts/useApiKey';
 import { useAuth0 } from '@auth0/auth0-react';
 import {
   KeyIcon,

@@ -9,7 +9,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { loggingService } from '../services/loggingService';
 import { ByokPanel } from './ByokPanel';
-import { useApiKey } from '../contexts/ApiKeyContext';
+import { useApiKey } from '../contexts/useApiKey';
 import { useKeyByokSpendUsd, clearAllByokLocalState } from '../utils/byokSpend';
 import { formatCostUsd } from '../utils/cost';
 

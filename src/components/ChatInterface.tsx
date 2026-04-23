@@ -7,7 +7,7 @@ import { chatService, ChatMessage, type CostError } from '../services/chatServic
 import { ChartService } from '../services/chartService';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
-import { useApiKey } from '../contexts/ApiKeyContext';
+import { useApiKey } from '../contexts/useApiKey';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';

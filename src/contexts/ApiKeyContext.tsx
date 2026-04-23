@@ -1,36 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { useCallback, useEffect, useState, ReactNode } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 import { clearKeySpend, clearAllByokLocalState } from '../utils/byokSpend';
+import { ApiKeyContext, ApiKeyContextValue, SubmitKeyResult } from './useApiKey';
 
 // BYOK (Bring Your Own Key) context. Raw keys live server-side (encrypted);
 // the client only holds verification state and the last-4 for display.
 
 const USE_FOR_CHAT_STORAGE_KEY = 'byok_use_for_chat';
 const LEGACY_API_KEY_STORAGE_KEY = 'api_key';
-
-export interface SubmitKeyResult {
-  verified: boolean;
-  last4?: string;
-  error?: string;
-}
-
-export interface ApiKeyContextValue {
-  hasKey: boolean; // server has a stored BYOK key for this user
-  keyLast4: string | null; // for UI display, null if no key
-  verified: boolean; // true after most recent successful validation
-  useForChat: boolean; // user toggle; persisted in localStorage
-  setUseForChat: (v: boolean) => void;
-  submitKey: (raw: string) => Promise<SubmitKeyResult>;
-  clearKey: () => Promise<void>;
-  refresh: () => Promise<void>;
-  /**
-   * Monotonically increasing counter that bumps on every key change (submit
-   * success or clear). Consumers that depend on server-side tier changes
-   * (e.g. ChatInterface's /api/usage fetch) can add this to a useEffect
-   * dependency list to re-query after the user flips BYOK state.
-   */
-  keyVersion: number;
-}
 
 interface UsageResponse {
   tier?: string;
@@ -42,8 +19,6 @@ interface ByokPostResponse {
   last4?: string;
   error?: string;
 }
-
-const ApiKeyContext = createContext<ApiKeyContextValue | undefined>(undefined);
 
 function readUseForChat(): boolean {
   try {
@@ -239,25 +214,4 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
   };
 
   return <ApiKeyContext.Provider value={value}>{children}</ApiKeyContext.Provider>;
-}
-
-export function useApiKey(): ApiKeyContextValue {
-  const context = useContext(ApiKeyContext);
-  if (context === undefined) {
-    throw new Error('useApiKey must be used within an ApiKeyProvider');
-  }
-  return context;
-}
-
-/**
- * @deprecated Transitional export retained until ChatInterface migrates to
- * server-side BYOK validation. New code should POST the key to /api/byok-key
- * and let the server validate via count_tokens. Remove this once ChatInterface
- * no longer imports it.
- */
-export function validateApiKey(key: string): { isValid: boolean; error?: string } {
-  const trimmedKey = key.trim();
-  if (!trimmedKey) return { isValid: false, error: 'API key is required' };
-  if (trimmedKey.length < 30) return { isValid: false, error: 'API key appears to be too short' };
-  return { isValid: true };
 }
