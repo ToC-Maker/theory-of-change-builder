@@ -81,7 +81,11 @@ export function ConnectionsComponent({
     });
   };
   const [smoothUpdates, setSmoothUpdates] = useState(false);
-  const [refreshCounter, setRefreshCounter] = useState(0);
+  // `refreshCounter` is a re-render kick: nothing reads the value, but calling
+  // `setRefreshCounter` forces this component to re-render so the `connections.map`
+  // block below re-reads live DOM offsets (used by the RAF smooth-update loop and
+  // by padding changes). The value itself is deliberately unused.
+  const [, setRefreshCounter] = useState(0);
   const animationFrameRef = useRef<number | null>(null);
   const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -258,23 +262,26 @@ export function ConnectionsComponent({
     };
   }, [editMode, highlightedNodes.size, hoveredConnections.size]);
 
-  const findNodeLocation = (nodeId: string) => {
-    for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
-      for (
-        let columnIndex = 0;
-        columnIndex < data.sections[sectionIndex].columns.length;
-        columnIndex++
-      ) {
-        const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
-          (n) => n.id === nodeId,
-        );
-        if (node) {
-          return { sectionIndex, columnIndex };
+  const findNodeLocation = useCallback(
+    (nodeId: string) => {
+      for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
+        for (
+          let columnIndex = 0;
+          columnIndex < data.sections[sectionIndex].columns.length;
+          columnIndex++
+        ) {
+          const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
+            (n) => n.id === nodeId,
+          );
+          if (node) {
+            return { sectionIndex, columnIndex };
+          }
         }
       }
-    }
-    return null;
-  };
+      return null;
+    },
+    [data.sections],
+  );
 
   const findNodeTitle = (nodeId: string) => {
     for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
@@ -357,7 +364,7 @@ export function ConnectionsComponent({
         ),
       )
       .filter((connection) => connection.start && connection.end);
-  }, [data.sections, nodeRefs, refreshCounter, findNodeLocation]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data.sections, nodeRefs, findNodeLocation]);
 
   const updateConfidence = (sourceId: string, targetId: string, newConfidence: number) => {
     setData(
