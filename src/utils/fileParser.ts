@@ -4,13 +4,15 @@
  * Text-like files (txt, md, csv, json, xml, html, yaml, log, rtf) are read
  * client-side and the extracted text is passed to the model inline.
  *
- * PDFs are NOT parsed client-side. We peek at the file header to extract
- * lightweight metadata (size + page count) for display purposes and return
- * an upload-intent signal; the caller is responsible for POSTing the binary
- * to Anthropic's Files API and passing the resulting file_id as a `document`
- * content block. Anthropic enforces its own ceilings (500 MB per file,
- * 100 pages per document block), so we don't preempt those here.
+ * PDFs are NOT parsed client-side beyond a header scan for metadata
+ * (size + page count). Binary bytes go to Anthropic's Files API via the
+ * caller; we enforce Anthropic's page-count cap before starting the upload
+ * (the Files API itself doesn't enforce it, but /v1/messages and
+ * count_tokens do — so too-large PDFs become unusable orphans on the
+ * account if we don't reject them here).
  */
+
+import { ANTHROPIC_PDF_PAGE_LIMIT } from '../../shared/anthropic-limits';
 
 const PDF_HEADER_SCAN_BYTES = 500 * 1024; // 500 KB — enough to find the root /Pages tree in most PDFs
 
@@ -40,19 +42,18 @@ export async function parseFile(file: File): Promise<ParsedFile> {
   try {
     if (isPdf) {
       const { pageCount, sizeBytes } = await validatePdf(file);
-      // Anthropic caps PDFs at 600 pages for both /v1/messages and
-      // count_tokens. Uploading a larger PDF succeeds at the Files API
-      // but every downstream call will 400. Reject here so the user sees
-      // a clear error immediately instead of a post-upload surprise.
-      // pageCount is a best-effort header scan and may be 0 for
-      // non-standard PDFs; skip the check when parsing failed.
-      const PDF_PAGE_LIMIT = 600;
-      if (pageCount > PDF_PAGE_LIMIT) {
+      // Anthropic caps PDFs at ANTHROPIC_PDF_PAGE_LIMIT pages for both
+      // /v1/messages and count_tokens. Uploading a larger PDF succeeds at
+      // the Files API but every downstream call will 400. Reject here so
+      // the user sees a clear error immediately instead of a post-upload
+      // surprise. pageCount is a best-effort header scan and may be 0
+      // for non-standard PDFs; skip the check when parsing failed.
+      if (pageCount > ANTHROPIC_PDF_PAGE_LIMIT) {
         return {
           kind: 'error',
           success: false,
           content: '',
-          error: `${file.name}: ${pageCount}-page PDF. Anthropic limits PDFs to ${PDF_PAGE_LIMIT} pages per document — please split it into smaller sections.`,
+          error: `${file.name}: ${pageCount}-page PDF. Anthropic limits PDFs to ${ANTHROPIC_PDF_PAGE_LIMIT} pages per document — please split it into smaller sections.`,
         };
       }
       return {

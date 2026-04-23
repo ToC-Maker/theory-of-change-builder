@@ -15,6 +15,17 @@ export const ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES = 32 * 1024 * 1024; // 32 MB
 export const ANTHROPIC_FILE_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
 
 /**
+ * Per-document PDF page cap. Enforced by both /v1/messages and
+ * count_tokens — a PDF with more pages will 400 with
+ * "A maximum of 600 PDF pages may be provided." The Files API upload
+ * itself does NOT enforce this, so a too-large PDF can sit on Anthropic
+ * as an unusable orphan unless we reject it ourselves.
+ *
+ * Source: https://platform.claude.com/docs/en/build-with-claude/pdf-support
+ */
+export const ANTHROPIC_PDF_PAGE_LIMIT = 600;
+
+/**
  * count_tokens dedicated rate limits (requests per minute), indexed by
  * Anthropic usage tier. Separate from Messages API limits: using one does
  * not count toward the other's budget.

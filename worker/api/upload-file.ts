@@ -3,6 +3,7 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken } from '../_shared/auth';
 import { FILE_UPLOAD_LIMIT_BYTES } from '../_shared/tiers';
 import { resolveAnonActor } from '../_shared/anon-id';
+import { ANTHROPIC_PDF_PAGE_LIMIT } from '../../shared/anthropic-limits';
 
 // TC39 typed-array base64 methods (stage 4 / in V8 12.8+, Workerd runs V8
 // 14+). TypeScript's lib definitions don't include them yet, so augment
@@ -217,12 +218,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         console.warn(
           `[upload-file] count_tokens failed at upload (status=${countResp.status}): ${body.slice(0, 300)}`,
         );
-        // Anthropic rejects PDFs >600 pages here AND in /v1/messages, so a
-        // file that fails count_tokens for this reason is permanently
-        // unusable. Delete the orphan from the Files API and fail the
-        // upload with a user-facing error, rather than leaving a dead
-        // file_id on the account.
-        if (countResp.status === 400 && /600 PDF pages/i.test(body)) {
+        // Anthropic rejects PDFs over ANTHROPIC_PDF_PAGE_LIMIT here AND
+        // in /v1/messages, so a file that fails count_tokens for this
+        // reason is permanently unusable. Delete the orphan from the
+        // Files API and fail the upload with a user-facing error, rather
+        // than leaving a dead file_id on the account. The error message
+        // shape comes from Anthropic directly ("A maximum of NNN PDF
+        // pages may be provided.") so we match on the stable phrase.
+        if (countResp.status === 400 && /PDF pages may be provided/i.test(body)) {
           try {
             await fetch(`https://api.anthropic.com/v1/files/${fileId}`, {
               method: 'DELETE',
@@ -240,7 +243,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
           return new Response(
             JSON.stringify({
               error: 'pdf_too_many_pages',
-              upstream_message: 'Anthropic limits PDFs to 600 pages per document. Please split this file into smaller sections.',
+              upstream_message: `Anthropic limits PDFs to ${ANTHROPIC_PDF_PAGE_LIMIT} pages per document. Please split this file into smaller sections.`,
             }),
             { status: 400, headers: headersOut },
           );
