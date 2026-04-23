@@ -80,10 +80,14 @@ export async function handler(
     return Response.json({ error: 'missing_chart_id' }, { status: 400 });
   }
 
-  const file = form.get('file');
-  if (!(file instanceof File)) {
+  // Workers-types declares FormData.get as `string | null`, but the runtime
+  // returns File instances per the Fetch spec. Cast through unknown and
+  // narrow on the presence of `arrayBuffer` to be safe.
+  const fileEntry = form.get('file') as unknown as File | string | null;
+  if (!fileEntry || typeof fileEntry === 'string') {
     return Response.json({ error: 'missing_file' }, { status: 400 });
   }
+  const file: File = fileEntry;
 
   // Authorization: mirror delete-file / chart-files posture.
   // - Owned chart -> require a valid JWT whose sub is the owner OR has an

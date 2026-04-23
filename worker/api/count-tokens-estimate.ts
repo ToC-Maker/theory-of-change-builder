@@ -226,17 +226,17 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       // (older clients) we fall back to the file_id-only query; this is
       // retained for compatibility and will be removed once all clients
       // carry the field.
-      const rows = chartId
-        ? await sql<{ file_id: string; input_tokens: string | number | null }>`
+      const rows = (chartId
+        ? await sql`
             SELECT file_id, input_tokens
             FROM chart_files
             WHERE file_id = ANY(${strippedFileIds}) AND chart_id = ${chartId}
           `
-        : await sql<{ file_id: string; input_tokens: string | number | null }>`
+        : await sql`
             SELECT file_id, input_tokens
             FROM chart_files
             WHERE file_id = ANY(${strippedFileIds})
-          `;
+          `) as { file_id: string; input_tokens: string | number | null }[];
       // Neon returns BIGINT as a string (safe for values > 2^53). Build a
       // lookup so we can bucket each file_id by whether it was in the draft
       // (last) message or history.

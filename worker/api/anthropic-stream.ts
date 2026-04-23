@@ -254,7 +254,7 @@ async function resolveActor(
 
 // --- Turnstile session cookie ------------------------------------------
 
-type TurnstileResult = 'ok' | 'missing' | 'expired' | 'ip_mismatch' | 'invalid' | 'not-configured';
+type TurnstileResult = 'ok' | 'missing' | 'expired' | 'actor_mismatch' | 'invalid' | 'not-configured';
 
 /**
  * Verify the Turnstile session cookie issued by POST /api/verify-turnstile.
@@ -1059,9 +1059,11 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // web-search counter (which message_delta only reports at end-of-stream).
   // Reuse computeCostMicroUsd so cache / multi-component pricing stay in one
   // place.
-  const usage = accumulatorToUsage(teeCtx.accumulator);
-  usage.output_tokens = outputTokensSoFar;
-  usage.server_tool_use = { web_search_requests: teeCtx.streamingContent.webSearchCount };
+  const usage: AnthropicUsage = {
+    ...accumulatorToUsage(teeCtx.accumulator),
+    output_tokens: outputTokensSoFar,
+    server_tool_use: { web_search_requests: teeCtx.streamingContent.webSearchCount },
+  };
 
   let estimatedMicro: bigint;
   try {
@@ -1753,7 +1755,7 @@ export async function handler(request: Request, env: Env, ctx: ExecutionContext)
   const tier = tierFor(actorId, hasByok);
 
   // Step 4: turnstile session cookie for anon.
-  // missing / expired / ip_mismatch / invalid all map to the same client UX:
+  // missing / expired / actor_mismatch / invalid all map to the same client UX:
   // solve a fresh challenge and retry.
   if (needTurnstile(tier)) {
     const result = await verifyTurnstileFromCookie(request, env, actorId);

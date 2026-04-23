@@ -709,7 +709,7 @@ class ChatService {
       // Create request body for streaming API. max_tokens is per-model
       // (Opus 128K, Sonnet/Haiku 64K) — sourced from shared/pricing.ts so
       // it stays in sync with the models-overview docs.
-      const maxOutputTokens = MODEL_CAPABILITIES[model]?.max_output_tokens ?? 64_000;
+      const maxOutputTokens = MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.max_output_tokens ?? 64_000;
       requestBody = {
         model,
         max_tokens: maxOutputTokens,
@@ -736,7 +736,7 @@ class ChatService {
       // Some models accept an output_config.effort; others reject the field.
       // Capability flag lives in shared/pricing.ts so it stays in sync with
       // the models-overview docs.
-      if (MODEL_CAPABILITIES[model]?.supports_output_config_effort) {
+      if (MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.supports_output_config_effort) {
         requestBody.output_config = { effort: 'xhigh' };
       }
 
