@@ -106,7 +106,21 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     return Response.json(result[0]);
   } catch (error) {
-    console.error('Error saving snapshot:', error);
-    return Response.json({ error: 'Failed to save snapshot' }, { status: 500 });
+    // Surface the specific Postgres error code to help diagnose without
+    // needing Worker logs (preview deploys have none). 23503 = foreign
+    // key violation; typical here when session_id points at a
+    // logging_sessions row that doesn't exist (stale client state or
+    // a prior createSession that failed silently). Return 409 so the
+    // client can distinguish "you sent a bad session" from a real 500.
+    const pgCode = (error as { code?: string }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[logging-saveSnapshot] insert failed:', pgCode, message);
+    if (pgCode === '23503') {
+      return Response.json(
+        { error: 'Foreign key violation', detail: message, code: pgCode },
+        { status: 409 },
+      );
+    }
+    return Response.json({ error: 'Failed to save snapshot', detail: message }, { status: 500 });
   }
 }
