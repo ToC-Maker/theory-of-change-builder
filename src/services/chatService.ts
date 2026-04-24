@@ -474,7 +474,6 @@ class ChatService {
     let fullContent = '';
     let fullThinking = '';
     let usage: AnthropicUsage | null = null;
-    let hasSearched = false;
 
     // Running cost accumulators for onCostUpdate. Anthropic's message_delta.usage
     // is cumulative (each delta carries the latest totals, not an increment), so
@@ -550,9 +549,8 @@ class ChatService {
                 event.type === 'content_block_start' &&
                 event.content_block?.type === 'server_tool_use'
               ) {
-                if (event.content_block.name === 'web_search' && !hasSearched) {
+                if (event.content_block.name === 'web_search') {
                   callbacks.onSearchStart?.();
-                  hasSearched = true;
                 }
               } else if (
                 event.type === 'content_block_start' &&

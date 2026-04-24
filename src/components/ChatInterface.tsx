@@ -1491,10 +1491,11 @@ export function ChatInterface({
             setIsSearching(false);
           },
           onContent: (_chunk: string, fullContent: string) => {
-            // Clear thinking state when content starts streaming
-            if (isThinking) {
-              setIsThinking(false);
-            }
+            // setIsThinking(false) unconditionally: the old `if (isThinking)`
+            // guard read from the closure captured at stream setup, where
+            // React hadn't re-rendered yet, so the check saw `false` and
+            // skipped — leaving the chip stuck on.
+            setIsThinking(false);
             setStreamingContent(fullContent);
             // Mirror into the ref so onCostError can preserve the partial
             // text when the stream is killed mid-turn. Without this the
@@ -2333,10 +2334,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         mode: 'generate',
         callbacks: {
           onContent: (_chunk: string, fullContent: string) => {
-            // Clear thinking state when content starts streaming
-            if (isThinking) {
-              setIsThinking(false);
-            }
+            // Unconditional setter: the prior `if (isThinking)` guard read
+            // from the closure captured at stream setup, so it saw `false`
+            // and never cleared the chip. See the Chat-mode callback for
+            // full notes.
+            setIsThinking(false);
             setStreamingContent(fullContent);
             // Mirror into the ref so onCostError can preserve the partial
             // text when the stream is killed mid-turn. Without this the
