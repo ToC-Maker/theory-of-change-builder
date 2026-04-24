@@ -489,6 +489,13 @@ class ChatService {
     let fullThinking = '';
     let usage: AnthropicUsage | null = null;
 
+    // Block timing: t0 is the first block's timestamp, tLast is the previous
+    // block_start/stop timestamp. Used to surface "this block was only N ms
+    // long" diagnostics when the UI chip looks like it's blinking.
+    const t0 = performance.now();
+    let tLast = t0;
+    const blockStartAt = new Map<number, number>();
+
     // Running cost accumulators for onCostUpdate. Anthropic's message_delta.usage
     // is cumulative (each delta carries the latest totals, not an increment), so
     // Math.max is safe belt-and-suspenders against any out-of-order delivery.
@@ -566,9 +573,15 @@ class ChatService {
               // late running_cost frame.
               if (event.type === 'content_block_start') {
                 const cb = event.content_block ?? {};
+                const now = performance.now();
+                const sinceStart = Math.round(now - t0);
+                const sinceLast = Math.round(now - tLast);
+                tLast = now;
+                blockStartAt.set(event.index, now);
                 console.log(
                   `[ChatService] block_start idx=${event.index} type=${cb.type}` +
-                    (cb.name ? ` name=${cb.name}` : ''),
+                    (cb.name ? ` name=${cb.name}` : '') +
+                    ` t+${sinceStart}ms Δ${sinceLast}ms`,
                 );
                 // Phase dispatch: map block type+name to a UI phase so the
                 // status chip keeps continuous coverage across the turn.
@@ -585,6 +598,22 @@ class ChatService {
                 else if (cb.type === 'code_execution_tool_result') phase = 'processing';
                 else phase = 'other';
                 callbacks.onStreamPhase?.(phase);
+              }
+
+              // Block-stop timing: surfaces the lifetime of each block so we
+              // can explain "the chip blinked" — if a block opens and closes
+              // within a few ms, its phase transition is too fast for the UI
+              // to render visibly.
+              if (event.type === 'content_block_stop') {
+                const now = performance.now();
+                const startedAt = blockStartAt.get(event.index);
+                const dur = startedAt !== undefined ? Math.round(now - startedAt) : -1;
+                const sinceLast = Math.round(now - tLast);
+                tLast = now;
+                blockStartAt.delete(event.index);
+                console.log(
+                  `[ChatService] block_stop  idx=${event.index} dur=${dur}ms Δ${sinceLast}ms`,
+                );
               }
 
               // Handle web search events. Fire on EVERY web_search block, not
