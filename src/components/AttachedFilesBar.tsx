@@ -148,8 +148,8 @@ export function AttachedFilesBar({
   if (files.length === 0 && !acceptsDrop) return null;
 
   const wrapperClass = [
-    'relative flex flex-col gap-2',
-    files.length === 0 ? 'min-h-[2rem]' : '',
+    'relative flex flex-col',
+    files.length > 0 ? 'gap-2 mb-2' : '',
     className ?? '',
   ]
     .filter(Boolean)
