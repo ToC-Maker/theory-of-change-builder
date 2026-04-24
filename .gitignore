@@ -41,6 +41,3 @@ test-database.js
 
 # Internal planning
 plans/
-
-# Storybook build
-storybook-static/

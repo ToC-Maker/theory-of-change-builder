@@ -4,7 +4,6 @@ dist-ssr
 build
 coverage
 .wrangler
-storybook-static
 package-lock.json
 policies
 # Human-maintained docs (prettier's markdown table expansion is intrusive).
