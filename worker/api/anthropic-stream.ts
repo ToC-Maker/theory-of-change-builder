@@ -1120,11 +1120,24 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  * acts as a backstop. No user-visible error on poll failure.
  */
 /**
- * Rebuild the streaming assistant turn as a count_tokens-compatible
- * content-block array. Skips half-streamed thinking (no signature yet —
- * Anthropic rejects those); appends a trailing text block when the tail
- * is a signed thinking block so the message is well-formed ("final block
- * cannot be thinking" 400). Shared between the mid-stream poller and
+ * Rebuild the streaming assistant turn as a count_tokens-compatible content-
+ * block array. Skips half-streamed thinking (no signature yet — Anthropic
+ * rejects those). Normalizes the message shape to Anthropic's validation
+ * rules, all empirically confirmed (2026-04-24) against /v1/messages/count_tokens:
+ *
+ *   1. Final block cannot be `thinking`.
+ *   2. Final block cannot end with trailing whitespace (space, newline, tab) —
+ *      even if it has real content before. A half-streamed text_delta ending
+ *      at a word boundary fails this rule often, which used to silently
+ *      disable the poller.
+ *   3. Text blocks must be non-empty and must contain non-whitespace.
+ *   4. Two `thinking` blocks cannot be adjacent in the assistant message
+ *      without a text block between them (otherwise Anthropic complains
+ *      that the thinking blocks "must remain as they were in the original
+ *      response"). Intersperse a minimal text block.
+ *
+ * We append / intersperse a single period when needed — ~1 extra token per
+ * call, trivial for budgeting. Shared between the mid-stream poller and
  * post-stream reconcile so the token-counting rules stay consistent.
  */
 function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record<string, string>> {
@@ -1134,9 +1147,21 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
     const block = teeCtx.streamingContent.blocks.get(i);
     if (!block || block.text.length === 0) continue;
     if (block.type === 'text') {
+      // Rule 3: skip empty/whitespace-only text blocks. They'd fail the
+      // "text content blocks must be non-empty / must contain non-whitespace"
+      // validation.
+      if (block.text.trim().length === 0) continue;
       assistantBlocks.push({ type: 'text', text: block.text });
     } else {
       if (!block.signature) continue;
+      // Rule 4: avoid adjacent thinking blocks by inserting a "." between
+      // them. The model never emits two thinking blocks back-to-back in
+      // practice, but if an intermediate text/tool block was skipped
+      // (e.g. empty text) we'd produce an invalid message shape.
+      const last = assistantBlocks[assistantBlocks.length - 1];
+      if (last?.type === 'thinking') {
+        assistantBlocks.push({ type: 'text', text: '.' });
+      }
       assistantBlocks.push({
         type: 'thinking',
         thinking: block.text,
@@ -1144,16 +1169,25 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
       });
     }
   }
-  // Anthropic rejects assistant messages ending in thinking ("final block
-  // cannot be thinking") AND also rejects whitespace-only trailing text
-  // ("final assistant content cannot end with trailing whitespace"), so a
-  // bare space fails the same way. Use a non-whitespace char — a single
-  // period adds one token to the count, trivial for budgeting.
-  if (
-    assistantBlocks.length > 0 &&
-    assistantBlocks[assistantBlocks.length - 1].type === 'thinking'
-  ) {
+  // Rules 1 + 2: ensure the final block is a text block with no trailing
+  // whitespace. Trim the last text block if it ends in whitespace; if
+  // trimming empties it, drop it and fall through to the append branch.
+  while (assistantBlocks.length > 0) {
+    const last = assistantBlocks[assistantBlocks.length - 1];
+    if (last.type === 'text') {
+      const trimmed = last.text.replace(/\s+$/u, '');
+      if (trimmed.length === 0) {
+        assistantBlocks.pop();
+        continue;
+      }
+      if (trimmed.length !== last.text.length) {
+        assistantBlocks[assistantBlocks.length - 1] = { type: 'text', text: trimmed };
+      }
+      break;
+    }
+    // Last is thinking — append a minimal non-whitespace text block.
     assistantBlocks.push({ type: 'text', text: '.' });
+    break;
   }
   return assistantBlocks;
 }
