@@ -28,7 +28,7 @@ declare global {
 }
 
 // Auth0 sub if the token verifies, otherwise the cookie-pinned anon id
-// (hmac-of-IP, migrated on IP change). setCookie is the Set-Cookie header
+// (server-minted UUID in tocb_actor_id). setCookie is the Set-Cookie header
 // value to echo on the response when the resolver minted or rewrote the
 // cookie.
 async function resolveActorId(
