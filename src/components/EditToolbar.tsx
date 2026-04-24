@@ -331,7 +331,15 @@ export function EditToolbar({
         // up the new editToken — otherwise the per-chart localStorage
         // keys (chat history, etc.) stay stuck at their pre-navigation
         // values until a full reload.
-        navigate(`/edit/${response.editToken}`, { replace: true });
+        //
+        // state.skipChartReload tells App.tsx's load effect not to re-fetch
+        // the chart we just created — the data is already in memory and
+        // re-fetching produces a visible UI flash ("looks like a refresh")
+        // after the URL change. Mirrors ChatInterface's ensureChartExists.
+        navigate(`/edit/${response.editToken}`, {
+          replace: true,
+          state: { skipChartReload: true },
+        });
         // Notify parent component about the new chart
         if (onChartCreated) {
           onChartCreated(response.editToken, response.chartId);
