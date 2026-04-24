@@ -1262,6 +1262,22 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     })}\n\n`,
   );
 
+  // Structured log so `wrangler tail` / Cloudflare logs can answer "why did
+  // the 'so far' value stop updating?" without a code redeploy. Runs every
+  // 5s per active stream (POLL_COUNT_TOKENS_INTERVAL_MS); volume is bounded
+  // by concurrent streams, and the JSON prefix lets a tail filter strip it.
+  console.log(
+    JSON.stringify({
+      event: 'poll_running_cost',
+      estimated_micro_usd: estimatedMicro.toString(),
+      estimated_usd: microToUsd(estimatedMicro),
+      output_tokens_est: outputTokensSoFar,
+      total_input_tokens: totalInputTokens,
+      web_searches: teeCtx.streamingContent.webSearchCount,
+      kill_threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+    }),
+  );
+
   if (estimatedMicro > teeCtx.killThresholdMicro) {
     // Race: if another path (parseFrame kill, abort, etc.) already fired, skip.
     if (teeCtx.killed.v) return;

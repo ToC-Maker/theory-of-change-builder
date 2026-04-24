@@ -544,7 +544,25 @@ class ChatService {
                 throw markAsCostError(new Error(`cost_error:${mappedType}`));
               }
 
-              // Handle web search events
+              // Per-block visibility: one log line per content_block_start
+              // (a couple dozen per turn, not per delta) lets DevTools show
+              // the stream's scaffold — thinking→text→web_search×N→… — so we
+              // can tell at a glance whether e.g. "so far" stopped updating
+              // because no more polls happened, or because the UI ignored a
+              // late running_cost frame.
+              if (event.type === 'content_block_start') {
+                const cb = event.content_block ?? {};
+                console.log(
+                  `[ChatService] block_start idx=${event.index} type=${cb.type}` +
+                    (cb.name ? ` name=${cb.name}` : ''),
+                );
+              }
+
+              // Handle web search events. Fire on EVERY web_search block, not
+              // just the first: Claude often runs 8+ searches in a single turn
+              // (code_execution orchestrates them one per iteration). Gating to
+              // the first search leaves the UI showing the stale "Thinking..."
+              // chip for the rest of the stream.
               if (
                 event.type === 'content_block_start' &&
                 event.content_block?.type === 'server_tool_use'
@@ -600,6 +618,12 @@ class ChatService {
                 // so without this the UI "$X so far" stayed frozen through
                 // the whole generation phase. The poller event updates it
                 // every ~5 seconds.
+                console.log(
+                  `[ChatService] running_cost: $${event.cost_usd.toFixed(4)}` +
+                    (typeof event.output_tokens_est === 'number'
+                      ? ` output~${event.output_tokens_est}`
+                      : ''),
+                );
                 callbacks.onCostUpdate?.(event.cost_usd);
               } else if (event.type === 'message_stop') {
                 ctx?.markComplete();
