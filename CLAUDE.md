@@ -23,7 +23,8 @@ npm run typecheck
 npm run lint
 npm run format:check
 npm test
-npm run preflight        # typecheck + lint + format:check + build + test, in CI order
+npm run preflight        # typecheck + lint + format:check + build + test, in parallel
+npm run preflight:serial # same as preflight but sequential (easier to read when debugging a failure)
 
 # Storybook
 npm run storybook        # Component development (port 6006)
@@ -33,9 +34,12 @@ For full-stack dev with HMR: run `npm run dev` in one terminal (Worker + API),
 then `npm run dev:vite` in another (Vite HMR, proxies `/api` to Worker).
 
 `npm run preflight` runs locally what CI enforces as gates (typecheck, lint,
-format check, build, unit tests). A `pre-push` git hook (via `simple-git-hooks`)
-runs it automatically before every `git push`; bypass with `git push --no-verify`
-when you need to push work-in-progress that isn't CI-clean yet.
+format check, build, unit tests). It runs the gates in parallel via
+`npm-run-all2` (takes ~15s vs ~35s serial). A `pre-push` git hook (via
+`simple-git-hooks`) runs it automatically before every `git push`; bypass
+with `git push --no-verify` when you need to push work-in-progress that
+isn't CI-clean yet. If a parallel run's interleaved output is hard to
+read, `npm run preflight:serial` runs the same gates sequentially.
 
 ## Stack
 
