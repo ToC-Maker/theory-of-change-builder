@@ -1394,9 +1394,14 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
 
   // Publish the fresh estimate to the client so the composer's "$X so far"
   // label isn't frozen on the message_start snapshot during generation.
-  // The client's chatService SSE parser watches for `running_cost` events.
+  // The client's chatService SSE parser keys events by the `type` field in
+  // the JSON data payload (it doesn't read the SSE `event:` header), so the
+  // type *must* be inside the JSON — otherwise the running_cost branch
+  // never matches and the payload is silently discarded. This was the bug
+  // behind "'so far' never updated" reports.
   teeCtx.pendingRunningCostFrame = new TextEncoder().encode(
     `event: running_cost\ndata: ${JSON.stringify({
+      type: 'running_cost',
       cost_usd: microToUsd(estimatedMicro),
       output_tokens_est: outputTokensSoFar,
     })}\n\n`,
