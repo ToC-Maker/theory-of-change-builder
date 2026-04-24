@@ -10,5 +10,14 @@ export default defineConfig({
   ],
   test: {
     include: ['tests/**/*.test.ts'],
+    coverage: {
+      // Workerd (the runtime Cloudflare Workers tests run in) doesn't
+      // expose `node:inspector/promises`, which the default `v8` provider
+      // requires. Istanbul instruments source at transform time instead
+      // and works cross-runtime.
+      provider: 'istanbul',
+      reporter: ['text', 'html'],
+      include: ['worker/**/*.ts', 'shared/**/*.ts', 'src/**/*.ts', 'src/**/*.tsx'],
+    },
   },
 });
