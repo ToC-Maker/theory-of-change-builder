@@ -1144,11 +1144,16 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
       });
     }
   }
+  // Anthropic rejects assistant messages ending in thinking ("final block
+  // cannot be thinking") AND also rejects whitespace-only trailing text
+  // ("final assistant content cannot end with trailing whitespace"), so a
+  // bare space fails the same way. Use a non-whitespace char — a single
+  // period adds one token to the count, trivial for budgeting.
   if (
     assistantBlocks.length > 0 &&
     assistantBlocks[assistantBlocks.length - 1].type === 'thinking'
   ) {
-    assistantBlocks.push({ type: 'text', text: ' ' });
+    assistantBlocks.push({ type: 'text', text: '.' });
   }
   return assistantBlocks;
 }
