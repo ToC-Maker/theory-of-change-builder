@@ -2,7 +2,6 @@ import React, { useId, useState } from 'react';
 import { useApiKey } from '../contexts/useApiKey';
 import { useAuth0 } from '@auth0/auth0-react';
 import {
-  KeyIcon,
   EyeIcon,
   EyeSlashIcon,
   CheckCircleIcon,
@@ -82,12 +81,8 @@ export function ByokPanel({
   if (!authLoading && !isAuthenticated) {
     return (
       <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
-        <h3
-          id={`${inputId}-title`}
-          className="flex items-start gap-2 text-base font-semibold text-gray-900"
-        >
-          <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
-          <span>Sign in to add your Anthropic API key</span>
+        <h3 id={`${inputId}-title`} className="text-base font-semibold text-gray-900">
+          Sign in to add your Anthropic API key
         </h3>
         <div className="mt-3">
           <button
@@ -117,12 +112,8 @@ export function ByokPanel({
 
   return (
     <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
-      <h3
-        id={`${inputId}-title`}
-        className="flex items-start gap-2 text-base font-semibold text-gray-900"
-      >
-        <KeyIcon className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" aria-hidden />
-        <span>Add your Anthropic API key</span>
+      <h3 id={`${inputId}-title`} className="text-base font-semibold text-gray-900">
+        Add your Anthropic API key
       </h3>
 
       {showConfirmation ? (
