@@ -1131,6 +1131,20 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       });
     }
   }
+  // Anthropic's count_tokens rejects an assistant message whose last block
+  // is `thinking` ("messages.1: The final block in an assistant message
+  // cannot be `thinking`."). That 400 silently disables the poller for the
+  // rest of the stream, leaving the kill switch blind until the next
+  // web_search block starts — which can be tens of seconds of unchecked
+  // output growth. Append a minimal text block when the tail is thinking
+  // so the request is well-formed AND the thinking tokens still count
+  // toward the output estimate.
+  if (
+    assistantBlocks.length > 0 &&
+    assistantBlocks[assistantBlocks.length - 1].type === 'thinking'
+  ) {
+    assistantBlocks.push({ type: 'text', text: ' ' });
+  }
   if (assistantBlocks.length === 0) return;
 
   // Skip if cap is already satisfied without considering output — the
