@@ -203,9 +203,11 @@ PDFs are not parsed client-side. `src/utils/fileParser.ts:validatePdf` runs
 a lightweight header scan that extracts `{pageCount, sizeBytes}` from the
 first 500 KB of the file (looking for `/Type /Pages ... /Count N`) and
 returns an upload-intent signal. It does NOT throw on size or page count
-— Anthropic enforces its own 500 MB per file and 100-page per document-block
-limits at upload time. The caller uploads the binary to Anthropic's Files
-API and references it via a `document` content block.
+— Anthropic enforces its own limits at upload/use time (see
+`shared/anthropic-limits.ts`: `ANTHROPIC_FILE_UPLOAD_BYTES` = 500 MB per
+file, `ANTHROPIC_PDF_PAGE_LIMIT` = 600 pages per PDF document). The
+caller uploads the binary to Anthropic's Files API and references it
+via a `document` content block.
 
 ### Local Development with Functions
 Run `npm run dev` in one terminal (Worker on :8787), then `npm run dev:vite` in another
