@@ -1076,6 +1076,24 @@ type SseTeeContext = {
     error_message?: string;
     fired_at_ms: number;
   } | null;
+  /**
+   * Whether Anthropic's `message_delta` event — which carries the authoritative
+   * final `output_tokens` — was ever observed. False after kill / abort /
+   * network error; the accumulator's output_tokens stays at message_start's
+   * placeholder in that case, so reconcile needs a fallback (count_tokens at
+   * reconcile time, char-based estimate, or last-poll estimate) to avoid
+   * under-billing the output that actually streamed.
+   */
+  messageDeltaSeen: boolean;
+  /**
+   * Output-token count from the latest successful poll. Used as a lower-bound
+   * fallback at reconcile when `message_delta` never arrives — better than the
+   * message_start placeholder but will still miss any output that streamed
+   * after polling died (e.g. a giant text block after the last web_search
+   * boundary). Reconcile prefers a fresh count_tokens call; this is the
+   * cheaper backup.
+   */
+  lastPollOutputTokens: number;
 };
 
 /**
@@ -1101,16 +1119,15 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  * and silently returns. The original end-of-stream `message_delta` kill still
  * acts as a backstop. No user-visible error on poll failure.
  */
-async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
-  if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
-  if (teeCtx.streamDone.v) return;
-  if (teeCtx.killThresholdMicro === null) return;
-  if (!teeCtx.env || !teeCtx.countTokensBase) return;
-
-  // Reconstruct the in-progress assistant message in Anthropic's content-block
-  // shape. Blocks are keyed by SSE `index`; sort numerically to preserve
-  // ordering if count_tokens weights positional token costs (it shouldn't,
-  // but cheap insurance).
+/**
+ * Rebuild the streaming assistant turn as a count_tokens-compatible
+ * content-block array. Skips half-streamed thinking (no signature yet —
+ * Anthropic rejects those); appends a trailing text block when the tail
+ * is a signed thinking block so the message is well-formed ("final block
+ * cannot be thinking" 400). Shared between the mid-stream poller and
+ * post-stream reconcile so the token-counting rules stay consistent.
+ */
+function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record<string, string>> {
   const indices = Array.from(teeCtx.streamingContent.blocks.keys()).sort((a, b) => a - b);
   const assistantBlocks: Array<Record<string, string>> = [];
   for (const i of indices) {
@@ -1119,10 +1136,6 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     if (block.type === 'text') {
       assistantBlocks.push({ type: 'text', text: block.text });
     } else {
-      // thinking blocks need signature; skip if not yet arrived (signature_delta
-      // fires during the block, so a half-streamed thinking block has no
-      // signature yet and Anthropic rejects it). Skipping under-estimates
-      // slightly — acceptable over failing the poll entirely.
       if (!block.signature) continue;
       assistantBlocks.push({
         type: 'thinking',
@@ -1131,20 +1144,59 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       });
     }
   }
-  // Anthropic's count_tokens rejects an assistant message whose last block
-  // is `thinking` ("messages.1: The final block in an assistant message
-  // cannot be `thinking`."). That 400 silently disables the poller for the
-  // rest of the stream, leaving the kill switch blind until the next
-  // web_search block starts — which can be tens of seconds of unchecked
-  // output growth. Append a minimal text block when the tail is thinking
-  // so the request is well-formed AND the thinking tokens still count
-  // toward the output estimate.
   if (
     assistantBlocks.length > 0 &&
     assistantBlocks[assistantBlocks.length - 1].type === 'thinking'
   ) {
     assistantBlocks.push({ type: 'text', text: ' ' });
   }
+  return assistantBlocks;
+}
+
+/**
+ * One-shot count_tokens call used by reconcile when `message_delta` never
+ * arrived (kill, abort, or upstream error mid-stream). Returns the output-
+ * token estimate (total - baseline input). Null on any failure path — callers
+ * should fall back to char-based estimate or the last-poll stash.
+ */
+async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | null> {
+  if (!teeCtx.env || !teeCtx.countTokensBase) return null;
+  const assistantBlocks = buildAssistantBlocksForCountTokens(teeCtx);
+  if (assistantBlocks.length === 0) return 0;
+  const priorMessages = Array.isArray(teeCtx.countTokensBase.messages)
+    ? teeCtx.countTokensBase.messages
+    : [];
+  const body = {
+    ...teeCtx.countTokensBase,
+    messages: [...priorMessages, { role: 'assistant', content: assistantBlocks }],
+  };
+  try {
+    const resp = await fetch(ANTHROPIC_COUNT_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': teeCtx.env.ANTHROPIC_API_KEY,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'anthropic-beta': ANTHROPIC_BETA,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { input_tokens?: number };
+    if (typeof data.input_tokens !== 'number') return null;
+    return Math.max(0, data.input_tokens - teeCtx.initialInputTokens);
+  } catch {
+    return null;
+  }
+}
+
+async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
+  if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
+  if (teeCtx.streamDone.v) return;
+  if (teeCtx.killThresholdMicro === null) return;
+  if (!teeCtx.env || !teeCtx.countTokensBase) return;
+
+  const assistantBlocks = buildAssistantBlocksForCountTokens(teeCtx);
   if (assistantBlocks.length === 0) return;
 
   // Skip if cap is already satisfied without considering output — the
@@ -1239,6 +1291,10 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // token count of the in-progress assistant content. Clamp to ≥ 0 in case of
   // counter drift.
   const outputTokensSoFar = Math.max(0, totalInputTokens - teeCtx.initialInputTokens);
+  // Stash for reconcile fallback: if the stream dies without message_delta,
+  // this is the best output-token number we have (modulo content that
+  // streamed between the last successful poll and the kill).
+  teeCtx.lastPollOutputTokens = Math.max(teeCtx.lastPollOutputTokens, outputTokensSoFar);
 
   // Synthesize a usage object with the estimated output tokens and the live
   // web-search counter (which message_delta only reports at end-of-stream).
@@ -1616,6 +1672,7 @@ function createCostTrackingStream(
         }
       }
     } else if (eventType === 'message_delta') {
+      teeCtx.messageDeltaSeen = true;
       const u = parsed.usage;
       if (u && typeof u === 'object' && !Array.isArray(u)) {
         usageObj = u as Record<string, unknown>;
@@ -2279,6 +2336,8 @@ export async function handler(
     streamDone: { v: false },
     killDiagnostic: null,
     pollDisableDiagnostic: null,
+    messageDeltaSeen: false,
+    lastPollOutputTokens: 0,
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
@@ -2309,8 +2368,37 @@ export async function handler(
         accumulator.web_search_requests,
         teeCtx.streamingContent.webSearchCount,
       );
+
+      // Same story for output_tokens: without message_delta, accumulator.output
+      // is the message_start placeholder (≈8). Every output token that streamed
+      // after that is invisible to the cost calc, so we under-bill whatever
+      // generated before the kill — a 47k-token text block can go unrecorded.
+      // Fallback order:
+      //   1. One-shot count_tokens at reconcile time — same mechanism the
+      //      poller uses, authoritative w.r.t. Anthropic's tokenization.
+      //   2. lastPollOutputTokens — last successful poll's result, stale but
+      //      not a guess.
+      //   3. accumulator.output_tokens — the placeholder. If we end up here
+      //      we log a diagnostic since we know we're under-counting.
+      let reconciledOutput = accumulator.output_tokens;
+      let reconcileOutputSource: 'message_delta' | 'count_tokens' | 'last_poll' | 'placeholder' =
+        'message_delta';
+      if (!teeCtx.messageDeltaSeen) {
+        const fresh = await countOutputTokensOnce(teeCtx);
+        if (fresh !== null) {
+          reconciledOutput = Math.max(reconciledOutput, fresh);
+          reconcileOutputSource = 'count_tokens';
+        } else if (teeCtx.lastPollOutputTokens > 0) {
+          reconciledOutput = Math.max(reconciledOutput, teeCtx.lastPollOutputTokens);
+          reconcileOutputSource = 'last_poll';
+        } else {
+          reconcileOutputSource = 'placeholder';
+        }
+      }
+
       const reconciledAccumulator: UsageAccumulator = {
         ...accumulator,
+        output_tokens: reconciledOutput,
         web_search_requests: reconciledWebSearch,
       };
 
@@ -2392,6 +2480,45 @@ export async function handler(
         `;
         } catch (e) {
           console.error('logging_messages cost update failed (non-fatal):', e);
+        }
+      }
+
+      // Persist reconcile output-source whenever message_delta never arrived.
+      // PR previews have no worker logs, so this is the only way to tell if
+      // the output-token estimator is doing its job (or silently falling back
+      // to the message_start placeholder and under-billing a whole turn).
+      if (!teeCtx.messageDeltaSeen) {
+        try {
+          await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, chart_id,
+            request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'DiagnosticReconcileWithoutMessageDelta',
+            ${`Reconcile w/o message_delta: output source=${reconcileOutputSource}, output=${reconciledOutput}, actual=${actualMicro.toString()} µUSD`},
+            ${actorId},
+            ${chartId ?? null},
+            ${JSON.stringify({
+              reconcile_output_source: reconcileOutputSource,
+              reconciled_output_tokens: reconciledOutput,
+              accumulator_output_tokens: accumulator.output_tokens,
+              last_poll_output_tokens: teeCtx.lastPollOutputTokens,
+              projected_micro_usd: projected.toString(),
+              actual_micro_usd: actualMicro.toString(),
+              accumulator: reconciledAccumulator,
+              live_web_search_count: teeCtx.streamingContent.webSearchCount,
+              model,
+              chart_id: chartId,
+              deployment_host: requestUrl.hostname,
+              fired_at_ms: Date.now(),
+            })}
+          )
+          ON CONFLICT (error_id) DO NOTHING
+        `;
+        } catch (e) {
+          console.error('reconcile-without-message_delta diagnostic insert failed:', e);
         }
       }
 
