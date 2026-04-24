@@ -939,10 +939,24 @@ type StreamingAssistantContent = {
    * lacking its signature ("messages.*.content.*.thinking.signature: Field
    * required"), which would 400 our polling request and silently disable
    * the kill poller.
+   *
+   * server_tool_use blocks stream their `input` field as a sequence of
+   * input_json_delta events; `input_json_raw` is the concatenated partial
+   * JSON and `input` is the parsed object (set at content_block_stop, or
+   * null if parse fails / block is still streaming). Count_tokens needs
+   * the parsed object, not the raw string.
    */
   blocks: Map<
     number,
-    { type: 'text'; text: string } | { type: 'thinking'; text: string; signature: string }
+    | { type: 'text'; text: string }
+    | { type: 'thinking'; text: string; signature: string }
+    | {
+        type: 'server_tool_use';
+        id: string;
+        name: string;
+        input_json_raw: string;
+        input: Record<string, unknown> | null;
+      }
   >;
   /**
    * Live count of `server_tool_use` blocks of name `web_search`. The usage
@@ -1140,26 +1154,28 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  * call, trivial for budgeting. Shared between the mid-stream poller and
  * post-stream reconcile so the token-counting rules stay consistent.
  */
-function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record<string, string>> {
+function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record<string, unknown>> {
   const indices = Array.from(teeCtx.streamingContent.blocks.keys()).sort((a, b) => a - b);
-  const assistantBlocks: Array<Record<string, string>> = [];
+  const assistantBlocks: Array<Record<string, unknown>> = [];
   for (const i of indices) {
     const block = teeCtx.streamingContent.blocks.get(i);
-    if (!block || block.text.length === 0) continue;
+    if (!block) continue;
     if (block.type === 'text') {
+      if (block.text.length === 0) continue;
       // Rule 3: skip empty/whitespace-only text blocks. They'd fail the
       // "text content blocks must be non-empty / must contain non-whitespace"
       // validation.
       if (block.text.trim().length === 0) continue;
       assistantBlocks.push({ type: 'text', text: block.text });
-    } else {
+    } else if (block.type === 'thinking') {
+      if (block.text.length === 0) continue;
       if (!block.signature) continue;
       // Rule 4: avoid adjacent thinking blocks by inserting a "." between
       // them. The model never emits two thinking blocks back-to-back in
       // practice, but if an intermediate text/tool block was skipped
       // (e.g. empty text) we'd produce an invalid message shape.
       const last = assistantBlocks[assistantBlocks.length - 1];
-      if (last?.type === 'thinking') {
+      if (last && last.type === 'thinking') {
         assistantBlocks.push({ type: 'text', text: '.' });
       }
       assistantBlocks.push({
@@ -1167,26 +1183,41 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
         thinking: block.text,
         signature: block.signature,
       });
+    } else {
+      // server_tool_use. Skip if input hasn't parsed yet — either the
+      // block is still streaming (poll hit mid-block) or the partial
+      // JSON was malformed. Including an unparsed block would either
+      // serialize `null` input (400) or omit a required field.
+      if (block.input === null) continue;
+      assistantBlocks.push({
+        type: 'server_tool_use',
+        id: block.id,
+        name: block.name,
+        input: block.input,
+      });
     }
   }
-  // Rules 1 + 2: ensure the final block is a text block with no trailing
-  // whitespace. Trim the last text block if it ends in whitespace; if
-  // trimming empties it, drop it and fall through to the append branch.
+  // Rules 1 + 2: the final block cannot be `thinking` and a trailing text
+  // block cannot end with whitespace. `server_tool_use` at the tail is OK
+  // (verified via count_tokens probe 2026-04-24), so only `thinking`
+  // requires an appended "." terminator.
   while (assistantBlocks.length > 0) {
     const last = assistantBlocks[assistantBlocks.length - 1];
+    if (last.type === 'thinking') {
+      assistantBlocks.push({ type: 'text', text: '.' });
+      break;
+    }
     if (last.type === 'text') {
-      const trimmed = last.text.replace(/\s+$/u, '');
+      const text = typeof last.text === 'string' ? last.text : '';
+      const trimmed = text.replace(/\s+$/u, '');
       if (trimmed.length === 0) {
         assistantBlocks.pop();
         continue;
       }
-      if (trimmed.length !== last.text.length) {
+      if (trimmed.length !== text.length) {
         assistantBlocks[assistantBlocks.length - 1] = { type: 'text', text: trimmed };
       }
-      break;
     }
-    // Last is thinking — append a minimal non-whitespace text block.
-    assistantBlocks.push({ type: 'text', text: '.' });
     break;
   }
   return assistantBlocks;
@@ -1648,15 +1679,26 @@ function createCostTrackingStream(
           teeCtx.streamingContent.blocks.set(idx, { type: 'text', text: '' });
         } else if (cbType === 'thinking') {
           teeCtx.streamingContent.blocks.set(idx, { type: 'thinking', text: '', signature: '' });
-        } else if (cbType === 'server_tool_use' && cbr.name === 'web_search') {
-          teeCtx.streamingContent.webSearchCount += 1;
-          // Web-search cost alone can push cumulative over the kill threshold
-          // (51 searches × $0.01 = $0.51 for a single turn). Check here so we
-          // don't wait for the 5s poll — which may also be disabled if
-          // Anthropic rate-limited our count_tokens. Use the accumulator's
-          // snapshot + the live web-search count; the accumulator's own
-          // web_search_requests field stays 0 until message_delta.
-          if (fireKillIfOverThreshold(controller)) return false;
+        } else if (cbType === 'server_tool_use') {
+          const id = typeof cbr.id === 'string' ? cbr.id : `srvtoolu_unknown_${idx}`;
+          const name = typeof cbr.name === 'string' ? cbr.name : '';
+          teeCtx.streamingContent.blocks.set(idx, {
+            type: 'server_tool_use',
+            id,
+            name,
+            input_json_raw: '',
+            input: null,
+          });
+          if (name === 'web_search') {
+            teeCtx.streamingContent.webSearchCount += 1;
+            // Web-search cost alone can push cumulative over the kill threshold
+            // (51 searches × $0.01 = $0.51 for a single turn). Check here so we
+            // don't wait for the 5s poll — which may also be disabled if
+            // Anthropic rate-limited our count_tokens. Use the accumulator's
+            // snapshot + the live web-search count; the accumulator's own
+            // web_search_requests field stays 0 until message_delta.
+            if (fireKillIfOverThreshold(controller)) return false;
+          }
         }
       }
       return false;
@@ -1694,6 +1736,38 @@ function createCostTrackingStream(
           // "messages.*.content.*.thinking.signature: Field required" and
           // polling is disabled for the rest of the stream.
           existing.signature += dr.signature;
+        } else if (
+          existing &&
+          dtype === 'input_json_delta' &&
+          typeof dr.partial_json === 'string' &&
+          existing.type === 'server_tool_use'
+        ) {
+          // server_tool_use blocks stream their `input` as a sequence of
+          // partial JSON fragments. Concatenate here; JSON.parse fires at
+          // block_stop since mid-stream fragments aren't necessarily
+          // balanced JSON.
+          existing.input_json_raw += dr.partial_json;
+        }
+      }
+      return false;
+    }
+
+    if (eventType === 'content_block_stop') {
+      const idx = typeof parsed.index === 'number' ? parsed.index : -1;
+      const existing = idx >= 0 ? teeCtx.streamingContent.blocks.get(idx) : undefined;
+      if (existing && existing.type === 'server_tool_use' && existing.input === null) {
+        // Parse the accumulated partial_json into a concrete object that
+        // count_tokens will accept. Graceful degradation on malformed JSON:
+        // leave `input` null so the assembler skips this block (we'd rather
+        // under-count output than disable the entire poller with a 400).
+        const raw = existing.input_json_raw;
+        try {
+          const parsedInput = JSON.parse(raw.length === 0 ? '{}' : raw) as unknown;
+          if (parsedInput && typeof parsedInput === 'object' && !Array.isArray(parsedInput)) {
+            existing.input = parsedInput as Record<string, unknown>;
+          }
+        } catch {
+          /* malformed; input stays null, assembler skips */
         }
       }
       return false;

@@ -197,6 +197,23 @@ async function main() {
     },
     { type: 'text', text: '.' },
   ]);
+  await tryCount('thinking, server_tool_use web_search (NO trailing text)', [
+    T0,
+    {
+      type: 'server_tool_use',
+      id: 'srvtoolu_test3',
+      name: 'web_search',
+      input: { query: 'Iceland population' },
+    },
+  ]);
+  await tryCount('server_tool_use code_execution only (no thinking, no text)', [
+    {
+      type: 'server_tool_use',
+      id: 'srvtoolu_test4',
+      name: 'code_execution',
+      input: { code: 'print(2+2)' },
+    },
+  ]);
 }
 
 main().catch((e) => {
