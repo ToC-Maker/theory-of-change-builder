@@ -17,7 +17,13 @@ npm run dev:vite         # Vite only with HMR (:5173, proxy /api to :8787)
 # Build and deploy
 npm run build            # Vite build only
 npm run deploy           # Build + deploy to Cloudflare Workers
+
+# Quality checks (also what CI runs)
+npm run typecheck
 npm run lint
+npm run format:check
+npm test
+npm run preflight        # typecheck + lint + format:check + build + test, in CI order
 
 # Storybook
 npm run storybook        # Component development (port 6006)
@@ -25,6 +31,11 @@ npm run storybook        # Component development (port 6006)
 
 For full-stack dev with HMR: run `npm run dev` in one terminal (Worker + API),
 then `npm run dev:vite` in another (Vite HMR, proxies `/api` to Worker).
+
+`npm run preflight` runs locally what CI enforces as gates (typecheck, lint,
+format check, build, unit tests). A `pre-push` git hook (via `simple-git-hooks`)
+runs it automatically before every `git push`; bypass with `git push --no-verify`
+when you need to push work-in-progress that isn't CI-clean yet.
 
 ## Stack
 
