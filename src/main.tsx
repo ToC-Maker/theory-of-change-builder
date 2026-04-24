@@ -1,3 +1,6 @@
+// Must be first: attaches Prism to window before @lexical/code language
+// plugins (bundled inside MDXEditor's chunk) execute. See prism-setup.ts.
+import './prism-setup';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
