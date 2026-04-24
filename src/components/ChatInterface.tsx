@@ -1902,6 +1902,12 @@ export function ChatInterface({
       formData.append('chart_id', chartIdForUpload);
 
       const headers = await getAuthHeaders();
+      // Anon charts (user_id NULL on the server) require the edit token to
+      // authorize an upload; without it the Worker returns 403 "forbidden"
+      // before ever talking to Anthropic, so page-limit errors get masked.
+      if (chart.editToken) {
+        headers['X-Edit-Token'] = chart.editToken;
+      }
       const response = await fetch('/api/upload-file', {
         method: 'POST',
         credentials: 'include',
