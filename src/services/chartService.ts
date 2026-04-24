@@ -335,8 +335,14 @@ export class ChartService {
     }
   }
 
-  // Delete a chart (owner only, or anyone for anonymous charts)
-  static async deleteChart(chartId: string): Promise<void> {
+  // Delete a chart (owner only, or anyone with the edit token for anonymous charts).
+  //
+  // The worker's anon branch requires the editToken in the body (see
+  // worker/api/deleteChart.ts). Authenticated owner deletes don't need it —
+  // the worker takes the chartOwnerId branch and matches by JWT sub against
+  // chart_permissions. Passing undefined in the owner case is fine; the
+  // editToken is only read on the anon branch.
+  static async deleteChart(chartId: string, editToken?: string): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -346,10 +352,15 @@ export class ChartService {
       headers['Authorization'] = `Bearer ${this.authToken}`;
     }
 
+    const body: { chartId: string; editToken?: string } = { chartId };
+    if (editToken) {
+      body.editToken = editToken;
+    }
+
     const response = await fetch(`${API_BASE}/deleteChart`, {
       method: 'DELETE',
       headers,
-      body: JSON.stringify({ chartId }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

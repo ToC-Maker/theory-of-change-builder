@@ -441,7 +441,7 @@ export function EditToolbar({
   // Delete chart
   const handleDeleteChart = async (chartId: string) => {
     try {
-      await ChartService.deleteChart(chartId);
+      await ChartService.deleteChart(chartId, currentEditToken ?? undefined);
       // Remove the BYOK spend counter for this chart so it doesn't leak into
       // localStorage forever. The key-lifetime counter is unaffected — the
       // user's total for their key persists across chart deletions.
