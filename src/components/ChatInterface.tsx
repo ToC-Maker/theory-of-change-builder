@@ -357,7 +357,18 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] px-3 py-2 rounded-lg rounded-br-sm bg-blue-500 text-white text-sm">
-          <div className={`${proseClass} prose-invert`}>
+          <div
+            className={
+              `${proseClass} prose-invert ` +
+              // prose-invert picks light-gray colors tuned for dark-slate
+              // backgrounds; on blue-500 they read muted. Pin each prose
+              // element to white explicitly so markdown text matches the
+              // surrounding "text-white" bubble.
+              'prose-headings:text-white prose-p:text-white prose-strong:text-white ' +
+              'prose-em:text-white prose-li:text-white prose-code:text-white ' +
+              'prose-a:text-white prose-a:underline'
+            }
+          >
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
           </div>
           <div className="text-xs mt-1 opacity-70 text-blue-100">
