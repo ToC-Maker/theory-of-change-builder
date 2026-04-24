@@ -69,6 +69,13 @@ jobs:
       - name: Prettier format check
         run: npm run format:check
 
+      - name: npm audit (high+ severity)
+        # Fails the job on any high or critical vuln in the dep tree.
+        # Low and moderate stay as informational warnings (won't block).
+        # If a high vuln lands from a transitive dep, either merge the
+        # Dependabot PR that fixes it, or run `npm audit fix` locally.
+        run: npm audit --audit-level=high
+
   build_and_test:
     name: Build + unit tests + coverage
     runs-on: ubuntu-latest
