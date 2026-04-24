@@ -598,13 +598,16 @@ class ChatService {
                     ` t+${sinceStart}ms Δ${sinceLast}ms`,
                 );
                 // Each thinking block is a fresh chain-of-thought, not a
-                // continuation of the previous one. Resetting here means the
-                // collapsible "Show thinking" details always shows the
-                // current block — appending across blocks confused readers
-                // who expected the model's current line of reasoning.
+                // continuation of the previous one. Reset the internal
+                // accumulator so the next thinking_delta lands on an empty
+                // buffer; the UI state isn't cleared here on purpose —
+                // doing so could unmount the streaming bubble (e.g. when
+                // streamingContent is also empty during tool-use bursts),
+                // taking the "$X so far" counter with it. The first
+                // thinking_delta of the new block will replace the old
+                // text via onThinking(chunk, fullThinking).
                 if (cb.type === 'thinking') {
                   fullThinking = '';
-                  callbacks.onThinking?.('', '');
                 }
                 // Phase dispatch: map block type+name to a UI phase so the
                 // status chip keeps continuous coverage across the turn.
