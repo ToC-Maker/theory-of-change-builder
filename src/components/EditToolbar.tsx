@@ -676,21 +676,37 @@ export function EditToolbar({
     }
   }, [currentEditToken, undoHistory.length, authLoading, isAuthenticated, user, handleShare]);
 
+  // Keep refs to the latest handleShare / loadExistingShareData so the
+  // auto-generate-on-open effect doesn't have to list them as deps. Both
+  // callbacks close over `data` (handleShare forwards it to createChart/
+  // updateChart), so their identity churns on every keystroke. If the
+  // effect below were keyed on them, every edit would re-fire the effect
+  // while the dropdown is closed, hit the close branch, null out shareData,
+  // and cascade into a fresh getChartByEditToken from the polling effect —
+  // a ~10s background /api/getChart loop for no user-visible reason.
+  const handleShareRef = useRef(handleShare);
+  useEffect(() => {
+    handleShareRef.current = handleShare;
+  });
+  const loadExistingShareDataRef = useRef(loadExistingShareData);
+  useEffect(() => {
+    loadExistingShareDataRef.current = loadExistingShareData;
+  });
+
   // Auto-generate or load share data when dropdown opens
   useEffect(() => {
     if (showShareDropdown && !shareData && !shareLoading) {
       if (currentEditToken) {
         // If we have an edit token, load existing share data
-        loadExistingShareData();
+        void loadExistingShareDataRef.current();
       } else {
         // Otherwise, create new share links
-        handleShare();
+        void handleShareRef.current();
       }
     } else if (!showShareDropdown && shareData !== null) {
       // Reset state when dropdown closes. Gate on shareData !== null so the
       // effect doesn't churn re-renders via fresh `[]`/null setters every
-      // time an unrelated dep (e.g. data → handleShare identity) shifts
-      // while the dropdown is closed.
+      // time an unrelated dep shifts while the dropdown is closed.
       setShareData(null);
       setShareError(null);
       setCopiedField(null);
@@ -699,14 +715,7 @@ export function EditToolbar({
       setPermissionError(null);
       setIsOwner(false);
     }
-  }, [
-    showShareDropdown,
-    shareData,
-    shareLoading,
-    currentEditToken,
-    loadExistingShareData,
-    handleShare,
-  ]);
+  }, [showShareDropdown, shareData, shareLoading, currentEditToken]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
