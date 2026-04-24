@@ -135,6 +135,11 @@ export function EditToolbar({
   const [shareLoading, setShareLoading] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  // Whether the signed-in user owns the current chart. Comes from the server's
+  // getChart response (verified against the JWT sub). Gates the
+  // managePermissions fetches below so we don't spam 403s for non-owned
+  // charts. Anonymous/view-only: always false.
+  const [isOwner, setIsOwner] = useState(false);
 
   // Permission management state
   const [showPermissionsSection, setShowPermissionsSection] = useState(false);
@@ -271,11 +276,15 @@ export function EditToolbar({
     setShareError(null);
 
     try {
-      const chartId = await ChartService.getChartIdFromEditToken(currentEditToken);
+      // Use the full getChart response so we can pick up isOwner alongside
+      // chartId in a single round trip. The chartId-only helper used to fire
+      // here dropped the rest of the payload on the floor.
+      const result = await ChartService.getChartByEditToken(currentEditToken);
+      setIsOwner(Boolean(result.isOwner));
       setShareData({
-        chartId,
+        chartId: result.chartId,
         editToken: currentEditToken,
-        viewUrl: `${window.location.origin}/chart/${chartId}`,
+        viewUrl: `${window.location.origin}/chart/${result.chartId}`,
         editUrl: `${window.location.origin}/edit/${currentEditToken}`,
       });
     } catch (err) {
@@ -293,17 +302,24 @@ export function EditToolbar({
       // If we already have an edit token, just update; otherwise create new
       if (currentEditToken) {
         await ChartService.updateChart(currentEditToken, data);
-        // Get the correct chartId from the API
-        const chartId = await ChartService.getChartIdFromEditToken(currentEditToken);
+        // Fetch the full getChart result so we can pick up isOwner; the
+        // chartId-only helper (getChartIdFromEditToken) used to throw away
+        // the rest.
+        const result = await ChartService.getChartByEditToken(currentEditToken);
+        setIsOwner(Boolean(result.isOwner));
         setShareData({
-          chartId,
+          chartId: result.chartId,
           editToken: currentEditToken,
-          viewUrl: `${window.location.origin}/chart/${chartId}`,
+          viewUrl: `${window.location.origin}/chart/${result.chartId}`,
           editUrl: `${window.location.origin}/edit/${currentEditToken}`,
         });
       } else {
-        // Create chart - auth token is sent automatically by ChartService
+        // Create chart - auth token is sent automatically by ChartService.
+        // An authenticated caller owns the freshly-created chart (see
+        // worker/api/createChart.ts). Anonymous charts have no owner, so
+        // nobody is "the owner" and permissions stay hidden.
         const response = await ChartService.createChart(data);
+        setIsOwner(isAuthenticated);
         setShareData(response);
         // Store the edit token locally
         ChartService.saveEditToken(response.chartId, response.editToken);
@@ -362,9 +378,12 @@ export function EditToolbar({
     }
   };
 
-  // Load permissions for the current chart
+  // Load permissions for the current chart. Only fires when the caller is
+  // the verified owner — managePermissions returns 403 for anyone else, and
+  // calling it on a polling schedule for non-owned charts used to spam 300+
+  // identical 403s per session.
   const loadPermissions = useCallback(async () => {
-    if (!shareData?.chartId || !isAuthenticated) return;
+    if (!shareData?.chartId || !isAuthenticated || !isOwner) return;
 
     setLoadingPermissions(true);
     setPermissionError(null);
@@ -379,7 +398,7 @@ export function EditToolbar({
     } finally {
       setLoadingPermissions(false);
     }
-  }, [shareData?.chartId, isAuthenticated]);
+  }, [shareData?.chartId, isAuthenticated, isOwner]);
 
   // Update user's permission level
   const handleUpdatePermission = async (targetUserId: string, newLevel: 'owner' | 'edit') => {
@@ -480,39 +499,38 @@ export function EditToolbar({
     }
   };
 
-  // Load permissions when share dropdown is shown (to check if user is owner)
+  // Load permissions when share dropdown is shown. Gated on isOwner so we
+  // don't fire managePermissions against charts the caller doesn't own (the
+  // previous comment said "to check if user is owner", but we now know
+  // ownership cheaply from the getChart response and don't need to burn an
+  // owner-only endpoint to discover it).
   useEffect(() => {
-    if (showShareDropdown && shareData?.chartId && isAuthenticated) {
+    if (showShareDropdown && shareData?.chartId && isAuthenticated && isOwner) {
       loadPermissions();
     }
-  }, [showShareDropdown, shareData?.chartId, isAuthenticated, loadPermissions]);
+  }, [showShareDropdown, shareData?.chartId, isAuthenticated, isOwner, loadPermissions]);
 
-  // Load permissions periodically to check for pending requests (for notification badge)
+  // Load permissions periodically to check for pending requests (for
+  // notification badge). Only polls when `isOwner === true` —
+  // managePermissions 403s for everyone else, and pre-fix this fired ~300
+  // times per session on non-owned charts. For non-owners we still need
+  // the chartId for the rest of the share panel, so we fetch it via
+  // getChartByEditToken and bail before touching managePermissions.
   useEffect(() => {
     if (!currentEditToken || !isAuthenticated) return;
 
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
 
-    // First get the chartId from the edit token if we don't have shareData
-    const loadAndPoll = async () => {
-      try {
-        // If we don't have shareData yet, get the chartId
-        let chartId = shareData?.chartId;
-        if (!chartId) {
-          chartId = await ChartService.getChartIdFromEditToken(currentEditToken);
-          // Store it in a temporary shareData-like object for permissions loading
-          if (!shareData) {
-            setShareData({
-              chartId,
-              editToken: currentEditToken,
-              viewUrl: `${window.location.origin}/chart/${chartId}`,
-              editUrl: `${window.location.origin}/edit/${currentEditToken}`,
-            });
-          }
-        }
+    const stopInterval = () => {
+      if (interval !== null) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
 
-        // Load permissions with the chartId
+    const fetchPermissions = async (chartId: string) => {
+      try {
         const result = await ChartService.getChartPermissions(chartId);
         if (cancelled) return;
         setPermissions(result.permissions || result);
@@ -520,33 +538,51 @@ export function EditToolbar({
           setLinkSharingLevel(result.linkSharingLevel);
         }
       } catch (err) {
-        // Silently fail for polling — but STOP the interval after the
-        // first error. The common case is `403 Only the owner can view
-        // permissions` (we're on a chart we don't own), and retrying every
-        // 30s just spams the network tab with identical 403s for the rest
-        // of the session. Any transient failure mode gets one attempt;
-        // user can refresh to retry.
+        // Belt-and-suspenders: isOwner gating should prevent 403s entirely,
+        // but if we hit one (e.g. ownership changed server-side mid-session)
+        // stop polling rather than loop.
         console.error('Failed to poll permissions (stopping poll):', err);
-        if (interval !== null) {
-          clearInterval(interval);
-          interval = null;
-        }
+        stopInterval();
       }
     };
 
-    // Load immediately
-    loadAndPoll();
-
-    // Then poll every 30 seconds to check for new requests
-    interval = setInterval(() => {
-      loadAndPoll();
-    }, 30000);
+    if (!shareData?.chartId) {
+      // Bootstrap path: we have an edit token but don't know the chartId
+      // or isOwner yet. Fetch the chart once so we can decide whether to
+      // poll. For non-owners this is the only network call — no
+      // managePermissions fetch fires at all.
+      void (async () => {
+        try {
+          const result = await ChartService.getChartByEditToken(currentEditToken);
+          if (cancelled) return;
+          setIsOwner(Boolean(result.isOwner));
+          setShareData({
+            chartId: result.chartId,
+            editToken: currentEditToken,
+            viewUrl: `${window.location.origin}/chart/${result.chartId}`,
+            editUrl: `${window.location.origin}/edit/${currentEditToken}`,
+          });
+          // State updates will re-run this effect with the fresh
+          // chartId/isOwner; the arming branch below takes it from there.
+        } catch (err) {
+          console.error('Failed to bootstrap permissions poll:', err);
+        }
+      })();
+    } else if (isOwner) {
+      // chartId + ownership known: fetch permissions once immediately, then
+      // poll every 30s. Anyone who isn't the owner simply never reaches
+      // this branch.
+      fetchPermissions(shareData.chartId);
+      interval = setInterval(() => {
+        fetchPermissions(shareData.chartId);
+      }, 30000);
+    }
 
     return () => {
       cancelled = true;
-      if (interval !== null) clearInterval(interval);
+      stopInterval();
     };
-  }, [currentEditToken, isAuthenticated, shareData]);
+  }, [currentEditToken, isAuthenticated, isOwner, shareData]);
 
   // Auto-expand permissions section if there are pending requests
   useEffect(() => {
@@ -653,6 +689,7 @@ export function EditToolbar({
       setShowPermissionsSection(false);
       setPermissions([]);
       setPermissionError(null);
+      setIsOwner(false);
     }
   }, [
     showShareDropdown,

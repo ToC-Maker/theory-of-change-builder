@@ -13,6 +13,11 @@ export interface GetChartResponse {
   chartData: ToCData;
   chartId: string;
   canEdit: boolean;
+  // true iff the server verified the caller's JWT and their sub matches the
+  // chart owner's sub. Used by the client to gate owner-only fetches
+  // (managePermissions) so we don't spam 403s for non-owned charts. Missing
+  // on older server responses, treat `undefined` as `false`.
+  isOwner?: boolean;
 }
 
 export interface UserChart {

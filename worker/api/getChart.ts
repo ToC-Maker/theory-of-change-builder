@@ -14,6 +14,12 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const sql = getDb(env);
 
+    // Track the authenticated caller's sub (if any) and the chart owner's
+    // sub so we can surface isOwner in the response. The client uses this to
+    // skip owner-only follow-up fetches (managePermissions), which otherwise
+    // spam 403s on every render for charts the caller doesn't own.
+    let verifiedUserId: string | null = null;
+    let ownerIdForResponse: string | null = null;
     let result;
     if (editToken) {
       result = await sql`
@@ -26,6 +32,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
 
       const chartOwnerId = result[0].user_id;
+      ownerIdForResponse = chartOwnerId;
       const linkSharingLevel = result[0].link_sharing_level || 'restricted';
       const allowAnonymousEdit = linkSharingLevel === 'editor';
 
@@ -56,6 +63,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         }
 
         const userId = decodedToken.sub;
+        verifiedUserId = userId;
         const userEmail = decodedToken.email || decodedToken.name;
 
         await tryMigrateDecoded(sql, decodedToken, 'getChart');
@@ -63,6 +71,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         // Re-read chart owner after migration (may have changed from old sub to new sub)
         const refreshed = await sql`SELECT user_id FROM charts WHERE id = ${result[0].id}`;
         const currentOwnerId = refreshed[0]?.user_id ?? chartOwnerId;
+        ownerIdForResponse = currentOwnerId;
 
         const existingPermission = await sql`
           SELECT user_id, status FROM chart_permissions
@@ -114,9 +123,15 @@ export async function handler(request: Request, env: Env): Promise<Response> {
           try {
             const decodedToken = await verifyToken(token, env);
             const userId = decodedToken.sub;
+            verifiedUserId = userId;
             const userEmail = decodedToken.email || decodedToken.name;
 
             await tryMigrateDecoded(sql, decodedToken, 'getChart');
+
+            // Re-read owner post-migration so the isOwner signal we return is
+            // based on the owner's current sub, not the pre-migration one.
+            const refreshed = await sql`SELECT user_id FROM charts WHERE id = ${result[0].id}`;
+            ownerIdForResponse = refreshed[0]?.user_id ?? chartOwnerId;
 
             const existingPermission = await sql`
               SELECT user_id FROM chart_permissions
@@ -147,6 +162,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
 
       const chartOwnerId = result[0].user_id;
+      ownerIdForResponse = chartOwnerId;
       const linkSharingLevel = result[0].link_sharing_level || 'restricted';
 
       // Owned + restricted: enforce the same approval gate used by the
@@ -179,11 +195,13 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         }
 
         const userId = decodedToken.sub;
+        verifiedUserId = userId;
         await tryMigrateDecoded(sql, decodedToken, 'getChart');
 
         // Re-read owner post-migration so a sub swap doesn't cause a spurious 403.
         const refreshed = await sql`SELECT user_id FROM charts WHERE id = ${chartId}`;
         const currentOwnerId = refreshed[0]?.user_id ?? chartOwnerId;
+        ownerIdForResponse = currentOwnerId;
 
         if (userId !== currentOwnerId) {
           const perm = await sql`
@@ -211,10 +229,19 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       return Response.json({ error: 'Chart not found' }, { status: 404 });
     }
 
+    // isOwner: true iff we verified the caller's JWT and their sub matches the
+    // (post-migration) chart owner's sub. Anonymous callers and cross-user
+    // callers get false. Anon charts (ownerIdForResponse === null) have no
+    // owner at all — everyone is a non-owner.
+    const isOwner = Boolean(
+      verifiedUserId && ownerIdForResponse && verifiedUserId === ownerIdForResponse,
+    );
+
     return Response.json({
       chartData: result[0].chart_data,
       chartId: result[0].id,
       canEdit: !!editToken,
+      isOwner,
     });
   } catch (error) {
     console.error('Error fetching chart:', error);
