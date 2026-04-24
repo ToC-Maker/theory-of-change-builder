@@ -2999,10 +2999,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                                 </div>
                               </details>
                             )}
-                            <div className="text-xs mt-1 opacity-70 text-gray-500">
-                              <div className="flex items-center gap-1">
-                                <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
-                                <span>Streaming...</span>
+                            <div className="text-xs mt-1 text-gray-500">
+                              <div className="flex items-center gap-1.5">
+                                {/* Live-indicator style: solid dot with a
+                                    ping ring. Louder than a 2px pulsing gray
+                                    dot, which was easy to miss — this is the
+                                    visual pattern used for "live" on social
+                                    sites, recognizable at a glance. */}
+                                <span className="relative inline-flex h-2.5 w-2.5" aria-hidden>
+                                  <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping"></span>
+                                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500"></span>
+                                </span>
+                                <span>Streaming…</span>
                                 {runningCostUsd != null && (
                                   <span className="ml-2 text-gray-600">
                                     · {formatCostUsd(runningCostUsd)} so far
@@ -3026,10 +3034,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     already conveys "typing". */}
                   {streamPhase === 'using_tools' && (
                     <div className="flex justify-start">
+                      <div className="bg-amber-50 text-amber-800 rounded-lg rounded-bl-sm p-2 text-sm border border-amber-200">
+                        <div className="flex items-center gap-2">
+                          <SparklesIcon className="w-4 h-4 animate-pulse text-amber-600" />
+                          <span className="text-amber-700">Using tools…</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {streamPhase === 'searching' && (
+                    <div className="flex justify-start">
                       <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
                         <div className="flex items-center gap-2">
                           <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
-                          <span className="text-blue-700">Using tools…</span>
+                          <span className="text-blue-700">Searching the web…</span>
                         </div>
                       </div>
                     </div>

@@ -32,7 +32,7 @@ export interface WebSearchResult {
   [key: string]: unknown;
 }
 
-export type StreamPhase = 'thinking' | 'writing' | 'using_tools' | 'other';
+export type StreamPhase = 'thinking' | 'writing' | 'using_tools' | 'searching' | 'other';
 
 export interface ChatMessage {
   id: string;
@@ -162,12 +162,14 @@ export interface StreamCallbacks {
    * onSearchStart sees. Callers should clear to null on completion.
    *   - 'thinking'    → extended-thinking block
    *   - 'writing'     → visible text block (prefer streaming bubble, no chip)
-   *   - 'using_tools' → any server_tool_use or tool_result block. Covers
-   *                     web_search + code_execution without trying to
-   *                     guess which is which — at block_start we only see
-   *                     that a tool is being called, not the semantics.
-   *                     The caller field linking code_execution to nested
-   *                     web_search arrives on the child block (too late).
+   *   - 'using_tools' → generic tool-use (code_execution or unknown) before
+   *                     we've seen a web_search in the current tool-use
+   *                     burst. Gets retroactively upgraded to 'searching'
+   *                     when a web_search block_start arrives.
+   *   - 'searching'   → sticky label applied once any web_search has been
+   *                     observed in the current burst; resets on the next
+   *                     text/thinking block so later independent tool use
+   *                     doesn't falsely claim "searching".
    *   - 'other'       → any unrecognized block type (defensive default)
    */
   onStreamPhase?: (phase: StreamPhase) => void;
@@ -493,6 +495,14 @@ class ChatService {
     let fullThinking = '';
     let usage: AnthropicUsage | null = null;
 
+    // Sticky flag for the 'using_tools' → 'searching' retroactive upgrade.
+    // Set true when a web_search block_start arrives, cleared on the next
+    // text/thinking block_start (i.e. at the start of a new "burst" of
+    // model-visible output). Lets the chip stay on "Searching the web…"
+    // through the entire research loop instead of flickering on each
+    // sub-millisecond web_search block.
+    let sawWebSearchInBurst = false;
+
     // Block timing: t0 is the first block's timestamp, tLast is the previous
     // block_start/stop timestamp. Used to surface "this block was only N ms
     // long" diagnostics when the UI chip looks like it's blinking.
@@ -601,15 +611,22 @@ class ChatService {
                 // Every non-text block gets a phase; text defers to the
                 // streaming bubble. See StreamPhase doc for the mapping.
                 let phase: StreamPhase | null = null;
-                if (cb.type === 'thinking') phase = 'thinking';
-                else if (cb.type === 'text') phase = 'writing';
-                else if (
+                if (cb.type === 'thinking') {
+                  phase = 'thinking';
+                  sawWebSearchInBurst = false;
+                } else if (cb.type === 'text') {
+                  phase = 'writing';
+                  sawWebSearchInBurst = false;
+                } else if (
                   cb.type === 'server_tool_use' ||
                   cb.type === 'web_search_tool_result' ||
                   cb.type === 'code_execution_tool_result'
-                )
-                  phase = 'using_tools';
-                else phase = 'other';
+                ) {
+                  if (cb.type === 'server_tool_use' && cb.name === 'web_search') {
+                    sawWebSearchInBurst = true;
+                  }
+                  phase = sawWebSearchInBurst ? 'searching' : 'using_tools';
+                } else phase = 'other';
                 callbacks.onStreamPhase?.(phase);
               }
 
