@@ -37,7 +37,6 @@ import {
 import {
   ChevronLeftIcon,
   Cog6ToothIcon,
-  CommandLineIcon,
   MagnifyingGlassIcon,
   ChevronDownIcon,
   PaperAirplaneIcon,
@@ -3025,22 +3024,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     tool-use stretches of a research-heavy turn. 'writing'
                     deliberately renders no chip — the streaming bubble
                     already conveys "typing". */}
-                  {streamPhase === 'searching' && (
+                  {streamPhase === 'using_tools' && (
                     <div className="flex justify-start">
                       <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
                         <div className="flex items-center gap-2">
                           <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
-                          <span className="text-blue-700">Searching the web…</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {streamPhase === 'processing' && (
-                    <div className="flex justify-start">
-                      <div className="bg-amber-50 text-amber-800 rounded-lg rounded-bl-sm p-2 text-sm border border-amber-200">
-                        <div className="flex items-center gap-2">
-                          <CommandLineIcon className="w-4 h-4 animate-pulse text-amber-600" />
-                          <span className="text-amber-700">Working with research results…</span>
+                          <span className="text-blue-700">Using tools…</span>
                         </div>
                       </div>
                     </div>

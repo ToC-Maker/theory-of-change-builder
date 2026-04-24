@@ -32,7 +32,7 @@ export interface WebSearchResult {
   [key: string]: unknown;
 }
 
-export type StreamPhase = 'thinking' | 'writing' | 'searching' | 'processing' | 'other';
+export type StreamPhase = 'thinking' | 'writing' | 'using_tools' | 'other';
 
 export interface ChatMessage {
   id: string;
@@ -162,8 +162,12 @@ export interface StreamCallbacks {
    * onSearchStart sees. Callers should clear to null on completion.
    *   - 'thinking'    → extended-thinking block
    *   - 'writing'     → visible text block (prefer streaming bubble, no chip)
-   *   - 'searching'   → web_search server-tool-use or its tool_result
-   *   - 'processing'  → code_execution server-tool-use or its tool_result
+   *   - 'using_tools' → any server_tool_use or tool_result block. Covers
+   *                     web_search + code_execution without trying to
+   *                     guess which is which — at block_start we only see
+   *                     that a tool is being called, not the semantics.
+   *                     The caller field linking code_execution to nested
+   *                     web_search arrives on the child block (too late).
    *   - 'other'       → any unrecognized block type (defensive default)
    */
   onStreamPhase?: (phase: StreamPhase) => void;
@@ -599,12 +603,12 @@ class ChatService {
                 let phase: StreamPhase | null = null;
                 if (cb.type === 'thinking') phase = 'thinking';
                 else if (cb.type === 'text') phase = 'writing';
-                else if (cb.type === 'server_tool_use') {
-                  if (cb.name === 'web_search') phase = 'searching';
-                  else if (cb.name === 'code_execution') phase = 'processing';
-                  else phase = 'other';
-                } else if (cb.type === 'web_search_tool_result') phase = 'searching';
-                else if (cb.type === 'code_execution_tool_result') phase = 'processing';
+                else if (
+                  cb.type === 'server_tool_use' ||
+                  cb.type === 'web_search_tool_result' ||
+                  cb.type === 'code_execution_tool_result'
+                )
+                  phase = 'using_tools';
                 else phase = 'other';
                 callbacks.onStreamPhase?.(phase);
               }
