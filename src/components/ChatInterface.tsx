@@ -3192,14 +3192,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     ) : wouldExceedCap ? (
                       <div className="space-y-2">
                         <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Your next send — including chat history and any attached files, not just
-                          what you type — is estimated at{' '}
-                          <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but you only have{' '}
+                          Your next send (includes chat history and attached files) is estimated at{' '}
+                          <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but only{' '}
                           <strong>
-                            {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}
+                            {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}/
+                            {formatCostUsd(usage!.limit_usd)}
                           </strong>{' '}
-                          left of the {formatCostUsd(usage!.limit_usd)} free quota. Add your
-                          Anthropic API key to continue.
+                          left. Add your Anthropic API key to continue.
                         </div>
                         <AddApiKeyButton />
                       </div>
