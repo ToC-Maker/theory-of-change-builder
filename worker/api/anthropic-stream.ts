@@ -1809,6 +1809,14 @@ function createCostTrackingStream(
           forwardFrame(frame, controller);
         }
       }
+      // Flush any pending running_cost frame from a poll that completed
+      // between chunks. Without this the frame sat in teeCtx until kill or
+      // end-of-stream, so the client's "$X so far" stayed frozen on the
+      // message_start estimate through the whole turn — exactly the bug
+      // reported when a web-search-heavy turn showed "stuck at $0.14".
+      if (teeCtx.pendingRunningCostFrame !== null) {
+        flushPendingPollerFrames(controller);
+      }
     },
     flush(controller) {
       // Either end-of-stream or the poller-triggered kill reached flush
