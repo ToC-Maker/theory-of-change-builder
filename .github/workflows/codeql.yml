@@ -1,0 +1,74 @@
+# CodeQL static analysis for the JS/TS codebase.
+#
+# CodeQL is GitHub's semantic code-analysis engine. It builds a queryable
+# database of the codebase and runs security queries against it to surface
+# vulnerabilities like IDOR, injection, XSS, insecure crypto, path traversal,
+# prototype pollution, and taint-tracking issues.
+#
+# Results land in the Security tab (Settings -> Security -> Code security
+# and analysis -> Code scanning). Enable "Code scanning" there if it isn't
+# already on, otherwise SARIF uploads will be rejected.
+#
+# We use the `security-extended` query suite (not `security-and-quality`)
+# intentionally: the extended suite adds lower-severity/precision security
+# queries on top of the default, while `security-and-quality` also pulls in
+# style/maintainability queries that are noisy for this use case. We only
+# want security signal here.
+#
+# Dependabot note: Dependabot-authored PRs get `contents: read` by default,
+# which is sufficient for CodeQL to check out and analyze. We rely on that
+# default rather than gating the job with an `if:` — simpler.
+
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Weekly: Monday 06:00 UTC (off-peak, low-traffic).
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to upload SARIF results to the Security tab.
+      security-events: write
+      # Required for private repos; harmless on public.
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          # Unified key covering both JavaScript and TypeScript (.ts + .tsx in
+          # src/, worker/, shared/, tests/). Older configs used two separate
+          # entries; the unified key is now the canonical form.
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Autobuild
+        # JS/TS doesn't need a real build for CodeQL — autobuild is a no-op
+        # wrapper that's still the documented entry point for non-compiled
+        # languages.
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          # Namespaced category so the Security tab groups results clearly
+          # and future multi-language matrices don't collide.
+          category: '/language:javascript-typescript'
