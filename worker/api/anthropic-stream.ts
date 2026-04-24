@@ -374,7 +374,7 @@ type EstimateResult =
  * observed in production. User-defined function tools are preserved so their
  * definitions still count toward the token total.
  */
-function stripToCountTokensBody(body: Record<string, unknown>): Record<string, unknown> {
+export function stripToCountTokensBody(body: Record<string, unknown>): Record<string, unknown> {
   // NOTE: `cache_control` is INTENTIONALLY not in the allow-list. Passing it
   // to count_tokens makes Anthropic return only the NON-cached token count,
   // which wildly under-estimates our cost projection for long conversations
@@ -599,7 +599,7 @@ async function estimateProjectedCost(
  * file_id. Used by estimateProjectedCost before the Anthropic-unfriendly
  * blocks are stripped out of the count_tokens body.
  */
-function extractDocumentFileIds(body: Record<string, unknown>): string[] {
+export function extractDocumentFileIds(body: Record<string, unknown>): string[] {
   const out: string[] = [];
   const messages = body.messages;
   if (!Array.isArray(messages)) return out;
