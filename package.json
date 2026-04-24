@@ -27,22 +27,22 @@
     "prepare": "simple-git-hooks"
   },
   "dependencies": {
-    "@auth0/auth0-react": "^2.16.2",
+    "@auth0/auth0-react": "^2.16.1",
     "@heroicons/react": "^2.2.0",
-    "@mdxeditor/editor": "3.54.1",
-    "@neondatabase/serverless": "^1.1.0",
+    "@mdxeditor/editor": "^3.54.1",
+    "@neondatabase/serverless": "^1.0.2",
     "clsx": "^2.1.1",
     "prismjs": "^1.30.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "7.14.1",
+    "react-router-dom": "^7.14.1",
     "react-tooltip": "^5.30.1",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.14.7",
-    "@cloudflare/workers-types": "4.20260417.1",
+    "@cloudflare/vitest-pool-workers": "^0.14.7",
+    "@cloudflare/workers-types": "^4.20260417.1",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/typography": "^0.5.19",
     "@types/node": "^22.19.17",
@@ -50,25 +50,25 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/coverage-istanbul": "4.1.4",
+    "@vitest/coverage-istanbul": "^4.1.4",
     "autoprefixer": "^10.5.0",
-    "eslint": "^10.2.1",
+    "eslint": "^10.2.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
     "jose": "^6.2.2",
     "lint-staged": "^16.4.0",
-    "npm-run-all2": "8.0.4",
+    "npm-run-all2": "^8.0.4",
     "postcss": "^8.5.10",
-    "prettier": "3.8.3",
+    "prettier": "^3.8.3",
     "simple-git-hooks": "^2.13.1",
     "tailwindcss": "^3.4.19",
     "typescript": "^6.0.3",
-    "typescript-eslint": "8.58.2",
-    "vite": "8.0.8",
-    "vitest": "4.1.4",
-    "wrangler": "4.83.0"
+    "typescript-eslint": "^8.58.2",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4",
+    "wrangler": "^4.83.0"
   },
   "simple-git-hooks": {
     "pre-commit": "npx lint-staged",
@@ -84,9 +84,9 @@
     ]
   },
   "overrides": {
-    "@vitest/coverage-v8": "4.1.4",
-    "@vitest/expect": "4.1.4",
-    "@vitest/spy": "4.1.4",
-    "@vitest/utils": "4.1.4"
+    "@vitest/coverage-v8": "^4.1.4",
+    "@vitest/expect": "^4.1.4",
+    "@vitest/spy": "^4.1.4",
+    "@vitest/utils": "^4.1.4"
   }
 }
