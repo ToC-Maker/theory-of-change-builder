@@ -511,11 +511,19 @@ export function EditToolbar({
   }, [showShareDropdown, shareData?.chartId, isAuthenticated, isOwner, loadPermissions]);
 
   // Load permissions periodically to check for pending requests (for
-  // notification badge). Only polls when `isOwner === true` —
-  // managePermissions 403s for everyone else, and pre-fix this fired ~300
-  // times per session on non-owned charts. For non-owners we still need
-  // the chartId for the rest of the share panel, so we fetch it via
-  // getChartByEditToken and bail before touching managePermissions.
+  // notification badge). Two guardrails:
+  //
+  // 1. Only polls when `isOwner === true` — managePermissions 403s for
+  //    everyone else, and pre-fix this fired ~300 times per session on
+  //    non-owned charts. For non-owners we still need the chartId for the
+  //    rest of the share panel, so we fetch it via getChartByEditToken
+  //    and bail before touching managePermissions.
+  //
+  // 2. Depends on `shareData?.chartId`, not the full `shareData` reference.
+  //    Every sync tick (or any other setShareData call with an otherwise-
+  //    equivalent payload) used to remount this effect and restart the
+  //    whole bootstrap cycle, which is how the 403s accumulated in the
+  //    first place.
   useEffect(() => {
     if (!currentEditToken || !isAuthenticated) return;
 
@@ -582,7 +590,7 @@ export function EditToolbar({
       cancelled = true;
       stopInterval();
     };
-  }, [currentEditToken, isAuthenticated, isOwner, shareData]);
+  }, [currentEditToken, isAuthenticated, isOwner, shareData?.chartId]);
 
   // Auto-expand permissions section if there are pending requests
   useEffect(() => {
