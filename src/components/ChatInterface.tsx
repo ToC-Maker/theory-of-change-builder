@@ -2901,7 +2901,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           files.filter((f) => f.status === 'ready').length +
                             generateAttachedFileIds.length ===
                             0 ||
-                          generateAttachedChips.some((f) => f.status === 'uploading') ||
+                          generateAttachedChips.some(
+                            (f) => f.status === 'uploading' || f.status === 'error',
+                          ) ||
                           isLoading
                         }
                         className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -3375,10 +3377,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                               isLoading ||
                               capAlreadyReached ||
                               wouldExceedCap ||
-                              // Block while any attached file is still uploading;
-                              // send would early-return server-side, but a
-                              // greyed button is clearer than a silent no-op.
-                              chatAttachedFiles.some((f) => f.status === 'uploading')
+                              // Block while any attached file is still uploading
+                              // or has failed: send would either early-return
+                              // server-side or silently drop the errored chip,
+                              // neither of which matches user intent.
+                              chatAttachedFiles.some(
+                                (f) => f.status === 'uploading' || f.status === 'error',
+                              )
                             }
                             className="p-2 bg-blue-500 text-white rounded-lg enabled:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                             title="Send message"
