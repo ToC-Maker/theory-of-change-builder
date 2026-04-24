@@ -1741,11 +1741,20 @@ export function ChatInterface({
     // Fire-and-forget: purge server-side Files API uploads tied to this
     // chart so we don't leak Anthropic storage. The user-visible response
     // doesn't wait on this — they've already moved on.
-    const chartIdForCleanup = params.chartId ?? params.editToken;
+    //
+    // For anon charts the worker requires the editToken (header or query
+    // param); owned charts use the JWT via getAuthHeaders(). If we only
+    // have the editToken (route `/edit/<token>`, no cached chartId yet)
+    // skip — we don't have a real chart_id to send anyway.
+    const chartIdForCleanup = params.chartId ?? autosavedChartIdRef.current;
+    const editTokenForCleanup = params.editToken ?? autosavedEditTokenRef.current;
     if (chartIdForCleanup) {
       void (async () => {
         try {
           const headers = await getAuthHeaders();
+          if (editTokenForCleanup) {
+            headers['X-Edit-Token'] = editTokenForCleanup;
+          }
           await fetch(`/api/chart-files?chart_id=${encodeURIComponent(chartIdForCleanup)}`, {
             method: 'DELETE',
             credentials: 'include',
@@ -2038,9 +2047,13 @@ export function ChatInterface({
       const removed = generateAttachedChips.find((f) => f.id === id);
       setGenerateAttachedChips((prev) => prev.filter((f) => f.id !== id));
       if (removed?.kind === 'upload' && removed.fileId) {
+        const editTokenForCleanup = params.editToken ?? autosavedEditTokenRef.current;
         void (async () => {
           try {
             const headers = await getAuthHeaders();
+            if (editTokenForCleanup) {
+              headers['X-Edit-Token'] = editTokenForCleanup;
+            }
             await fetch(`/api/files/${encodeURIComponent(removed.fileId!)}`, {
               method: 'DELETE',
               headers,
@@ -2051,7 +2064,7 @@ export function ChatInterface({
         })();
       }
     },
-    [generateAttachedChips, getAuthHeaders],
+    [generateAttachedChips, getAuthHeaders, params.editToken],
   );
 
   const removeFile = (fileToRemove: File) => {
@@ -2174,9 +2187,13 @@ export function ChatInterface({
       const removed = chatAttachedFiles.find((f) => f.id === id);
       setChatAttachedFiles((prev) => prev.filter((f) => f.id !== id));
       if (removed?.kind === 'upload' && removed.fileId) {
+        const editTokenForCleanup = params.editToken ?? autosavedEditTokenRef.current;
         void (async () => {
           try {
             const headers = await getAuthHeaders();
+            if (editTokenForCleanup) {
+              headers['X-Edit-Token'] = editTokenForCleanup;
+            }
             await fetch(`/api/files/${encodeURIComponent(removed.fileId!)}`, {
               method: 'DELETE',
               headers,
@@ -2189,7 +2206,7 @@ export function ChatInterface({
         })();
       }
     },
-    [chatAttachedFiles, getAuthHeaders],
+    [chatAttachedFiles, getAuthHeaders, params.editToken],
   );
 
   const handleChatFileRetry = useCallback(

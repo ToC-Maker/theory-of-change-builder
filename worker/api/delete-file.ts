@@ -24,9 +24,11 @@ function extractFileId(pathname: string): string | null {
 // the file everywhere.
 //
 // Authorization matches deleteChart:
-// - Anonymous chart (charts.user_id IS NULL) -> allowed without auth. Anyone
-//   reaching this endpoint with the file_id is treated like the edit-token
-//   holder (mirrors deleteChart's anon branch).
+// - Anonymous chart (charts.user_id IS NULL) -> require the editToken in the
+//   X-Edit-Token header or `edit_token` query param (mirrors deleteChart's
+//   anon branch hardening). file_id has higher entropy than chart_id and
+//   isn't in public URLs, but we still gate it to match the rest of the
+//   write surface.
 // - Owned chart -> require a valid JWT whose sub has an approved owner/edit
 //   row in chart_permissions for the associated chart_id.
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -50,11 +52,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
     const chartId = fileRow[0].chart_id;
 
-    // Figure out whether the chart has an owner. Anonymous charts (user_id
-    // NULL) are editable by anyone with the edit token; we don't have the
-    // edit token in this endpoint, so we currently require auth for anon too.
-    // This matches the safer posture of deleteChart and can be relaxed later
-    // if the client threads the edit token through.
+    // Figure out whether the chart has an owner and gate accordingly. Anon
+    // charts accept the editToken (header or query param); owned charts
+    // require a JWT with an approved permission row.
     const chartRow = await sql`
       SELECT user_id FROM charts WHERE id = ${chartId}
     `;
@@ -66,12 +66,20 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
     const chartOwnerId = chartRow[0].user_id;
 
-    // For anonymous charts: accept the delete without an owner check. The
-    // chart has no owner to authorize against, so anyone reaching this
-    // endpoint with the right file_id can clean it up. This mirrors
-    // deleteChart's "anonymous chart, no auth" branch.
     let authorized = false;
     if (!chartOwnerId) {
+      // Anon chart: require the editToken matching this chart_id.
+      const suppliedToken =
+        request.headers.get('x-edit-token') ?? url.searchParams.get('edit_token');
+      if (!suppliedToken) {
+        return Response.json({ error: 'Edit token required' }, { status: 401 });
+      }
+      const tokRows = await sql`
+        SELECT 1 FROM charts WHERE id = ${chartId} AND edit_token = ${suppliedToken}
+      `;
+      if (!tokRows.length) {
+        return Response.json({ error: 'Edit token required' }, { status: 401 });
+      }
       authorized = true;
     } else {
       const token = extractToken(request.headers.get('authorization'));

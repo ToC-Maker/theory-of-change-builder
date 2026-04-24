@@ -109,8 +109,13 @@ async function handleBulkDelete(
 
   const sql = getDb(env);
 
-  // Ownership: anon charts can be cleared without auth (same posture as
-  // deleteChart anon branch). Owned charts require a permission row.
+  // Ownership:
+  // - Owned charts: require JWT + owner/approved-edit permission row.
+  // - Anonymous charts (user_id NULL): require the editToken in the
+  //   X-Edit-Token header or `edit_token` query param. This mirrors the
+  //   deleteChart anon branch hardening — chart_id travels in the public
+  //   view URL, so gating on chart_id alone would let any view-link
+  //   recipient wipe the creator's uploaded PDFs.
   const chartRow = await sql`
     SELECT user_id FROM charts WHERE id = ${chartId}
   `;
@@ -126,6 +131,17 @@ async function handleBulkDelete(
     const hasAccess = await hasChartAccess(sql, chartId, userId);
     if (!hasAccess) {
       return Response.json({ error: 'forbidden' }, { status: 403 });
+    }
+  } else {
+    const suppliedToken = request.headers.get('x-edit-token') ?? url.searchParams.get('edit_token');
+    if (!suppliedToken) {
+      return Response.json({ error: 'Edit token required' }, { status: 401 });
+    }
+    const tokRows = await sql`
+      SELECT 1 FROM charts WHERE id = ${chartId} AND edit_token = ${suppliedToken}
+    `;
+    if (!tokRows.length) {
+      return Response.json({ error: 'Edit token required' }, { status: 401 });
     }
   }
 
