@@ -32,6 +32,8 @@ export interface WebSearchResult {
   [key: string]: unknown;
 }
 
+export type StreamPhase = 'thinking' | 'writing' | 'searching' | 'processing' | 'other';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -153,6 +155,18 @@ export interface StreamCallbacks {
   onError?: (error: string) => void;
   onSearchStart?: () => void;
   onSearchComplete?: (results?: WebSearchResult[]) => void;
+  /**
+   * Fires on every `content_block_start` with a normalized "phase" label.
+   * Lets the UI render a continuous status chip across the whole turn
+   * instead of flickering only on the narrow `web_search` sub-blocks that
+   * onSearchStart sees. Callers should clear to null on completion.
+   *   - 'thinking'    → extended-thinking block
+   *   - 'writing'     → visible text block (prefer streaming bubble, no chip)
+   *   - 'searching'   → web_search server-tool-use or its tool_result
+   *   - 'processing'  → code_execution server-tool-use or its tool_result
+   *   - 'other'       → any unrecognized block type (defensive default)
+   */
+  onStreamPhase?: (phase: StreamPhase) => void;
   /** Fires on each `message_delta.usage` SSE event with the running USD estimate. */
   onCostUpdate?: (runningCostUsd: number) => void;
   /**
@@ -556,6 +570,21 @@ class ChatService {
                   `[ChatService] block_start idx=${event.index} type=${cb.type}` +
                     (cb.name ? ` name=${cb.name}` : ''),
                 );
+                // Phase dispatch: map block type+name to a UI phase so the
+                // status chip keeps continuous coverage across the turn.
+                // Every non-text block gets a phase; text defers to the
+                // streaming bubble. See StreamPhase doc for the mapping.
+                let phase: StreamPhase | null = null;
+                if (cb.type === 'thinking') phase = 'thinking';
+                else if (cb.type === 'text') phase = 'writing';
+                else if (cb.type === 'server_tool_use') {
+                  if (cb.name === 'web_search') phase = 'searching';
+                  else if (cb.name === 'code_execution') phase = 'processing';
+                  else phase = 'other';
+                } else if (cb.type === 'web_search_tool_result') phase = 'searching';
+                else if (cb.type === 'code_execution_tool_result') phase = 'processing';
+                else phase = 'other';
+                callbacks.onStreamPhase?.(phase);
               }
 
               // Handle web search events. Fire on EVERY web_search block, not

@@ -3,7 +3,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
-import { chatService, ChatMessage, type CostError } from '../services/chatService';
+import {
+  chatService,
+  ChatMessage,
+  type CostError,
+  type StreamPhase,
+} from '../services/chatService';
 import { ChartService } from '../services/chartService';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
@@ -32,6 +37,7 @@ import {
 import {
   ChevronLeftIcon,
   Cog6ToothIcon,
+  CommandLineIcon,
   MagnifyingGlassIcon,
   ChevronDownIcon,
   PaperAirplaneIcon,
@@ -462,8 +468,11 @@ export function ChatInterface({
   const [streamingThinking, setStreamingThinking] = useState('');
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isThinking, setIsThinking] = useState(false);
+  // Fine-grained status: the chip renderer picks one of these, so the
+  // composer shows continuous feedback through a web-search-heavy turn
+  // (which cycles through many short tool-use blocks) rather than
+  // flickering on the narrow `web_search` sub-block only.
+  const [streamPhase, setStreamPhase] = useState<StreamPhase | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   // Extended thinking is always enabled on Opus 4.7; the server defaults to
@@ -1352,8 +1361,7 @@ export function ChatInterface({
       setIsLoading(false);
       setStreamingContent('');
       setStreamingThinking('');
-      setIsSearching(false);
-      setIsThinking(false);
+      setStreamPhase(null);
 
       // If there's a streaming message, finalize it with current content
       if (streamingMessageRef.current && streamingContent) {
@@ -1441,9 +1449,11 @@ export function ChatInterface({
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
 
-    // Extended thinking is always on; show the thinking indicator until the
-    // first text delta arrives.
-    setIsThinking(true);
+    // Extended thinking is always on; seed the phase as 'thinking' until the
+    // first content_block_start arrives (which will overwrite it anyway).
+    // This covers the pre-stream/connection window where no blocks have
+    // reached the client yet.
+    setStreamPhase('thinking');
 
     // NOTE: `userAnthropicKey` is not passed from the client in the
     // server-stored BYOK flow — the client never retains the raw key after
@@ -1484,18 +1494,10 @@ export function ChatInterface({
         currentGraphData: graphData,
         mode: 'chat',
         callbacks: {
-          onSearchStart: () => {
-            setIsSearching(true);
-          },
-          onSearchComplete: () => {
-            setIsSearching(false);
+          onStreamPhase: (phase) => {
+            setStreamPhase(phase);
           },
           onContent: (_chunk: string, fullContent: string) => {
-            // setIsThinking(false) unconditionally: the old `if (isThinking)`
-            // guard read from the closure captured at stream setup, where
-            // React hadn't re-rendered yet, so the check saw `false` and
-            // skipped — leaving the chip stuck on.
-            setIsThinking(false);
             setStreamingContent(fullContent);
             // Mirror into the ref so onCostError can preserve the partial
             // text when the stream is killed mid-turn. Without this the
@@ -1533,7 +1535,7 @@ export function ChatInterface({
             setIsStreaming(false);
             setStreamingContent('');
             setStreamingThinking('');
-            setIsThinking(false);
+            setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
 
@@ -1629,8 +1631,7 @@ export function ChatInterface({
             setIsStreaming(false);
             setStreamingContent('');
             setStreamingThinking('');
-            setIsSearching(false);
-            setIsThinking(false);
+            setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
           },
@@ -1672,8 +1673,7 @@ export function ChatInterface({
             setIsStreaming(false);
             setStreamingContent('');
             setStreamingThinking('');
-            setIsSearching(false);
-            setIsThinking(false);
+            setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
           },
@@ -1714,8 +1714,7 @@ export function ChatInterface({
       setIsStreaming(false);
       setStreamingContent('');
       setStreamingThinking('');
-      setIsSearching(false);
-      setIsThinking(false);
+      setStreamPhase(null);
       setRunningCostUsd(null);
       streamingMessageRef.current = null;
     } finally {
@@ -2269,7 +2268,7 @@ export function ChatInterface({
     setStreamingThinking('');
 
     // Extended thinking is always on.
-    setIsThinking(true);
+    setStreamPhase('thinking');
 
     // Combine all file contents
     const documentContent = files
@@ -2333,12 +2332,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         currentGraphData: graphData,
         mode: 'generate',
         callbacks: {
+          onStreamPhase: (phase) => {
+            setStreamPhase(phase);
+          },
           onContent: (_chunk: string, fullContent: string) => {
-            // Unconditional setter: the prior `if (isThinking)` guard read
-            // from the closure captured at stream setup, so it saw `false`
-            // and never cleared the chip. See the Chat-mode callback for
-            // full notes.
-            setIsThinking(false);
             setStreamingContent(fullContent);
             // Mirror into the ref so onCostError can preserve the partial
             // text when the stream is killed mid-turn. Without this the
@@ -2373,7 +2370,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             setIsStreaming(false);
             setStreamingContent('');
             setStreamingThinking('');
-            setIsThinking(false);
+            setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
 
@@ -2445,7 +2442,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             setIsStreaming(false);
             setStreamingContent('');
             setStreamingThinking('');
-            setIsThinking(false);
+            setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
           },
@@ -2485,7 +2482,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             setIsStreaming(false);
             setStreamingContent('');
             setStreamingThinking('');
-            setIsThinking(false);
+            setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
           },
@@ -2530,7 +2527,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       setIsStreaming(false);
       setStreamingContent('');
       setStreamingThinking('');
-      setIsThinking(false);
+      setStreamPhase(null);
       setRunningCostUsd(null);
       streamingMessageRef.current = null;
     } finally {
@@ -3019,27 +3016,41 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       );
                     })()}
 
-                  {/* Status chips BELOW the streaming bubble — tells the user
-                    "still working on it" next to the partial text, not
-                    above it where they'd scroll past to find it. */}
-                  {isSearching && (
+                  {/* Status chip BELOW the streaming bubble — tells the user
+                    "still working on it" next to the partial text, not above
+                    it where they'd scroll past to find it. The phase comes
+                    from chatService's content_block_start dispatch so every
+                    block (thinking, web_search, code_execution, tool results)
+                    maps to exactly one chip, preventing gaps during the long
+                    tool-use stretches of a research-heavy turn. 'writing'
+                    deliberately renders no chip — the streaming bubble
+                    already conveys "typing". */}
+                  {streamPhase === 'searching' && (
                     <div className="flex justify-start">
                       <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
                         <div className="flex items-center gap-2">
                           <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
-                          <span className="text-blue-700">
-                            Searching the web for current information...
-                          </span>
+                          <span className="text-blue-700">Searching the web…</span>
                         </div>
                       </div>
                     </div>
                   )}
-                  {isThinking && !isSearching && (
+                  {streamPhase === 'processing' && (
+                    <div className="flex justify-start">
+                      <div className="bg-amber-50 text-amber-800 rounded-lg rounded-bl-sm p-2 text-sm border border-amber-200">
+                        <div className="flex items-center gap-2">
+                          <CommandLineIcon className="w-4 h-4 animate-pulse text-amber-600" />
+                          <span className="text-amber-700">Working with research results…</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {streamPhase === 'thinking' && (
                     <div className="flex justify-start">
                       <div className="bg-purple-50 text-purple-800 rounded-lg rounded-bl-sm p-2 text-sm border border-purple-200">
                         <div className="flex items-center gap-2">
                           <SparklesIcon className="w-4 h-4 animate-pulse text-purple-600" />
-                          <span className="text-purple-700">Thinking about your request...</span>
+                          <span className="text-purple-700">Thinking about your request…</span>
                         </div>
                       </div>
                     </div>
@@ -3063,7 +3074,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     sit next to the input rather than scrolling away in the
                     message history. See the composer-side render. */}
 
-                  {isLoading && !isStreaming && !isSearching && (
+                  {isLoading && !isStreaming && !streamPhase && (
                     <div className="flex justify-start">
                       <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
                         <div className="flex items-center gap-1">
