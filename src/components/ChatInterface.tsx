@@ -3253,24 +3253,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         target.style.height = newHeight + 'px';
                       }}
                     />
-                    {(composerEstimateUsd > 0 || estimatingCost) && (
-                      <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                        {estimatingCost && (
-                          <span
-                            className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                            aria-label="Recalculating estimate"
-                          />
-                        )}
-                        {composerEstimateUsd > 0 ? (
-                          <span>
-                            Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
-                            live during streaming.
-                          </span>
-                        ) : (
-                          <span className="text-gray-400">Estimating…</span>
-                        )}
-                      </div>
-                    )}
+                    <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                      {estimatingCost && (
+                        <span
+                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                          aria-label="Recalculating estimate"
+                        />
+                      )}
+                      <span>
+                        Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
+                        live during streaming.
+                      </span>
+                    </div>
                     {composerEstimateError && (
                       <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                         Estimation failed: {composerEstimateError}. Fell back to a rough local
