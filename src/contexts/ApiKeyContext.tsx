@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, ReactNode } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 import { clearKeySpend, clearAllByokLocalState } from '../utils/byokSpend';
+import { getFreshIdToken } from '../utils/auth';
 import { ApiKeyContext, ApiKeyContextValue, SubmitKeyResult } from './useApiKey';
 
 // BYOK (Bring Your Own Key) context. Raw keys live server-side (encrypted);
@@ -33,7 +34,7 @@ interface ApiKeyProviderProps {
 }
 
 export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
-  const { isAuthenticated, getIdTokenClaims } = useAuth0();
+  const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
 
   const [hasKey, setHasKey] = useState(false);
   const [keyLast4, setKeyLast4] = useState<string | null>(null);
@@ -56,15 +57,9 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
 
   const getAuthHeader = useCallback(async (): Promise<Record<string, string>> => {
     if (!isAuthenticated) return {};
-    try {
-      const claims = await getIdTokenClaims();
-      const idToken = claims?.__raw;
-      return idToken ? { Authorization: `Bearer ${idToken}` } : {};
-    } catch (err) {
-      console.error('[ApiKeyContext] Failed to get ID token:', err);
-      return {};
-    }
-  }, [isAuthenticated, getIdTokenClaims]);
+    const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+  }, [isAuthenticated, getIdTokenClaims, getAccessTokenSilently]);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!isAuthenticated) {

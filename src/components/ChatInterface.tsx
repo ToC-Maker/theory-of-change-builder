@@ -16,6 +16,7 @@ import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedG
 import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
+import { getFreshIdToken } from '../utils/auth';
 import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import type { ToCData } from '../types';
@@ -403,7 +404,7 @@ export function ChatInterface({
   onChartCreated,
 }: ChatInterfaceProps) {
   const { hasKey, keyLast4, verified, keyVersion } = useApiKey();
-  const { isAuthenticated, getIdTokenClaims } = useAuth0();
+  const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
 
@@ -794,19 +795,14 @@ export function ChatInterface({
   }, [showModelDropdown]);
 
   // Auth header helper shared by /api/usage and file-upload callers. Returns
-  // an empty object for anonymous visitors; those requests hit the worker
-  // anonymously and rely on the Turnstile token for quota attribution.
+  // an empty object for anonymous visitors or when silent refresh fails;
+  // those requests hit the worker anonymously and rely on the Turnstile
+  // token for quota attribution.
   const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
     if (!isAuthenticated) return {};
-    try {
-      const claims = await getIdTokenClaims();
-      const idToken = claims?.__raw;
-      return idToken ? { Authorization: `Bearer ${idToken}` } : {};
-    } catch (err) {
-      console.error('[ChatInterface] Failed to read ID token:', err);
-      return {};
-    }
-  }, [isAuthenticated, getIdTokenClaims]);
+    const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+  }, [isAuthenticated, getIdTokenClaims, getAccessTokenSilently]);
 
   // Poll /api/usage on mount and after each stream completion. The worker
   // tallies cost/usage server-side (U9); we just render the progress bar.

@@ -19,6 +19,7 @@ import {
   DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import AuthButton from './components/AuthButton';
+import { getFreshIdToken } from './utils/auth';
 import type { ToCData } from './types';
 import './App.css';
 
@@ -81,6 +82,7 @@ function ToCViewerOnly() {
     isAuthenticated,
     isLoading: authLoading,
     getIdTokenClaims,
+    getAccessTokenSilently,
   } = useAuth0();
   const [data, setData] = useState<ToCData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -183,16 +185,16 @@ function ToCViewerOnly() {
 
       // Get and set the auth token if user is authenticated
       if (isAuthenticated) {
-        try {
-          const idTokenClaims = await getIdTokenClaims();
-          const idToken = idTokenClaims?.__raw;
-          if (idToken) {
-            ChartService.setAuthToken(idToken);
-            console.log('[ToCViewerOnly] Auth token set for copy operation');
-          }
-        } catch (err) {
-          console.error('[ToCViewerOnly] Failed to get ID token:', err);
-          // Continue without token - will create anonymous chart
+        const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+        if (idToken) {
+          ChartService.setAuthToken(idToken);
+          console.log('[ToCViewerOnly] Auth token set for copy operation');
+        } else {
+          // Silent refresh failed or token unavailable. Fall through with no
+          // auth header; the worker will create an anonymous copy instead of
+          // 401-ing on a stale token.
+          console.warn('[ToCViewerOnly] No fresh ID token available, copying anonymously');
+          ChartService.setAuthToken(null);
         }
       } else {
         ChartService.setAuthToken(null);
@@ -604,6 +606,7 @@ function ToCViewer() {
   const location = useLocation();
   const {
     getIdTokenClaims,
+    getAccessTokenSilently,
     isAuthenticated,
     isLoading: authLoading,
     loginWithRedirect,
@@ -694,35 +697,29 @@ function ToCViewer() {
   useEffect(() => {
     const setToken = async () => {
       if (isAuthenticated && !authLoading) {
-        try {
-          console.log('[App] Fetching Auth0 ID token...');
-          const idTokenClaims = await getIdTokenClaims();
-          const idToken = idTokenClaims?.__raw;
-          if (idToken) {
-            ChartService.setAuthToken(idToken);
-            chatService.setAuthToken(idToken);
-            LoggingServiceClass.setAuthToken(idToken);
-            // Sync server-side logging preference to localStorage before proceeding
-            await loggingService.syncPreferenceFromServer();
-            console.log(
-              '[App] Auth token set on ChartService and LoggingService (length:',
-              idToken.length,
-              ')',
-            );
-            setAuthTokenReady(true);
-          } else {
-            console.error('[App] ID token not available');
-            ChartService.setAuthToken(null);
-            chatService.setAuthToken(null);
-            LoggingServiceClass.setAuthToken(null);
-            setAuthTokenReady(true); // Ready even if no token (anonymous mode)
-          }
-        } catch (err) {
-          console.error('[App] Failed to get ID token:', err);
+        console.log('[App] Fetching Auth0 ID token...');
+        const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+        if (idToken) {
+          ChartService.setAuthToken(idToken);
+          chatService.setAuthToken(idToken);
+          LoggingServiceClass.setAuthToken(idToken);
+          // Sync server-side logging preference to localStorage before proceeding
+          await loggingService.syncPreferenceFromServer();
+          console.log(
+            '[App] Auth token set on ChartService and LoggingService (length:',
+            idToken.length,
+            ')',
+          );
+          setAuthTokenReady(true);
+        } else {
+          // Silent refresh failed (refresh token revoked/expired or network
+          // hiccup). Fall back to anonymous mode so the UI keeps working
+          // instead of sending stale tokens that 401 server-side.
+          console.warn('[App] No fresh ID token available, falling back to anonymous mode');
           ChartService.setAuthToken(null);
           chatService.setAuthToken(null);
           LoggingServiceClass.setAuthToken(null);
-          setAuthTokenReady(true); // Ready even if error (anonymous mode)
+          setAuthTokenReady(true);
         }
       } else if (!authLoading) {
         // Auth finished loading but user is not authenticated
@@ -738,7 +735,7 @@ function ToCViewer() {
       }
     };
     setToken();
-  }, [isAuthenticated, authLoading, getIdTokenClaims]);
+  }, [isAuthenticated, authLoading, getIdTokenClaims, getAccessTokenSilently]);
 
   // Helper function to format relative time
   const getTimeAgo = (date: Date) => {
