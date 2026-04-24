@@ -1833,7 +1833,7 @@ export async function handler(
   let hasByok = !!byokKey && actor.authenticated;
 
   if (!hasByok && actor.authenticated) {
-    let encryptedKey: Uint8Array | ArrayBuffer | null = null;
+    let encryptedKey: Uint8Array | ArrayBuffer | null;
     try {
       const rows = (await sql`
         SELECT encrypted_key FROM user_byok_keys WHERE user_id = ${actorId} LIMIT 1

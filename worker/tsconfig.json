@@ -9,7 +9,8 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "./dist"
+    "noEmit": true,
+    "rootDir": ".."
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts", "../shared/**/*.ts"]
 }

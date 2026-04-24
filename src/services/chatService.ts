@@ -679,7 +679,6 @@ class ChatService {
     // Initialize to empty string so TS can prove it's assigned before use in
     // the catch-block retry guard. The real value is set before streamFromApi.
     let serializedBody = '';
-    let retriedWithH2 = false;
     // Captured in the try-block so the H3->H2 retry can reuse most headers.
     let capturedExtraHeaders: Record<string, string> | undefined;
     try {
@@ -928,9 +927,7 @@ class ChatService {
         // request and us seeing the SSE stream), both would bill. The 60s window
         // primarily protects against browser-level double-sends; H3->H2 retry
         // is rare enough that occasional double-billing is acceptable.
-        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== '') {
-          retriedWithH2 = true;
-
+        if (isNetworkErr && !signal?.aborted && serializedBody !== '') {
           // Log the first failure for observability
           loggingService.reportError({
             error_name: 'NetworkErrorRetrying',

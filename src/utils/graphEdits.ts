@@ -207,6 +207,7 @@ export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
     } catch (pathError) {
       throw new Error(
         `Edit ${index}: Invalid path "${edit.path}" - ${pathError instanceof Error ? pathError.message : 'Unknown path error'}`,
+        { cause: pathError },
       );
     }
 

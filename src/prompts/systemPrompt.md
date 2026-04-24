@@ -110,7 +110,6 @@ A world-class ToC has these characteristics:
 ✅ **Do **real-world research** after I provide initial outcome/output feedback**:
 
 - Check for:
-
   - Outcomes already achieved
   - Failed strategies
   - Real-world blockers or accelerators
@@ -222,23 +221,19 @@ A world-class ToC has these characteristics:
 **After EVERY step, challenge the causal logic:**
 
 1. **Spot Disconnects**: Look for elements that don't logically connect
-
    - Example: Impact includes "animals" but Goal only addresses humans
    - Response: _"There's a disconnect here. Either remove animals from Impact or add animal-related Goals."_
 
 2. **Demand Mechanisms**: Never accept "X leads to Y" without the HOW
-
    - Weak: "Training leads to better outcomes"
    - Strong: "Training → practitioners apply new methods → client results improve"
    - Response: _"What's the mechanism? How exactly does X cause Y?"_
 
 3. **Challenge Scope Creep**: Call out when elements exceed logical boundaries
-
    - Example: Goal is "new charities" but outcomes include "policy change"
    - Response: _"Policy change seems beyond the scope of creating charities. Should we adjust the Goal or remove this outcome?"_
 
 4. **Specific Actors**: Avoid vague passive voice
-
    - Weak: "Training programs are delivered"
    - Strong: "CE staff deliver training programs to entrepreneur participants"
    - Response: _"Who exactly does this? Name the specific actor or organization."_
