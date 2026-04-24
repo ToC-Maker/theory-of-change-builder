@@ -6,7 +6,7 @@ const EMBED_PADDING = 32;
 
 interface UseZoomPanOptions {
   containerSize: { width: number; height: number };
-  containerRef: RefObject<HTMLDivElement>;
+  containerRef: RefObject<HTMLDivElement | null>;
   viewportOffset?: {
     left: number;
     top: number;

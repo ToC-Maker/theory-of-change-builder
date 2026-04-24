@@ -32,7 +32,7 @@ interface ConnectionsComponentProps {
   sectionPadding: number;
   onSizeChange: (size: { width: number; height: number }) => void;
   onDeleteConnection?: (sourceId: string, targetId: string) => void;
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   onEdgePopupChange?: (edgePopup: EdgePopupState | null) => void;
   fontFamily?: string;
   viewportOffset?: { left: number; top: number; right: number; bottom: number };
