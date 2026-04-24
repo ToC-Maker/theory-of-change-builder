@@ -3,7 +3,7 @@
   "name": "theory-of-change-builder",
   "account_id": "1264d0222f12a9d8073f6fd606aee8b9",
   "main": "worker/index.ts",
-  "compatibility_date": "2025-04-01",
+  "compatibility_date": "2026-04-10",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": true,
