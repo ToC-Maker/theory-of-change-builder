@@ -189,6 +189,14 @@ export type StreamMessageOptions = {
   idempotencyKey?: string;
   userAnthropicKey?: string;
   chartId?: string;
+  /**
+   * Anon-chart edit token. Required by the worker's file-ownership gate
+   * in anthropic-stream.ts when the request references file_ids and the
+   * chart has no owner. Owned charts authorize via the JWT; passing this
+   * alongside an Authorization header is harmless — the worker uses it
+   * only when `chart_owner_id IS NULL`.
+   */
+  editToken?: string;
   loggingMessageId?: string;
 };
 
@@ -671,6 +679,7 @@ class ChatService {
       idempotencyKey,
       userAnthropicKey,
       chartId,
+      editToken,
       loggingMessageId,
     } = options;
 
@@ -868,6 +877,11 @@ class ChatService {
       };
       if (userAnthropicKey) extraHeaders['X-User-Anthropic-Key'] = userAnthropicKey;
       if (chartId) extraHeaders['X-Chart-Id'] = chartId;
+      // X-Edit-Token authorizes anon-chart file_id references in the worker's
+      // file-ownership gate (see validateFileOwnership in anthropic-stream.ts).
+      // Owned charts authorize via the JWT; sending this header alongside is
+      // harmless — the worker only consults it when `chart_owner_id IS NULL`.
+      if (editToken) extraHeaders['X-Edit-Token'] = editToken;
       if (loggingMessageId) extraHeaders['X-Logging-Message-Id'] = loggingMessageId;
       capturedExtraHeaders = extraHeaders;
 

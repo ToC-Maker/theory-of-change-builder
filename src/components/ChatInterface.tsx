@@ -1686,6 +1686,10 @@ export function ChatInterface({
         attachedFileIds,
         idempotencyKey,
         chartId: resolvedChartId,
+        // For anon charts the worker's file-ownership gate in
+        // anthropic-stream.ts requires the editToken. Owned charts
+        // authorize via the JWT; passing the token alongside is harmless.
+        editToken: resolvedChart?.editToken,
         loggingMessageId: userMessageId,
         // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
       });
@@ -2491,6 +2495,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         // Fall back to route params for defense in depth but never leak
         // editToken through as chart_id.
         chartId: params.chartId ?? autosavedChartIdRef.current ?? undefined,
+        // For anon charts the worker's file-ownership gate in
+        // anthropic-stream.ts requires the editToken. Owned charts
+        // authorize via the JWT; passing the token alongside is harmless.
+        editToken: params.editToken ?? autosavedEditTokenRef.current ?? undefined,
         loggingMessageId: userMessageId,
         // userAnthropicKey: server-stored BYOK; raw key not held client-side.
       });

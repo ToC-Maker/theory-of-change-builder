@@ -460,6 +460,7 @@ async function estimateProjectedCost(
   env: Env,
   altSvcHeaders: Record<string, string>,
   sql: NeonQueryFunction<false, false>,
+  chartId: string | null,
 ): Promise<EstimateResult> {
   const model = typeof body.model === 'string' ? body.model : DEFAULT_MODEL;
   const rate = RATES_MICRO_USD_PER_TOKEN[model];
@@ -548,14 +549,28 @@ async function estimateProjectedCost(
   // missing rows contribute 0 — we log and under-project rather than fail
   // the estimate outright; the mid-stream kill switch still catches any
   // significant overshoot.
+  //
+  // Scope by chart_id when we have one so a file_id belonging to a DIFFERENT
+  // chart can't leak its token count via timing. validateFileOwnership has
+  // already confirmed each file_id is registered under chartId; this query
+  // just keeps the estimator honest on the same axis. When chartId is null
+  // (no files in body, so no ownership check either) the lookup is a no-op.
   let cachedFileTokens = 0;
   if (strippedFileIds.length > 0) {
     try {
-      const rows = (await sql`
-        SELECT file_id, input_tokens
-        FROM chart_files
-        WHERE file_id = ANY(${strippedFileIds})
-      `) as { file_id: string; input_tokens: string | number | null }[];
+      const rows = (
+        chartId
+          ? await sql`
+            SELECT file_id, input_tokens
+            FROM chart_files
+            WHERE file_id = ANY(${strippedFileIds}) AND chart_id = ${chartId}
+          `
+          : await sql`
+            SELECT file_id, input_tokens
+            FROM chart_files
+            WHERE file_id = ANY(${strippedFileIds})
+          `
+      ) as { file_id: string; input_tokens: string | number | null }[];
       // Neon returns BIGINT as a string; parse before summing.
       for (const r of rows) {
         const n = r.input_tokens == null ? NaN : Number(r.input_tokens);
@@ -600,6 +615,112 @@ function extractDocumentFileIds(body: Record<string, unknown>): string[] {
     }
   }
   return out;
+}
+
+type FileOwnershipResult = { ok: true } | { ok: false; response: Response };
+
+/**
+ * Before forwarding a request that references file_ids upstream, verify:
+ *   1. Caller has access to `chartId` (owner/approved-edit for authed charts,
+ *      matching editToken for anon charts — same posture as deleteChart).
+ *   2. Every file_id in the body belongs to `chartId` per `chart_files`.
+ *
+ * Without this, the shared `env.ANTHROPIC_API_KEY` workspace key passes
+ * Anthropic's workspace-level file ownership check for ANY file uploaded
+ * by ANY free-tier user on our worker — so a leaked file_id would let a
+ * different tenant dereference it cross-user. BYOK callers are gated by
+ * their own Anthropic workspace key, so we skip this for them.
+ */
+async function validateFileOwnership(
+  request: Request,
+  env: Env,
+  sql: NeonQueryFunction<false, false>,
+  body: Record<string, unknown>,
+  chartId: string | null,
+  altSvcHeaders: Record<string, string>,
+): Promise<FileOwnershipResult> {
+  const fileIds = extractDocumentFileIds(body);
+  if (fileIds.length === 0) return { ok: true };
+
+  if (!chartId) {
+    return {
+      ok: false,
+      response: jsonError({ error: 'missing_chart_id_for_files' }, 400, altSvcHeaders),
+    };
+  }
+
+  // Chart access: owned charts require JWT + approved permission row; anon
+  // charts require matching editToken in X-Edit-Token.
+  const chartRows = (await sql`
+    SELECT user_id FROM charts WHERE id = ${chartId}
+  `) as { user_id: string | null }[];
+  if (!chartRows.length) {
+    return { ok: false, response: jsonError({ error: 'chart_not_found' }, 404, altSvcHeaders) };
+  }
+  const chartOwnerId = chartRows[0].user_id;
+
+  if (chartOwnerId) {
+    const token = extractToken(request.headers.get('authorization'));
+    let allowed = false;
+    if (token) {
+      try {
+        const decoded = await verifyToken(token, env);
+        if (decoded.sub === chartOwnerId) {
+          allowed = true;
+        } else {
+          const perm = (await sql`
+            SELECT status FROM chart_permissions
+            WHERE chart_id = ${chartId} AND user_id = ${decoded.sub}
+          `) as { status: string }[];
+          allowed = !!perm.length && perm[0].status === 'approved';
+        }
+      } catch {
+        /* bad token -> allowed stays false */
+      }
+    }
+    if (!allowed) {
+      return { ok: false, response: jsonError({ error: 'forbidden' }, 403, altSvcHeaders) };
+    }
+  } else {
+    const suppliedToken = request.headers.get('x-edit-token');
+    if (!suppliedToken) {
+      return {
+        ok: false,
+        response: jsonError({ error: 'Edit token required' }, 401, altSvcHeaders),
+      };
+    }
+    const tokRows = await sql`
+      SELECT 1 FROM charts WHERE id = ${chartId} AND edit_token = ${suppliedToken}
+    `;
+    if (!tokRows.length) {
+      return {
+        ok: false,
+        response: jsonError({ error: 'Edit token required' }, 401, altSvcHeaders),
+      };
+    }
+  }
+
+  // Every file_id must be registered against this chart. A file_id that
+  // exists in chart_files under a DIFFERENT chart_id is just as bad as an
+  // unknown file — both signal a cross-tenant reference attempt.
+  const owned = (await sql`
+    SELECT file_id FROM chart_files
+    WHERE chart_id = ${chartId} AND file_id = ANY(${fileIds})
+  `) as { file_id: string }[];
+  const ownedSet = new Set(owned.map((r) => r.file_id));
+  const missing = fileIds.filter((f) => !ownedSet.has(f));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      response: jsonError(
+        { error: 'file_not_owned', missing_file_ids: missing },
+        403,
+        altSvcHeaders,
+      ),
+    };
+  }
+
+  return { ok: true };
 }
 
 type ReserveResult = { ok: true; postReservationUsage: bigint } | { ok: false; response: Response };
@@ -1895,6 +2016,18 @@ export async function handler(
     }
   }
 
+  // Step 5.5: file_id ownership. For our metered path (shared
+  // env.ANTHROPIC_API_KEY), Anthropic's workspace-level file access check
+  // passes for ANY file uploaded by ANY of our users — so a leaked file_id
+  // would let one tenant dereference another's upload. Validate chart access
+  // + scope every file_id to chartId before we hit upstream. BYOK callers
+  // use their own Anthropic workspace key, so their key already enforces
+  // ownership and we skip the check.
+  if (!hasByok) {
+    const fileCheck = await validateFileOwnership(request, env, sql, body, chartId, altSvcHeaders);
+    if (!fileCheck.ok) return fileCheck.response;
+  }
+
   // Step 6 + 7: estimate + reserve (skipped for BYOK).
   let projected: bigint = 0n;
   let model = typeof body.model === 'string' ? body.model : DEFAULT_MODEL;
@@ -1902,7 +2035,7 @@ export async function handler(
   let initialInputTokens = 0;
   let countTokensBase: Record<string, unknown> | null = null;
   if (isCapped(tier)) {
-    const est = await estimateProjectedCost(body, env, altSvcHeaders, sql);
+    const est = await estimateProjectedCost(body, env, altSvcHeaders, sql, chartId);
     if (!est.ok) return est.response;
     projected = est.projected;
     model = est.model;
