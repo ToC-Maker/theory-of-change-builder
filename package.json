@@ -83,11 +83,5 @@
     "*.{js,jsx,json,jsonc,md,yml,yaml,css,html}": [
       "prettier --write"
     ]
-  },
-  "overrides": {
-    "@vitest/coverage-v8": "^4.1.4",
-    "@vitest/expect": "^4.1.4",
-    "@vitest/spy": "^4.1.4",
-    "@vitest/utils": "^4.1.4"
   }
 }
