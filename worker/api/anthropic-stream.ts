@@ -1359,10 +1359,20 @@ function createCostTrackingStream(
   // every exit path so we don't leak timers across Worker isolates.
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let pollInFlight = false;
-  const clearPollTimer = () => {
+  const clearPollTimer = (reason: string) => {
     if (pollTimer !== null) {
       clearInterval(pollTimer);
       pollTimer = null;
+      // Surface the stop reason so "so far stopped updating" can be
+      // traced: kill_fired, polling_disabled, stream_done, abort, etc.
+      // pollDisableDiagnostic (if set) carries the deeper why.
+      console.log(
+        JSON.stringify({
+          event: 'poll_timer_cleared',
+          reason,
+          poll_disable: teeCtx.pollDisableDiagnostic ?? null,
+        }),
+      );
     }
   };
 
@@ -1372,7 +1382,7 @@ function createCostTrackingStream(
   // resolve is idempotent, so double-resolution from the normal path is a
   // no-op. Also clears the poll timer so nothing fires after done resolves.
   teeCtx.abortController.signal.addEventListener('abort', () => {
-    clearPollTimer();
+    clearPollTimer('abort_signal');
     resolveDone();
   });
 
@@ -1383,7 +1393,7 @@ function createCostTrackingStream(
   ) {
     pollTimer = setInterval(() => {
       if (teeCtx.killed.v || teeCtx.pollingDisabled) {
-        clearPollTimer();
+        clearPollTimer(teeCtx.killed.v ? 'killed' : 'polling_disabled');
         return;
       }
       if (pollInFlight) return;
@@ -1402,7 +1412,9 @@ function createCostTrackingStream(
         })
         .finally(() => {
           pollInFlight = false;
-          if (teeCtx.killed.v || teeCtx.pollingDisabled) clearPollTimer();
+          if (teeCtx.killed.v || teeCtx.pollingDisabled) {
+            clearPollTimer(teeCtx.killed.v ? 'killed' : 'polling_disabled_after_poll');
+          }
         });
     }, POLL_COUNT_TOKENS_INTERVAL_MS);
   }
@@ -1785,7 +1797,7 @@ function createCostTrackingStream(
         } catch {
           /* ignore */
         }
-        clearPollTimer();
+        clearPollTimer('killed_in_transform');
         resolveDone();
         return;
       }
@@ -1801,7 +1813,7 @@ function createCostTrackingStream(
         const intercepted = await parseFrame(frame, controller);
         if (teeCtx.killed.v) {
           flushPendingPollerFrames(controller);
-          clearPollTimer();
+          clearPollTimer('killed_after_parse');
           // resolveDone was called by parseFrame (or will be on abort).
           return;
         }
@@ -1830,13 +1842,13 @@ function createCostTrackingStream(
           /* ignore */
         }
       }
-      clearPollTimer();
+      clearPollTimer('stream_ended');
       resolveDone();
     },
     cancel() {
       // Downstream cancelled (client disconnect) — resolve so reconcile can
       // proceed with the partial accumulator we have.
-      clearPollTimer();
+      clearPollTimer('downstream_cancel');
       resolveDone();
     },
   });
