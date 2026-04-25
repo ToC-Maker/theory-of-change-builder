@@ -99,6 +99,69 @@ const MODELS = {
   'claude-opus-4-7': 'Claude Opus 4.7',
 } as const;
 
+type ModelKey = keyof typeof MODELS;
+
+/**
+ * Self-contained model picker. Self-contained so we can drop one in the
+ * Chat composer AND the Generate composer without sharing a click-outside
+ * ref between the two. Keeps `selected`/`onSelect` lifted in the parent so
+ * the choice persists across mode switches.
+ */
+function ModelDropdown({
+  selected,
+  onSelect,
+  className = '',
+}: {
+  selected: ModelKey;
+  onSelect: (model: ModelKey) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handle = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+  return (
+    <div className={`relative ${className}`} ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-[140px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
+        title="Select AI Model"
+      >
+        <span className="font-medium">{MODELS[selected]}</span>
+        <ChevronDownIcon
+          className={`w-3 h-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute bottom-full mb-1 left-0 w-[200px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
+          {Object.entries(MODELS).map(([key, name]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                onSelect(key as ModelKey);
+                setOpen(false);
+              }}
+              className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
+                selected === key ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Cloudflare Turnstile site key for anonymous rate-limit enforcement.
 // Public (surfaced in the bundle by Vite). Unset in dev = widget skipped,
 // mirroring the server-side behavior (U9 skips verification when its
@@ -481,7 +544,6 @@ export function ChatInterface({
   // (which cycles through many short tool-use blocks) rather than
   // flickering on the narrow `web_search` sub-block only.
   const [streamPhase, setStreamPhase] = useState<StreamPhase | null>(null);
-  const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   // Extended thinking is always enabled on Opus 4.7; the server defaults to
   // adaptive thinking when extendedThinkingEnabled is omitted/true.
@@ -650,7 +712,6 @@ export function ChatInterface({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
   // Set to true by ensureChartExists right before it navigates to the new
   // /edit/<token> URL. The route-change effect reads + clears it; when
   // set, it skips the usual "load from localStorage" step so the user's
@@ -773,20 +834,6 @@ export function ChatInterface({
       localStorage.removeItem('customSystemPrompt');
     }
   }, []);
-
-  // Close model dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
-        setShowModelDropdown(false);
-      }
-    };
-
-    if (showModelDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showModelDropdown]);
 
   // Auth header helper shared by /api/usage and file-upload callers. Returns
   // an empty object for anonymous visitors or when silent refresh fails;
@@ -2867,6 +2914,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </div>
                       )}
 
+                      {/* Model picker. Mirrors the chat composer's pattern;
+                    selectedModel is shared across modes so a user's choice
+                    in one carries to the other. */}
+                      <div className="flex items-center justify-between text-xs text-gray-600">
+                        <span>Model</span>
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                      </div>
+
                       {/* Generate button. The BYOK gate is enforced upstream:
                     this render path is reached only when hasKey && verified,
                     so we don't need a fallback branch for the unkeyed case. */}
@@ -3301,39 +3356,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </button>
                       </div>
                       <div className="flex items-center gap-2">
-                        <div className="relative" ref={modelDropdownRef}>
-                          <button
-                            onClick={() => setShowModelDropdown(!showModelDropdown)}
-                            className="w-[140px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
-                            title="Select AI Model"
-                          >
-                            <span className="font-medium">{MODELS[selectedModel]}</span>
-                            <ChevronDownIcon
-                              className={`w-3 h-3 transition-transform duration-200 ${showModelDropdown ? 'rotate-180' : ''}`}
-                            />
-                          </button>
-
-                          {showModelDropdown && (
-                            <div className="absolute bottom-full mb-1 left-0 w-[200px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
-                              {Object.entries(MODELS).map(([key, name]) => (
-                                <button
-                                  key={key}
-                                  onClick={() => {
-                                    setSelectedModel(key as keyof typeof MODELS);
-                                    setShowModelDropdown(false);
-                                  }}
-                                  className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
-                                    selectedModel === key
-                                      ? 'bg-blue-50 text-blue-600'
-                                      : 'text-gray-700'
-                                  }`}
-                                >
-                                  {name}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
 
                         {isStreaming ? (
                           <button
