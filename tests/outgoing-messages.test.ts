@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildOutgoingMessages } from '../src/services/outgoingMessages';
 import type { ChatMessage } from '../src/services/chatService';
 
@@ -159,6 +159,7 @@ describe('buildOutgoingMessages', () => {
       // Defensive: a recorded turn with content_blocks=[] (e.g. all blocks
       // dropped as orphans) shouldn't ship an empty array — Anthropic 400s
       // on empty assistant content. Fall back to text.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const messages: ChatMessage[] = [
         mkUser('hi'),
         mkAssistant({ content: 'reply text', content_blocks: [] }),
@@ -166,6 +167,24 @@ describe('buildOutgoingMessages', () => {
       ];
       const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
       expect(out[1]).toEqual({ role: 'assistant', content: 'reply text' });
+      // Empty content_blocks is distinct from missing — the latter is a legacy
+      // turn, the former means the accumulator dropped everything. Warn so
+      // we hear about the lossy case in devtools.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('empty content_blocks');
+      warn.mockRestore();
+    });
+
+    it('does not warn when content_blocks field is absent (legacy turn)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const messages: ChatMessage[] = [
+        mkUser('hi'),
+        mkAssistant({ content: 'reply text' }),
+        mkUser('next'),
+      ];
+      buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
     });
   });
 });

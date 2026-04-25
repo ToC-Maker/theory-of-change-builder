@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   StreamBlockAccumulator,
   toAssistantContentBlocks,
@@ -396,6 +396,7 @@ describe('StreamBlockAccumulator', () => {
     });
 
     it('ignores unknown block types', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const acc = new StreamBlockAccumulator();
       acc.handleEvent({
         type: 'content_block_start',
@@ -404,6 +405,52 @@ describe('StreamBlockAccumulator', () => {
       });
       acc.handleEvent({ type: 'content_block_stop', index: 0 });
       expect(toAssistantContentBlocks(acc)).toEqual([]);
+      // Surfaces the unknown type so a future Anthropic block we don't model
+      // doesn't disappear silently.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][1]).toEqual({ type: 'futuristic_block_we_dont_know_about' });
+      warn.mockRestore();
+    });
+
+    it('only warns once per unknown block type per accumulator', () => {
+      // Streams sometimes contain dozens of the same novel block kind in a
+      // burst; we don't want to fill devtools with the same line.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const acc = new StreamBlockAccumulator();
+      for (let i = 0; i < 5; i++) {
+        acc.handleEvent({
+          type: 'content_block_start',
+          index: i,
+          content_block: { type: 'novel_block' },
+        });
+      }
+      // Different unknown type should warn separately.
+      acc.handleEvent({
+        type: 'content_block_start',
+        index: 99,
+        content_block: { type: 'another_novel_block' },
+      });
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
+    });
+
+    it('warns when server_tool_use input_json fails to parse', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const acc = new StreamBlockAccumulator();
+      acc.handleEvent({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'server_tool_use', id: 'srvtoolu_b', name: 'web_search' },
+      });
+      acc.handleEvent({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{not json' },
+      });
+      acc.handleEvent({ type: 'content_block_stop', index: 0 });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('failed to parse server_tool_use input_json');
+      warn.mockRestore();
     });
 
     it('ignores deltas for indices we never opened', () => {
