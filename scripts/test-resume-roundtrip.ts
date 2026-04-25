@@ -2,58 +2,35 @@
 /**
  * Manual probe: end-to-end signed-thinking resume round-trip.
  *
- * What it verifies, in order:
- *   1. Stream a real /v1/messages turn with adaptive thinking enabled.
- *   2. Reconstruct AssistantBlock[] from the SSE stream the same way the
- *      client does (mirrors src/services/streamBlockAccumulator.ts).
- *   3. JSON.stringify → JSON.parse the captured blocks. This simulates the
- *      localStorage round-trip the client performs between turns.
- *   4. Assert every signed thinking block's `signature` field is byte-
- *      identical pre- and post-round-trip. A single character change here
- *      means Anthropic will 400 the next replay.
- *   5. POST a follow-up /v1/messages call with shape:
- *        [user_first, assistant_with_signed_thinking, user_followup]
- *      This is exactly what the client ships on every send after the new
- *      chat-persistence work landed.
- *   6. Assert the upstream returns 200 and prints the first text snippet.
+ * Streams a real /v1/messages turn, JSON.stringify → JSON.parse the captured
+ * AssistantBlock[] (mirrors the client's localStorage hop between turns),
+ * then POSTs a follow-up shaped as
+ *   [user_first, assistant_with_signed_thinking, user_followup]
+ * and asserts Anthropic returns 200. Touches the same code paths as
+ * src/services/streamBlockAccumulator.ts (client) and
+ * collectAssistantBlocksForAnalytics in worker/api/anthropic-stream.ts (which
+ * writes the TEXT `content_blocks` column on logging_messages).
  *
- * When to run:
- *   - Before merging changes that touch the client SSE accumulator
- *     (src/services/streamBlockAccumulator.ts, chatService.ts).
- *   - Before merging changes that touch the localStorage persistence layer
- *     for chat history (any code that JSON.stringifies AssistantBlock[]).
- *   - Before merging changes to the worker analytics path that captures
- *     content_blocks into logging_messages (worker/api/anthropic-stream.ts
- *     buildAssistantBlocksForLogging and the `content_blocks` JSONB column).
+ * Run before merging changes to any of those files, or to the chat-history
+ * localStorage layer.
  *
  * Why not in CI:
- *   - Real Anthropic /v1/messages call. Each run is ~$0.02-0.05 of Opus 4.7
- *     time depending on how chatty the model is on the prompt below.
- *   - Requires a real ANTHROPIC_API_KEY in the operator's env; CI secrets
- *     should not be spent on every PR.
- *   - The probe is stochastic: the model may or may not emit a thinking
- *     block on a given run. We use a deterministic prompt that elicits
- *     thinking reliably in practice, but flakes would be expensive to
- *     gate merges on.
+ *   - Real Anthropic call (~$0.02-0.05 of Opus 4.7 per run); CI secrets
+ *     shouldn't fund every PR.
+ *   - Stochastic: the model may elide thinking. Exit code 2 means "rerun";
+ *     not a real failure.
  *
  * Usage:
  *   source .dev.vars && ./scripts/test-resume-roundtrip.ts
- *
- * Or with an explicit key:
  *   ANTHROPIC_API_KEY=sk-ant-... ./scripts/test-resume-roundtrip.ts
  *
  * Exit codes:
  *   0  — round-trip succeeded
  *   1  — ANTHROPIC_API_KEY not set
- *   2  — first turn produced no thinking blocks (prompt didn't elicit; not a
- *        round-trip bug, but skip and rerun)
- *   3  — block type changed during JSON round-trip (would mean a tsx/JSON
- *        type-coercion bug somewhere upstream)
- *   4  — thinking signature differed after round-trip (the load-bearing
- *        failure: replay would 400)
- *   5  — Anthropic rejected the replay (400/4xx); check the body printed
- *        below to see whether it's a signature mismatch, an orphan tool
- *        block, or something else
+ *   2  — first turn produced no thinking blocks (rerun)
+ *   3  — block type changed during JSON round-trip
+ *   4  — thinking signature differed after round-trip (replay would 400)
+ *   5  — Anthropic rejected the replay (4xx)
  *  99  — uncaught throw
  */
 
