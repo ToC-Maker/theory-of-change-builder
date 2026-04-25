@@ -77,12 +77,17 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
     setError(null);
 
     try {
-      // Best-effort auth header. Anon users skip it; the Worker falls back
-      // to the cookie-pinned actor id.
+      // Auth users MUST send a JWT. Without one the Worker takes the anon
+      // branch and only the anon-cookie row gets cleared — the auth user's
+      // charts/BYOK survive but the UI would falsely report "deleted
+      // everything". Bail out and ask the user to re-sign-in instead.
       const headers: Record<string, string> = {};
       if (isAuthenticated) {
         const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
-        if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
+        if (!idToken) {
+          throw new Error('Your session expired. Please sign in again and retry.');
+        }
+        headers['Authorization'] = `Bearer ${idToken}`;
       }
 
       const response = await fetch('/api/my-data', {
