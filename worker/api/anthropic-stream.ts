@@ -2,6 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
+import { isUserOptedOut } from '../_shared/logging-optout';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
 import {
   resolveAnonActor,
@@ -27,6 +28,7 @@ import {
   type Tier,
 } from '../_shared/tiers';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
+import type { AssistantBlock } from '../../shared/chat-blocks';
 
 /**
  * HTTP streaming proxy for Anthropic's /v1/messages endpoint with server-side
@@ -924,6 +926,34 @@ function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void
 }
 
 /**
+ * Discriminated union for blocks we accumulate from the SSE stream. Used by
+ * two consumers with different fidelity requirements:
+ *
+ *   - `buildAssistantBlocksForCountTokens` (kill-switch / reconcile): only
+ *     `text`, `thinking`, and `server_tool_use` are submitted to Anthropic's
+ *     count_tokens endpoint. The two `*_tool_result` types are captured but
+ *     skipped on that path (Anthropic doesn't accept them on the assistant
+ *     turn going IN to count_tokens — they're a response artifact).
+ *   - `collectAssistantBlocksForAnalytics`: emits all five types verbatim
+ *     into `logging_messages.content_blocks` so analytics can fork/replay
+ *     the turn via the Messages API, where these blocks are valid history.
+ */
+type StreamingBlock =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string; signature: string }
+  | {
+      type: 'server_tool_use';
+      id: string;
+      name: string;
+      input_json_raw: string;
+      input: Record<string, unknown> | null;
+    }
+  | { type: 'web_search_tool_result'; tool_use_id: string; content: unknown }
+  | { type: 'code_execution_tool_result'; tool_use_id: string; content: unknown };
+
+type StreamingBlocksMap = Map<number, StreamingBlock>;
+
+/**
  * In-progress assistant-turn content accumulated from SSE `content_block_*`
  * events. Used by the count_tokens polling kill-switch to estimate output
  * cost mid-stream. Only text and thinking blocks are reconstructed (they
@@ -946,18 +976,7 @@ type StreamingAssistantContent = {
    * null if parse fails / block is still streaming). Count_tokens needs
    * the parsed object, not the raw string.
    */
-  blocks: Map<
-    number,
-    | { type: 'text'; text: string }
-    | { type: 'thinking'; text: string; signature: string }
-    | {
-        type: 'server_tool_use';
-        id: string;
-        name: string;
-        input_json_raw: string;
-        input: Record<string, unknown> | null;
-      }
-  >;
+  blocks: StreamingBlocksMap;
   /**
    * Live count of `server_tool_use` blocks of name `web_search`. The usage
    * accumulator only picks this up from `message_delta` at end-of-stream,
@@ -1183,11 +1202,11 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
         thinking: block.text,
         signature: block.signature,
       });
-    } else {
-      // server_tool_use. Skip if input hasn't parsed yet — either the
-      // block is still streaming (poll hit mid-block) or the partial
-      // JSON was malformed. Including an unparsed block would either
-      // serialize `null` input (400) or omit a required field.
+    } else if (block.type === 'server_tool_use') {
+      // Skip if input hasn't parsed yet — either the block is still
+      // streaming (poll hit mid-block) or the partial JSON was malformed.
+      // Including an unparsed block would either serialize `null` input
+      // (400) or omit a required field.
       if (block.input === null) continue;
       assistantBlocks.push({
         type: 'server_tool_use',
@@ -1196,6 +1215,12 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
         input: block.input,
       });
     }
+    // web_search_tool_result and code_execution_tool_result are intentionally
+    // skipped on the count_tokens path. Anthropic accepts them on history in
+    // the Messages API (where analytics replay sends them) but rejects them
+    // on the assistant turn going IN to count_tokens — they're a response-
+    // side artifact, not input. The polling kill-switch only needs an output-
+    // token estimate, which the text/thinking blocks already cover.
   }
   // Rules 1 + 2: the final block cannot be `thinking` and a trailing text
   // block cannot end with whitespace. `server_tool_use` at the tail is OK
@@ -1221,6 +1246,63 @@ function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record
     break;
   }
   return assistantBlocks;
+}
+
+/**
+ * Convert the worker's in-progress block accumulator into the discriminated
+ * `AssistantBlock[]` shape for analytics persistence (`logging_messages.
+ * content_blocks`). Unlike `buildAssistantBlocksForCountTokens` this does
+ * NOT smooth the assistant turn for Anthropic's count_tokens validation
+ * (no trailing-whitespace strip, no period padding, no thinking-after-thinking
+ * spacer). Analytics wants raw model output so the team can fork conversations
+ * from any point and replay via the Messages API, which accepts the un-smoothed
+ * shape on history (count_tokens is the stricter of the two endpoints).
+ *
+ * Skipped blocks (no analytics value): empty text, unsigned thinking. An
+ * unsigned thinking block cannot be replayed (Anthropic 400s on missing
+ * signatures during anti-forgery validation), so persisting it would just
+ * pollute the analytics store with a dead artifact.
+ *
+ * server_tool_use with `input === null` (parse mid-stream / malformed JSON)
+ * is rendered with an empty input object rather than dropped, so the
+ * tool_use_id pairing with the result block survives — the analytics replay
+ * path needs both halves of the pair to round-trip cleanly.
+ */
+export function collectAssistantBlocksForAnalytics(blocks: StreamingBlocksMap): AssistantBlock[] {
+  const indices = Array.from(blocks.keys()).sort((a, b) => a - b);
+  const out: AssistantBlock[] = [];
+  for (const i of indices) {
+    const block = blocks.get(i);
+    if (!block) continue;
+    if (block.type === 'text') {
+      if (block.text.length === 0) continue;
+      out.push({ type: 'text', text: block.text });
+    } else if (block.type === 'thinking') {
+      if (block.text.length === 0) continue;
+      if (!block.signature) continue;
+      out.push({ type: 'thinking', thinking: block.text, signature: block.signature });
+    } else if (block.type === 'server_tool_use') {
+      out.push({
+        type: 'server_tool_use',
+        id: block.id,
+        name: block.name,
+        input: block.input ?? {},
+      });
+    } else if (block.type === 'web_search_tool_result') {
+      out.push({
+        type: 'web_search_tool_result',
+        tool_use_id: block.tool_use_id,
+        content: block.content,
+      });
+    } else {
+      out.push({
+        type: 'code_execution_tool_result',
+        tool_use_id: block.tool_use_id,
+        content: block.content,
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -1704,6 +1786,22 @@ function createCostTrackingStream(
             // web_search_requests field stays 0 until message_delta.
             if (fireKillIfOverThreshold(controller)) return false;
           }
+        } else if (cbType === 'web_search_tool_result') {
+          // Anthropic delivers the resolved result in this single block_start
+          // event (no deltas follow). Capture verbatim for analytics replay.
+          const tuid = typeof cbr.tool_use_id === 'string' ? cbr.tool_use_id : '';
+          teeCtx.streamingContent.blocks.set(idx, {
+            type: 'web_search_tool_result',
+            tool_use_id: tuid,
+            content: cbr.content,
+          });
+        } else if (cbType === 'code_execution_tool_result') {
+          const tuid = typeof cbr.tool_use_id === 'string' ? cbr.tool_use_id : '';
+          teeCtx.streamingContent.blocks.set(idx, {
+            type: 'code_execution_tool_result',
+            tool_use_id: tuid,
+            content: cbr.content,
+          });
         }
       }
       return false;
@@ -2598,6 +2696,46 @@ export async function handler(
         `;
         } catch (e) {
           console.error('logging_messages cost update failed (non-fatal):', e);
+        }
+      }
+
+      // Per-message analytics: populate logging_messages.content_blocks (raw
+      // assistant turn) and was_killed (kill-switch fired) so the analytics
+      // team can fork conversations from any point and replay via the
+      // Messages API. UPDATE-only: the row was INSERTed by the client via
+      // logging-saveMessage when the turn started; we just augment it here.
+      //
+      // Gating mirrors the other logging-* endpoints: opt-out applies only to
+      // authenticated users (anon opt-out is enforced client-side; anon users
+      // have no server-side identity to key a preference against). Anonymous
+      // requests are always written.
+      //
+      // Skip when the blocks array is empty — e.g. a kill before any
+      // block_start arrived, or BYOK callers who don't pass a logging-message-
+      // id. The row's pre-existing `content` text column already covers the
+      // "no blocks captured" case.
+      if (loggingMessageId) {
+        const optedOut = await isUserOptedOut(sql, actor.authenticated ? actorId : null);
+        if (!optedOut) {
+          const analyticsBlocks = collectAssistantBlocksForAnalytics(
+            teeCtx.streamingContent.blocks,
+          );
+          if (analyticsBlocks.length > 0) {
+            try {
+              // Stringify directly (TEXT column, not JSONB) so signed thinking
+              // blocks round-trip byte-identical for replay — Postgres JSONB
+              // would normalize key ordering / whitespace / numbers, which
+              // could break Anthropic signature verification.
+              await sql`
+              UPDATE logging_messages
+              SET content_blocks = ${JSON.stringify(analyticsBlocks)},
+                  was_killed = ${teeCtx.killed.v}
+              WHERE message_id = ${loggingMessageId}
+            `;
+            } catch (e) {
+              console.error('logging_messages content_blocks update failed (non-fatal):', e);
+            }
+          }
         }
       }
 
