@@ -20,6 +20,7 @@ import { handler as chartFiles } from './api/chart-files';
 import { handler as deleteFile } from './api/delete-file';
 import { handler as verifyTurnstile } from './api/verify-turnstile';
 import { handler as countTokensEstimate } from './api/count-tokens-estimate';
+import { handler as deleteMyData } from './api/delete-my-data';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
 type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
@@ -51,6 +52,7 @@ const routes: [HttpMethod, string, Handler][] = [
   ['DELETE', '/api/chart-files', chartFiles],
   ['*', '/api/verify-turnstile', verifyTurnstile],
   ['POST', '/api/count-tokens-estimate', countTokensEstimate],
+  ['DELETE', '/api/my-data', deleteMyData],
 ];
 
 function routeMatches(routePath: string, pathname: string): boolean {

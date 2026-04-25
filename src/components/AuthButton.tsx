@@ -9,6 +9,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { loggingService } from '../services/loggingService';
 import { ByokPanel } from './ByokPanel';
+import { DeleteMyDataPanel } from './DeleteMyDataPanel';
 import { useApiKey } from '../contexts/useApiKey';
 import { useKeyByokSpendUsd, clearAllByokLocalState } from '../utils/byokSpend';
 import { formatCostUsd } from '../utils/cost';
@@ -163,7 +164,12 @@ function PrivacyModal({
   };
 
   return (
-    <AccessibleModal isOpen={isOpen} onClose={onClose} labelledBy={headingId}>
+    <AccessibleModal
+      isOpen={isOpen}
+      onClose={onClose}
+      labelledBy={headingId}
+      cardClassName="relative bg-white rounded-lg shadow-xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto"
+    >
       {/* Close button */}
       <button
         onClick={onClose}
@@ -211,6 +217,15 @@ function PrivacyModal({
           Please accept the privacy policy first to manage your data preferences.
         </p>
       )}
+
+      {/* GDPR Art. 17 erasure: "Delete all my data". Visible to both auth
+          and anon users — the underlying endpoint dispatches based on JWT
+          presence vs cookie-pinned anon identity. We keep this here under
+          Data & Privacy because a full erasure tool only makes sense in
+          the same surface that explains what we collect. */}
+      <div className="mt-4">
+        <DeleteMyDataPanel />
+      </div>
 
       {/* Footer */}
       <div className="mt-4 pt-3 border-t border-gray-100">
