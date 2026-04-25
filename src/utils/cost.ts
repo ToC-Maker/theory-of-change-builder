@@ -58,11 +58,12 @@ export function estimateCostLowBound(inputTokens: number, model: string): number
   return (inputTokens / 1_000_000) * rate;
 }
 
-/** Compact USD formatter: $0.0047, $0.05, $1.20, $12.34, $123 */
+/** USD formatter, always 2 decimals: $0.00, $0.05, $4.89, $12.34, $123.45.
+ *  Sub-cent costs round to $0.00 by design — uniform precision avoids the
+ *  jarring 4→2 decimal switch that was visible mid-stream as "$X so far"
+ *  ticked past 1¢. */
 export function formatCostUsd(usd: number): string {
-  if (usd < 1) return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
-  if (usd < 100) return `$${usd.toFixed(2)}`;
-  return `$${Math.round(usd)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 /** "Est. $0.47 • up to $X budget remaining" (undefined remaining omits the second clause) */
