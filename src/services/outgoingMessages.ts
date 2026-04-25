@@ -1,17 +1,6 @@
 // Assemble the `messages[]` array shipped to /api/anthropic-stream from the
-// in-memory ChatMessage[] state. Lives separately from chatService.ts so the
-// shape rule (assistant turns ship content_blocks; user turns ship text +
-// optional document blocks) is unit-testable without faking SSE/fetch.
-//
-// The contract enforced here:
-//   - User turns with attachedFileIds emit `[document..., text]` content
-//     arrays on every replay (not just the turn the file was uploaded);
-//     otherwise Anthropic only sees the PDF on turn 1.
-//   - Assistant turns with content_blocks ship `[blocks...]`. Without
-//     content_blocks (legacy localStorage entries), fall back to plain
-//     string content so old chats keep working through reload.
-//   - Empty content_blocks arrays are treated as legacy fallback because
-//     Anthropic 400s on empty assistant content.
+// in-memory ChatMessage[] state. Separate from chatService.ts so it stays
+// unit-testable without faking SSE/fetch.
 import type { ChatMessage } from './chatService';
 
 interface OutgoingUserContent {
@@ -26,8 +15,6 @@ interface OutgoingUserContent {
 
 interface OutgoingAssistantContent {
   role: 'assistant';
-  // Either a plain string (legacy, pre-content-blocks turns) or the typed
-  // AssistantBlock[] array (signed thinking + text + paired tool blocks).
   content: string | unknown[];
 }
 

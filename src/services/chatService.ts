@@ -195,21 +195,14 @@ export interface StreamCallbacks {
   onSearchStart?: () => void;
   onSearchComplete?: (results?: WebSearchResult[]) => void;
   /**
-   * Fires on every `content_block_start` with a normalized "phase" label.
-   * Lets the UI render a continuous status chip across the whole turn
-   * instead of flickering only on the narrow `web_search` sub-blocks that
-   * onSearchStart sees. Callers should clear to null on completion.
-   *   - 'thinking'    → extended-thinking block
-   *   - 'writing'     → visible text block (prefer streaming bubble, no chip)
-   *   - 'using_tools' → generic tool-use (code_execution or unknown) before
-   *                     we've seen a web_search in the current tool-use
-   *                     burst. Gets retroactively upgraded to 'searching'
-   *                     when a web_search block_start arrives.
-   *   - 'searching'   → sticky label applied once any web_search has been
-   *                     observed in the current burst; resets on the next
-   *                     text/thinking block so later independent tool use
-   *                     doesn't falsely claim "searching".
-   *   - 'other'       → any unrecognized block type (defensive default)
+   * Fires on every `content_block_start` with a normalized "phase" label so
+   * the UI can render a continuous status chip across the whole turn.
+   * Callers should clear to null on completion.
+   *
+   * Sticky/retroactive: 'using_tools' upgrades to 'searching' retroactively
+   * when a web_search block_start arrives in the same tool-use burst, then
+   * stays sticky until the next text/thinking block resets it (so later
+   * independent tool use doesn't falsely claim "searching").
    */
   onStreamPhase?: (phase: StreamPhase) => void;
   /** Fires on each `message_delta.usage` SSE event with the running USD estimate. */
@@ -439,8 +432,7 @@ class ChatService {
       body: JSON.stringify(requestBody),
       signal,
       // Include same-origin cookies so the Turnstile `tocb_anon` cookie
-      // reaches the Worker. Same-origin defaults to 'same-origin' already,
-      // but being explicit avoids Safari/cross-origin surprises.
+      // reaches the Worker. Explicit value avoids Safari/cross-origin surprises.
       credentials: 'include',
     });
 
@@ -601,7 +593,7 @@ class ChatService {
             const data = line.slice(6);
 
             if (data === '[DONE]') {
-              // Don't call onComplete here - wait for message_stop event which has complete usage data
+              // Wait for message_stop, which carries final usage.
               continue;
             }
 
@@ -973,9 +965,8 @@ class ChatService {
         lastIndex,
       });
 
-      // Create request body for streaming API. max_tokens is per-model
-      // (Opus 128K, Sonnet/Haiku 64K) — sourced from shared/pricing.ts so
-      // it stays in sync with the models-overview docs.
+      // max_tokens sourced from shared/pricing.ts so it stays in sync with
+      // the models-overview docs.
       const maxOutputTokens =
         MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.max_output_tokens ?? 64_000;
       requestBody = {

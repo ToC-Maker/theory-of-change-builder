@@ -1,20 +1,10 @@
-// Client-side reconstruction of Anthropic SSE content blocks into typed
-// AssistantBlock[] objects. Mirrors the worker's StreamingAssistantContent
-// shape (see worker/api/anthropic-stream.ts) so chat history written to
-// localStorage matches what the worker would produce — no schema drift.
-//
-// Design constraints:
-//  - Signed thinking signatures must round-trip byte-identical: the
-//    accumulator concatenates signature_delta strings raw (no decode/
-//    re-encode).
-//  - Tool-use blocks must pair with their tool_result; an orphan would
-//    400 on the next outgoing /v1/messages call. The accumulator drops
-//    unpaired blocks defensively.
-//  - Mid-stream kills can leave a block half-built. We surface what we
-//    have so users see the partial text rather than nothing.
-//
-// Not a parser: trust SSE shape from our own worker, no defensive type
-// validation beyond the discriminator. See shared/chat-blocks.ts comment.
+// Reconstructs Anthropic SSE content blocks into typed AssistantBlock[].
+// Three load-bearing constraints:
+//  - Signature_delta strings concatenate raw (base64-ASCII, must round-trip
+//    byte-identical for replay verification).
+//  - Drop unpaired tool_use / tool_result blocks; orphans 400 on replay.
+//  - Surface partial text/thinking on mid-stream kill so users see what
+//    they saw streamed.
 import type { AssistantBlock } from '../../shared/chat-blocks';
 
 interface RawSseEvent {
@@ -135,7 +125,6 @@ export class StreamBlockAccumulator {
       ) {
         existing.input_json_raw += d.partial_json;
       }
-      // Unknown delta types ignored.
       return;
     }
 
@@ -167,8 +156,6 @@ export class StreamBlockAccumulator {
     }
   }
 
-  // Internal accessor for tests + emit helper. Returns blocks in insertion
-  // order; emit helper sorts by index.
   _entries(): Array<[number, InternalBlock]> {
     return Array.from(this.blocks.entries());
   }
