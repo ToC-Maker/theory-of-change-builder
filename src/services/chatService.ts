@@ -14,6 +14,9 @@ import {
   WEB_SEARCH_USD_PER_USE,
 } from '../utils/cost';
 import { MODEL_CAPABILITIES } from '../../shared/pricing';
+import type { AssistantBlock } from '../../shared/chat-blocks';
+import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockAccumulator';
+import { buildOutgoingMessages } from './outgoingMessages';
 
 export interface AnthropicUsage {
   input_tokens: number;
@@ -46,6 +49,28 @@ export interface ChatMessage {
    * only sees the PDF on the turn it was uploaded, not subsequent ones.
    */
   attachedFileIds?: string[];
+  /**
+   * Structured content blocks captured from the SSE stream for assistant
+   * turns: text, signed thinking (with byte-identical signature), and any
+   * server-tool-use / tool-result pairs. Persisted to localStorage and
+   * re-shipped on the next turn so Opus 4.7 sees prior thinking + tool
+   * blocks as Anthropic expects (replay otherwise loses signed thinking
+   * and reasoning quality). Optional because legacy entries pre-dating
+   * this feature have only `content`; outgoing-message assembly falls back
+   * to the text shape when this is undefined or empty.
+   *
+   * Only set on assistant turns — user turns use `attachedFileIds` for
+   * documents and `content` for text.
+   */
+  content_blocks?: AssistantBlock[];
+  /**
+   * Set true when the kill-switch (request_cost_ceiling_exceeded) fires
+   * mid-stream and the partial assistant message was preserved. UI shows
+   * a subtle "interrupted" indicator. The user can simply send a follow-up
+   * ("continue", "next step") and the model picks up because the partial
+   * `content_blocks` round-trip into the next request.
+   */
+  was_killed?: boolean;
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -105,6 +130,15 @@ export interface CostError {
   type: CostErrorType;
   /** Raw error payload (HTTP JSON body, or SSE event object). Shape varies by type. */
   data: unknown;
+  /**
+   * Partial assistant content captured from the SSE stream up to the kill
+   * point. Populated for mid-stream errors so the caller can stash the
+   * half-built turn (text + signed thinking + paired tool blocks) onto a
+   * "was_killed" message — letting the user resume with "continue" because
+   * the partial replays back to Anthropic on the next turn. Undefined for
+   * pre-stream HTTP errors (no blocks could have arrived).
+   */
+  partialContentBlocks?: AssistantBlock[];
 }
 
 /**
@@ -151,6 +185,11 @@ export interface StreamCallbacks {
      *  the model produced, including cases where cleaning empties the
      *  displayed `message`. */
     rawMessage?: string,
+    /** Structured content blocks reconstructed from SSE — text, signed
+     *  thinking, server-tool-use + result pairs — in original block order.
+     *  Caller persists these on the assistant ChatMessage so the next turn
+     *  re-ships them and Opus 4.7 sees prior thinking + tool context. */
+    contentBlocks?: AssistantBlock[],
   ) => void;
   onError?: (error: string) => void;
   onSearchStart?: () => void;
@@ -494,6 +533,13 @@ class ChatService {
     let fullThinking = '';
     let usage: AnthropicUsage | null = null;
 
+    // Block accumulator runs in parallel with the existing fullContent /
+    // fullThinking string buffers (which power the live UI). On
+    // message_stop we surface the rebuilt AssistantBlock[] to onComplete;
+    // on a mid-stream cost error we attach the partial blocks to the
+    // CostError so the caller can stash them on the "was_killed" turn.
+    const blockAccumulator = new StreamBlockAccumulator();
+
     // Sticky flag for the 'using_tools' → 'searching' retroactive upgrade.
     // Set true when a web_search block_start arrives, cleared on the next
     // text/thinking block_start (i.e. at the start of a new "burst" of
@@ -567,13 +613,28 @@ class ChatService {
             }
 
             try {
+              // Feed every parsed event into the block accumulator first.
+              // This stays decoupled from the rest of the dispatch (which
+              // updates UI state, fires phase callbacks, etc.) so the two
+              // pipelines can't accidentally drop or reorder events.
+              if (
+                event.type === 'content_block_start' ||
+                event.type === 'content_block_delta' ||
+                event.type === 'content_block_stop'
+              ) {
+                blockAccumulator.handleEvent(event);
+              }
               // Mid-stream synthesized error events from the worker (U9). These
               // arrive as SSE events rather than HTTP errors because the failure
               // was detected after streaming began. They terminate the stream
               // via onCostError without invoking onError or the retry path.
               if (typeof event.type === 'string' && event.type in MID_STREAM_ERROR_TYPES) {
                 const mappedType = MID_STREAM_ERROR_TYPES[event.type];
-                callbacks.onCostError?.({ type: mappedType, data: event });
+                callbacks.onCostError?.({
+                  type: mappedType,
+                  data: event,
+                  partialContentBlocks: toAssistantContentBlocks(blockAccumulator),
+                });
                 ctx?.markError();
                 throw markAsCostError(new Error(`cost_error:${mappedType}`));
               }
@@ -733,12 +794,14 @@ class ChatService {
                 // Pass raw fullContent so loggers capture exactly what
                 // Claude produced. Display uses cleanContent; audit uses
                 // rawMessage.
+                const contentBlocks = toAssistantContentBlocks(blockAccumulator);
                 try {
                   callbacks.onComplete?.(
                     cleanContent,
                     editInstructions,
                     usage ?? undefined,
                     fullContent,
+                    contentBlocks,
                   );
                 } catch (callbackErr) {
                   console.error('[ChatService] onComplete callback error:', callbackErr);
@@ -877,29 +940,14 @@ class ChatService {
           ? `${systemPromptContent}\n\n${generateModePromptContent}`
           : `${systemPromptContent}\n\n${chatModePromptContent}`;
 
-      // Build messages. For every user turn that had files attached —
-      // whether it's the message currently being sent (last index) or a
-      // prior turn in history — re-emit `document` content blocks ahead of
-      // the text so Anthropic sees the PDF context on every follow-up.
-      // Without this, PDFs uploaded on turn 1 were invisible to turn 2+:
-      // the file blocks only got attached to the latest message, and past
-      // messages serialized as plain strings.
-      const outgoingMessages = processedMessages.map((msg, i) => {
-        const fileIds = i === lastIndex ? attachedFileIds : (msg.attachedFileIds ?? []);
-        if (msg.role === 'user' && fileIds.length > 0) {
-          const docBlocks = fileIds.map((file_id) => ({
-            type: 'document',
-            source: { type: 'file', file_id },
-          }));
-          return {
-            role: msg.role as 'user' | 'assistant',
-            content: [...docBlocks, { type: 'text', text: msg.content }],
-          };
-        }
-        return {
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        };
+      // Build outgoing messages via the shared helper so the assembly rule
+      // (assistant turns ship content_blocks; user turns ship text + optional
+      // document blocks; PDFs ride along on every replay; legacy entries
+      // fall back to text content) is unit-testable and stays in lockstep
+      // with the persisted ChatMessage shape.
+      const outgoingMessages = buildOutgoingMessages(processedMessages, {
+        attachedFileIds,
+        lastIndex,
       });
 
       // Create request body for streaming API. max_tokens is per-model

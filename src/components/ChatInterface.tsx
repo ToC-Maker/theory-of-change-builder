@@ -447,6 +447,21 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
     );
   }
 
+  // Persisted thinking blocks (from prior streams that completed or were
+  // killed mid-flight). Concatenated with double newlines because Anthropic
+  // sometimes emits multiple thinking blocks per turn (one per major chain-
+  // of-thought chunk). Empty when the turn had no thinking blocks (legacy
+  // entries, non-thinking models, or web-search-only turns).
+  const persistedThinking =
+    message.content_blocks
+      ?.filter(
+        (b): b is { type: 'thinking'; thinking: string; signature: string } =>
+          b.type === 'thinking',
+      )
+      .map((b) => b.thinking)
+      .filter((t) => t.length > 0)
+      .join('\n\n') ?? '';
+
   return (
     <div className="w-full text-sm text-gray-800">
       <div
@@ -458,6 +473,22 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
       >
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
       </div>
+      {persistedThinking && (
+        // Mirrors the streamingThinking disclosure used during live streams
+        // (text-xs muted, SparklesIcon, hover affordance) so the visual
+        // language is the same: "click to peek at how Claude reasoned about
+        // this turn." Stays closed by default — most users won't open it,
+        // and the prose flow shouldn't be dominated by reasoning text.
+        <details className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">
+          <summary className="cursor-pointer select-none text-gray-600 hover:text-gray-800 inline-flex items-center gap-1">
+            <SparklesIcon className="w-3.5 h-3.5 text-purple-500" aria-hidden />
+            <span>Show thinking</span>
+          </summary>
+          <div className="mt-1 whitespace-pre-wrap italic text-gray-600 leading-relaxed">
+            {persistedThinking}
+          </div>
+        </details>
+      )}
       <div className="text-xs mt-1 text-gray-500 opacity-70">
         <div>
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -467,6 +498,17 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
           message.usage.cost_usd > 0 && (
             <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
           )}
+        {message.was_killed && (
+          // Subtle "interrupted" indicator: the user can simply send a
+          // follow-up like "continue" — the partial content_blocks ride
+          // along on the next request so the model picks up where the kill
+          // landed. Neutral amber styling so it's noticeable without
+          // alarming (the message itself was preserved; nothing is lost).
+          <div className="mt-1 inline-flex items-center gap-1 text-amber-700">
+            <StopIcon className="w-3 h-3" aria-hidden />
+            <span>Response was interrupted — send a follow-up to continue.</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1537,12 +1579,18 @@ export function ChatInterface({
           onThinking: (_chunk: string, fullThinking: string) => {
             setStreamingThinking(fullThinking);
           },
-          onComplete: (finalMessage, editInstructions, usage, rawMessage) => {
+          onComplete: (finalMessage, editInstructions, usage, rawMessage, contentBlocks) => {
             const assistantMessage: ChatMessage = {
               id: assistantMessageId,
               role: 'assistant',
               content: finalMessage,
               timestamp: new Date(),
+              // Persist structured blocks so the next turn re-ships signed
+              // thinking + tool-use back to Anthropic (Opus 4.7 expects
+              // prior thinking; replay-without-it loses reasoning quality).
+              // Undefined when no blocks (defensive — onComplete should
+              // always pass them, but legacy callers won't).
+              content_blocks: contentBlocks && contentBlocks.length > 0 ? contentBlocks : undefined,
               usage: usage
                 ? {
                     input_tokens: usage.input_tokens || 0,
@@ -1684,15 +1732,23 @@ export function ChatInterface({
             const partial = streamingMessageRef.current;
             if (partial) {
               const hasText = partial.content.length > 0;
-              setMessages((prev) => [
-                ...prev,
-                hasText
-                  ? partial
-                  : {
-                      ...partial,
-                      content: '_(Assistant was cut off before writing a visible response.)_',
-                    },
-              ]);
+              // Stamp the partial assistant turn with was_killed=true so the
+              // bubble shows an "interrupted" indicator. Capture the partial
+              // content_blocks too: when the user follows up with "continue",
+              // the next request ships the half-built turn (text + signed
+              // thinking + paired tool blocks) so Anthropic resumes from
+              // where the kill landed.
+              const partialBlocks = error.partialContentBlocks;
+              const stamped: ChatMessage = {
+                ...partial,
+                was_killed: true,
+                content_blocks:
+                  partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
+                content: hasText
+                  ? partial.content
+                  : '_(Assistant was cut off before writing a visible response.)_',
+              };
+              setMessages((prev) => [...prev, stamped]);
             }
             handleCostError(error);
             setIsStreaming(false);
