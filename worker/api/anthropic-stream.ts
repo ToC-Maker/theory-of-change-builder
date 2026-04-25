@@ -1173,7 +1173,9 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  * call, trivial for budgeting. Shared between the mid-stream poller and
  * post-stream reconcile so the token-counting rules stay consistent.
  */
-function buildAssistantBlocksForCountTokens(teeCtx: SseTeeContext): Array<Record<string, unknown>> {
+export function buildAssistantBlocksForCountTokens(
+  teeCtx: SseTeeContext,
+): Array<Record<string, unknown>> {
   const indices = Array.from(teeCtx.streamingContent.blocks.keys()).sort((a, b) => a - b);
   const assistantBlocks: Array<Record<string, unknown>> = [];
   for (const i of indices) {
