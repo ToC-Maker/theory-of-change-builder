@@ -490,13 +490,38 @@ export async function handler(
   );
 }
 
-// Map a Postgres error to the right HTTP response. 08* = connection / IO,
-// transient → retry hint via 503. Everything else (constraint, syntax,
-// permission) is non-transient → 500 with the incident_id so the user has
-// something concrete to quote when reporting. Exported for tests.
+// Postgres error classes that signal "retry might succeed". Mapped to a 503
+// retry hint instead of a 500 corruption response. Anything not in this set
+// (constraint, syntax, permission) is non-transient → 500.
+//
+// Codes covered:
+//   08*    connection_exception (network drop, pool exhaustion)
+//   53*    insufficient_resources (out of memory / disk / connections)
+//   57P0*  operator_intervention. Neon's idle reconnect raises 57P01
+//          (admin_shutdown) when its serverless control plane recycles a
+//          compute instance — extremely common on cold paths. Without this
+//          mapping the user sees a 500 for what is in fact a transient
+//          reconnect.
+//   40001  serialization_failure (SSI rollback, retry succeeds)
+//   40P01  deadlock_detected (lock-graph cycle, retry succeeds)
+// Exported for unit tests.
+export function isTransientPgErrorCode(code: string): boolean {
+  return (
+    code.startsWith('08') ||
+    code.startsWith('53') ||
+    code.startsWith('57P0') ||
+    code === '40001' ||
+    code === '40P01'
+  );
+}
+
+// Map a Postgres error to the right HTTP response. Transient classes →
+// retry hint via 503. Everything else is non-transient → 500 with the
+// incident_id so the user has something concrete to quote when reporting.
+// Exported for tests.
 export function classifyDbError(err: unknown, incidentId?: string): Response {
   const code = (err as { code?: string })?.code;
-  if (typeof code === 'string' && code.startsWith('08')) {
+  if (typeof code === 'string' && isTransientPgErrorCode(code)) {
     return Response.json({ error: 'database_unavailable' }, { status: 503 });
   }
   return Response.json(
