@@ -45,6 +45,13 @@ interface DeleteResponse {
   ok?: boolean;
   no_data?: boolean;
   deleted?: DeleteSummary;
+  // Files whose Anthropic-side DELETE has not been confirmed at the time of
+  // response. The Worker queues them for an out-of-band retry; UI words this
+  // honestly rather than claiming they're already gone.
+  files_pending_remote_delete?: number;
+  // Server-side incident id when the cascade itself errored. Returned with
+  // 5xx so the user has something to quote when reporting.
+  incident_id?: string | null;
   error?: string;
 }
 
@@ -67,6 +74,7 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DeleteSummary | null>(null);
+  const [filesPending, setFilesPending] = useState(0);
   const [noData, setNoData] = useState(false);
 
   const canSubmit = confirmation === CONFIRM_PHRASE && !submitting;
@@ -101,7 +109,8 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
 
       const data = (await response.json().catch(() => ({}))) as DeleteResponse;
       if (!response.ok) {
-        throw new Error(data.error ?? `Delete failed (${response.status})`);
+        const incident = data.incident_id ? ` (incident ${data.incident_id})` : '';
+        throw new Error(`${data.error ?? `Delete failed (${response.status})`}${incident}`);
       }
 
       // Wipe BYOK localStorage immediately — server-side blob is gone, the
@@ -114,6 +123,7 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
         setNoData(true);
       } else {
         setResult(data.deleted ?? null);
+        setFilesPending(data.files_pending_remote_delete ?? 0);
       }
 
       onDeleted?.();
@@ -161,7 +171,8 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
             {result!.files > 0 ? (
               <>
                 {', '}
-                {result!.files} attached file{result!.files === 1 ? '' : 's'} cleared
+                {result!.files} attached file{result!.files === 1 ? '' : 's'} cleared locally
+                {filesPending > 0 ? ' (queued for remote deletion at Anthropic)' : ''}
               </>
             ) : null}
             .{isAuthenticated ? ' Signing you out…' : ''}
