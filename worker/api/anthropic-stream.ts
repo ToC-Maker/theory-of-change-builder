@@ -940,7 +940,7 @@ function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void
  */
 type StreamingBlock =
   | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string; signature: string }
+  | { type: 'thinking'; thinking: string; signature: string }
   | {
       type: 'server_tool_use';
       id: string;
@@ -1189,7 +1189,7 @@ export function buildAssistantBlocksForCountTokens(
       if (block.text.trim().length === 0) continue;
       assistantBlocks.push({ type: 'text', text: block.text });
     } else if (block.type === 'thinking') {
-      if (block.text.length === 0) continue;
+      if (block.thinking.length === 0) continue;
       if (!block.signature) continue;
       // Rule 4: avoid adjacent thinking blocks by inserting a "." between
       // them. The model never emits two thinking blocks back-to-back in
@@ -1201,7 +1201,7 @@ export function buildAssistantBlocksForCountTokens(
       }
       assistantBlocks.push({
         type: 'thinking',
-        thinking: block.text,
+        thinking: block.thinking,
         signature: block.signature,
       });
     } else if (block.type === 'server_tool_use') {
@@ -1280,9 +1280,9 @@ export function collectAssistantBlocksForAnalytics(blocks: StreamingBlocksMap): 
       if (block.text.length === 0) continue;
       out.push({ type: 'text', text: block.text });
     } else if (block.type === 'thinking') {
-      if (block.text.length === 0) continue;
+      if (block.thinking.length === 0) continue;
       if (!block.signature) continue;
-      out.push({ type: 'thinking', thinking: block.text, signature: block.signature });
+      out.push({ type: 'thinking', thinking: block.thinking, signature: block.signature });
     } else if (block.type === 'server_tool_use') {
       out.push({
         type: 'server_tool_use',
@@ -1767,7 +1767,11 @@ function createCostTrackingStream(
         if (cbType === 'text') {
           teeCtx.streamingContent.blocks.set(idx, { type: 'text', text: '' });
         } else if (cbType === 'thinking') {
-          teeCtx.streamingContent.blocks.set(idx, { type: 'thinking', text: '', signature: '' });
+          teeCtx.streamingContent.blocks.set(idx, {
+            type: 'thinking',
+            thinking: '',
+            signature: '',
+          });
         } else if (cbType === 'server_tool_use') {
           const id = typeof cbr.id === 'string' ? cbr.id : `srvtoolu_unknown_${idx}`;
           const name = typeof cbr.name === 'string' ? cbr.name : '';
@@ -1828,7 +1832,7 @@ function createCostTrackingStream(
           typeof dr.thinking === 'string' &&
           existing.type === 'thinking'
         ) {
-          existing.text += dr.thinking;
+          existing.thinking += dr.thinking;
         } else if (
           existing &&
           dtype === 'signature_delta' &&

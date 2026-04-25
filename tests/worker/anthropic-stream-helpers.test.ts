@@ -294,7 +294,7 @@ describe('collectAssistantBlocksForAnalytics', () => {
     const blocks = new Map();
     blocks.set(0, {
       type: 'thinking',
-      text: 'let me reason about this',
+      thinking: 'let me reason about this',
       signature: 'sig-abc-DEF/123+xyz==',
     });
     expect(collectAssistantBlocksForAnalytics(blocks)).toEqual([
@@ -310,7 +310,7 @@ describe('collectAssistantBlocksForAnalytics', () => {
     const blocks = new Map();
     // Insert out-of-order to verify sort by numeric index.
     blocks.set(2, { type: 'text', text: 'third' });
-    blocks.set(0, { type: 'thinking', text: 'first', signature: 'sig0' });
+    blocks.set(0, { type: 'thinking', thinking: 'first', signature: 'sig0' });
     blocks.set(1, { type: 'text', text: 'second' });
     const out = collectAssistantBlocksForAnalytics(blocks);
     expect(out).toEqual([
@@ -415,7 +415,7 @@ describe('collectAssistantBlocksForAnalytics', () => {
     // be replayed via the Anthropic API so it's a dead artifact too.
     const blocks = new Map();
     blocks.set(0, { type: 'text', text: '' });
-    blocks.set(1, { type: 'thinking', text: 'partial', signature: '' });
+    blocks.set(1, { type: 'thinking', thinking: 'partial', signature: '' });
     blocks.set(2, { type: 'text', text: 'real text' });
     expect(collectAssistantBlocksForAnalytics(blocks)).toEqual([
       { type: 'text', text: 'real text' },
@@ -424,7 +424,7 @@ describe('collectAssistantBlocksForAnalytics', () => {
 
   it('returns full discriminated union shape mixed in one turn', () => {
     const blocks = new Map();
-    blocks.set(0, { type: 'thinking', text: 'thinking out loud', signature: 'sig-x' });
+    blocks.set(0, { type: 'thinking', thinking: 'thinking out loud', signature: 'sig-x' });
     blocks.set(1, {
       type: 'server_tool_use',
       id: 'srvtoolu_1',
@@ -476,7 +476,7 @@ describe('buildAssistantBlocksForCountTokens', () => {
     // single-period text block, not by dropping the thinking block — the
     // thinking is the expensive output we want counted.
     const blocks = new Map<number, AnyBlock>();
-    blocks.set(0, { type: 'thinking', text: 'reasoning', signature: 'sig-1' });
+    blocks.set(0, { type: 'thinking', thinking: 'reasoning', signature: 'sig-1' });
     const ctx = makeTeeCtx(blocks);
     expect(buildAssistantBlocksForCountTokens(ctx)).toEqual([
       { type: 'thinking', thinking: 'reasoning', signature: 'sig-1' },
@@ -486,7 +486,7 @@ describe('buildAssistantBlocksForCountTokens', () => {
 
   it('keeps a non-trailing thinking block when followed by a text block', () => {
     const blocks = new Map<number, AnyBlock>();
-    blocks.set(0, { type: 'thinking', text: 'reasoning', signature: 'sig-1' });
+    blocks.set(0, { type: 'thinking', thinking: 'reasoning', signature: 'sig-1' });
     blocks.set(1, { type: 'text', text: 'final answer' });
     const ctx = makeTeeCtx(blocks);
     expect(buildAssistantBlocksForCountTokens(ctx)).toEqual([
@@ -543,9 +543,9 @@ describe('buildAssistantBlocksForCountTokens', () => {
     // produce an invalid shape. Splice rather than drop so the cost of the
     // second thinking turn is still counted.
     const blocks = new Map<number, AnyBlock>();
-    blocks.set(0, { type: 'thinking', text: 'first thought', signature: 'sig-a' });
+    blocks.set(0, { type: 'thinking', thinking: 'first thought', signature: 'sig-a' });
     blocks.set(1, { type: 'text', text: '' }); // dropped, leaving adjacent thinkings
-    blocks.set(2, { type: 'thinking', text: 'second thought', signature: 'sig-b' });
+    blocks.set(2, { type: 'thinking', thinking: 'second thought', signature: 'sig-b' });
     blocks.set(3, { type: 'text', text: 'final' });
     const ctx = makeTeeCtx(blocks);
     expect(buildAssistantBlocksForCountTokens(ctx)).toEqual([
@@ -558,7 +558,7 @@ describe('buildAssistantBlocksForCountTokens', () => {
 
   it('drops thinking with empty text', () => {
     const blocks = new Map<number, AnyBlock>();
-    blocks.set(0, { type: 'thinking', text: '', signature: 'sig-only' });
+    blocks.set(0, { type: 'thinking', thinking: '', signature: 'sig-only' });
     blocks.set(1, { type: 'text', text: 'real' });
     const ctx = makeTeeCtx(blocks);
     expect(buildAssistantBlocksForCountTokens(ctx)).toEqual([{ type: 'text', text: 'real' }]);
@@ -569,7 +569,7 @@ describe('buildAssistantBlocksForCountTokens', () => {
     // is unsigned. Anthropic 400s on submitting such a block, so it must be
     // dropped — silently disabling the poll otherwise.
     const blocks = new Map<number, AnyBlock>();
-    blocks.set(0, { type: 'thinking', text: 'partial reasoning', signature: '' });
+    blocks.set(0, { type: 'thinking', thinking: 'partial reasoning', signature: '' });
     blocks.set(1, { type: 'text', text: 'final' });
     const ctx = makeTeeCtx(blocks);
     expect(buildAssistantBlocksForCountTokens(ctx)).toEqual([{ type: 'text', text: 'final' }]);
@@ -652,7 +652,7 @@ describe('buildAssistantBlocksForCountTokens', () => {
   it('preserves block ordering by SSE index when entries arrive out-of-order', () => {
     const blocks = new Map<number, AnyBlock>();
     blocks.set(2, { type: 'text', text: 'third' });
-    blocks.set(0, { type: 'thinking', text: 'first', signature: 'sig0' });
+    blocks.set(0, { type: 'thinking', thinking: 'first', signature: 'sig0' });
     blocks.set(1, { type: 'text', text: 'second' });
     const ctx = makeTeeCtx(blocks);
     expect(buildAssistantBlocksForCountTokens(ctx)).toEqual([
