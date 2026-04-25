@@ -168,7 +168,8 @@ PDFs and other files attached in Chat are uploaded to Anthropic's Files API (`ht
 - **Clear Chat button** — `DELETE /api/chart-files?chart_id=X` clears both the local rows and the Anthropic-side files.
 - **Abandoned upload cleanup**: `DELETE /api/files/:id` removes a single file (used when the user attaches then detaches before sending).
 - **Lookup**: `GET /api/files/:id` returns metadata for a single file (ownership check + filename).
-- **GDPR erasure** — manual admin script walks the user's charts and deletes.
+- **"Delete all my data"** — `DELETE /api/my-data` (see `worker/api/delete-my-data.ts`). User-initiated GDPR Art. 17 erasure, available in the Data & Privacy modal. Hard-deletes sole-owned charts (CASCADEs `chart_files` + `chart_permissions`), orphans collab-edited charts (`user_id → NULL`), DELETEs the user's `logging_*` rows and `chart_files`, and (auth only) zero-then-deletes the BYOK encrypted blob. Anthropic Files API DELETEs fan out via `ctx.waitUntil` (concurrency 6). Preserves `user_api_usage` and `tocb_actor_id` (anti-abuse cap, separate Art 6(1)(f) basis per LIA §1B); clears `tocb_anon` and `tocb_auth_link`.
+- **GDPR erasure (admin)** — manual admin script walks the user's charts and deletes; backstop for partial / non-self-service requests.
 
 Files are not subject to Anthropic's 7-day message retention; they persist at Anthropic until an explicit DELETE. Privacy policy discloses this (see `policies/privacy-policy.md § 2E` and the retention table). The Markdown sources of the privacy policy and LIA live under `policies/` (gitignored — canonical published version is the Google Doc linked from `AuthButton.tsx`).
 
@@ -243,6 +244,8 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 - `worker/api/verify-turnstile.ts` - Turnstile challenge verification, issues `tocb_anon` session cookie
 - `worker/api/upload-file.ts` - Anthropic Files API upload proxy, records rows in `chart_files`
 - `worker/api/chart-files.ts` - `chart_files` cleanup (clear-chat and per-chart erasure)
+- `worker/api/delete-my-data.ts` - User-initiated GDPR Art. 17 erasure (`DELETE /api/my-data`); dual-mode auth/anon
+- `src/components/DeleteMyDataPanel.tsx` - "Delete all my data" UI affordance, lives inside the Data & Privacy modal
 - `worker/_shared/auth.ts` - Auth0 JWT verification (jose)
 - `worker/_shared/byok-crypto.ts` - AES-GCM wrap/unwrap for per-user BYOK keys
 - `worker/_shared/turnstile-cookie.ts` - HMAC-signed Turnstile session cookie (`tocb_anon`)
