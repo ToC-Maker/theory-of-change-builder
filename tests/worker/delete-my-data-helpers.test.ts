@@ -11,6 +11,7 @@ import {
   COOKIES_TO_CLEAR_ON_DATA_DELETE,
   COOKIES_TO_PRESERVE_ON_DATA_DELETE,
   fanOutAnthropicDeletes,
+  isTransientPgErrorCode,
 } from '../../worker/api/delete-my-data';
 
 describe('buildExpiredCookieHeader', () => {
@@ -75,6 +76,57 @@ describe('buildClearedCookieHeaders', () => {
   });
 });
 
+describe('isTransientPgErrorCode', () => {
+  it('returns true for 08* (connection_exception)', () => {
+    // 08006: connection_failure, 08001: sqlclient_unable_to_establish_sqlconnection
+    expect(isTransientPgErrorCode('08006')).toBe(true);
+    expect(isTransientPgErrorCode('08001')).toBe(true);
+    expect(isTransientPgErrorCode('08000')).toBe(true);
+  });
+
+  it('returns true for 53* (insufficient_resources)', () => {
+    // 53100: disk_full, 53200: out_of_memory, 53300: too_many_connections
+    expect(isTransientPgErrorCode('53100')).toBe(true);
+    expect(isTransientPgErrorCode('53200')).toBe(true);
+    expect(isTransientPgErrorCode('53300')).toBe(true);
+  });
+
+  it('returns true for 57P0* (operator_intervention — covers Neon idle-reconnect 57P01)', () => {
+    // Neon raises 57P01 (admin_shutdown) when its serverless control plane
+    // recycles a compute. Without this we'd 500 every cold-path delete.
+    expect(isTransientPgErrorCode('57P01')).toBe(true);
+    expect(isTransientPgErrorCode('57P02')).toBe(true);
+    expect(isTransientPgErrorCode('57P03')).toBe(true);
+    expect(isTransientPgErrorCode('57P04')).toBe(true);
+  });
+
+  it('returns true for 40001 (serialization_failure)', () => {
+    expect(isTransientPgErrorCode('40001')).toBe(true);
+  });
+
+  it('returns true for 40P01 (deadlock_detected)', () => {
+    expect(isTransientPgErrorCode('40P01')).toBe(true);
+  });
+
+  it('returns false for non-transient classes (constraint, syntax, permission)', () => {
+    // 23503: foreign_key_violation, 42601: syntax_error, 42501: insufficient_privilege
+    expect(isTransientPgErrorCode('23503')).toBe(false);
+    expect(isTransientPgErrorCode('42601')).toBe(false);
+    expect(isTransientPgErrorCode('42501')).toBe(false);
+  });
+
+  it('returns false for empty string', () => {
+    expect(isTransientPgErrorCode('')).toBe(false);
+  });
+
+  it('does not match non-57P0 codes that share the 57 prefix', () => {
+    // 57014 (query_canceled) is in class 57 but not 57P0; we exclude it
+    // because it usually means the client cancelled, not a transient
+    // server-side fault.
+    expect(isTransientPgErrorCode('57014')).toBe(false);
+  });
+});
+
 describe('classifyDbError', () => {
   it('maps Postgres 08* (connection-class) codes to 503 retry', async () => {
     const r = classifyDbError({ code: '08006' }, 'inc-1');
@@ -83,7 +135,31 @@ describe('classifyDbError', () => {
     expect(body).toEqual({ error: 'database_unavailable' });
   });
 
-  it('maps non-08 PG codes (e.g. constraint violations) to 500 with incident_id', async () => {
+  it('maps Neon 57P01 (operator_intervention / idle reconnect) to 503 retry', async () => {
+    // Round 2 review flagged that Neon's idle-reconnect was being mis-classified
+    // as a 500 corruption error.
+    const r = classifyDbError({ code: '57P01' }, 'inc-neon');
+    expect(r.status).toBe(503);
+    const body = await r.json();
+    expect(body).toEqual({ error: 'database_unavailable' });
+  });
+
+  it('maps 40001 (serialization_failure) to 503 retry', async () => {
+    const r = classifyDbError({ code: '40001' }, 'inc-ser');
+    expect(r.status).toBe(503);
+  });
+
+  it('maps 40P01 (deadlock_detected) to 503 retry', async () => {
+    const r = classifyDbError({ code: '40P01' }, 'inc-dl');
+    expect(r.status).toBe(503);
+  });
+
+  it('maps 53200 (out_of_memory) to 503 retry', async () => {
+    const r = classifyDbError({ code: '53200' }, 'inc-oom');
+    expect(r.status).toBe(503);
+  });
+
+  it('maps non-transient PG codes (e.g. constraint violations) to 500 with incident_id', async () => {
     const r = classifyDbError({ code: '23503' }, 'inc-2');
     expect(r.status).toBe(500);
     const body = (await r.json()) as { error: string; incident_id: string | null };
