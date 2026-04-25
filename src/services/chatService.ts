@@ -921,16 +921,14 @@ class ChatService {
         stream: true,
       };
 
-      // Mode-conditional top-level cache_control (per v2 spec, Subtask 5):
-      // - Chat: top-level automatic caching of the growing conversation PLUS
-      //   the explicit system-block breakpoint above. Uses 2 of 4 breakpoint
-      //   slots; history hits at 0.1× input rate after the first turn.
-      // - Generate: explicit system-block only. Top-level would write 1.25×
-      //   the full mutating payload (PDFs, graph, edit instructions) on every
-      //   one-shot call — cost outweighs benefit when there's no repeat turn.
-      if (mode === 'chat') {
-        requestBody.cache_control = { type: 'ephemeral' };
-      }
+      // Top-level cache_control set unconditionally. Generate seeds a
+      // chat-mode continuation (ChatInterface.tsx:2331-2333 flips mode
+      // to 'chat' with the generation as turn 1), so its payload becomes
+      // the cache prefix for the first chat follow-up. Net win: generate
+      // writes once at 1.25×, the next chat turn reads at 0.1×, instead
+      // of paying 1× then 1.25× without the prefix. Loses only if the
+      // user idles >5min between generate and first chat turn (cache TTL).
+      requestBody.cache_control = { type: 'ephemeral' };
 
       // Some models accept an output_config.effort; others reject the field.
       // Capability flag lives in shared/pricing.ts so it stays in sync with
