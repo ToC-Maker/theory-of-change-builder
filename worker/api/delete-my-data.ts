@@ -428,6 +428,19 @@ export async function handler(
       // owns anything, which is a privacy regression. Surface as an
       // incident so the operator can chase it manually.
       console.error('[delete-my-data] BYOK delete failed (post-cascade):', e);
+      // Mirror the main cascade catch: transition the audit row to a failure
+      // incident so the operator sees what went wrong instead of finding a
+      // pending-files row dangling. Gated on userFileIds.length > 0 because
+      // that's the only path that inserted the audit row in the first place
+      // (recordCascadeFailure is UPDATE-only and would silently no-op
+      // otherwise).
+      try {
+        if (userFileIds.length > 0) {
+          await recordCascadeFailure(sql, incidentId, userId, e);
+        }
+      } catch (auditErr) {
+        console.error('[delete-my-data] BYOK audit-row failure transition also failed:', auditErr);
+      }
       return classifyDbError(e, incidentId);
     }
   }
@@ -440,9 +453,13 @@ export async function handler(
   // up).
   //
   // Skip when ANTHROPIC_API_KEY is unset (test/local-dev) — local rows are
-  // already gone so it's not a privacy regression for the CI/dev path.
-  if (env.ANTHROPIC_API_KEY && userFileIds.length > 0) {
-    const apiKey = env.ANTHROPIC_API_KEY;
+  // already gone so it's not a privacy regression for the CI/dev path. The
+  // response shape distinguishes "fan-out scheduled" from "fan-out skipped"
+  // via the `remote_delete_disabled` flag, so the UI can avoid claiming
+  // "queued for remote deletion" when no fan-out actually happened.
+  const remoteDeleteEnabled = Boolean(env.ANTHROPIC_API_KEY) && userFileIds.length > 0;
+  if (remoteDeleteEnabled) {
+    const apiKey = env.ANTHROPIC_API_KEY as string;
     ctx.waitUntil(
       (async () => {
         const failed = await fanOutAnthropicDeletes(apiKey, userFileIds);
@@ -482,9 +499,14 @@ export async function handler(
         byok: byokDeleted,
       },
       // Number of file_ids whose Anthropic-side DELETE has not been
-      // confirmed at the time of response. If non-zero, a retry job will
-      // replay them off the audit row at error_id = incident_id.
-      files_pending_remote_delete: userFileIds.length,
+      // confirmed at the time of response. Zero when remote_delete_disabled
+      // is true (no fan-out to wait on); otherwise a retry job will replay
+      // failed entries off the audit row at error_id = incident_id.
+      files_pending_remote_delete: remoteDeleteEnabled ? userFileIds.length : 0,
+      // True when ANTHROPIC_API_KEY is unset (dev/test). The UI should NOT
+      // claim "queued for remote deletion" in that case since no fan-out
+      // happened.
+      remote_delete_disabled: !remoteDeleteEnabled && userFileIds.length > 0,
     }),
     { status: 200, headers },
   );
