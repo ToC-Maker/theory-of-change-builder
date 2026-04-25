@@ -1,45 +1,8 @@
-// DELETE /api/my-data — GDPR Art. 17 erasure for both authenticated and
-// anonymous users. Triggered by the "Delete all my data" button in the
-// settings panel.
-//
-// What this endpoint does (see CLAUDE.md C6 task brief for the full spec):
-//
-//   1. Resolve identity:
-//        - JWT present  → authenticated user (sub from verifyToken)
-//        - else         → anon actor from `tocb_actor_id` cookie
-//          (resolveAnonActor)
-//   2. Find sole-owned charts (no other-user activity in chart_permissions /
-//      chart_files / logging_sessions) and delete them. Cascade rules:
-//        - chart_files: ON DELETE CASCADE
-//        - chart_permissions: ON DELETE CASCADE
-//        - logging_sessions/messages/snapshots: chart_id ON DELETE SET NULL
-//   3. Find collab-edited charts (anything that was NOT sole-owned) and
-//      orphan them: UPDATE charts SET user_id = NULL.
-//   4. Snapshot the user's chart_files file_ids before SQL DELETE so we can
-//      fan out Anthropic Files API DELETEs via ctx.waitUntil (concurrency-6
-//      pattern from chart-files.ts).
-//   5. DELETE the user's logging rows directly (logging_messages,
-//      logging_snapshots, logging_sessions, logging_errors,
-//      logging_preferences). The session DELETE itself cascades to leftover
-//      messages/snapshots; the explicit user-id DELETEs catch rows whose
-//      session is owned by someone else (rare but possible).
-//   6. DELETE chart_files / chart_permissions WHERE user_id = ? — the
-//      previous steps' CASCADE only ran on sole-owned charts; user-uploaded
-//      files and permissions on collab-edited charts also have to go.
-//   7. (auth only) DELETE user_byok_keys row. Zero-then-delete inside a
-//      transaction mirrors byok-key.ts so encrypted blob doesn't linger.
-//   8. KEEP user_api_usage. Anti-abuse cap is processed under a separate
-//      Art 6(1)(f) basis (LIA §1B) — explicitly carved out as no-opt-out.
-//   9. Cookie hygiene:
-//        - clear  tocb_anon       (Turnstile session)
-//        - clear  tocb_auth_link  (auth-sub binding)
-//        - KEEP   tocb_actor_id   (so the anon cap stays attached to the
-//                                  same browser even after deletion)
-//
-// Cascade-order rationale: charts → user_byok_keys → cookie clears. The
-// chart deletes happen first so the FK CASCADEs do most of the cleanup
-// "for free"; the manual DELETEs after just sweep up rows attached to
-// charts we orphaned (collab-edited path).
+// DELETE /api/my-data — GDPR Art. 17 erasure. Identity dispatch (JWT → auth
+// sub, else `tocb_actor_id` cookie → anon actor); cascade-first cleanup
+// (sole-owned charts hard-deleted, collab-edited charts orphaned to
+// user_id=NULL); user_api_usage carved out under a separate Art 6(1)(f)
+// basis (LIA §1B) as anti-abuse, no-opt-out.
 
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
@@ -50,20 +13,10 @@ import { resolveAnonActor } from '../_shared/anon-id';
 // Cookie-clearing helpers (exported for unit tests).
 // ---------------------------------------------------------------------------
 
-/**
- * Cookies we erase as part of the data-delete flow. Matches the ones the
- * Worker mints itself (tocb_anon via verify-turnstile, tocb_auth_link via
- * anthropic-stream / resolveActor). NOT include: `tocb_actor_id` — see
- * COOKIES_TO_PRESERVE_ON_DATA_DELETE.
- */
 export const COOKIES_TO_CLEAR_ON_DATA_DELETE = ['tocb_anon', 'tocb_auth_link'] as const;
 
-/**
- * Cookies we deliberately leave alone. The anon-cap row in user_api_usage is
- * preserved under a separate Art 6(1)(f) basis (anti-abuse, no-opt-out per
- * LIA §1B) — clearing the cookie that keys into it would silently mint a
- * fresh cap for the same browser, defeating the carve-out.
- */
+// Preserved deliberately: clearing tocb_actor_id would silently mint a fresh
+// anon cap for the same browser, defeating the user_api_usage carve-out.
 export const COOKIES_TO_PRESERVE_ON_DATA_DELETE = ['tocb_actor_id'] as const;
 
 // Allow the safe character class only — names go straight into a
@@ -75,15 +28,10 @@ const SAFE_COOKIE_NAME_RE = /^[A-Za-z0-9_\-.]+$/;
 // have. UTC literal so we don't depend on the runtime's tz.
 const EPOCH_GMT = 'Thu, 01 Jan 1970 00:00:00 GMT';
 
-/**
- * Build a Set-Cookie header value that erases `name` from the browser.
- *
- * RFC 6265 §3.1: Setting a cookie with `Max-Age=0` (or an `Expires` in the
- * past) causes the user agent to delete the cookie. We send both because
- * some old browsers honour only one. Path/Secure/HttpOnly/SameSite mirror
- * the attributes of the live cookies so the browser's "matching cookie"
- * lookup actually finds and overwrites the right entry.
- */
+// RFC 6265 §3.1: Max-Age=0 OR Expires-in-past deletes a cookie. Send both so
+// old browsers that only honour one still drop it. Path/Secure/HttpOnly/
+// SameSite must mirror the live cookies' attributes so the browser matches
+// and overwrites the right entry.
 export function buildExpiredCookieHeader(name: string): string {
   if (!SAFE_COOKIE_NAME_RE.test(name)) {
     throw new Error(`invalid cookie name: ${JSON.stringify(name)}`);
@@ -91,11 +39,6 @@ export function buildExpiredCookieHeader(name: string): string {
   return `${name}=; Path=/; Max-Age=0; Expires=${EPOCH_GMT}; Secure; HttpOnly; SameSite=Lax`;
 }
 
-/**
- * Set-Cookie header values for every cookie listed in
- * `COOKIES_TO_CLEAR_ON_DATA_DELETE`. Caller appends each one to the outbound
- * response.
- */
 export function buildClearedCookieHeaders(): string[] {
   return COOKIES_TO_CLEAR_ON_DATA_DELETE.map(buildExpiredCookieHeader);
 }
@@ -182,7 +125,11 @@ async function resolveIdentity(request: Request, env: Env): Promise<IdentityResu
       return {
         ok: false,
         response: Response.json(
-          { ok: true, deleted: { charts: 0, files: 0, byok: false }, no_data: true },
+          {
+            ok: true,
+            deleted: { charts_hard_deleted: 0, charts_orphaned: 0, files: 0, byok: false },
+            no_data: true,
+          },
           { status: 200 },
         ),
       };
@@ -320,16 +267,14 @@ export async function handler(
         sql`DELETE FROM user_byok_keys WHERE user_id = ${userId}`,
       ]);
     } else {
-      // Anon path: same as auth minus user_byok_keys (anon users can't store
-      // BYOK; the table is keyed on auth0 sub) and minus logging_preferences
-      // (also keyed on auth sub). Charts created by anon users have user_id
-      // NULL by default, so soleOwnedIds is typically empty for anon. The
-      // only way an anon user_id ends up on a chart is via a prior auth
-      // session that's since logged out (tocb_auth_link → still resolves to
-      // the auth sub). In that fall-through case the anon path here would
-      // resolve to the auth sub via tocb_auth_link, and we'd take the auth
-      // branch. So this branch usually only deletes logging rows + nothing
-      // chart-side.
+      // Anon path: skips user_byok_keys and logging_preferences (both keyed on
+      // auth sub). userId here can be either `anon-<uuid>` (no auth-link
+      // cookie) OR an auth sub (resolveAnonActor returns the linked sub when
+      // tocb_auth_link verifies). The post-logout case still routes here —
+      // not to the auth branch — because resolveIdentity hard-codes
+      // authenticated=false on this path. That gates BYOK delete behind a
+      // fresh JWT, mirroring the BYOK-key endpoint, so a stale auth-link
+      // cookie can never trigger a BYOK wipe.
       await sql.transaction([
         soleOwnedIds.length > 0
           ? sql`DELETE FROM charts WHERE id = ANY(${soleOwnedIds}::text[]) AND user_id = ${userId}`
