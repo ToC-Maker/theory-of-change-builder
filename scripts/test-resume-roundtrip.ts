@@ -74,13 +74,13 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const ANTHROPIC_BETA = 'files-api-2025-04-14';
 const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 
-// Reliable thinking-eliciting prompt: a multi-step arithmetic question phrased
-// to encourage chain-of-thought rather than a one-shot answer. If the model
-// elides thinking on a given run, exit with code 2 and rerun — that's a
-// stochastic miss, not a real failure.
+// Thinking-eliciting prompt: a logic puzzle with multiple constraints that
+// resists pattern-matching, so adaptive thinking reliably engages. If the
+// model elides thinking on a given run, exit with code 2 and rerun (stochastic
+// miss, not a real failure).
 const FIRST_USER_PROMPT =
-  'Calculate 17 * 23 step by step in your head, then briefly explain your method.';
-const FOLLOWUP_USER_PROMPT = 'Now apply the same method to 19 * 27. Just the answer please.';
+  'Five people (A, B, C, D, E) sit in a row. A is not at either end. B is two seats to the left of E. C is somewhere to the right of B. D is adjacent to A. Where does each person sit? Show your reasoning.';
+const FOLLOWUP_USER_PROMPT = 'Now swap the positions of A and B. What is the new seating order?';
 
 // --- Internal accumulator (mirrors src/services/streamBlockAccumulator.ts) ---
 //
@@ -272,10 +272,11 @@ async function streamFirstTurn(): Promise<AssistantBlock[]> {
   const body = {
     model: MODEL,
     max_tokens: 4096,
-    // Match production: adaptive thinking with summarized display. The
-    // signature is generated regardless of display mode; this just affects
-    // the verbosity of the visible thinking text.
+    // Match production: adaptive thinking with summarized display + xhigh
+    // effort so the model actually engages thinking on the probe's prompt
+    // (adaptive without effort is conservative and frequently no-ops).
     thinking: { type: 'adaptive', display: 'summarized' },
+    output_config: { effort: 'xhigh' },
     messages: [{ role: 'user', content: FIRST_USER_PROMPT }],
     stream: true,
   };
@@ -348,6 +349,7 @@ async function postReplayTurn(priorBlocks: AssistantBlock[]): Promise<Response> 
     model: MODEL,
     max_tokens: 1024,
     thinking: { type: 'adaptive', display: 'summarized' },
+    output_config: { effort: 'xhigh' },
     messages: [
       { role: 'user', content: FIRST_USER_PROMPT },
       { role: 'assistant', content: priorBlocks },
