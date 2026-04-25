@@ -804,7 +804,30 @@ class ChatService {
                     contentBlocks,
                   );
                 } catch (callbackErr) {
-                  console.error('[ChatService] onComplete callback error:', callbackErr);
+                  // A throw from the React onComplete handler (e.g. setState
+                  // on an unmounted component, exception inside graphEdits)
+                  // would otherwise leave the user staring at a "complete"
+                  // stream that never rendered. Route it through the standard
+                  // error logging path so the failure reaches logging_errors
+                  // server-side, the same way HTTP/transport failures do.
+                  const cbErr =
+                    callbackErr instanceof Error ? callbackErr : new Error(String(callbackErr));
+                  console.error('[ChatService] onComplete callback error:', cbErr);
+                  loggingService.reportError({
+                    error_name: `onCompleteCallback:${cbErr.name}`,
+                    error_message: cbErr.message,
+                    stack_trace: cbErr.stack,
+                    request_metadata: {
+                      model,
+                      mode,
+                      messageCount: messages.length,
+                      webSearchEnabled,
+                      extendedThinkingEnabled,
+                      contentBlockCount: contentBlocks.length,
+                      editInstructionCount: editInstructions.length,
+                      ...(ctx ? ctx.toMetadata().streaming : {}),
+                    },
+                  });
                 }
                 return;
               }

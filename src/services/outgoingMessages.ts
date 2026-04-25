@@ -72,6 +72,17 @@ export function buildOutgoingMessages(
     if (blocks && blocks.length > 0) {
       return { role: 'assistant', content: blocks };
     }
+    if (blocks && blocks.length === 0) {
+      // Distinguishes "blocks were captured but all got dropped" from "legacy
+      // turn (no content_blocks field at all)". The text fallback is correct
+      // either way (Anthropic 400s on empty assistant arrays), but the empty-
+      // array case means we lost signed thinking / tool pairs to the orphan
+      // filter and the next turn won't include them. Worth surfacing.
+      console.warn(
+        '[outgoingMessages] assistant turn has empty content_blocks; falling back to text content',
+        { messageId: msg.id, content: msg.content.slice(0, 100) },
+      );
+    }
     return { role: 'assistant', content: msg.content };
   });
 }

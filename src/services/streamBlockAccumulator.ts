@@ -50,6 +50,9 @@ export class StreamBlockAccumulator {
   // sort numerically when emitting because index values can arrive out of
   // order in theory (worker sometimes interleaves polling).
   private readonly blocks = new Map<number, InternalBlock>();
+  // Per-instance one-shot warning gates so a stream that emits 50 unknown
+  // blocks of the same type only logs once rather than spamming devtools.
+  private readonly warnedUnknownTypes = new Set<string>();
 
   handleEvent(event: RawSseEvent): void {
     const idx = typeof event.index === 'number' ? event.index : -1;
@@ -88,8 +91,18 @@ export class StreamBlockAccumulator {
           tool_use_id,
           content: cb.content,
         });
+      } else {
+        // Unknown block type. Best-effort: drop and warn (once per type per
+        // session) so a future Anthropic block kind we don't model surfaces
+        // in devtools instead of disappearing silently.
+        const typeKey = typeof cbType === 'string' ? cbType : `<${typeof cbType}>`;
+        if (!this.warnedUnknownTypes.has(typeKey)) {
+          this.warnedUnknownTypes.add(typeKey);
+          console.warn('[streamBlockAccumulator] unknown content block type; ignoring', {
+            type: typeKey,
+          });
+        }
       }
-      // Unknown block types are silently ignored; the accumulator is best-effort.
       return;
     }
 
@@ -140,8 +153,14 @@ export class StreamBlockAccumulator {
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             existing.input = parsed as Record<string, unknown>;
           }
-        } catch {
-          // Malformed JSON: input stays null; emit-time drop.
+        } catch (e) {
+          // Malformed JSON: input stays null; emit-time drop. Warn so the
+          // dropped tool block (and its now-orphaned tool_result) doesn't
+          // disappear from history without a trace.
+          console.warn(
+            '[streamBlockAccumulator] failed to parse server_tool_use input_json; block will drop on emit',
+            { idx, partial: existing.input_json_raw.slice(0, 200), error: String(e) },
+          );
         }
       }
       return;

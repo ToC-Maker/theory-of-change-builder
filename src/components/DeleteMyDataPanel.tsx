@@ -49,6 +49,11 @@ interface DeleteResponse {
   // response. The Worker queues them for an out-of-band retry; UI words this
   // honestly rather than claiming they're already gone.
   files_pending_remote_delete?: number;
+  // Set when the Worker has no ANTHROPIC_API_KEY configured (test/local-dev)
+  // and therefore cannot fan out remote DELETEs at all. Local rows are still
+  // gone; the file rows on Anthropic's side persist until manual cleanup.
+  // We surface this honestly rather than claim a queue that won't drain.
+  remote_delete_disabled?: boolean;
   // Server-side incident id when the cascade itself errored. Returned with
   // 5xx so the user has something to quote when reporting.
   incident_id?: string | null;
@@ -75,6 +80,7 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DeleteSummary | null>(null);
   const [filesPending, setFilesPending] = useState(0);
+  const [remoteDeleteDisabled, setRemoteDeleteDisabled] = useState(false);
   const [noData, setNoData] = useState(false);
 
   const canSubmit = confirmation === CONFIRM_PHRASE && !submitting;
@@ -124,6 +130,7 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
       } else {
         setResult(data.deleted ?? null);
         setFilesPending(data.files_pending_remote_delete ?? 0);
+        setRemoteDeleteDisabled(data.remote_delete_disabled === true);
       }
 
       onDeleted?.();
@@ -172,7 +179,11 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
               <>
                 {', '}
                 {result!.files} attached file{result!.files === 1 ? '' : 's'} cleared locally
-                {filesPending > 0 ? ' (queued for remote deletion at Anthropic)' : ''}
+                {remoteDeleteDisabled
+                  ? ' (remote-side delete unavailable)'
+                  : filesPending > 0
+                    ? ' (queued for remote deletion at Anthropic)'
+                    : ''}
               </>
             ) : null}
             .{isAuthenticated ? ' Signing you out…' : ''}
