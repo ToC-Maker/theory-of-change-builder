@@ -142,11 +142,13 @@ The following safeguards are implemented to protect data subjects' rights:
 
 4. **Deletion on request:** Users can request deletion of their data at any time. Since sessions are linked to Auth0 user IDs, data associated with an authenticated user can be identified and removed. Anonymous visitors can effectively force deletion by clearing cookies and local storage: once `tocb_actor_id`, `tocb_auth_link`, and `tocb_anon` are gone from the browser, the spend row is unreferenceable and will be garbage-collected.
 
-5. **Access controls:** Logging and cost-accounting data are stored in the same secured database as chart data, subject to the same access controls and infrastructure security measures.
+5. **In-UI account deletion:** Users (signed-in and anonymous) can immediately erase all data tied to their identity via the "Delete all my data" affordance in the account / Data & Privacy menu. This is in addition to the email channel for partial-erasure requests. The affordance preserves the per-visitor anti-abuse counter (`user_api_usage`), which is processed under a separate legal basis (see §1B) and is not opt-out-able.
 
-6. **Transparency:** The privacy policy clearly describes what data is collected, why, and how to opt out. The privacy popup shown to new users explains the AI-improvement data collection and offers an opt-out checkbox.
+6. **Access controls:** Logging and cost-accounting data are stored in the same secured database as chart data, subject to the same access controls and infrastructure security measures.
 
-7. **No third-party sharing:** Logging and cost-accounting data are used solely internally (AI improvement, cap enforcement, security diagnostics) and are not shared with third parties.
+7. **Transparency:** The privacy policy clearly describes what data is collected, why, and how to opt out. The privacy popup shown to new users explains the AI-improvement data collection and offers an opt-out checkbox.
+
+8. **No third-party sharing:** Logging and cost-accounting data are used solely internally (AI improvement, cap enforcement, security diagnostics) and are not shared with third parties.
 
 ## **5\. Outcome**
 

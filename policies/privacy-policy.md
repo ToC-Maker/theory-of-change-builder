@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** 23 April 2026
+**Effective date:** 25 April 2026
 
 **Product:** Theory of Change Builder (the "Service", "ToC Builder", the "Website")
 
@@ -53,7 +53,7 @@ We store your user ID and email address in our own database for access control a
 We collect usage data to evaluate and improve our AI assistant, unless you opt out. This includes:
 
 - **Session metadata:** A randomly generated session ID, chart ID, your user ID (if logged in), browser user agent, and timestamps.  
-- **Chat messages:** The prompts you send to the AI and the AI's responses, including token usage counts. Messages are stored in association with the chart they relate to. If logged in, your user ID is attached.  
+- **Chat messages:** The prompts you send to the AI and the AI's responses, including token usage counts, plus the structured content blocks (text, model reasoning ("thinking"), tool invocations, and tool results) for analytics fidelity. Messages are stored in association with the chart they relate to. If logged in, your user ID is attached.  
 - **Graph snapshots:** The state of your graph after each edit (manual, AI, or undo/redo). Snapshots are stored in temporal sequence, enabling reconstruction of the editing history. For AI edits, we also store the edit instructions, whether the edit succeeded, any error details, and a link to the specific chat message that triggered the edit. If logged in, your user ID is attached.
 - **Error reports:** When an error occurs during AI interactions, we log the error type and message, HTTP status code, a truncated stack trace (up to 4 KB), your browser user agent, and request metadata (such as the AI model used and features enabled). If logged in, your user ID is attached; the relevant chart ID and session ID are included when available.
 
@@ -120,7 +120,7 @@ We and our processors may process data in countries outside your own, including 
 | Customer Content | Retained until you (or your organisation) delete it or ask us to delete it. |
 | Account Data | Retained while your account exists. |
 | Cost accounting (`user_api_usage`, `global_monthly_usage`) | Retained while your account exists or, for anonymous visitors, until the `tocb_actor_id` cookie expires (1 year with no further activity) or you clear cookies, after which the row has no way to be looked up again. Deleted on account deletion or erasure request. |
-| AI Improvement Data (server-side logging) | Retained for up to **24 months**, after which it is automatically deleted. |
+| AI Improvement Data (server-side logging, including structured content blocks) | Retained for up to **24 months**, after which it is automatically deleted. |
 | Messages API content at Anthropic (prompts and responses) | **7 days** at Anthropic (reduced from 30 days on 14 September 2025). |
 | Files API uploads at Anthropic | Retained until you delete the file, delete the chart, or submit a data erasure request (see Section 8). Files are not subject to the 7-day Messages retention. |
 | Flagged content at Anthropic (trust-and-safety review) | Up to **2 years** for flagged content, up to **7 years** for classifier scores, per Anthropic's policies. Applies even under zero-data-retention arrangements. |
@@ -158,7 +158,9 @@ Depending on your location, you may have rights to access, rectify, erase, restr
 
 **To opt out of AI improvement data collection:** Disable usage data sharing in your account privacy settings. This takes effect immediately and stops all usage data collection. You do not need to provide a reason.
 
-**To request data export or deletion:** Email [theoryofchangebuilder@gmail.com](mailto:theoryofchangebuilder@gmail.com) with your request. Include your user ID (if logged in) or the edit token/URL of your chart so we can locate your data. We will respond within 30 days.
+**Delete all your data:** Click "Delete all my data" in the Data & Privacy section of your account menu. The button is visible whether or not you are signed in. It cascade-deletes your charts, chat history, uploaded files (including the copies held at Anthropic), and, for signed-in users, your stored Anthropic API key. Anonymous visitors can use the same button to wipe data tied to their browser. Charts you have shared with others, where collaborators have edited them, become orphan and remain accessible via the edit link to whoever holds it; only your association is removed. Your usage limit (the per-browser anti-abuse counter described in Section 2B) is preserved; to reset that, sign out and clear cookies.
+
+**To request data export or partial deletion:** Email [theoryofchangebuilder@gmail.com](mailto:theoryofchangebuilder@gmail.com) with your request. Include your user ID (if logged in) or the edit token/URL of your chart so we can locate your data. The email channel is available for partial, cross-browser, or customer-support cases that the in-UI button does not cover. We will respond within 30 days.
 
 If we act on behalf of your organisation, please contact them first; we will support them in fulfilling your request.
 
@@ -176,16 +178,16 @@ We use browser storage for functional purposes.
 
 **Cookies (set by our server):**
 
-- `tocb_actor_id`: HttpOnly, Secure, SameSite=Lax. Max-Age 1 year. Stores a random UUID minted once per browser, as described in Section 2B. This is the key we use to attribute free-tier AI spend to the same visitor across requests. Not derived from your IP or any other personal data.
-- `tocb_auth_link`: HttpOnly, Secure, SameSite=Lax. Max-Age 1 year. HMAC-signed with a server-side secret; payload records the Auth0 user ID this browser has been signed in as. Consulted only when you are signed out, to keep attributing your AI spend to your authenticated cap row (prevents a "log out to reset the cap" loophole). Refreshed on every successful sign-in.
-- `tocb_anon`: HttpOnly, Secure, SameSite=Lax. Max-Age 24 hours. Proves you solved a Cloudflare Turnstile challenge. Independent of the spend identifier; when this expires we ask you to re-solve the widget, but your spend counter is unaffected.
+- `tocb_actor_id`: HttpOnly, Secure, SameSite=Lax. Max-Age 1 year. Stores a random UUID minted once per browser, as described in Section 2B. This is the key we use to attribute free-tier AI spend to the same visitor across requests. Not derived from your IP or any other personal data. Preserved when you use "Delete all my data" (it anchors the anti-abuse counter); to clear it, use your browser's cookie controls.
+- `tocb_auth_link`: HttpOnly, Secure, SameSite=Lax. Max-Age 1 year. HMAC-signed with a server-side secret; payload records the Auth0 user ID this browser has been signed in as. Consulted only when you are signed out, to keep attributing your AI spend to your authenticated cap row (prevents a "log out to reset the cap" loophole). Refreshed on every successful sign-in. Cleared when you use "Delete all my data".
+- `tocb_anon`: HttpOnly, Secure, SameSite=Lax. Max-Age 24 hours. Proves you solved a Cloudflare Turnstile challenge. Independent of the spend identifier; when this expires we ask you to re-solve the widget, but your spend counter is unaffected. Cleared when you use "Delete all my data".
 
 **Local storage (stays on your device):**
 
 - **Authentication:** Login tokens and return-path after authentication
 - **Privacy preferences:** Privacy policy acceptance status, usage data sharing preference
 - **Logging session:** Session identifiers for active usage logging sessions
-- **Chat history:** Your AI assistant conversation history, stored per chart so messages persist across page reloads
+- **Chat history:** Your AI assistant conversation history, stored per chart so messages persist across page reloads. Includes signed model reasoning blocks alongside text, kept locally on your device for chat continuity. No new data is transmitted to our servers as a result of caching these blocks locally.
 - **Graph backups:** Local copies of your chart data for recovery purposes
 - **User settings:** Custom AI system prompts, recently edited chart metadata, tutorial completion status
 - **BYOK spend counters:** If you use Bring Your Own Key, a running total of spend per chart and per key last-4 digits. Stored locally only; cleared when you remove the key or delete the chart.
