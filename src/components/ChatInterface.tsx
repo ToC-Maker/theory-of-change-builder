@@ -18,7 +18,6 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
-import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
@@ -36,7 +35,6 @@ import {
 } from '../utils/cost';
 import {
   ChevronLeftIcon,
-  Cog6ToothIcon,
   MagnifyingGlassIcon,
   ChevronDownIcon,
   PaperAirplaneIcon,
@@ -621,16 +619,6 @@ export function ChatInterface({
     [generateAttachedChips],
   );
 
-  // First-upload privacy notice. Persisted across sessions via localStorage
-  // Settings modal state
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [customSystemPrompt, setCustomSystemPrompt] = useState<string>(
-    localStorage.getItem('customSystemPrompt') || '',
-  );
-  const [tempSystemPrompt, setTempSystemPrompt] = useState(
-    localStorage.getItem('customSystemPrompt') || systemPromptContent,
-  );
-
   // Get selected nodes info from graphData and highlightedNodes
   const selectedNodes = React.useMemo(() => {
     if (!graphData || !highlightedNodes.size) return [];
@@ -655,19 +643,6 @@ export function ChatInterface({
 
     return nodes;
   }, [graphData, highlightedNodes]);
-
-  // Initialize temp prompt when modal opens
-  useEffect(() => {
-    if (showSettingsModal) {
-      const promptToUse = customSystemPrompt.trim() ? customSystemPrompt : systemPromptContent;
-      console.log('Setting temp prompt:', {
-        customSystemPrompt,
-        systemPromptContent: systemPromptContent.substring(0, 100) + '...',
-        promptToUse: promptToUse.substring(0, 100) + '...',
-      });
-      setTempSystemPrompt(promptToUse);
-    }
-  }, [showSettingsModal, customSystemPrompt]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -790,14 +765,14 @@ export function ChatInterface({
     }
   }, [isCollapsed]);
 
-  // Save custom system prompt to localStorage when it changes
+  // Drop any legacy customSystemPrompt entry from localStorage (the
+  // settings UI that wrote it has been removed; we always use the
+  // bundled systemPromptContent now).
   useEffect(() => {
-    if (customSystemPrompt) {
-      localStorage.setItem('customSystemPrompt', customSystemPrompt);
-    } else {
+    if (localStorage.getItem('customSystemPrompt') !== null) {
       localStorage.removeItem('customSystemPrompt');
     }
-  }, [customSystemPrompt]);
+  }, []);
 
   // Close model dropdown when clicking outside
   useEffect(() => {
@@ -1057,10 +1032,6 @@ export function ChatInterface({
   useEffect(() => {
     graphDataRef.current = graphData;
   }, [graphData]);
-  const customSystemPromptRef = useRef(customSystemPrompt);
-  useEffect(() => {
-    customSystemPromptRef.current = customSystemPrompt;
-  }, [customSystemPrompt]);
 
   // Debounced input-cost estimate for the Chat composer. Mirrors the
   // request shape streamMessage assembles so the number reflects actual
@@ -1070,10 +1041,9 @@ export function ChatInterface({
   //     JSON appended to the draft (chatService.ts:546-557)
   //   - cache_control: ephemeral, defaulting to 5m TTL per Anthropic docs
   //
-  // Rate-limit hygiene: 600ms debounce + graphData/customSystemPrompt
-  // read via ref so graph nudges and rare prompt edits don't refire the
-  // effect. Tier 1 is 100 RPM; a continuously-typing user would otherwise
-  // fire ~100 RPM alone between pauses.
+  // Rate-limit hygiene: 600ms debounce + graphData read via ref so graph
+  // nudges don't refire the effect. Tier 1 is 100 RPM; a continuously-
+  // typing user would otherwise fire ~100 RPM alone between pauses.
   //
   // Cache accounting: count_tokens returns a flat input-token count with no
   // write-vs-read split. We approximate by timing the last assistant turn:
@@ -1142,8 +1112,7 @@ export function ChatInterface({
             ]
           : draftBody;
 
-      const baseSystemPrompt = customSystemPromptRef.current?.trim() || systemPromptContent;
-      const systemPrompt = `${baseSystemPrompt}\n\n${chatModePromptContent}`;
+      const systemPrompt = `${systemPromptContent}\n\n${chatModePromptContent}`;
       const historyForEstimate = messages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -1292,8 +1261,7 @@ export function ChatInterface({
           : ''
       }`;
 
-      const baseSystemPrompt = customSystemPromptRef.current?.trim() || systemPromptContent;
-      const systemPromptForEstimate = `${baseSystemPrompt}\n\n${generateModePromptContent}`;
+      const systemPromptForEstimate = `${systemPromptContent}\n\n${generateModePromptContent}`;
 
       setEstimatingCost(true);
       void (async () => {
@@ -1691,7 +1659,6 @@ export function ChatInterface({
         signal: abortControllerRef.current?.signal,
         model: selectedModel,
         webSearchEnabled,
-        customSystemPrompt,
         highlightedNodes,
         extendedThinkingEnabled: true,
         attachedFileIds,
@@ -2500,7 +2467,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         signal: abortControllerRef.current?.signal,
         model: selectedModel,
         webSearchEnabled,
-        customSystemPrompt,
         highlightedNodes,
         extendedThinkingEnabled: true,
         attachedFileIds: generateAttachedFileIds,
@@ -3315,15 +3281,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={() => {
-                            setShowSettingsModal(true);
-                          }}
-                          className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                          title="Settings"
-                        >
-                          <Cog6ToothIcon className="w-5 h-5" />
-                        </button>
-                        <button
                           onClick={() => chatFileInputRef.current?.click()}
                           className="p-2 rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                           title="Attach a file"
@@ -3423,72 +3380,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             </div>
           </div>
         </div>
-
-        {/* Settings Modal */}
-        {showSettingsModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
-              {/* Modal Header */}
-              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-800">Chat Settings</h2>
-                <button
-                  onClick={() => setShowSettingsModal(false)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <XMarkIcon className="w-6 h-6" />
-                </button>
-              </div>
-
-              {/* Modal Body */}
-              <div className="flex-1 overflow-y-auto px-6 py-4">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Custom System Prompt
-                    </label>
-                    <p className="text-xs text-gray-500 mb-2">
-                      Override the default system prompt with your own instructions.
-                    </p>
-                    <MDXEditorComponent
-                      markdown={tempSystemPrompt}
-                      onChange={(value) => setTempSystemPrompt(value)}
-                      placeholder="Enter your custom system prompt here..."
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Modal Footer */}
-              <div className="px-6 py-4 border-t border-gray-200 flex justify-between">
-                <button
-                  onClick={() => {
-                    setTempSystemPrompt(systemPromptContent);
-                  }}
-                  className="px-4 py-2 text-sm text-red-600 hover:text-red-700 transition-colors"
-                >
-                  Reset to Default
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowSettingsModal(false)}
-                    className="px-4 py-2 text-sm text-gray-600 hover:text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => {
-                      setCustomSystemPrompt(tempSystemPrompt);
-                      setShowSettingsModal(false);
-                    }}
-                    className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
-                  >
-                    Save Changes
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </>
   );

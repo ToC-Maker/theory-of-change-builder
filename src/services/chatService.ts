@@ -202,7 +202,6 @@ export type StreamMessageOptions = {
   signal?: AbortSignal;
   model?: string;
   webSearchEnabled?: boolean;
-  customSystemPrompt?: string;
   highlightedNodes?: Set<string> | string[];
   extendedThinkingEnabled?: boolean;
   attachedFileIds?: string[];
@@ -785,7 +784,6 @@ class ChatService {
       signal,
       model = 'claude-opus-4-7',
       webSearchEnabled = false,
-      customSystemPrompt,
       highlightedNodes,
       extendedThinkingEnabled = false,
       attachedFileIds = [],
@@ -873,19 +871,11 @@ class ChatService {
         }
       }
 
-      // Use custom system prompt if provided, otherwise use default
-      let baseSystemPrompt: string;
-      if (customSystemPrompt?.trim()) {
-        baseSystemPrompt = customSystemPrompt;
-      } else {
-        baseSystemPrompt = systemPromptContent;
-      }
-
-      // Combine with mode-specific prompt
+      // Combine the bundled system prompt with the mode-specific suffix.
       const systemPrompt =
         mode === 'generate'
-          ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
-          : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
+          ? `${systemPromptContent}\n\n${generateModePromptContent}`
+          : `${systemPromptContent}\n\n${chatModePromptContent}`;
 
       // Build messages. For every user turn that had files attached —
       // whether it's the message currently being sent (last index) or a
