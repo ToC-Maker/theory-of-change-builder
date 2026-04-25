@@ -2700,7 +2700,7 @@ export async function handler(
       }
 
       // Per-message analytics: populate logging_messages.content_blocks (raw
-      // assistant turn) and was_killed (kill-switch fired) so the analytics
+      // assistant turn) and was_killed (cost-cap kill fired) so the analytics
       // team can fork conversations from any point and replay via the
       // Messages API. UPDATE-only: the row was INSERTed by the client via
       // logging-saveMessage when the turn started; we just augment it here.
@@ -2710,13 +2710,62 @@ export async function handler(
       // have no server-side identity to key a preference against). Anonymous
       // requests are always written.
       //
-      // Skip when the blocks array is empty — e.g. a kill before any
-      // block_start arrived, or BYOK callers who don't pass a logging-message-
-      // id. The row's pre-existing `content` text column already covers the
-      // "no blocks captured" case.
+      // Two UPDATEs because was_killed and content_blocks have different
+      // applicability:
+      //   - was_killed must always be persisted when the row exists, including
+      //     when the kill fired before any content_block_start event arrived
+      //     (analyticsBlocks would be empty in that case).
+      //   - content_blocks is only worth writing when we actually captured
+      //     blocks — empty array writes destroy the pre-existing `content`
+      //     text column's information value for "no blocks captured" rows.
+      //
+      // was_killed semantically means "cost-cap kill fired" specifically, NOT
+      // any stream termination. The not_found_error interception path also
+      // sets teeCtx.killed.v (for flow control), but does not set
+      // killDiagnostic — so killDiagnostic is the authoritative cost-cap
+      // signal.
       if (loggingMessageId) {
         const optedOut = await isUserOptedOut(sql, actor.authenticated ? actorId : null);
         if (!optedOut) {
+          const wasKilledByCostCap = teeCtx.killDiagnostic !== null;
+          // Always-on: was_killed reflects whether the cost-cap kill fired,
+          // independent of how many content blocks were captured.
+          try {
+            await sql`
+              UPDATE logging_messages
+              SET was_killed = ${wasKilledByCostCap}
+              WHERE message_id = ${loggingMessageId}
+            `;
+          } catch (e) {
+            console.error('logging_messages was_killed update failed (non-fatal):', e);
+            try {
+              await sql`
+                INSERT INTO logging_errors (
+                  error_id, error_name, error_message, user_id, chart_id,
+                  request_metadata
+                )
+                VALUES (
+                  ${crypto.randomUUID()},
+                  'analytics_was_killed_update_failed',
+                  ${`logging_messages.was_killed update failed: ${e instanceof Error ? e.message : String(e)}`},
+                  ${actorId},
+                  ${chartId ?? null},
+                  ${JSON.stringify({
+                    logging_message_id: loggingMessageId,
+                    was_killed: wasKilledByCostCap,
+                    error_message: e instanceof Error ? e.message : String(e),
+                    deployment_host: requestUrl.hostname,
+                    fired_at_ms: Date.now(),
+                  })}
+                )
+                ON CONFLICT (error_id) DO NOTHING
+              `;
+            } catch (innerErr) {
+              console.error('was_killed-failure diagnostic insert also failed:', innerErr);
+            }
+          }
+
+          // Conditional: content_blocks only when we captured blocks.
           const analyticsBlocks = collectAssistantBlocksForAnalytics(
             teeCtx.streamingContent.blocks,
           );
@@ -2727,23 +2776,57 @@ export async function handler(
               // would normalize key ordering / whitespace / numbers, which
               // could break Anthropic signature verification.
               await sql`
-              UPDATE logging_messages
-              SET content_blocks = ${JSON.stringify(analyticsBlocks)},
-                  was_killed = ${teeCtx.killed.v}
-              WHERE message_id = ${loggingMessageId}
-            `;
+                UPDATE logging_messages
+                SET content_blocks = ${JSON.stringify(analyticsBlocks)}
+                WHERE message_id = ${loggingMessageId}
+              `;
             } catch (e) {
               console.error('logging_messages content_blocks update failed (non-fatal):', e);
+              // Mirror the reconcile-failure diagnostic pattern: persist a
+              // logging_errors row so silent analytics drift is visible. If
+              // this ALSO fails, fall through — outer console.error already
+              // captured the original.
+              try {
+                await sql`
+                  INSERT INTO logging_errors (
+                    error_id, error_name, error_message, user_id, chart_id,
+                    request_metadata
+                  )
+                  VALUES (
+                    ${crypto.randomUUID()},
+                    'analytics_content_blocks_update_failed',
+                    ${`logging_messages.content_blocks update failed: ${e instanceof Error ? e.message : String(e)}`},
+                    ${actorId},
+                    ${chartId ?? null},
+                    ${JSON.stringify({
+                      logging_message_id: loggingMessageId,
+                      block_count: analyticsBlocks.length,
+                      error_message: e instanceof Error ? e.message : String(e),
+                      deployment_host: requestUrl.hostname,
+                      fired_at_ms: Date.now(),
+                    })}
+                  )
+                  ON CONFLICT (error_id) DO NOTHING
+                `;
+              } catch (innerErr) {
+                console.error('content_blocks-failure diagnostic insert also failed:', innerErr);
+              }
             }
           }
         }
       }
 
-      // Persist reconcile output-source whenever message_delta never arrived.
-      // PR previews have no worker logs, so this is the only way to tell if
-      // the output-token estimator is doing its job (or silently falling back
-      // to the message_start placeholder and under-billing a whole turn).
-      if (!teeCtx.messageDeltaSeen) {
+      // Persist reconcile output-source whenever message_delta never arrived
+      // on a stream that should have completed cleanly. PR previews have no
+      // worker logs, so this is the only way to tell if the output-token
+      // estimator is doing its job (or silently falling back to the
+      // message_start placeholder and under-billing a whole turn).
+      //
+      // Gate on !killed.v: any kill (cost-cap OR not_found interception)
+      // tears the stream down before message_delta would naturally arrive,
+      // so its absence is expected, not a signal worth diagnosing. Without
+      // this gate every kill writes a noise row.
+      if (!teeCtx.killed.v && !teeCtx.messageDeltaSeen) {
         try {
           await sql`
           INSERT INTO logging_errors (
