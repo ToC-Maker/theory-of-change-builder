@@ -693,27 +693,19 @@ export function EditToolbar({
     loadExistingShareDataRef.current = loadExistingShareData;
   });
 
-  // Auto-generate or load share data when dropdown opens
+  // Auto-generate or load share data when dropdown opens. Don't reset
+  // shareData on close: the permissions-poll bootstrap effect re-fills it
+  // for owners regardless of dropdown state, and a "reset on close" branch
+  // here was producing a tight loop with that bootstrap (~400ms cadence,
+  // visible as a getChart spam after login). Stale shareData is fine — it's
+  // overwritten on the next open via loadExistingShareData.
   useEffect(() => {
     if (showShareDropdown && !shareData && !shareLoading) {
       if (currentEditToken) {
-        // If we have an edit token, load existing share data
         void loadExistingShareDataRef.current();
       } else {
-        // Otherwise, create new share links
         void handleShareRef.current();
       }
-    } else if (!showShareDropdown && shareData !== null) {
-      // Reset state when dropdown closes. Gate on shareData !== null so the
-      // effect doesn't churn re-renders via fresh `[]`/null setters every
-      // time an unrelated dep shifts while the dropdown is closed.
-      setShareData(null);
-      setShareError(null);
-      setCopiedField(null);
-      setShowPermissionsSection(false);
-      setPermissions([]);
-      setPermissionError(null);
-      setIsOwner(false);
     }
   }, [showShareDropdown, shareData, shareLoading, currentEditToken]);
 
