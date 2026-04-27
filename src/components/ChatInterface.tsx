@@ -427,7 +427,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
               // surrounding "text-white" bubble.
               'prose-headings:text-white prose-p:text-white prose-strong:text-white ' +
               'prose-em:text-white prose-li:text-white prose-code:text-white ' +
-              'prose-a:text-white prose-a:underline'
+              'prose-a:text-white prose-a:underline marker:text-white'
             }
           >
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
@@ -3228,9 +3228,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                      changed), `handleCostError` flips us back to this branch. */
                   <div className="space-y-2">
                     <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
-                      Solve the challenge below to verify you're human before sending a message. We
-                      do this once per 24 hours (or whenever your IP changes) to prevent abuse of
-                      the free tier.
+                      Solve the challenge below to verify you're human before sending a message.
                     </div>
                     <TurnstileWidget siteKey={TURNSTILE_SITE_KEY} onToken={handleTurnstileToken} />
                     {turnstileError && (
