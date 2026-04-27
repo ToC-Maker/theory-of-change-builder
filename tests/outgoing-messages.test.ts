@@ -113,7 +113,14 @@ describe('buildOutgoingMessages', () => {
       expect(reparsed[1].content[0].signature).toBe(sig);
     });
 
-    it('keeps server_tool_use + tool_result pair intact', () => {
+    it('strips server_tool_use + tool_result blocks (Anthropic strips them server-side anyway)', () => {
+      // When `web_search_20260209` is enabled, Anthropic auto-injects a
+      // `code_execution` orchestrator and emits nested web_searches with a
+      // `caller` field. Our accumulator drops `caller`, so on round-trip the
+      // structure looks like {code_exec, web_search, web_result, ...,
+      // code_exec_result} flat — and Anthropic 400s on the apparent
+      // unpaired code_execution. Strip server-tool blocks at the send
+      // boundary so the outgoing payload is always structurally valid.
       const messages: ChatMessage[] = [
         mkUser('search for cats'),
         mkAssistant({
@@ -138,21 +145,112 @@ describe('buildOutgoingMessages', () => {
       const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
       expect(out[1]).toEqual({
         role: 'assistant',
+        content: [{ type: 'text', text: 'found them' }],
+      });
+    });
+
+    it('strips code_execution wrapper + nested web_searches + results, keeps thinking + text', () => {
+      // Reproduces the actual production crash: killed mid-stream after a
+      // code_execution batch search. The flat block sequence (code_exec,
+      // web_search×N, web_result×N, code_exec_result) round-trips as an
+      // apparent unpaired code_execution because we strip `caller`. After
+      // filtering, only the model's visible thinking + text survives.
+      const messages: ChatMessage[] = [
+        mkUser('compare these studies'),
+        mkAssistant({
+          content: "I'll search for sources first.",
+          content_blocks: [
+            { type: 'thinking', thinking: 'plan the search', signature: 'sig_a==' },
+            { type: 'text', text: "I'll search for sources first." },
+            {
+              type: 'server_tool_use',
+              id: 'srvtoolu_codeexec',
+              name: 'code_execution',
+              input: { code: 'queries = [...]' },
+            },
+            {
+              type: 'server_tool_use',
+              id: 'srvtoolu_web1',
+              name: 'web_search',
+              input: { query: 'study one' },
+            },
+            {
+              type: 'web_search_tool_result',
+              tool_use_id: 'srvtoolu_web1',
+              content: [{ url: 'https://x' }],
+            },
+            {
+              type: 'code_execution_tool_result',
+              tool_use_id: 'srvtoolu_codeexec',
+              content: { type: 'code_execution_tool_result_error', error_code: 'unavailable' },
+            },
+          ],
+        }),
+        mkUser('continue'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({
+        role: 'assistant',
         content: [
-          {
-            type: 'server_tool_use',
-            id: 'srvtoolu_1',
-            name: 'web_search',
-            input: { query: 'cats' },
-          },
-          {
-            type: 'web_search_tool_result',
-            tool_use_id: 'srvtoolu_1',
-            content: [{ url: 'https://x.example' }],
-          },
-          { type: 'text', text: 'found them' },
+          { type: 'thinking', thinking: 'plan the search', signature: 'sig_a==' },
+          { type: 'text', text: "I'll search for sources first." },
         ],
       });
+    });
+
+    it('strips thinking blocks with empty signature (partial from mid-stream kill)', () => {
+      // When a kill lands inside a thinking block before any signature_delta
+      // arrives, the accumulator emits {thinking: "...", signature: ""}.
+      // Anthropic 400s on missing signature during replay. Drop these.
+      const messages: ChatMessage[] = [
+        mkUser('hi'),
+        mkAssistant({
+          content: 'partial reply',
+          content_blocks: [
+            { type: 'thinking', thinking: 'first thought', signature: 'sig_complete==' },
+            { type: 'text', text: 'partial reply' },
+            // Killed mid-thinking; signature never arrived.
+            { type: 'thinking', thinking: 'started reasoning when', signature: '' },
+          ],
+        }),
+        mkUser('next'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'first thought', signature: 'sig_complete==' },
+          { type: 'text', text: 'partial reply' },
+        ],
+      });
+    });
+
+    it('falls back to text content when all blocks get filtered (tool-only turn killed early)', () => {
+      // Edge case: kill landed before any thinking signature, and the only
+      // captured blocks were a code_execution + result pair. After filtering,
+      // nothing replayable remains — fall back to the visible text content.
+      const messages: ChatMessage[] = [
+        mkUser('hi'),
+        mkAssistant({
+          content: 'visible text',
+          content_blocks: [
+            {
+              type: 'server_tool_use',
+              id: 'srvtoolu_x',
+              name: 'code_execution',
+              input: { code: 'x' },
+            },
+            {
+              type: 'code_execution_tool_result',
+              tool_use_id: 'srvtoolu_x',
+              content: { type: 'code_execution_tool_result_error', error_code: 'unavailable' },
+            },
+          ],
+        }),
+        mkUser('next'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({ role: 'assistant', content: 'visible text' });
     });
 
     it('treats empty content_blocks array as legacy fallback (uses string content)', () => {

@@ -2,6 +2,31 @@
 // in-memory ChatMessage[] state. Separate from chatService.ts so it stays
 // unit-testable without faking SSE/fetch.
 import type { ChatMessage } from './chatService';
+import type { AssistantBlock } from '../../shared/chat-blocks';
+
+// When `web_search_20260209` is enabled, Anthropic auto-injects a
+// `code_execution` orchestrator that batches web_searches under it.
+// The SSE stream emits these as flat top-level blocks with a `caller`
+// field linking nested web_searches and their results back to the
+// outer code_execution. Our accumulator drops `caller` (it's not in
+// AssistantBlock), so on round-trip Anthropic sees a code_execution
+// tool_use, then *interleaved* web_search tool_uses + results, then a
+// code_execution_tool_result — and 400s with "code_execution tool use
+// was found without a corresponding code_execution_tool_result block".
+//
+// Server tools are response-side artifacts; Anthropic auto-strips them
+// from prior assistant turns on replay anyway. Strip them here so the
+// outgoing payload is structurally valid (thinking + text only). Also
+// drop thinking blocks with empty signature — those are partial blocks
+// from a mid-stream kill (no signature_delta arrived before abort) and
+// Anthropic 400s on missing signatures during replay verification.
+function isReplayableAssistantBlock(b: AssistantBlock): boolean {
+  if (b.type === 'server_tool_use') return false;
+  if (b.type === 'web_search_tool_result') return false;
+  if (b.type === 'code_execution_tool_result') return false;
+  if (b.type === 'thinking' && b.signature.length === 0) return false;
+  return true;
+}
 
 interface OutgoingUserContent {
   role: 'user';
@@ -52,12 +77,18 @@ export function buildOutgoingMessages(
     }
 
     // Assistant turn. Prefer content_blocks when present and non-empty so
-    // signed thinking + tool-use round-trip back to Anthropic. Fall back to
-    // string content for legacy entries (no content_blocks field, or empty
-    // array if all blocks were dropped as orphans).
+    // signed thinking round-trips back to Anthropic. Filter server-tool
+    // blocks and partial (unsigned) thinking — see isReplayableAssistantBlock
+    // doc above. Fall back to string content for legacy entries (no
+    // content_blocks field, or filter dropped everything).
     const blocks = msg.content_blocks;
     if (blocks && blocks.length > 0) {
-      return { role: 'assistant', content: blocks };
+      const replayable = blocks.filter(isReplayableAssistantBlock);
+      if (replayable.length > 0) {
+        return { role: 'assistant', content: replayable };
+      }
+      // Filter dropped everything (e.g. turn was tool-only, killed before
+      // any thinking signature arrived). Fall through to text content.
     }
     if (blocks && blocks.length === 0) {
       // Distinguishes "blocks were captured but all got dropped" from "legacy
