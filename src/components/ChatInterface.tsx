@@ -1561,39 +1561,50 @@ export function ChatInterface({
   }, [files, additionalInstructions, generateAttachedFileIds, selectedModel]);
 
   const handleStopStreaming = () => {
+    // Don't gate the whole handler on abortControllerRef.current being
+    // truthy. The Stop button is rendered whenever isStreaming is true,
+    // but the ref can be null at the moment the user clicks if a stream
+    // just finished naturally and React hasn't committed setIsStreaming
+    // (false) yet, or for the (theoretical) sub-millisecond gap between
+    // setIsStreaming(true) and ref assignment in handleSendMessage.
+    // Previously the entire body short-circuited in those windows, so
+    // the click visibly did nothing — the user reported needing two
+    // clicks to actually stop. Now the abort call is the only thing
+    // gated; the state cleanup runs unconditionally, so the button
+    // always responds the first time it's pressed.
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      setIsStreaming(false);
-      setIsLoading(false);
-      setStreamingContent('');
-      setStreamingThinking('');
-      setStreamPhase(null);
-
-      // Finalize a partial assistant turn when the user clicked Stop. Two
-      // signals to preserve: visible text (streamingContent) AND structured
-      // blocks (streamingContentBlocksRef, captured per content_block_stop
-      // via onContentBlocks). A turn that streamed only thinking + no text
-      // shows up as blocks-but-no-content; without the blocks check those
-      // would silently vanish.
-      const partialBlocks = streamingContentBlocksRef.current;
-      const hasBlocks = partialBlocks.length > 0;
-      const hasText = streamingContent.length > 0;
-      if (streamingMessageRef.current && (hasText || hasBlocks)) {
-        const finalMessage: ChatMessage = {
-          ...streamingMessageRef.current,
-          content: hasText
-            ? streamingContent
-            : '_(Assistant was stopped before writing a visible response.)_',
-          was_killed: true,
-          kill_reason: 'aborted',
-          content_blocks: hasBlocks ? partialBlocks : undefined,
-        };
-        setMessages((prev) => [...prev, finalMessage]);
-        streamingMessageRef.current = null;
-      }
-      streamingContentBlocksRef.current = [];
     }
+    setIsStreaming(false);
+    setIsLoading(false);
+    setStreamingContent('');
+    setStreamingThinking('');
+    setStreamPhase(null);
+
+    // Finalize a partial assistant turn when the user clicked Stop. Two
+    // signals to preserve: visible text (streamingContent) AND structured
+    // blocks (streamingContentBlocksRef, captured per content_block_stop
+    // via onContentBlocks). A turn that streamed only thinking + no text
+    // shows up as blocks-but-no-content; without the blocks check those
+    // would silently vanish.
+    const partialBlocks = streamingContentBlocksRef.current;
+    const hasBlocks = partialBlocks.length > 0;
+    const hasText = streamingContent.length > 0;
+    if (streamingMessageRef.current && (hasText || hasBlocks)) {
+      const finalMessage: ChatMessage = {
+        ...streamingMessageRef.current,
+        content: hasText
+          ? streamingContent
+          : '_(Assistant was stopped before writing a visible response.)_',
+        was_killed: true,
+        kill_reason: 'aborted',
+        content_blocks: hasBlocks ? partialBlocks : undefined,
+      };
+      setMessages((prev) => [...prev, finalMessage]);
+      streamingMessageRef.current = null;
+    }
+    streamingContentBlocksRef.current = [];
   };
 
   const handleSendMessage = async () => {
