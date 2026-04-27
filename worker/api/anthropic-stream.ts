@@ -2442,6 +2442,51 @@ export async function handler(
     if (!rate) {
       console.warn('Unknown model on BYOK request (passing through):', model);
     }
+    // Probe count_tokens upfront for BYOK so polling and reconcile-fallback
+    // can compute output tokens correctly.
+    //
+    // The polling path computes output as `totalInputTokens -
+    // initialInputTokens`. The reconcile-without-message_delta fallback at
+    // `countOutputTokensOnce` uses the same subtraction. If
+    // initialInputTokens defaults to 0, both paths treat the entire request
+    // (system prompt + messages, often 20-30k tokens) as "output" and the
+    // computed cost balloons by ~5-10x — the opposite of the
+    // missing-cache-cost bug, but just as wrong.
+    //
+    // Use the BYOK key so the probe bills the user's own Anthropic account
+    // (we don't want to pay for BYOK-user count_tokens probes from our
+    // shared ANTHROPIC_API_KEY). Probe failure leaves countTokensBase=null,
+    // which disables polling for this stream — better than running with a
+    // bad baseline and flooding the BYOK pill with inflated estimates.
+    const candidateBody = stripToCountTokensBody(body);
+    if (byokKey) {
+      try {
+        const probeResp = await fetch(ANTHROPIC_COUNT_URL, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': byokKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+            'anthropic-beta': ANTHROPIC_BETA,
+          },
+          body: JSON.stringify(candidateBody),
+        });
+        if (probeResp.ok) {
+          const probeData = (await probeResp.json()) as { input_tokens?: number };
+          if (typeof probeData.input_tokens === 'number' && probeData.input_tokens >= 0) {
+            initialInputTokens = probeData.input_tokens;
+            countTokensBase = candidateBody;
+          } else {
+            console.warn('[byok-probe] count_tokens response missing input_tokens', probeData);
+          }
+        } else {
+          const text = await probeResp.text().catch(() => '');
+          console.warn('[byok-probe] count_tokens upstream', probeResp.status, text.slice(0, 200));
+        }
+      } catch (e) {
+        console.warn('[byok-probe] count_tokens fetch failed:', e);
+      }
+    }
   }
 
   // Step 8: upstream fetch. For our metered path we set metadata.user_id so
