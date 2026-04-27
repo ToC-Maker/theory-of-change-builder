@@ -2723,7 +2723,15 @@ export async function handler(
       // Per-message attribution: populate logging_messages.cost_micro_usd so
       // per-chart cost queries can JOIN + SUM without a separate aggregate. Only
       // runs if the client passed X-Logging-Message-Id. Fire-and-forget.
-      if (loggingMessageId && actualMicro > 0n) {
+      //
+      // NO `actualMicro > 0n` gate: a user-aborted stream can produce
+      // actualMicro=0 if the abort raced parseFrame's accumulator update, but
+      // tokens were still billed by Anthropic. Writing 0 here is better than
+      // skipping — the row is "settled" and a follow-up audit can spot rows
+      // with reconciled=0 + content_blocks present (means the accumulator
+      // missed a usage event). Logged via DiagnosticReconcileEmptyAccumulator
+      // when this happens to a row that DID stream content.
+      if (loggingMessageId) {
         try {
           await sql`
           UPDATE logging_messages
@@ -2732,6 +2740,48 @@ export async function handler(
         `;
         } catch (e) {
           console.error('logging_messages cost update failed (non-fatal):', e);
+        }
+
+        // Diagnostic: a stream that streamed content but ended with empty
+        // accumulator usage (no message_start/message_delta merged) means
+        // the abort/cancel cut parseFrame mid-flight. We can't recover the
+        // cost retroactively but we can flag it for analysis.
+        const blocksCount = teeCtx.streamingContent.blocks.size;
+        const accumulatorEmpty =
+          teeCtx.accumulator.input_tokens === 0 &&
+          teeCtx.accumulator.output_tokens === 0 &&
+          teeCtx.accumulator.cache_creation_input_tokens === 0 &&
+          teeCtx.accumulator.cache_read_input_tokens === 0;
+        if (blocksCount > 0 && accumulatorEmpty) {
+          try {
+            await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, chart_id,
+              request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'DiagnosticReconcileEmptyAccumulator',
+              ${`Stream had ${blocksCount} blocks but accumulator usage stayed at 0 (likely abort race)`},
+              ${actorId},
+              ${chartId ?? null},
+              ${JSON.stringify({
+                user_id: actorId,
+                logging_message_id: loggingMessageId,
+                blocks_count: blocksCount,
+                tier,
+                model,
+                killed: teeCtx.killed.v,
+                killDiagnosticPresent: teeCtx.killDiagnostic !== null,
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+              })}
+            )
+            ON CONFLICT (error_id) DO NOTHING
+          `;
+          } catch (innerErr) {
+            console.error('reconcile-empty-accumulator diagnostic insert failed:', innerErr);
+          }
         }
       }
 
