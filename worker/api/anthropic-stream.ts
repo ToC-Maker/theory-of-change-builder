@@ -2742,17 +2742,20 @@ export async function handler(
           console.error('logging_messages cost update failed (non-fatal):', e);
         }
 
-        // Diagnostic: a stream that streamed content but ended with empty
-        // accumulator usage (no message_start/message_delta merged) means
-        // the abort/cancel cut parseFrame mid-flight. We can't recover the
-        // cost retroactively but we can flag it for analysis.
+        // Diagnostic: a stream that ended with empty accumulator usage means
+        // either no SSE arrived (network failure / instant abort) OR the
+        // accumulator update was racing the reconcile read. We can't recover
+        // the cost retroactively but we flag every empty-accumulator case
+        // for analysis. blocksCount surfaces which scenario it was: 0 means
+        // the worker forwarded nothing, >0 means content streamed but the
+        // usage merge was lost.
         const blocksCount = teeCtx.streamingContent.blocks.size;
         const accumulatorEmpty =
           teeCtx.accumulator.input_tokens === 0 &&
           teeCtx.accumulator.output_tokens === 0 &&
           teeCtx.accumulator.cache_creation_input_tokens === 0 &&
           teeCtx.accumulator.cache_read_input_tokens === 0;
-        if (blocksCount > 0 && accumulatorEmpty) {
+        if (accumulatorEmpty) {
           try {
             await sql`
             INSERT INTO logging_errors (
@@ -2762,7 +2765,7 @@ export async function handler(
             VALUES (
               ${crypto.randomUUID()},
               'DiagnosticReconcileEmptyAccumulator',
-              ${`Stream had ${blocksCount} blocks but accumulator usage stayed at 0 (likely abort race)`},
+              ${`Reconcile saw empty accumulator (blocks_count=${blocksCount}, killed=${teeCtx.killed.v}, messageDeltaSeen=${teeCtx.messageDeltaSeen})`},
               ${actorId},
               ${chartId ?? null},
               ${JSON.stringify({
