@@ -2652,9 +2652,15 @@ export async function handler(
     killed,
     chartId,
     sql,
-    // count_tokens polling kill switch: only armed for capped tiers. BYOK
-    // skips it (no cap to enforce) by leaving env + countTokensBase null.
-    env: isCapped(tier) ? env : null,
+    // count_tokens polling. Originally a kill-switch gated on capped tier,
+    // but BYOK now uses the same poll cycle to emit running_cost frames
+    // that drive the BYOK "$X this chart" pill. Both env and countTokensBase
+    // must be non-null for the timer to arm; for BYOK, countTokensBase
+    // comes from the upfront probe (see the BYOK branch in the request
+    // handler) and stays null on probe failure, which keeps polling
+    // disarmed for that stream rather than letting it run with a bad
+    // baseline.
+    env,
     countTokensBase,
     initialInputTokens,
     streamingContent: newStreamingAssistantContent(),
