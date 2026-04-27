@@ -1902,6 +1902,36 @@ function createCostTrackingStream(
     }
     if (!usageObj) return false;
 
+    // Polling-based running_cost ticks every ~5s during the stream, so the
+    // client's last tick can be up to 5s stale at message_stop. message_delta
+    // carries the authoritative final usage; emit one final running_cost frame
+    // here so BYOK spend tracking and the "$X so far" UI converge with what
+    // the worker's reconcile will write to user_api_usage. Without this the
+    // client undercounts by whatever output streamed between the last poll
+    // and the end of the turn.
+    if (eventType === 'message_delta') {
+      const merged = { ...teeCtx.accumulator };
+      mergeUsage(merged, usageObj);
+      try {
+        const finalMicro = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(merged));
+        const frame = encoder.encode(
+          `event: running_cost\ndata: ${JSON.stringify({
+            type: 'running_cost',
+            cost_usd: microToUsd(finalMicro),
+            output_tokens_est: merged.output_tokens,
+          })}\n\n`,
+        );
+        try {
+          controller.enqueue(frame);
+        } catch {
+          // Controller closed (downstream cancelled). Reconcile still writes
+          // the authoritative figure; the client just misses the last tick.
+        }
+      } catch (e) {
+        console.error('final running_cost emit failed:', e);
+      }
+    }
+
     // Diagnostic: log the raw usage shape on message_start so we can confirm
     // whether cache_creation/cache_read land immediately (as the kill switch
     // assumes) or only at message_delta at end-of-stream. One log per stream.

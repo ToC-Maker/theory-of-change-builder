@@ -10,6 +10,7 @@ import {
   type StreamPhase,
 } from '../services/chatService';
 import { ChartService } from '../services/chartService';
+import { buildOutgoingMessages } from '../services/outgoingMessages';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
 import { useApiKey } from '../contexts/useApiKey';
@@ -1210,10 +1211,17 @@ export function ChatInterface({
           : draftBody;
 
       const systemPrompt = `${systemPromptContent}\n\n${chatModePromptContent}`;
-      const historyForEstimate = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      // Mirror the outgoing-messages shape that streamMessage actually
+      // ships, so the estimate counts signed thinking + tool blocks on
+      // prior assistant turns. Using m.content (text only) here was
+      // undercounting by however many tokens the persisted thinking
+      // blocks added — visible after a cap kill + BYOK + "continue", where
+      // the actual send carries the partial assistant turn but the estimate
+      // didn't.
+      const historyForEstimate = buildOutgoingMessages(messages, {
+        attachedFileIds: [],
+        lastIndex: -1, // no in-flight user turn appended via this call
+      });
       const hasDraftContent = draftBody.length > 0 || uploadFiles.length > 0;
       const messagesForEstimate = hasDraftContent
         ? [...historyForEstimate, { role: 'user' as const, content: userContent }]
