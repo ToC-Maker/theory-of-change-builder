@@ -499,13 +499,22 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
             <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
           )}
         {message.was_killed && (
-          // was_killed is set only by onCostError (cap exceeded) — so this
-          // copy is specific to that case rather than a generic "interrupted"
-          // claim. User-aborted / network / upstream errors leave was_killed
-          // unset and don't render an indicator.
+          // Specific copy per kill_reason. cap_exceeded directs the user to
+          // the unblock path; aborted is a neutral "Stopped" so the bubble
+          // visually distinguishes from a complete response; error surfaces
+          // the actual upstream/network failure verbatim so the user can
+          // diagnose without opening devtools.
           <div className="mt-1 inline-flex items-center gap-1 text-amber-700">
             <StopIcon className="w-3 h-3" aria-hidden />
-            <span>Cost limit reached — sign in or add an API key to continue.</span>
+            <span>
+              {message.kill_reason === 'cap_exceeded'
+                ? 'Cost limit reached — sign in or add an API key to continue.'
+                : message.kill_reason === 'aborted'
+                  ? 'Stopped.'
+                  : message.kill_reason === 'error'
+                    ? `Error: ${message.kill_message ?? 'Connection lost.'}`
+                    : 'Response was interrupted.'}
+            </span>
           </div>
         )}
       </div>
@@ -1430,10 +1439,14 @@ export function ChatInterface({
       setStreamPhase(null);
 
       // If there's a streaming message, finalize it with current content
+      // and mark as user-aborted so the bubble distinguishes it from a
+      // complete response.
       if (streamingMessageRef.current && streamingContent) {
         const finalMessage: ChatMessage = {
           ...streamingMessageRef.current,
           content: streamingContent,
+          was_killed: true,
+          kill_reason: 'aborted',
         };
         setMessages((prev) => [...prev, finalMessage]);
         streamingMessageRef.current = null;
@@ -1692,13 +1705,30 @@ export function ChatInterface({
               // BYOK-recovered retries re-use the same messages array).
               setCostErrorBanner(classified);
             } else {
-              const errorMessage: ChatMessage = {
-                id: assistantMessageId,
-                role: 'assistant',
-                content: `Error: ${error}`,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, errorMessage]);
+              // Preserve any partial that streamed before the error so the
+              // user can read what they got + see the actual failure inline.
+              // Without this the partial vanishes and the user has no signal
+              // beyond the chat resetting.
+              const partial = streamingMessageRef.current;
+              if (partial && partial.content.length > 0) {
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'error',
+                  kill_message: error,
+                };
+                setMessages((prev) => [...prev, stamped]);
+              } else {
+                // No visible partial — surface the error as a fresh assistant
+                // turn so the user still sees what went wrong.
+                const errorMessage: ChatMessage = {
+                  id: assistantMessageId,
+                  role: 'assistant',
+                  content: `Error: ${error}`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
             }
             setIsStreaming(false);
             setStreamingContent('');
@@ -1741,6 +1771,7 @@ export function ChatInterface({
               const stamped: ChatMessage = {
                 ...partial,
                 was_killed: true,
+                kill_reason: 'cap_exceeded',
                 content_blocks:
                   partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
                 content: hasText
@@ -2510,13 +2541,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             if (classified) {
               setCostErrorBanner(classified);
             } else {
-              const errorMessage: ChatMessage = {
-                id: generationAssistantId,
-                role: 'assistant',
-                content: `Error: ${error}`,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, errorMessage]);
+              const partial = streamingMessageRef.current;
+              if (partial && partial.content.length > 0) {
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'error',
+                  kill_message: error,
+                };
+                setMessages((prev) => [...prev, stamped]);
+              } else {
+                const errorMessage: ChatMessage = {
+                  id: generationAssistantId,
+                  role: 'assistant',
+                  content: `Error: ${error}`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
             }
             setIsStreaming(false);
             setStreamingContent('');

@@ -64,13 +64,26 @@ export interface ChatMessage {
    */
   content_blocks?: AssistantBlock[];
   /**
-   * Set true when the kill-switch (request_cost_ceiling_exceeded) fires
-   * mid-stream and the partial assistant message was preserved. UI shows
-   * a subtle "interrupted" indicator. The user can simply send a follow-up
-   * ("continue", "next step") and the model picks up because the partial
-   * `content_blocks` round-trip into the next request.
+   * Set true when the assistant turn was interrupted before natural
+   * completion and the partial was preserved. UI shows a subtle indicator
+   * whose copy varies by `kill_reason`. The user can simply send a
+   * follow-up; the partial `content_blocks` round-trip into the next
+   * request so the model picks up where the interruption landed.
    */
   was_killed?: boolean;
+  /**
+   * Why the turn was interrupted, used by the UI to render specific copy
+   * (cap-exceeded → "Cost limit reached…", aborted → "Stopped.", error
+   * → the upstream message). Always set together with `was_killed`.
+   */
+  kill_reason?: 'cap_exceeded' | 'aborted' | 'error';
+  /**
+   * Free-form error text from the upstream/network failure. Only set when
+   * `kill_reason === 'error'` — surfaced verbatim in the indicator so the
+   * user sees the actual failure mode (e.g. "fetch failed", "Anthropic
+   * returned 503") rather than a generic "interrupted" message.
+   */
+  kill_message?: string;
   usage?: {
     input_tokens: number;
     output_tokens: number;
