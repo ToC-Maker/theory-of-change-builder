@@ -876,11 +876,15 @@ export function ChatInterface({
   // signed thinking + tool blocks (otherwise they only have plain text and
   // the next "continue" turn loses Opus 4.7's reasoning continuity).
   const streamingContentBlocksRef = useRef<AssistantBlock[]>([]);
-  // Synchronous guard against double-send. handleSendMessage awaits
-  // ensureChartExists() before flipping isStreaming/isLoading, so a
-  // second Enter (or click) racing in during that ~80ms window passes the
-  // React-state guard and fires a duplicate request. The ref flips
-  // synchronously so the second call early-returns immediately.
+  // Synchronous guard against double-send for both handleSendMessage and
+  // startGeneration. handleSendMessage awaits ensureChartExists() before
+  // flipping isStreaming/isLoading, so a second Enter racing in during that
+  // ~80ms window passes the React-state guard and fires a duplicate
+  // request. startGeneration's window is narrower (one render tick) but
+  // also exists because it has no in-handler guard at all. The ref flips
+  // synchronously so the second call early-returns immediately. Shared
+  // because chat-mode and generate-mode are mutually exclusive UI states,
+  // so the two handlers can't run concurrently.
   const sendInFlightRef = useRef(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   // Set to true by ensureChartExists right before it navigates to the new
@@ -2522,6 +2526,10 @@ export function ChatInterface({
   };
 
   const startGeneration = async () => {
+    // Synchronous double-send guard, same as handleSendMessage. See
+    // sendInFlightRef declaration for rationale.
+    if (sendInFlightRef.current) return;
+
     const readyTextFiles = files.filter((f) => f.status === 'ready').length;
     const readyPdfFiles = generateAttachedFileIds.length;
     if (readyTextFiles + readyPdfFiles === 0) {
@@ -2532,6 +2540,7 @@ export function ChatInterface({
       return;
     }
 
+    sendInFlightRef.current = true;
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
@@ -2820,6 +2829,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
+      sendInFlightRef.current = false;
     }
   };
 
