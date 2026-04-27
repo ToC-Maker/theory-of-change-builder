@@ -12,6 +12,10 @@ const LEGACY_API_KEY_STORAGE_KEY = 'api_key';
 
 interface UsageResponse {
   tier?: string;
+  // Last-4 of the user's stored BYOK key when tier === 'byok'. Round-tripped
+  // so a page reload can rehydrate the byok-spend-key-<last4> localStorage
+  // bucket without requiring the user to re-submit the key.
+  byok_last4?: string | null;
   // other fields (used_usd, limit_usd, global) exist but aren't needed here
 }
 
@@ -89,10 +93,14 @@ export function ApiKeyProvider({ children }: ApiKeyProviderProps) {
       setVerified(isByok);
       if (!isByok) {
         setKeyLast4(null);
+      } else if (data.byok_last4) {
+        // /api/usage now round-trips key_last4 from user_byok_keys so a
+        // page reload (or post-login refresh) restores it without needing
+        // the user to re-submit. Without this the byok-spend-key-<last4>
+        // bucket couldn't be rehydrated and per-key spend tracking
+        // silently broke for any session that didn't go through submitKey.
+        setKeyLast4(data.byok_last4);
       }
-      // Note: /api/usage doesn't return last4. keyLast4 is set by submitKey
-      // on success; on refresh we preserve whatever submitKey last set, or
-      // leave null if the user hasn't submitted in this session.
     } catch (err) {
       console.error('[ApiKeyContext] refresh failed:', err);
     }

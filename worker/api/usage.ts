@@ -74,12 +74,17 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         WHERE user_id = ${userId}
       `,
       // Only meaningful for authenticated users; anon can never have a BYOK row.
+      // key_last4 round-trips so the client can rebuild byok-spend-key-<last4>
+      // bucket lookups after a page reload (submitKey only fires on first
+      // submission; without this, keyLast4 stays null and per-key spend
+      // tracking silently breaks).
       userId.startsWith('anon-')
-        ? Promise.resolve([] as { user_id: string }[])
-        : sql`SELECT user_id FROM user_byok_keys WHERE user_id = ${userId}`,
+        ? Promise.resolve([] as { user_id: string; key_last4: string | null }[])
+        : sql`SELECT user_id, key_last4 FROM user_byok_keys WHERE user_id = ${userId}`,
     ]);
 
     const hasByok = byokRows.length > 0;
+    const byokLast4 = hasByok ? ((byokRows[0].key_last4 as string | null) ?? null) : null;
     const userMicro = userRows.length > 0 ? (userRows[0].cost_micro_usd as bigint | number) : 0;
 
     // Global monthly spend is observability-only (tracked in `global_monthly_usage`,
@@ -95,6 +100,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         used_usd: microToUsd(userMicro),
         limit_usd: LIFETIME_CAP_USD,
         tier: tierFor(userId, hasByok),
+        byok_last4: byokLast4,
       }),
       { status: 200, headers },
     );
