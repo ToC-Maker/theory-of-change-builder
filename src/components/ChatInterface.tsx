@@ -876,6 +876,12 @@ export function ChatInterface({
   // signed thinking + tool blocks (otherwise they only have plain text and
   // the next "continue" turn loses Opus 4.7's reasoning continuity).
   const streamingContentBlocksRef = useRef<AssistantBlock[]>([]);
+  // Synchronous guard against double-send. handleSendMessage awaits
+  // ensureChartExists() before flipping isStreaming/isLoading, so a
+  // second Enter (or click) racing in during that ~80ms window passes the
+  // React-state guard and fires a duplicate request. The ref flips
+  // synchronously so the second call early-returns immediately.
+  const sendInFlightRef = useRef(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   // Set to true by ensureChartExists right before it navigates to the new
   // /edit/<token> URL. The route-change effect reads + clears it; when
@@ -1588,11 +1594,21 @@ export function ChatInterface({
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isStreaming) return;
+    // Synchronous double-send guard. Two rapid Enters (or click + Enter)
+    // both pass the React-state guard above because setIsStreaming/
+    // setIsLoading don't fire until after `await ensureChartExists()`
+    // below. The ref flips before any await, so the second call returns
+    // here. Reset in the `finally` block at the end of this handler.
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
 
     // Reject sends while any chip is still uploading. The server would accept
     // the request but the files wouldn't be attached; better to fail loud
     // client-side.
-    if (chatAttachedFiles.some((f) => f.status === 'uploading')) return;
+    if (chatAttachedFiles.some((f) => f.status === 'uploading')) {
+      sendInFlightRef.current = false;
+      return;
+    }
 
     // Block client-side when we already know the send will fail the
     // server's reservation. Avoids the round-trip, and more importantly
@@ -1600,7 +1616,10 @@ export function ChatInterface({
     // Turnstile re-challenge instead of the BYOK path they actually need.
     // UI already renders a warning + BYOK panel in this state; the send
     // button is also disabled, this is a defense-in-depth guard.
-    if (capAlreadyReached || wouldExceedCap) return;
+    if (capAlreadyReached || wouldExceedCap) {
+      sendInFlightRef.current = false;
+      return;
+    }
 
     // Persist the chart NOW, before we log the user message. Without this,
     // a first send on the `/` root URL has no chart_id → loggingService's
@@ -1969,6 +1988,7 @@ export function ChatInterface({
       streamingMessageRef.current = null;
     } finally {
       setIsLoading(false);
+      sendInFlightRef.current = false;
     }
   };
 
