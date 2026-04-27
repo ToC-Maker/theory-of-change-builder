@@ -2379,11 +2379,38 @@ export async function handler(
   // tier (ignoring the hasByok override) — allowByok('anon') === false, so
   // any accidental promotion of an anon caller to 'byok' trips here before
   // we touch upstream.
+  //
+  // Fail loud rather than downgrading silently. If we fall through to the
+  // free tier, the user's BYOK pill keeps crediting the request as if it
+  // hit their key, but the upstream call would actually use our shared
+  // ANTHROPIC_API_KEY — they get phantom-billed twice (once locally on the
+  // pill, once for real on our account). Surface a 500 so the bug is
+  // visible and the user retries instead of accruing silent drift.
   const baseTier = tierFor(actorId, false);
   if (hasByok && !allowByok(baseTier)) {
-    console.warn('hasByok set for non-byok-eligible tier; forcing no-BYOK', { baseTier });
-    hasByok = false;
-    byokKey = null;
+    console.error('[anthropic-stream] invariant violated: hasByok=true on non-byok-eligible tier', {
+      baseTier,
+      actorId,
+    });
+    try {
+      await sql`
+        INSERT INTO logging_errors (error_id, error_name, error_message, user_id, request_metadata)
+        VALUES (
+          ${crypto.randomUUID()},
+          'ByokTierInvariantViolation',
+          ${`hasByok=true on baseTier=${baseTier}; refused to downgrade silently`},
+          ${actorId},
+          ${JSON.stringify({ baseTier, deployment_host: requestUrl.hostname, fired_at_ms: Date.now() })}
+        )
+      `;
+    } catch (e) {
+      console.error('[anthropic-stream] ByokTierInvariantViolation diagnostic insert failed:', e);
+    }
+    return jsonError(
+      { error: 'byok_tier_mismatch', detail: 'BYOK rejected on non-eligible base tier' },
+      500,
+      altSvcHeaders,
+    );
   }
   const tier = tierFor(actorId, hasByok);
 

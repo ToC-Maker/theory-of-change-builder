@@ -892,6 +892,46 @@ class ChatService {
           }
         }
       }
+    } catch (e) {
+      // Kill-time output cost estimate (closes the K2 gap: kills <5s after
+      // message_start, before the first count_tokens poll has fired and
+      // before any thinking-block signature has arrived, otherwise capture
+      // only the message_start placeholder of 8 output tokens).
+      //
+      // We have the streamed assistant content locally (fullContent +
+      // fullThinking). Tokens-from-chars is rough (≈4 chars/token in
+      // English; varies by tokenizer and content) but it's strictly better
+      // than the 8-token placeholder by orders of magnitude — a sub-5s
+      // kill that streamed 2,000 chars of thinking should credit ~500
+      // tokens of output, not 8.
+      //
+      // Bump runningOutput to max(current, char-estimate) and re-fire
+      // onCostUpdate so the BYOK pill catches up before the catch above
+      // tears down state. The delta-credit logic in the caller handles
+      // the addition idempotently. Skipped on non-abort errors — those
+      // paths show the user an error UI; cost capture isn't user-visible.
+      const isAbort =
+        (e instanceof DOMException && e.name === 'AbortError') || signal?.aborted === true;
+      if (isAbort) {
+        try {
+          const totalChars = fullContent.length + fullThinking.length;
+          if (totalChars > 0) {
+            const estimatedOutputTokens = Math.ceil(totalChars / 4);
+            if (estimatedOutputTokens > runningOutput) {
+              runningOutput = estimatedOutputTokens;
+              const finalCost = computeRunningCost();
+              callbacks.onCostUpdate?.(finalCost);
+              console.log(
+                `[ChatService] kill-time output estimate: chars=${totalChars}` +
+                  ` estTokens=${estimatedOutputTokens} → finalCost=$${finalCost.toFixed(6)}`,
+              );
+            }
+          }
+        } catch (estErr) {
+          console.warn('[ChatService] kill-time cost estimate failed:', estErr);
+        }
+      }
+      throw e;
     } finally {
       reader.releaseLock();
     }

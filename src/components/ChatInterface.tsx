@@ -2643,7 +2643,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     // See chat-path comment above; Generate is always BYOK (hasKey required
     // to render the panel) but still snapshot for parity and to survive the
     // unlikely case of a key swap mid-stream.
-    const streamChartId = params.chartId ?? params.editToken ?? null;
+    //
+    // Generate doesn't go through ensureChartExists (PDFs were uploaded
+    // earlier in the flow, which auto-created the chart and populated the
+    // autosaved* refs). But on the very first send from `/`, params can
+    // still be the pre-navigation snapshot in this closure — same race
+    // as the chat path. Prefer autosavedEditTokenRef which is set
+    // synchronously by the upload's chart-create step, falling back to
+    // params for the path where the user landed on /edit/<token> directly.
+    const streamChartId =
+      autosavedEditTokenRef.current ?? params.chartId ?? params.editToken ?? null;
     const streamKeyLast4 = keyLast4;
     const streamUsesByok = hasKey;
     turnLastAppliedMicroRef.current = 0;
