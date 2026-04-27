@@ -1493,6 +1493,11 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       cost_usd: microToUsd(estimatedMicro),
       output_tokens_est: outputTokensSoFar,
       source: 'poll',
+      cost_micro_usd: estimatedMicro.toString(),
+      input_tokens: teeCtx.accumulator.input_tokens,
+      cache_creation_input_tokens: teeCtx.accumulator.cache_creation_input_tokens,
+      cache_read_input_tokens: teeCtx.accumulator.cache_read_input_tokens,
+      web_search_requests: teeCtx.streamingContent.webSearchCount,
     })}\n\n`,
   );
 
@@ -1929,45 +1934,29 @@ function createCostTrackingStream(
       mergeUsage(merged, usageObj);
       try {
         const finalMicro = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(merged));
-        // Granular log so the same event the client receives can be
-        // correlated with what the worker computed. `source` identifies
-        // which event triggered the emit (message_start vs message_delta
-        // vs poll). The accumulator snapshot lets us replay the math
-        // offline if the client and server numbers diverge.
-        console.log(
-          JSON.stringify({
-            event: 'running_cost_emit',
-            source: eventType,
-            cost_micro_usd: finalMicro.toString(),
-            cost_usd: microToUsd(finalMicro),
-            input_tokens: merged.input_tokens,
-            output_tokens: merged.output_tokens,
-            cache_creation_input_tokens: merged.cache_creation_input_tokens,
-            cache_read_input_tokens: merged.cache_read_input_tokens,
-            web_search_requests: merged.web_search_requests,
-          }),
-        );
+        // Embed the full accumulator snapshot in the SSE frame so the
+        // client can log it alongside its delta-credit math. This is the
+        // only way to surface server-side compute on PR-preview deploys
+        // where `wrangler tail` isn't available.
         const frame = encoder.encode(
           `event: running_cost\ndata: ${JSON.stringify({
             type: 'running_cost',
             cost_usd: microToUsd(finalMicro),
             output_tokens_est: merged.output_tokens,
             source: eventType,
+            cost_micro_usd: finalMicro.toString(),
+            input_tokens: merged.input_tokens,
+            cache_creation_input_tokens: merged.cache_creation_input_tokens,
+            cache_read_input_tokens: merged.cache_read_input_tokens,
+            web_search_requests: merged.web_search_requests,
           })}\n\n`,
         );
         try {
           controller.enqueue(frame);
-        } catch (e) {
-          // Controller closed (downstream cancelled). Reconcile still writes
-          // the authoritative figure; the client just misses the tick.
-          console.log(
-            JSON.stringify({
-              event: 'running_cost_emit_dropped',
-              source: eventType,
-              reason: 'controller_closed',
-              error_message: e instanceof Error ? e.message : String(e),
-            }),
-          );
+        } catch {
+          // Controller closed (downstream cancelled). Reconcile still
+          // writes the authoritative figure to the DB; the client just
+          // misses the tick.
         }
       } catch (e) {
         console.error(`running_cost emit failed at ${eventType}:`, e);
@@ -2738,11 +2727,14 @@ export async function handler(
         return;
       }
 
-      // Single structured log per reconcile so we can correlate
-      // server-side final cost with the client's last running_cost
-      // frame. Look for matching cost_micro_usd values in
-      // running_cost_emit logs (source=message_delta is the
-      // closest-to-reconcile authority when message_delta arrived).
+      // Persist a per-reconcile diagnostic to logging_errors so the
+      // server-side final cost is queryable from the DB on PR-preview
+      // deploys (no wrangler tail available there). Pair this with the
+      // client-side `[ChatService] running_cost` lines (which now embed
+      // the same accumulator breakdown via the SSE payload) to see
+      // whether the server's final figure matches the last frame the
+      // client received. The DB row is the queryable diagnostic; the
+      // console.log below is for production debugging via wrangler tail.
       console.log(
         JSON.stringify({
           event: 'reconcile_cost_computed',
@@ -2762,6 +2754,41 @@ export async function handler(
           output_source: reconcileOutputSource,
         }),
       );
+      try {
+        await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, chart_id,
+            request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'DiagnosticReconcileCostComputed',
+            ${`actual=${actualMicro.toString()} µUSD output=${reconciledAccumulator.output_tokens} source=${reconcileOutputSource}`},
+            ${actorId},
+            ${chartId ?? null},
+            ${JSON.stringify({
+              logging_message_id: loggingMessageId,
+              tier,
+              model,
+              message_delta_seen: teeCtx.messageDeltaSeen,
+              actual_micro_usd: actualMicro.toString(),
+              actual_usd: microToUsd(actualMicro),
+              projected_micro_usd: projected.toString(),
+              input_tokens: reconciledAccumulator.input_tokens,
+              output_tokens: reconciledAccumulator.output_tokens,
+              cache_creation_input_tokens: reconciledAccumulator.cache_creation_input_tokens,
+              cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
+              web_search_requests: reconciledAccumulator.web_search_requests,
+              output_source: reconcileOutputSource,
+              deployment_host: requestUrl.hostname,
+              fired_at_ms: Date.now(),
+            })}
+          )
+          ON CONFLICT (error_id) DO NOTHING
+        `;
+      } catch (e) {
+        console.error('DiagnosticReconcileCostComputed insert failed:', e);
+      }
 
       if (isCapped(tier)) {
         const deltaMicro = actualMicro - projected;

@@ -801,13 +801,22 @@ class ChatService {
                 // so without this the UI "$X so far" stayed frozen through
                 // the whole generation phase. The poller event updates it
                 // every ~5 seconds.
+                //
+                // The worker now embeds the full accumulator snapshot in
+                // the SSE payload (input/output/cache/web_search) so PR-
+                // preview deploys (where wrangler tail isn't available)
+                // can still see the server-side compute by logging the
+                // event payload here.
                 const src = typeof event.source === 'string' ? event.source : 'unknown';
+                const num = (v: unknown) => (typeof v === 'number' ? v : '?');
                 console.log(
-                  `[ChatService] running_cost: $${event.cost_usd.toFixed(4)}` +
-                    (typeof event.output_tokens_est === 'number'
-                      ? ` output~${event.output_tokens_est}`
-                      : '') +
-                    ` source=${src}`,
+                  `[ChatService] running_cost: $${event.cost_usd.toFixed(6)}` +
+                    ` source=${src}` +
+                    ` output=${num(event.output_tokens_est)}` +
+                    ` input=${num(event.input_tokens)}` +
+                    ` cache_w=${num(event.cache_creation_input_tokens)}` +
+                    ` cache_r=${num(event.cache_read_input_tokens)}` +
+                    ` web_search=${num(event.web_search_requests)}`,
                 );
                 callbacks.onCostUpdate?.(event.cost_usd);
               } else if (event.type === 'message_stop') {
