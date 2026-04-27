@@ -2797,12 +2797,48 @@ export async function handler(
         web_search_requests: reconciledWebSearch,
       };
 
-      let actualMicro: bigint;
+      let actualMicro: bigint = 0n;
       try {
         actualMicro = computeCostMicroUsd(model, accumulatorToUsage(reconciledAccumulator));
       } catch (e) {
         console.error('Post-stream cost computation failed:', e);
-        return;
+        if (loggingMessageId) {
+          try {
+            await sql`
+              INSERT INTO logging_errors (
+                error_id, error_name, error_message, user_id, chart_id,
+                request_metadata
+              )
+              VALUES (
+                ${crypto.randomUUID()},
+                'DiagnosticReconcileCostComputeFailed',
+                ${`computeCostMicroUsd threw: ${e instanceof Error ? e.message : String(e)}`},
+                ${actorId},
+                ${chartId ?? null},
+                ${JSON.stringify({
+                  logging_message_id: loggingMessageId,
+                  tier,
+                  model,
+                  error_message: e instanceof Error ? e.message : String(e),
+                  error_stack: e instanceof Error ? e.stack : null,
+                  reconciled_accumulator: reconciledAccumulator,
+                  output_source: reconcileOutputSource,
+                  message_delta_seen: teeCtx.messageDeltaSeen,
+                  killed: teeCtx.killed.v,
+                  deployment_host: requestUrl.hostname,
+                  fired_at_ms: Date.now(),
+                })}
+              )
+              ON CONFLICT (error_id) DO NOTHING
+            `;
+          } catch (innerErr) {
+            console.error('cost-compute-failed diagnostic insert failed:', innerErr);
+          }
+        }
+        // Don't return — fall through with actualMicro=0n so downstream
+        // logging_messages UPDATEs (was_killed, content_blocks) still run.
+        // The cost-attribution bits silently set cost=0 for this turn, but
+        // the diagnostic above tells us what threw.
       }
 
       // Persist a per-reconcile diagnostic to logging_errors so the
@@ -3242,7 +3278,77 @@ export async function handler(
           console.error('kill diagnostic insert failed (non-fatal):', e);
         }
       }
-    })(),
+
+      // End-of-IIFE marker. If we observe DiagnosticReconcileEntered for a turn
+      // but no DiagnosticReconcileCompleted (and no DiagnosticReconcileBailedUnhandled
+      // / DiagnosticReconcileCostComputeFailed), it means the IIFE was terminated
+      // by Cloudflare's waitUntil time budget rather than by an exception we caught.
+      if (loggingMessageId) {
+        try {
+          await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, chart_id,
+              request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'DiagnosticReconcileCompleted',
+              'Reconcile IIFE reached end',
+              ${actorId},
+              ${chartId ?? null},
+              ${JSON.stringify({
+                logging_message_id: loggingMessageId,
+                tier,
+                model,
+                killed: teeCtx.killed.v,
+                message_delta_seen: teeCtx.messageDeltaSeen,
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+              })}
+            )
+            ON CONFLICT (error_id) DO NOTHING
+          `;
+        } catch (e) {
+          console.error('reconcile-completed diagnostic insert failed:', e);
+        }
+      }
+    })().catch(async (outerErr) => {
+      // Anything that throws inside the IIFE without being caught lands here.
+      // Without this, ctx.waitUntil silently swallows the rejection and we get
+      // DiagnosticReconcileEntered with no follow-up row — indistinguishable
+      // from a Cloudflare budget kill. The completion marker above + this
+      // catch together let us tell the two failure modes apart.
+      console.error('Reconcile IIFE bailed unhandled:', outerErr);
+      if (loggingMessageId) {
+        try {
+          await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, chart_id,
+              request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'DiagnosticReconcileBailedUnhandled',
+              ${`Unhandled throw in reconcile IIFE: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`},
+              ${actorId},
+              ${chartId ?? null},
+              ${JSON.stringify({
+                logging_message_id: loggingMessageId,
+                tier,
+                model,
+                error_message: outerErr instanceof Error ? outerErr.message : String(outerErr),
+                error_stack: outerErr instanceof Error ? outerErr.stack : null,
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+              })}
+            )
+            ON CONFLICT (error_id) DO NOTHING
+          `;
+        } catch (innerErr) {
+          console.error('reconcile-bailed diagnostic insert failed:', innerErr);
+        }
+      }
+    }),
   );
 
   return new Response(keepaliveStream, {
