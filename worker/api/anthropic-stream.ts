@@ -2603,6 +2603,40 @@ export async function handler(
   // independent of tier.
   ctx.waitUntil(
     (async () => {
+      // Trace marker: insert a row at reconcile entry so we can tell whether
+      // the waitUntil ran at all vs. hit an exception before the existing
+      // diagnostics. Only fires when a logging-message-id was provided so we
+      // don't pollute logging_errors with anonymous noise. Fire-and-forget;
+      // if THIS insert fails the rest of the waitUntil still runs.
+      if (loggingMessageId) {
+        try {
+          await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, chart_id,
+              request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'DiagnosticReconcileEntered',
+              'reconcile waitUntil entered (pre tracked.done await)',
+              ${actorId},
+              ${chartId ?? null},
+              ${JSON.stringify({
+                user_id: actorId,
+                logging_message_id: loggingMessageId,
+                tier,
+                model,
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+              })}
+            )
+            ON CONFLICT (error_id) DO NOTHING
+          `;
+        } catch (e) {
+          console.error('reconcile-entered diagnostic insert failed:', e);
+        }
+      }
+
       // Wait for the SSE stream to finish (natural end, kill-switch, or
       // client-cancel). Once `tracked.done` resolves, the accumulator is
       // stable — no further transform() callbacks will mutate it.
