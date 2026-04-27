@@ -1902,14 +1902,20 @@ function createCostTrackingStream(
     }
     if (!usageObj) return false;
 
-    // Polling-based running_cost ticks every ~5s during the stream, so the
-    // client's last tick can be up to 5s stale at message_stop. message_delta
-    // carries the authoritative final usage; emit one final running_cost frame
-    // here so BYOK spend tracking and the "$X so far" UI converge with what
-    // the worker's reconcile will write to user_api_usage. Without this the
-    // client undercounts by whatever output streamed between the last poll
-    // and the end of the turn.
-    if (eventType === 'message_delta') {
+    // Emit a running_cost frame on every usage-bearing event so the client's
+    // BYOK spend counter never lags behind reality:
+    //   - message_start: cache_creation_input_tokens / cache_read_input_tokens
+    //     and the full input_tokens count are only reported here (per
+    //     mergeUsage doc). Without this emit, a kill landing before the first
+    //     5s polling tick records ZERO cost for the turn — even though
+    //     Anthropic already billed the cache writes at prompt-processing time.
+    //     This was the bug behind the BYOK "$X this chart" counter
+    //     undercounting cache costs by ~75% on chart 7DGgVcEy (10 quick
+    //     kills, $1.58 actual vs $0.38 displayed).
+    //   - message_delta: the authoritative final usage. Polling can be up to
+    //     5s stale at message_stop, so this final frame is what makes the
+    //     counter converge with what reconcile writes to user_api_usage.
+    if (eventType === 'message_start' || eventType === 'message_delta') {
       const merged = { ...teeCtx.accumulator };
       mergeUsage(merged, usageObj);
       try {
@@ -1925,10 +1931,10 @@ function createCostTrackingStream(
           controller.enqueue(frame);
         } catch {
           // Controller closed (downstream cancelled). Reconcile still writes
-          // the authoritative figure; the client just misses the last tick.
+          // the authoritative figure; the client just misses the tick.
         }
       } catch (e) {
-        console.error('final running_cost emit failed:', e);
+        console.error(`running_cost emit failed at ${eventType}:`, e);
       }
     }
 
