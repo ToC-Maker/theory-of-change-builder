@@ -1718,7 +1718,19 @@ export function ChatInterface({
     // credit partial spend to the right bucket even if state changes mid-stream
     // (e.g. user navigates away). Use delta accumulation so aborted streams
     // still record the portion that was billed.
-    const streamChartId = params.chartId ?? params.editToken ?? null;
+    //
+    // Prefer resolvedChart over params here. On the first send from `/`,
+    // ensureChartExists has just navigate()'d to /edit/<editToken>, but
+    // this handler's closure was created on the previous (root-URL) render
+    // and so still holds the OLD params with both fields undefined. Reading
+    // params here would yield streamChartId=null, addByokSpend(null,...)
+    // would skip the per-chart bucket write, and turn 1's cost (the biggest
+    // cache_write of the conversation) would silently disappear from the
+    // "$X this chart" pill. resolvedChart.editToken is fresh from the
+    // ensureChartExists return value and matches the key the
+    // useChartByokSpendUsd reader uses (which sees the new params on the
+    // next render).
+    const streamChartId = resolvedChart?.editToken ?? params.chartId ?? params.editToken ?? null;
     const streamKeyLast4 = keyLast4;
     const streamUsesByok = hasKey;
     turnLastAppliedMicroRef.current = 0;
