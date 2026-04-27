@@ -9,6 +9,7 @@ import {
   type CostError,
   type StreamPhase,
 } from '../services/chatService';
+import type { AssistantBlock } from '../../shared/chat-blocks';
 import { ChartService } from '../services/chartService';
 import { buildOutgoingMessages } from '../services/outgoingMessages';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
@@ -762,6 +763,12 @@ export function ChatInterface({
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
+  // Mirror of chatService's block accumulator, updated on each
+  // content_block_stop via the onContentBlocks callback. Read synchronously
+  // by handleStopStreaming so user-aborted partial assistant turns preserve
+  // signed thinking + tool blocks (otherwise they only have plain text and
+  // the next "continue" turn loses Opus 4.7's reasoning continuity).
+  const streamingContentBlocksRef = useRef<AssistantBlock[]>([]);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   // Set to true by ensureChartExists right before it navigates to the new
   // /edit/<token> URL. The route-change effect reads + clears it; when
@@ -1446,19 +1453,29 @@ export function ChatInterface({
       setStreamingThinking('');
       setStreamPhase(null);
 
-      // If there's a streaming message, finalize it with current content
-      // and mark as user-aborted so the bubble distinguishes it from a
-      // complete response.
-      if (streamingMessageRef.current && streamingContent) {
+      // Finalize a partial assistant turn when the user clicked Stop. Two
+      // signals to preserve: visible text (streamingContent) AND structured
+      // blocks (streamingContentBlocksRef, captured per content_block_stop
+      // via onContentBlocks). A turn that streamed only thinking + no text
+      // shows up as blocks-but-no-content; without the blocks check those
+      // would silently vanish.
+      const partialBlocks = streamingContentBlocksRef.current;
+      const hasBlocks = partialBlocks.length > 0;
+      const hasText = streamingContent.length > 0;
+      if (streamingMessageRef.current && (hasText || hasBlocks)) {
         const finalMessage: ChatMessage = {
           ...streamingMessageRef.current,
-          content: streamingContent,
+          content: hasText
+            ? streamingContent
+            : '_(Assistant was stopped before writing a visible response.)_',
           was_killed: true,
           kill_reason: 'aborted',
+          content_blocks: hasBlocks ? partialBlocks : undefined,
         };
         setMessages((prev) => [...prev, finalMessage]);
         streamingMessageRef.current = null;
       }
+      streamingContentBlocksRef.current = [];
     }
   };
 
@@ -1532,6 +1549,7 @@ export function ChatInterface({
     setIsStreaming(true);
     setStreamingContent('');
     setStreamingThinking('');
+    streamingContentBlocksRef.current = [];
     setCostErrorBanner(null);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
@@ -1744,6 +1762,12 @@ export function ChatInterface({
             setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
+          },
+          onContentBlocks: (blocks) => {
+            // Mirror chatService's accumulator so handleStopStreaming can
+            // read it synchronously when the user clicks Stop (the service's
+            // own AbortError catch fires too late for that path).
+            streamingContentBlocksRef.current = blocks;
           },
           onCostUpdate: (runningUsd: number) => {
             // Delta-credit the per-chart and per-key BYOK buckets during the
@@ -2384,6 +2408,7 @@ export function ChatInterface({
     setIsStreaming(true);
     setStreamingContent('');
     setStreamingThinking('');
+    streamingContentBlocksRef.current = [];
 
     // Extended thinking is always on.
     setStreamPhase('thinking');
@@ -2574,6 +2599,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             setStreamPhase(null);
             setRunningCostUsd(null);
             streamingMessageRef.current = null;
+          },
+          onContentBlocks: (blocks) => {
+            // Mirror chatService's accumulator so handleStopStreaming can
+            // read it synchronously when the user clicks Stop (the service's
+            // own AbortError catch fires too late for that path).
+            streamingContentBlocksRef.current = blocks;
           },
           onCostUpdate: (runningUsd: number) => {
             // Delta-credit the per-chart and per-key BYOK buckets during the

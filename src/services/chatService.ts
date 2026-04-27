@@ -221,6 +221,15 @@ export interface StreamCallbacks {
   /** Fires on each `message_delta.usage` SSE event with the running USD estimate. */
   onCostUpdate?: (runningCostUsd: number) => void;
   /**
+   * Fires after every `content_block_stop` with the current accumulator
+   * snapshot (text + signed thinking + tool_use + tool_results in order).
+   * Lets the caller keep a mirror in a ref so user-abort handlers can stamp
+   * `content_blocks` onto the partial assistant turn synchronously, without
+   * waiting for the chatService's async cleanup that runs after the abort
+   * has already returned. Cheap: fires per block-stop, not per delta.
+   */
+  onContentBlocks?: (blocks: AssistantBlock[]) => void;
+  /**
    * Fires for cost/policy errors (HTTP 401/402/409/413/429/503 with known shapes,
    * and mid-stream synthesized error events). Does NOT fall through to the
    * generic `onError` handler or the H3->H2 retry path.
@@ -712,6 +721,17 @@ class ChatService {
                 console.log(
                   `[ChatService] block_stop  idx=${event.index} dur=${dur}ms Δ${sinceLast}ms`,
                 );
+                // Snapshot the current blocks so the caller can keep a ref in
+                // sync; user-abort then has a synchronously-readable view of
+                // what streamed before the abort. Skip silently if no
+                // listener — most callers don't need it.
+                if (callbacks.onContentBlocks) {
+                  try {
+                    callbacks.onContentBlocks(toAssistantContentBlocks(blockAccumulator));
+                  } catch (cbErr) {
+                    console.warn('[ChatService] onContentBlocks threw:', cbErr);
+                  }
+                }
               }
 
               // Handle web search events. Fire on EVERY web_search block, not
