@@ -499,14 +499,13 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
             <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
           )}
         {message.was_killed && (
-          // Subtle "interrupted" indicator: the user can simply send a
-          // follow-up like "continue" — the partial content_blocks ride
-          // along on the next request so the model picks up where the kill
-          // landed. Neutral amber styling so it's noticeable without
-          // alarming (the message itself was preserved; nothing is lost).
+          // was_killed is set only by onCostError (cap exceeded) — so this
+          // copy is specific to that case rather than a generic "interrupted"
+          // claim. User-aborted / network / upstream errors leave was_killed
+          // unset and don't render an indicator.
           <div className="mt-1 inline-flex items-center gap-1 text-amber-700">
             <StopIcon className="w-3 h-3" aria-hidden />
-            <span>Response was interrupted — send a follow-up to continue.</span>
+            <span>Cost limit reached — sign in or add an API key to continue.</span>
           </div>
         )}
       </div>
