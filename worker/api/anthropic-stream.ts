@@ -1492,6 +1492,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       type: 'running_cost',
       cost_usd: microToUsd(estimatedMicro),
       output_tokens_est: outputTokensSoFar,
+      source: 'poll',
     })}\n\n`,
   );
 
@@ -1928,18 +1929,45 @@ function createCostTrackingStream(
       mergeUsage(merged, usageObj);
       try {
         const finalMicro = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(merged));
+        // Granular log so the same event the client receives can be
+        // correlated with what the worker computed. `source` identifies
+        // which event triggered the emit (message_start vs message_delta
+        // vs poll). The accumulator snapshot lets us replay the math
+        // offline if the client and server numbers diverge.
+        console.log(
+          JSON.stringify({
+            event: 'running_cost_emit',
+            source: eventType,
+            cost_micro_usd: finalMicro.toString(),
+            cost_usd: microToUsd(finalMicro),
+            input_tokens: merged.input_tokens,
+            output_tokens: merged.output_tokens,
+            cache_creation_input_tokens: merged.cache_creation_input_tokens,
+            cache_read_input_tokens: merged.cache_read_input_tokens,
+            web_search_requests: merged.web_search_requests,
+          }),
+        );
         const frame = encoder.encode(
           `event: running_cost\ndata: ${JSON.stringify({
             type: 'running_cost',
             cost_usd: microToUsd(finalMicro),
             output_tokens_est: merged.output_tokens,
+            source: eventType,
           })}\n\n`,
         );
         try {
           controller.enqueue(frame);
-        } catch {
+        } catch (e) {
           // Controller closed (downstream cancelled). Reconcile still writes
           // the authoritative figure; the client just misses the tick.
+          console.log(
+            JSON.stringify({
+              event: 'running_cost_emit_dropped',
+              source: eventType,
+              reason: 'controller_closed',
+              error_message: e instanceof Error ? e.message : String(e),
+            }),
+          );
         }
       } catch (e) {
         console.error(`running_cost emit failed at ${eventType}:`, e);
@@ -2709,6 +2737,31 @@ export async function handler(
         console.error('Post-stream cost computation failed:', e);
         return;
       }
+
+      // Single structured log per reconcile so we can correlate
+      // server-side final cost with the client's last running_cost
+      // frame. Look for matching cost_micro_usd values in
+      // running_cost_emit logs (source=message_delta is the
+      // closest-to-reconcile authority when message_delta arrived).
+      console.log(
+        JSON.stringify({
+          event: 'reconcile_cost_computed',
+          loggingMessageId: loggingMessageId ?? null,
+          chartId: chartId ?? null,
+          tier,
+          model,
+          message_delta_seen: teeCtx.messageDeltaSeen,
+          actual_micro_usd: actualMicro.toString(),
+          actual_usd: microToUsd(actualMicro),
+          projected_micro_usd: projected.toString(),
+          input_tokens: reconciledAccumulator.input_tokens,
+          output_tokens: reconciledAccumulator.output_tokens,
+          cache_creation_input_tokens: reconciledAccumulator.cache_creation_input_tokens,
+          cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
+          web_search_requests: reconciledAccumulator.web_search_requests,
+          output_source: reconcileOutputSource,
+        }),
+      );
 
       if (isCapped(tier)) {
         const deltaMicro = actualMicro - projected;

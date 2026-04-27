@@ -801,11 +801,13 @@ class ChatService {
                 // so without this the UI "$X so far" stayed frozen through
                 // the whole generation phase. The poller event updates it
                 // every ~5 seconds.
+                const src = typeof event.source === 'string' ? event.source : 'unknown';
                 console.log(
                   `[ChatService] running_cost: $${event.cost_usd.toFixed(4)}` +
                     (typeof event.output_tokens_est === 'number'
                       ? ` output~${event.output_tokens_est}`
-                      : ''),
+                      : '') +
+                    ` source=${src}`,
                 );
                 callbacks.onCostUpdate?.(event.cost_usd);
               } else if (event.type === 'message_stop') {

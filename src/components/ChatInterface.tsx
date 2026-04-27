@@ -1929,10 +1929,29 @@ export function ChatInterface({
             if (streamUsesByok) {
               const newMicro = Math.round(runningUsd * 1_000_000);
               const deltaMicro = newMicro - turnLastAppliedMicroRef.current;
+              // Granular log so we can correlate every running_cost frame
+              // with what gets credited (or skipped). Skip reasons: delta<=0
+              // = non-monotonic frame (worker re-emitted a lower estimate);
+              // chartId/keyLast4 null = bucket misrouting; streamUsesByok
+              // false = anon path, no BYOK accounting at all.
+              console.log(
+                `[BYOK chat] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+                  ` lastAppliedMicro=${turnLastAppliedMicroRef.current}` +
+                  ` newMicro=${newMicro}` +
+                  ` deltaMicro=${deltaMicro}` +
+                  ` chartId=${streamChartId ?? 'null'}` +
+                  ` keyLast4=${streamKeyLast4 ?? 'null'}` +
+                  ` willCredit=${deltaMicro > 0}`,
+              );
               if (deltaMicro > 0) {
                 addByokSpend(streamChartId, streamKeyLast4, deltaMicro / 1_000_000);
                 turnLastAppliedMicroRef.current = newMicro;
               }
+            } else {
+              console.log(
+                `[BYOK chat] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+                  ` skipped: streamUsesByok=false (anon path)`,
+              );
             }
             runningCostUsdRef.current = runningUsd;
             setRunningCostUsd(runningUsd);
@@ -2773,10 +2792,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             if (streamUsesByok) {
               const newMicro = Math.round(runningUsd * 1_000_000);
               const deltaMicro = newMicro - turnLastAppliedMicroRef.current;
+              console.log(
+                `[BYOK gen] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+                  ` lastAppliedMicro=${turnLastAppliedMicroRef.current}` +
+                  ` newMicro=${newMicro}` +
+                  ` deltaMicro=${deltaMicro}` +
+                  ` chartId=${streamChartId ?? 'null'}` +
+                  ` keyLast4=${streamKeyLast4 ?? 'null'}` +
+                  ` willCredit=${deltaMicro > 0}`,
+              );
               if (deltaMicro > 0) {
                 addByokSpend(streamChartId, streamKeyLast4, deltaMicro / 1_000_000);
                 turnLastAppliedMicroRef.current = newMicro;
               }
+            } else {
+              console.log(
+                `[BYOK gen] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+                  ` skipped: streamUsesByok=false`,
+              );
             }
             runningCostUsdRef.current = runningUsd;
             setRunningCostUsd(runningUsd);

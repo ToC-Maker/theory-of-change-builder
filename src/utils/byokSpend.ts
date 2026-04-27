@@ -65,16 +65,39 @@ export function addByokSpend(
   keyLast4: string | null,
   costUsd: number,
 ): void {
-  if (!(costUsd > 0)) return;
+  if (!(costUsd > 0)) {
+    console.log(
+      `[BYOK addSpend] skipped costUsd=${costUsd} (must be > 0)` +
+        ` chartId=${chartId ?? 'null'} keyLast4=${keyLast4 ?? 'null'}`,
+    );
+    return;
+  }
   const micro = Math.round(costUsd * 1_000_000);
+  let chartPrev = 0;
+  let chartNext = 0;
+  let keyPrev = 0;
+  let keyNext = 0;
   if (chartId) {
     const key = CHART_PREFIX + chartId;
-    safeWriteMicroUsd(key, safeReadMicroUsd(key) + micro);
+    chartPrev = safeReadMicroUsd(key);
+    chartNext = chartPrev + micro;
+    safeWriteMicroUsd(key, chartNext);
   }
   if (keyLast4) {
     const key = KEY_PREFIX + keyLast4;
-    safeWriteMicroUsd(key, safeReadMicroUsd(key) + micro);
+    keyPrev = safeReadMicroUsd(key);
+    keyNext = keyPrev + micro;
+    safeWriteMicroUsd(key, keyNext);
   }
+  // Single line per call so we can grep/diff against the running_cost log.
+  // Includes prev→next for both buckets so we can spot localStorage write
+  // failures (prev would equal next on next call) or bucket misrouting
+  // (chartId/keyLast4 silently null when caller intended otherwise).
+  console.log(
+    `[BYOK addSpend] +${micro} µUSD ($${costUsd.toFixed(6)})` +
+      ` chart[${chartId ?? 'null'}]: ${chartPrev}→${chartNext}` +
+      ` key[${keyLast4 ?? 'null'}]: ${keyPrev}→${keyNext}`,
+  );
   emitSpendChanged();
 }
 
