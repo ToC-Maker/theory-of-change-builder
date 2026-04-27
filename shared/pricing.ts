@@ -32,6 +32,15 @@ export const MODEL_PRICING = {
 /** Union of all known model IDs. Derived from `MODEL_PRICING` keys. */
 export type ModelId = keyof typeof MODEL_PRICING;
 
+/**
+ * `output_config.effort` levels Anthropic accepts. `xhigh` is Opus 4.7 only.
+ * `high` matches the API default (omitting the parameter is equivalent).
+ * Order is significant: low → max is increasing thoroughness, used by the UI
+ * dropdown.
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
 export interface ModelCapabilities {
   /** Total context window in tokens (input + output combined). */
   context_window_tokens: number;
@@ -39,8 +48,15 @@ export interface ModelCapabilities {
   max_output_tokens: number;
   /** Whether this model supports extended / adaptive thinking blocks. */
   supports_extended_thinking: boolean;
-  /** Whether this model accepts `output_config: {effort}`; Opus 4.7 only at time of writing. */
+  /** Whether this model accepts `output_config: {effort}`. */
   supports_output_config_effort: boolean;
+  /**
+   * Effort levels accepted by this model. Empty when the model does not
+   * support effort. Populated low → max so the UI can iterate in display order.
+   */
+  effort_levels: readonly EffortLevel[];
+  /** Default effort to seed the UI with (must appear in `effort_levels`). */
+  default_effort: EffortLevel | null;
 }
 
 // Keyed by `ModelId` so adding a model to `MODEL_PRICING` forces a matching
@@ -51,24 +67,32 @@ export const MODEL_CAPABILITIES = {
     max_output_tokens: 128_000,
     supports_extended_thinking: true,
     supports_output_config_effort: true,
+    effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    default_effort: 'xhigh',
   },
   'claude-opus-4-6': {
     context_window_tokens: 1_000_000,
     max_output_tokens: 128_000,
     supports_extended_thinking: true,
-    supports_output_config_effort: false,
+    supports_output_config_effort: true,
+    effort_levels: ['low', 'medium', 'high', 'max'],
+    default_effort: 'high',
   },
   'claude-sonnet-4-6': {
     context_window_tokens: 1_000_000,
     max_output_tokens: 64_000,
     supports_extended_thinking: true,
-    supports_output_config_effort: false,
+    supports_output_config_effort: true,
+    effort_levels: ['low', 'medium', 'high', 'max'],
+    default_effort: 'high',
   },
   'claude-haiku-4-5': {
     context_window_tokens: 200_000,
     max_output_tokens: 64_000,
     supports_extended_thinking: true,
     supports_output_config_effort: false,
+    effort_levels: [],
+    default_effort: null,
   },
 } as const satisfies Record<ModelId, ModelCapabilities>;
 

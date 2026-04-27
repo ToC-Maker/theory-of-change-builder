@@ -10,6 +10,7 @@ import {
   type StreamPhase,
 } from '../services/chatService';
 import type { AssistantBlock } from '../../shared/chat-blocks';
+import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
 import { ChartService } from '../services/chartService';
 import { buildOutgoingMessages } from '../services/outgoingMessages';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
@@ -104,6 +105,18 @@ const MODELS = {
 type ModelKey = keyof typeof MODELS;
 
 /**
+ * Display labels for the effort dropdown. Order is fixed via
+ * `MODEL_CAPABILITIES[model].effort_levels`; this map only owns the copy.
+ */
+const EFFORT_LABELS: Record<EffortLevel, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+};
+
+/**
  * Self-contained model picker. Self-contained so we can drop one in the
  * Chat composer AND the Generate composer without sharing a click-outside
  * ref between the two. Keeps `selected`/`onSelect` lifted in the parent so
@@ -156,6 +169,75 @@ function ModelDropdown({
               }`}
             >
               {name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Effort-level picker. Mirrors `ModelDropdown`'s self-contained pattern so it
+ * can drop into both composers without sharing click-outside state. Hidden
+ * when `MODEL_CAPABILITIES[model].supports_output_config_effort` is false; the
+ * available level set is read from the same capabilities entry so a model
+ * that doesn't accept e.g. `xhigh` can't have it offered.
+ */
+function EffortDropdown({
+  model,
+  selected,
+  onSelect,
+  className = '',
+}: {
+  model: ModelKey;
+  selected: EffortLevel;
+  onSelect: (effort: EffortLevel) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handle = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+
+  const caps = MODEL_CAPABILITIES[model];
+  if (!caps.supports_output_config_effort) return null;
+  const levels = caps.effort_levels;
+
+  return (
+    <div className={`relative ${className}`} ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-[110px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
+        title="Effort: trades response thoroughness against token usage"
+      >
+        <span className="font-medium">{EFFORT_LABELS[selected]}</span>
+        <ChevronDownIcon
+          className={`w-3 h-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute bottom-full mb-1 left-0 w-[160px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
+          {levels.map((level) => (
+            <button
+              key={level}
+              type="button"
+              onClick={() => {
+                onSelect(level);
+                setOpen(false);
+              }}
+              className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
+                selected === level ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+              }`}
+            >
+              {EFFORT_LABELS[level]}
             </button>
           ))}
         </div>
@@ -536,6 +618,31 @@ export function ChatInterface({
   const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
+  // Effort defaults to the model's recommended starting point (xhigh on Opus
+  // 4.7, high elsewhere), matching what we hardcoded before this dropdown
+  // existed. `default_effort` is null only for models that don't support
+  // effort at all (haiku); not currently in the picker, but we fall back
+  // safely if that changes.
+  const [selectedEffort, setSelectedEffort] = useState<EffortLevel>(
+    () => MODEL_CAPABILITIES['claude-opus-4-7'].default_effort ?? 'high',
+  );
+
+  // When the user switches models, clamp effort to a level the new model
+  // accepts. Keeping effort across model swaps preserves user intent (a user
+  // who picked "low" on Opus probably also wants "low" on Sonnet); we only
+  // overwrite when the chosen level isn't valid (e.g. xhigh after switching
+  // off Opus 4.7) or the new model doesn't support effort at all.
+  useEffect(() => {
+    const caps = MODEL_CAPABILITIES[selectedModel];
+    if (!caps.supports_output_config_effort) return;
+    // `effort_levels` is a `readonly` tuple narrowed via `as const`; widen
+    // here so `includes()` accepts the broader `EffortLevel` union we hold
+    // in state. Without the cast TS rejects `xhigh` against a Sonnet tuple
+    // even though we want exactly that "is the current effort still valid?"
+    // answer.
+    if ((caps.effort_levels as readonly EffortLevel[]).includes(selectedEffort)) return;
+    setSelectedEffort(caps.default_effort ?? 'high');
+  }, [selectedModel, selectedEffort]);
 
   // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
@@ -1826,6 +1933,7 @@ export function ChatInterface({
         webSearchEnabled,
         highlightedNodes,
         extendedThinkingEnabled: true,
+        effort: selectedEffort,
         attachedFileIds,
         idempotencyKey,
         chartId: resolvedChartId,
@@ -2652,6 +2760,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         webSearchEnabled,
         highlightedNodes,
         extendedThinkingEnabled: true,
+        effort: selectedEffort,
         attachedFileIds: generateAttachedFileIds,
         idempotencyKey: crypto.randomUUID(), // fresh per send: dedupes browser reload / double-click
         // Generate mode always has a chart by this point (attached files
@@ -3057,6 +3166,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         <span>Model</span>
                         <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
                       </div>
+
+                      {/* Effort picker. Hidden when the model doesn't accept
+                          `output_config.effort`; rendered on the same row when
+                          it does so the controls stay visually grouped. */}
+                      {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
+                        <div className="flex items-center justify-between text-xs text-gray-600">
+                          <span>Effort</span>
+                          <EffortDropdown
+                            model={selectedModel}
+                            selected={selectedEffort}
+                            onSelect={setSelectedEffort}
+                          />
+                        </div>
+                      )}
 
                       {/* Generate button. The BYOK gate is enforced upstream:
                     this render path is reached only when hasKey && verified,
@@ -3490,6 +3613,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </button>
                       </div>
                       <div className="flex items-center gap-2">
+                        <EffortDropdown
+                          model={selectedModel}
+                          selected={selectedEffort}
+                          onSelect={setSelectedEffort}
+                        />
                         <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
 
                         {isStreaming ? (

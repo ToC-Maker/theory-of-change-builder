@@ -13,7 +13,7 @@ import {
   MODEL_OUTPUT_RATES_USD_PER_MTOK,
   WEB_SEARCH_USD_PER_USE,
 } from '../utils/cost';
-import { MODEL_CAPABILITIES } from '../../shared/pricing';
+import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockAccumulator';
 import { buildOutgoingMessages } from './outgoingMessages';
@@ -258,6 +258,13 @@ export type StreamMessageOptions = {
   webSearchEnabled?: boolean;
   highlightedNodes?: Set<string> | string[];
   extendedThinkingEnabled?: boolean;
+  /**
+   * `output_config.effort` value. Only forwarded when the model's
+   * `supports_output_config_effort` capability is true; otherwise dropped to
+   * avoid Anthropic rejecting the field. Caller is expected to clamp to a
+   * level the model accepts (e.g. `xhigh` is Opus 4.7 only).
+   */
+  effort?: EffortLevel;
   attachedFileIds?: string[];
   idempotencyKey?: string;
   userAnthropicKey?: string;
@@ -897,6 +904,7 @@ class ChatService {
       webSearchEnabled = false,
       highlightedNodes,
       extendedThinkingEnabled = false,
+      effort,
       attachedFileIds = [],
       idempotencyKey,
       userAnthropicKey,
@@ -1027,11 +1035,18 @@ class ChatService {
 
       // Some models accept an output_config.effort; others reject the field.
       // Capability flag lives in shared/pricing.ts so it stays in sync with
-      // the models-overview docs.
+      // the models-overview docs. The caller picks the level (UI dropdown);
+      // we additionally guard the per-model accept-list so an `xhigh` choice
+      // surviving a model swap to e.g. Sonnet 4.6 doesn't 400 upstream.
+      // The `as readonly EffortLevel[]` widens the per-model tuple (narrowed
+      // via `as const`) so `includes()` accepts the broader union.
+      const caps = MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES];
       if (
-        MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.supports_output_config_effort
+        caps?.supports_output_config_effort &&
+        effort &&
+        (caps.effort_levels as readonly EffortLevel[]).includes(effort)
       ) {
-        requestBody.output_config = { effort: 'xhigh' };
+        requestBody.output_config = { effort };
       }
 
       // Add web search with dynamic filtering (auto-injects code_execution)
