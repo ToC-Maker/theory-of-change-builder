@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+coverage
 *.local
 
 # Editor directories and files
@@ -31,14 +32,12 @@ dist-ssr
 # Test files with sensitive data
 test-database.js
 
-# Netlify
-.netlify/
+# Cloudflare
+.wrangler/
+.dev.vars
 
 # Claude Code local settings
 .claude/settings.local.json
 
 # Internal planning
 plans/
-
-# Storybook build
-storybook-static/

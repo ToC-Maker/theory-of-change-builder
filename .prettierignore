@@ -1,3 +1,11 @@
-# Ignore artifacts:
+node_modules
+dist
+dist-ssr
 build
 coverage
+.wrangler
+package-lock.json
+policies
+# Human-maintained docs (prettier's markdown table expansion is intrusive).
+CLAUDE.md
+README.md
