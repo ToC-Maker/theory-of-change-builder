@@ -1347,7 +1347,11 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
 async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
   if (teeCtx.streamDone.v) return;
-  if (teeCtx.killThresholdMicro === null) return;
+  // killThresholdMicro=null is the BYOK path (no cap, so no kill switch).
+  // We still run polling for those streams because the running_cost frame
+  // it emits is the only way the BYOK "$X this chart" pill captures
+  // mid-stream output cost when the user kills before message_delta. Kill
+  // logic below is gated separately on the threshold.
   if (!teeCtx.env || !teeCtx.countTokensBase) return;
 
   const assistantBlocks = buildAssistantBlocksForCountTokens(teeCtx);
@@ -1503,11 +1507,13 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       output_tokens_est: outputTokensSoFar,
       total_input_tokens: totalInputTokens,
       web_searches: teeCtx.streamingContent.webSearchCount,
-      kill_threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+      kill_threshold_micro_usd: teeCtx.killThresholdMicro?.toString() ?? null,
     }),
   );
 
-  if (estimatedMicro > teeCtx.killThresholdMicro) {
+  // BYOK streams (killThresholdMicro=null) emit running_cost frames but
+  // skip the cap-enforcement branch below.
+  if (teeCtx.killThresholdMicro !== null && estimatedMicro > teeCtx.killThresholdMicro) {
     // Race: if another path (parseFrame kill, abort, etc.) already fired, skip.
     if (teeCtx.killed.v) return;
     const payload = JSON.stringify({
@@ -1615,11 +1621,13 @@ function createCostTrackingStream(
     resolveDone();
   });
 
-  if (
-    teeCtx.killThresholdMicro !== null &&
-    teeCtx.env !== null &&
-    teeCtx.countTokensBase !== null
-  ) {
+  // Arm the polling timer whenever count_tokens is reachable. This covers
+  // both purposes: the cap kill-switch (when killThresholdMicro is set) and
+  // the running_cost emit that drives the BYOK "$X this chart" pill (which
+  // needs ticks even when killThresholdMicro is null, otherwise mid-stream
+  // output cost is invisible until message_delta — and message_delta never
+  // fires on a user-kill).
+  if (teeCtx.env !== null && teeCtx.countTokensBase !== null) {
     pollTimer = setInterval(() => {
       if (teeCtx.killed.v || teeCtx.pollingDisabled) {
         clearPollTimer(teeCtx.killed.v ? 'killed' : 'polling_disabled');
