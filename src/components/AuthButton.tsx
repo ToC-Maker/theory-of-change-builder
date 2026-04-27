@@ -285,8 +285,7 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
       </div>
 
       <p className="text-sm text-gray-600 mb-4">
-        When a key is set, your messages are billed to your Anthropic account instead of our shared
-        free pool.
+        When a key is set, your messages are billed to your Anthropic account.
       </p>
 
       <ByokPanel />
@@ -298,7 +297,7 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
               dashboard is the source of truth for billing. Resets when
               the key is removed. */}
           <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-600">Spent on this key (via this app)</span>
+            <span className="text-gray-600">Spent on this key</span>
             <span className="font-medium text-gray-900">{formatCostUsd(keyLifetimeSpendUsd)}</span>
           </div>
           <button
