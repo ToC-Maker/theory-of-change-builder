@@ -513,27 +513,13 @@ function TurnstileWidget({
 }
 
 /**
- * Memoized single-message renderer. Extracted + React.memo'd because
- * otherwise every keystroke in the composer re-parses every historical
- * assistant message's markdown from scratch (ReactMarkdown is not cheap
- * on a long conversation), which made pasting large strings freeze the
- * UI. Each message's identity is stable after append, so the shallow
- * prop comparison skips re-renders in the common case.
- *
- * message.content is already the cleaned (marker-stripped) version —
- * cleanResponseContent was applied in onComplete before the row landed
- * in `messages` state; no per-render cleaning needed here.
- */
-/**
- * Assistant messages render flush with the scrollable container (no
- * bubble, full width, at the container's visual hierarchy). User messages
- * stay as a right-aligned blue bubble — the bubble + alignment makes the
- * role clear without relying on left/right as the only signal.
- *
- * Both sides render GitHub-flavored markdown (remark-gfm) so tables,
- * strikethrough, task lists, and autolinks show up in either direction.
- * `prose-table:block prose-table:overflow-x-auto` lets wide tables scroll
- * horizontally instead of overflowing the narrow chat column.
+ * Memoized single-message renderer. React.memo'd because otherwise every
+ * keystroke in the composer re-parses every historical assistant message's
+ * markdown (ReactMarkdown is not cheap on a long conversation). Assistant
+ * messages render flush with the scrollable container; user messages
+ * stay as a right-aligned blue bubble. Both sides use remark-gfm so
+ * tables/strikethrough/task lists work in either direction. message.content
+ * is pre-cleaned in onComplete — no per-render cleaning here.
  */
 const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
   const proseClass =
@@ -1715,12 +1701,6 @@ export function ChatInterface({
     // reached the client yet.
     setStreamPhase('thinking');
 
-    // NOTE: `userAnthropicKey` is not passed from the client in the
-    // server-stored BYOK flow — the client never retains the raw key after
-    // it's been submitted to /api/byok-key. Server-side transparent BYOK
-    // decrypt-and-forward in anthropic-stream is a follow-up; until then,
-    // explicit per-request BYOK requires the user to re-enter the key.
-
     // Log user message (fire and forget)
     loggingService.logUserMessage({
       messageId: userMessageId,
@@ -2120,8 +2100,8 @@ export function ChatInterface({
    * `/edit/<token>` and `/chart/<id>` routes the chart already exists and
    * we just return its id. Idempotent — safe to call multiple times.
    *
-   * Side effects on first creation: updates the URL to
-   * `/edit/<editToken>` (replaceState, no route re-render) and fires
+   * Side effects on first creation: navigates to `/edit/<editToken>` (with
+   * replace=true so the back button doesn't return to `/`) and fires
    * `onChartCreated`, which in App.tsx triggers `initializeLogging` — so
    * the logging session is up before the first saveMessage lands.
    */
