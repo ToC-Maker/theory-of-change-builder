@@ -11,7 +11,14 @@ import { resolveAnonActor } from '../_shared/anon-id';
 import {
   deleteOneAnthropicFile as sharedDeleteOneAnthropicFile,
   fanOutAnthropicFileDeletes,
+  type AnthropicFileDeleteFailure,
+  type DeleteOutcome,
 } from '../_shared/anthropic-files';
+import type {
+  DeleteMyDataNoData,
+  DeleteMyDataResponse,
+  DeleteMyDataSuccess,
+} from '../../shared/delete-my-data';
 
 // ---------------------------------------------------------------------------
 // Cookie-clearing helpers (exported for unit tests).
@@ -58,29 +65,30 @@ export function buildClearedCookieHeaders(): string[] {
 
 const LOG_PREFIX = '[delete-my-data]';
 
-export function deleteOneAnthropicFile(apiKey: string, fid: string): Promise<boolean> {
+export function deleteOneAnthropicFile(apiKey: string, fid: string): Promise<DeleteOutcome> {
   return sharedDeleteOneAnthropicFile(apiKey, fid, LOG_PREFIX);
 }
 
 export function fanOutAnthropicDeletes(
   apiKey: string,
   fileIds: readonly string[],
-): Promise<string[]> {
+): Promise<AnthropicFileDeleteFailure[]> {
   return fanOutAnthropicFileDeletes(apiKey, fileIds, LOG_PREFIX);
 }
 
 // ---------------------------------------------------------------------------
-// Audit row in logging_errors. Source of truth for "files we promised to
-// delete at Anthropic but haven't confirmed yet" and for cascade-failure
-// incidents. The row's user_id stays NULL so the cascade DELETE-by-user_id
-// inside the same request doesn't wipe its own audit trail; the real user_id
-// lives in request_metadata.
+// Audit row in logging_errors. The audit row's `user_id` column is set to
+// NULL so the cascade DELETE-by-user_id below cannot wipe its own audit
+// trail; the real user_id lives in `request_metadata.user_id` for operator
+// queries. This invariant is referenced by both the Phase-2a insert and the
+// Phase-2b cascade — single source of truth here.
 // ---------------------------------------------------------------------------
 
 type Sql = ReturnType<typeof getDb>;
 
 const ERROR_NAME_FILES_PENDING = 'delete_my_data_files_pending';
 const ERROR_NAME_CASCADE_FAILED = 'delete_my_data_failed';
+const ERROR_NAME_AUDIT_TRANSITION_FAILED = 'delete_my_data_audit_transition_failed';
 
 async function insertPendingAuditRow(
   sql: Sql,
@@ -88,8 +96,12 @@ async function insertPendingAuditRow(
   userId: string,
   fileIds: readonly string[],
 ): Promise<void> {
-  // TODO: scheduled retry job — read rows WHERE error_name = 'delete_my_data_files_pending'
-  // and replay the Anthropic DELETE for each file_id in request_metadata.file_ids.
+  // Future retry job filters on error_name='delete_my_data_files_pending'
+  // AND request_metadata->'file_ids' is non-empty AND no sibling
+  // 'delete_my_data_audit_transition_failed' row exists for this incident_id
+  // (sibling presence means the cascade itself rolled back; replaying the
+  // file DELETEs would attempt to re-delete files whose local rows are still
+  // present, which is a privacy regression rather than a recovery).
   await sql`
     INSERT INTO logging_errors (
       error_id, error_name, error_message, user_id, request_metadata
@@ -108,17 +120,24 @@ async function finalizeAuditRow(
   sql: Sql,
   errorId: string,
   userId: string,
-  failedFileIds: string[],
+  failures: AnthropicFileDeleteFailure[],
 ): Promise<void> {
-  if (failedFileIds.length === 0) {
+  if (failures.length === 0) {
     await sql`DELETE FROM logging_errors WHERE error_id = ${errorId}`;
     return;
   }
+  // Split by transient/permanent so a future retry job can pick up only the
+  // transient ones. `file_ids` (legacy aggregate) is preserved so existing
+  // queries on request_metadata->'file_ids' keep working.
+  const transientFids = failures.filter((f) => f.transient).map((f) => f.fid);
+  const permanentFids = failures.filter((f) => !f.transient).map((f) => f.fid);
   await sql`
     UPDATE logging_errors
        SET request_metadata = ${JSON.stringify({
          user_id: userId,
-         file_ids: failedFileIds,
+         file_ids: failures.map((f) => f.fid),
+         transient_file_ids: transientFids,
+         permanent_file_ids: permanentFids,
          status: 'partial',
        })}
      WHERE error_id = ${errorId}
@@ -146,13 +165,70 @@ async function recordCascadeFailure(
   `;
 }
 
+// Best-effort transition of the pending audit row to a failure incident.
+// Used by both the cascade catch and the BYOK catch — the pattern is
+// identical except for the `stage` discriminator that tags the sibling
+// diagnostic when even the transition itself fails. Caller still returns
+// the same incident_id so the user has something concrete to quote.
+async function tryRecordFailure(
+  sql: Sql,
+  incidentId: string,
+  userId: string,
+  fileIdsPromised: readonly string[],
+  err: unknown,
+  stage: 'cascade' | 'byok_delete',
+): Promise<void> {
+  try {
+    await recordCascadeFailure(sql, incidentId, userId, err);
+  } catch (auditErr) {
+    console.error(`${LOG_PREFIX} ${stage} audit-row failure transition also failed:`, auditErr);
+    // The original audit row is now stuck in 'pending' state but the work
+    // it referred to (cascade / BYOK delete) actually rolled back. A future
+    // retry job seeing 'pending' would mistakenly replay file deletes that
+    // never happened — insert a sibling diagnostic so an operator can find
+    // these stuck rows, and so the retry job's filter (no sibling
+    // ERROR_NAME_AUDIT_TRANSITION_FAILED for the same incident_id) excludes
+    // them.
+    try {
+      const stageLabel = stage === 'cascade' ? 'cascade rolled back' : 'BYOK delete failed';
+      await sql`
+        INSERT INTO logging_errors (
+          error_id, error_name, error_message, user_id, request_metadata
+        )
+        VALUES (
+          ${crypto.randomUUID()},
+          ${ERROR_NAME_AUDIT_TRANSITION_FAILED},
+          ${`Could not transition incident ${incidentId} to failed status; ${stageLabel} but original row remains 'pending'`},
+          ${null},
+          ${JSON.stringify({
+            user_id: userId,
+            original_incident_id: incidentId,
+            file_ids_promised: fileIdsPromised,
+            stage,
+            cascade_error: err instanceof Error ? err.message : String(err),
+            transition_error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+          })}
+        )
+      `;
+    } catch (siblingErr) {
+      console.error(`${LOG_PREFIX} ${stage} sibling diagnostic insert also failed:`, siblingErr);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Identity resolution: dual-mode (auth via JWT, anon via tocb_actor_id).
 // ---------------------------------------------------------------------------
 
-type IdentityResult =
+// Tagged union: the `false` arm splits into three semantically distinct
+// kinds so the handler can't accidentally treat a 200-no-data path the same
+// as a 401-invalid-token (e.g. attempting an anon BYOK delete on a no-data
+// path that has no actor cookie). `kind` is exhaustive over the false arms.
+export type IdentityResult =
   | { ok: true; userId: string; authenticated: boolean }
-  | { ok: false; response: Response };
+  | { ok: false; kind: 'unauthorized'; response: Response }
+  | { ok: false; kind: 'service_unavailable'; response: Response }
+  | { ok: false; kind: 'no_data'; response: Response };
 
 async function resolveIdentity(request: Request, env: Env): Promise<IdentityResult> {
   const token = extractToken(request.headers.get('authorization'));
@@ -162,13 +238,20 @@ async function resolveIdentity(request: Request, env: Env): Promise<IdentityResu
       return { ok: true, userId: decoded.sub, authenticated: true };
     } catch (err) {
       if (err instanceof JWKSFetchError) {
+        console.error(`${LOG_PREFIX} JWKS fetch failed during token verify:`, err);
         return {
           ok: false,
+          kind: 'service_unavailable',
           response: Response.json({ error: 'authentication_service_unavailable' }, { status: 503 }),
         };
       }
+      // Visibility for unauthorized hits — without this, an attacker spraying
+      // invalid tokens at /api/my-data leaves no breadcrumb. Use `warn` so
+      // it's distinct from the JWKS-availability `error` above.
+      console.warn(`${LOG_PREFIX} Token verification failed (invalid_token):`, err);
       return {
         ok: false,
+        kind: 'unauthorized',
         response: Response.json({ error: 'invalid_token' }, { status: 401 }),
       };
     }
@@ -188,24 +271,19 @@ async function resolveIdentity(request: Request, env: Env): Promise<IdentityResu
       // this browser. Return a 200 with a no-op summary; do NOT echo the
       // freshly minted cookie (we don't want to assign an identity just to
       // delete from it).
+      const body: DeleteMyDataNoData = { ok: true, no_data: true };
       return {
         ok: false,
-        response: Response.json(
-          {
-            ok: true,
-            deleted: { charts_hard_deleted: 0, charts_orphaned: 0, files: 0, byok: false },
-            files_pending_remote_delete: 0,
-            no_data: true,
-          },
-          { status: 200 },
-        ),
+        kind: 'no_data',
+        response: Response.json(body, { status: 200 }),
       };
     }
     return { ok: true, userId: resolved.userId, authenticated: false };
   } catch (e) {
-    console.error('[delete-my-data] resolveAnonActor failed:', e);
+    console.error(`${LOG_PREFIX} resolveAnonActor failed:`, e);
     return {
       ok: false,
+      kind: 'service_unavailable',
       response: Response.json({ error: 'actor_unavailable' }, { status: 503 }),
     };
   }
@@ -275,7 +353,7 @@ export async function handler(
       collabEditedIds = allOwnedIds.filter((id) => collabSet.has(id));
     }
   } catch (e) {
-    console.error('[delete-my-data] discovery query failed:', e);
+    console.error(`${LOG_PREFIX} discovery query failed:`, e);
     return classifyDbError(e);
   }
 
@@ -288,16 +366,16 @@ export async function handler(
     `;
     userFileIds = fileRows.map((r) => r.file_id as string);
   } catch (e) {
-    console.error('[delete-my-data] file_id snapshot failed:', e);
+    console.error(`${LOG_PREFIX} file_id snapshot failed:`, e);
     return classifyDbError(e);
   }
 
   // --- Phase 2a: pre-cascade audit row -------------------------------------
   // Insert one durable audit row capturing the file_ids we're about to
-  // promise to delete at Anthropic. The cascade DELETE-by-user_id can't
-  // wipe it (we set user_id = NULL on this row; real user_id lives in
-  // request_metadata), so even if the cascade itself fails we still have
-  // an incident record we can return as `error_id`.
+  // promise to delete at Anthropic. The cascade DELETE-by-user_id can't wipe
+  // it (audit-row invariant: user_id = NULL on the row, real user_id in
+  // request_metadata) so even if the cascade itself fails we still have an
+  // incident record to return as `error_id`.
   //
   // Inserted unconditionally — even when userFileIds is empty — so that
   // charts-only / BYOK-only users hitting a cascade failure get a queryable
@@ -307,7 +385,7 @@ export async function handler(
   try {
     await insertPendingAuditRow(sql, incidentId, userId, userFileIds);
   } catch (e) {
-    console.error('[delete-my-data] audit-row insert failed; refusing to cascade:', e);
+    console.error(`${LOG_PREFIX} audit-row insert failed; refusing to cascade:`, e);
     return classifyDbError(e);
   }
 
@@ -320,93 +398,49 @@ export async function handler(
   //   4. DELETE logging_snapshots tied to user's sessions.
   //   5. DELETE logging_sessions (cascades any leftover messages/snapshots).
   //   6. DELETE logging_errors WHERE user_id = ?
-  //      (audit row above has user_id = NULL, so it survives.)
+  //      (audit row above has user_id = NULL — see invariant — so it survives.)
   //   7. DELETE logging_preferences (auth only; anon table is keyed on sub).
   //   8. DELETE chart_files WHERE user_id = ? (orphan-chart sweep).
   //   9. DELETE chart_permissions WHERE user_id = ? (orphan-chart sweep).
   //
   // BYOK delete is a separate transaction (Phase 2c) so we can use RETURNING
   // to know whether a row actually existed.
+  //
+  // Anon path note: userId can be `anon-<uuid>` (no auth-link cookie) OR an
+  // auth sub (resolveAnonActor returns the linked sub when tocb_auth_link
+  // verifies). Post-logout calls still route here, not to the auth branch,
+  // because resolveIdentity hard-codes authenticated=false for non-JWT
+  // requests. That gates BYOK delete behind a fresh JWT, mirroring
+  // byok-key.ts, so a stale auth-link cookie can never trigger a BYOK wipe.
   try {
-    if (authenticated) {
-      await sql.transaction([
-        soleOwnedIds.length > 0
-          ? sql`DELETE FROM charts WHERE id = ANY(${soleOwnedIds}::text[]) AND user_id = ${userId}`
-          : sql`SELECT 1 WHERE FALSE`,
-        collabEditedIds.length > 0
-          ? sql`UPDATE charts SET user_id = NULL WHERE id = ANY(${collabEditedIds}::text[]) AND user_id = ${userId}`
-          : sql`SELECT 1 WHERE FALSE`,
-        sql`DELETE FROM logging_messages WHERE user_id = ${userId}`,
-        sql`DELETE FROM logging_snapshots WHERE session_id IN (
-              SELECT session_id FROM logging_sessions WHERE user_id = ${userId}
-            )`,
-        sql`DELETE FROM logging_sessions WHERE user_id = ${userId}`,
-        sql`DELETE FROM logging_errors WHERE user_id = ${userId}`,
-        sql`DELETE FROM logging_preferences WHERE user_id = ${userId}`,
-        sql`DELETE FROM chart_files WHERE user_id = ${userId}`,
-        sql`DELETE FROM chart_permissions WHERE user_id = ${userId}`,
-      ]);
-    } else {
-      // Anon path: userId here can be `anon-<uuid>` (no auth-link cookie) OR
-      // an auth sub (resolveAnonActor returns the linked sub when
-      // tocb_auth_link verifies). Post-logout calls still route here, not
-      // to the auth branch, because resolveIdentity hard-codes
-      // authenticated=false. That gates BYOK delete behind a fresh JWT,
-      // mirroring byok-key.ts, so a stale auth-link cookie can never
-      // trigger a BYOK wipe.
-      await sql.transaction([
-        soleOwnedIds.length > 0
-          ? sql`DELETE FROM charts WHERE id = ANY(${soleOwnedIds}::text[]) AND user_id = ${userId}`
-          : sql`SELECT 1 WHERE FALSE`,
-        collabEditedIds.length > 0
-          ? sql`UPDATE charts SET user_id = NULL WHERE id = ANY(${collabEditedIds}::text[]) AND user_id = ${userId}`
-          : sql`SELECT 1 WHERE FALSE`,
-        sql`DELETE FROM logging_messages WHERE user_id = ${userId}`,
-        sql`DELETE FROM logging_snapshots WHERE session_id IN (
-              SELECT session_id FROM logging_sessions WHERE user_id = ${userId}
-            )`,
-        sql`DELETE FROM logging_sessions WHERE user_id = ${userId}`,
-        sql`DELETE FROM logging_errors WHERE user_id = ${userId}`,
-        sql`DELETE FROM chart_files WHERE user_id = ${userId}`,
-        sql`DELETE FROM chart_permissions WHERE user_id = ${userId}`,
-      ]);
-    }
+    const cascadeStatements = [
+      soleOwnedIds.length > 0
+        ? sql`DELETE FROM charts WHERE id = ANY(${soleOwnedIds}::text[]) AND user_id = ${userId}`
+        : sql`SELECT 1 WHERE FALSE`,
+      collabEditedIds.length > 0
+        ? sql`UPDATE charts SET user_id = NULL WHERE id = ANY(${collabEditedIds}::text[]) AND user_id = ${userId}`
+        : sql`SELECT 1 WHERE FALSE`,
+      sql`DELETE FROM logging_messages WHERE user_id = ${userId}`,
+      sql`DELETE FROM logging_snapshots WHERE session_id IN (
+            SELECT session_id FROM logging_sessions WHERE user_id = ${userId}
+          )`,
+      sql`DELETE FROM logging_sessions WHERE user_id = ${userId}`,
+      sql`DELETE FROM logging_errors WHERE user_id = ${userId}`,
+      // logging_preferences only exists for auth users (anon has no opt-out
+      // surface); splice it in at this position when authenticated. Avoids
+      // duplicating the entire transaction array between the two paths.
+      ...(authenticated ? [sql`DELETE FROM logging_preferences WHERE user_id = ${userId}`] : []),
+      sql`DELETE FROM chart_files WHERE user_id = ${userId}`,
+      sql`DELETE FROM chart_permissions WHERE user_id = ${userId}`,
+    ];
+    await sql.transaction(cascadeStatements);
   } catch (e) {
-    console.error('[delete-my-data] write transaction failed:', e);
+    console.error(`${LOG_PREFIX} write transaction failed:`, e);
     // Best-effort: transition the audit row to a failure incident so a
-    // human can see what went wrong. If this also fails we still return
-    // the same incident_id, so the user has something to quote.
-    try {
-      await recordCascadeFailure(sql, incidentId, userId, e);
-    } catch (auditErr) {
-      console.error('[delete-my-data] audit-row failure transition also failed:', auditErr);
-      // The original audit row is now stuck in 'pending' state but the
-      // cascade actually rolled back. A future retry job seeing 'pending'
-      // would mistakenly replay file deletes that never happened. Insert
-      // a sibling diagnostic so an operator can find these stuck rows.
-      try {
-        await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'delete_my_data_audit_transition_failed',
-            ${`Could not transition incident ${incidentId} to failed status; cascade rolled back but original row remains 'pending'`},
-            ${null},
-            ${JSON.stringify({
-              user_id: userId,
-              original_incident_id: incidentId,
-              file_ids_promised: userFileIds,
-              cascade_error: e instanceof Error ? e.message : String(e),
-              transition_error: auditErr instanceof Error ? auditErr.message : String(auditErr),
-            })}
-          )
-        `;
-      } catch (siblingErr) {
-        console.error('[delete-my-data] sibling diagnostic insert also failed:', siblingErr);
-      }
-    }
+    // human can see what went wrong. If even this fails (and the sibling
+    // diagnostic too) we still return the same incident_id, so the user
+    // has something to quote.
+    await tryRecordFailure(sql, incidentId, userId, userFileIds, e, 'cascade');
     return classifyDbError(e, incidentId);
   }
 
@@ -429,44 +463,11 @@ export async function handler(
     } catch (e) {
       // Charts are already deleted at this point; failing to drop the BYOK
       // row would leave an orphan blob keyed under a user that no longer
-      // owns anything, which is a privacy regression. Surface as an
-      // incident so the operator can chase it manually.
-      console.error('[delete-my-data] BYOK delete failed (post-cascade):', e);
-      // Mirror the main cascade catch: transition the audit row to a failure
-      // incident so the operator sees what went wrong instead of finding a
-      // pending-files row dangling. The audit row is always inserted in
-      // Phase 2a (regardless of userFileIds.length), so recordCascadeFailure
-      // always has something to UPDATE.
-      try {
-        await recordCascadeFailure(sql, incidentId, userId, e);
-      } catch (auditErr) {
-        console.error('[delete-my-data] BYOK audit-row failure transition also failed:', auditErr);
-        // Sibling diagnostic so the stuck 'pending' row is findable. Same
-        // structure as the cascade-catch fallback above.
-        try {
-          await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'delete_my_data_audit_transition_failed',
-              ${`Could not transition incident ${incidentId} to failed status; BYOK delete failed and original row remains 'pending'`},
-              ${null},
-              ${JSON.stringify({
-                user_id: userId,
-                original_incident_id: incidentId,
-                file_ids_promised: userFileIds,
-                stage: 'byok_delete',
-                cascade_error: e instanceof Error ? e.message : String(e),
-                transition_error: auditErr instanceof Error ? auditErr.message : String(auditErr),
-              })}
-            )
-          `;
-        } catch (siblingErr) {
-          console.error('[delete-my-data] BYOK sibling diagnostic insert also failed:', siblingErr);
-        }
-      }
+      // owns anything, which is a privacy regression. Surface as an incident
+      // so the operator can chase it manually. Same audit-row failure-path
+      // contract as the cascade catch above.
+      console.error(`${LOG_PREFIX} BYOK delete failed (post-cascade):`, e);
+      await tryRecordFailure(sql, incidentId, userId, userFileIds, e, 'byok_delete');
       return classifyDbError(e, incidentId);
     }
   }
@@ -475,13 +476,13 @@ export async function handler(
   // Audit row at incidentId is the durable record of what we promised to
   // delete. Fan-out runs after the response (ctx.waitUntil); on completion
   // it either DELETEs the audit row (all succeeded) or UPDATEs it with the
-  // surviving failed file_ids (so a future scheduled-task replay picks them
-  // up).
+  // surviving failed file_ids split by transient/permanent (so a future
+  // scheduled-task replay picks up only the transient ones).
   //
   // Skip when ANTHROPIC_API_KEY is unset (test/local-dev) — local rows are
   // already gone so it's not a privacy regression for the CI/dev path. The
   // response shape distinguishes "fan-out scheduled" from "fan-out skipped"
-  // via the `remote_delete_disabled` flag, so the UI can avoid claiming
+  // via the `remote_files.mode` discriminator, so the UI can avoid claiming
   // "queued for remote deletion" when no fan-out actually happened.
   const remoteDeleteEnabled = Boolean(env.ANTHROPIC_API_KEY) && userFileIds.length > 0;
   if (remoteDeleteEnabled) {
@@ -492,7 +493,7 @@ export async function handler(
         try {
           await finalizeAuditRow(sql, incidentId, userId, failed);
         } catch (auditErr) {
-          console.error('[delete-my-data] audit-row finalize failed:', auditErr);
+          console.error(`${LOG_PREFIX} audit-row finalize failed:`, auditErr);
         }
       })(),
     );
@@ -503,39 +504,52 @@ export async function handler(
     ctx.waitUntil(
       sql`DELETE FROM logging_errors WHERE error_id = ${incidentId}`.then(
         () => undefined,
-        (e: unknown) =>
-          console.error('[delete-my-data] audit-row cleanup (no-key path) failed:', e),
+        (e: unknown) => console.error(`${LOG_PREFIX} audit-row cleanup (no-key path) failed:`, e),
       ),
     );
   }
 
   // --- Phase 4: response with cookie clears --------------------------------
+  // `Clear-Site-Data: "storage"` on the auth-path 200 wipes the Auth0 token
+  // cache (we use cacheLocation="localstorage") so a deleted account can't
+  // continue to use a residual JWT from the same browser tab — fixes the
+  // ~24h "still logged in" gap if the user closes the tab before the
+  // 1.5s-deferred logout() in the panel fires.
+  //
+  // Why not "cookies": that would clear `tocb_actor_id`, defeating the
+  // user_api_usage carve-out (the cap stays attached to the browser, see
+  // COOKIES_TO_PRESERVE_ON_DATA_DELETE). The Auth0 JWT itself doesn't live
+  // in our cookies — only `tocb_anon`/`tocb_auth_link` do, and those are
+  // cleared explicitly via Set-Cookie above.
+  //
+  // Why not "executionContexts": too aggressive — it'd close other tabs of
+  // the same origin, surprising the user.
   const headers = new Headers({ 'content-type': 'application/json' });
   for (const cookie of buildClearedCookieHeaders()) {
     headers.append('Set-Cookie', cookie);
   }
+  if (authenticated) {
+    headers.set('Clear-Site-Data', '"storage"');
+  }
 
-  return new Response(
-    JSON.stringify({
-      ok: true,
-      deleted: {
-        charts_hard_deleted: soleOwnedIds.length,
-        charts_orphaned: collabEditedIds.length,
-        files: userFileIds.length,
-        byok: byokDeleted,
-      },
-      // Number of file_ids whose Anthropic-side DELETE has not been
-      // confirmed at the time of response. Zero when remote_delete_disabled
-      // is true (no fan-out to wait on); otherwise a retry job will replay
-      // failed entries off the audit row at error_id = incident_id.
-      files_pending_remote_delete: remoteDeleteEnabled ? userFileIds.length : 0,
-      // True when ANTHROPIC_API_KEY is unset (dev/test). The UI should NOT
-      // claim "queued for remote deletion" in that case since no fan-out
-      // happened.
-      remote_delete_disabled: !remoteDeleteEnabled && userFileIds.length > 0,
-    }),
-    { status: 200, headers },
-  );
+  const remoteFiles: DeleteMyDataSuccess['remote_files'] = remoteDeleteEnabled
+    ? { mode: 'queued', count: userFileIds.length }
+    : userFileIds.length > 0
+      ? { mode: 'disabled' }
+      : { mode: 'queued', count: 0 };
+
+  const body: DeleteMyDataResponse = {
+    ok: true,
+    deleted: {
+      charts_hard_deleted: soleOwnedIds.length,
+      charts_orphaned: collabEditedIds.length,
+      files: userFileIds.length,
+      byok: byokDeleted,
+    },
+    remote_files: remoteFiles,
+  };
+
+  return new Response(JSON.stringify(body), { status: 200, headers });
 }
 
 // Postgres error classes that signal "retry might succeed". Mapped to a 503

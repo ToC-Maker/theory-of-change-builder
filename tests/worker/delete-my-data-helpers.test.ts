@@ -205,23 +205,38 @@ describe('fanOutAnthropicDeletes', () => {
     expect(failed).toEqual([]);
   });
 
-  it('returns only the failed file_ids on partial server-side failure', async () => {
+  it('classifies 5xx as transient so the retry job picks it up', async () => {
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      // file_b 500s, others succeed
       if (url.includes('file_b')) return new Response('boom', { status: 500 });
       return new Response('', { status: 200 });
     }) as typeof fetch;
     const failed = await fanOutAnthropicDeletes('sk-test', ['file_a', 'file_b', 'file_c']);
-    expect(failed).toEqual(['file_b']);
+    expect(failed).toEqual([{ fid: 'file_b', transient: true }]);
   });
 
-  it('returns the failed file_ids when fetch itself throws', async () => {
+  it('classifies non-404 4xx as permanent so the retry job skips it', async () => {
+    // 401/403/422 etc — retrying with the same key won't change the answer.
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('file_b')) return new Response('forbidden', { status: 403 });
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    const failed = await fanOutAnthropicDeletes('sk-test', ['file_a', 'file_b']);
+    expect(failed).toEqual([{ fid: 'file_b', transient: false }]);
+  });
+
+  it('treats fetch-throw as transient (network-level fault, retry might recover)', async () => {
     globalThis.fetch = vi.fn(async () => {
       throw new Error('network down');
     }) as typeof fetch;
     const failed = await fanOutAnthropicDeletes('sk-test', ['file_a', 'file_b']);
-    expect(failed.sort()).toEqual(['file_a', 'file_b']);
+    // Sort by fid so the test is order-independent.
+    const sorted = [...failed].sort((a, b) => a.fid.localeCompare(b.fid));
+    expect(sorted).toEqual([
+      { fid: 'file_a', transient: true },
+      { fid: 'file_b', transient: true },
+    ]);
   });
 
   it('processes all ids when there are more than the per-chunk concurrency limit', async () => {

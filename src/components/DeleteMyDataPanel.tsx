@@ -3,6 +3,13 @@ import { useAuth0 } from '@auth0/auth0-react';
 import { ExclamationTriangleIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { getFreshIdToken } from '../utils/auth';
 import { clearAllByokLocalState } from '../utils/byokSpend';
+import {
+  isDeleteMyDataError,
+  isDeleteMyDataNoData,
+  isDeleteMyDataSuccess,
+  type DeleteMyDataResponse,
+  type DeleteSummary,
+} from '../../shared/delete-my-data';
 
 // "Delete all my data" affordance — GDPR Art. 17 erasure mechanism.
 //
@@ -33,32 +40,6 @@ import { clearAllByokLocalState } from '../utils/byokSpend';
 //     chart itself stays so the other collaborators don't lose their work)
 
 const CONFIRM_PHRASE = 'DELETE';
-
-interface DeleteSummary {
-  charts_hard_deleted: number;
-  charts_orphaned: number;
-  files: number;
-  byok: boolean;
-}
-
-interface DeleteResponse {
-  ok?: boolean;
-  no_data?: boolean;
-  deleted?: DeleteSummary;
-  // Files whose Anthropic-side DELETE has not been confirmed at the time of
-  // response. The Worker queues them for an out-of-band retry; UI words this
-  // honestly rather than claiming they're already gone.
-  files_pending_remote_delete?: number;
-  // Set when the Worker has no ANTHROPIC_API_KEY configured (test/local-dev)
-  // and therefore cannot fan out remote DELETEs at all. Local rows are still
-  // gone; the file rows on Anthropic's side persist until manual cleanup.
-  // We surface this honestly rather than claim a queue that won't drain.
-  remote_delete_disabled?: boolean;
-  // Server-side incident id when the cascade itself errored. Returned with
-  // 5xx so the user has something to quote when reporting.
-  incident_id?: string | null;
-  error?: string;
-}
 
 export interface DeleteMyDataPanelProps {
   className?: string;
@@ -113,10 +94,15 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
         headers,
       });
 
-      const data = (await response.json().catch(() => ({}))) as DeleteResponse;
+      const data = (await response.json().catch(() => ({}))) as DeleteMyDataResponse;
       if (!response.ok) {
-        const incident = data.incident_id ? ` (incident ${data.incident_id})` : '';
-        throw new Error(`${data.error ?? `Delete failed (${response.status})`}${incident}`);
+        // The error arm is keyed by `error`; on JSON-parse failure or an
+        // unexpected shape we fall through to a generic message rather than
+        // showing the user "undefined".
+        const errorBody = isDeleteMyDataError(data) ? data : null;
+        const incident = errorBody?.incident_id ? ` (incident ${errorBody.incident_id})` : '';
+        const message = errorBody?.error ?? `Delete failed (${response.status})`;
+        throw new Error(`${message}${incident}`);
       }
 
       // Wipe BYOK localStorage immediately — server-side blob is gone, the
@@ -149,12 +135,24 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
         console.warn('[DeleteMyData] localStorage chat-history sweep failed');
       }
 
-      if (data.no_data) {
+      if (isDeleteMyDataNoData(data)) {
         setNoData(true);
+      } else if (isDeleteMyDataSuccess(data)) {
+        setResult(data.deleted);
+        // Discriminated union on remote_files.mode keeps "queued" vs
+        // "disabled" mutually exclusive on the wire — no risk of the server
+        // claiming both at once.
+        if (data.remote_files.mode === 'queued') {
+          setFilesPending(data.remote_files.count);
+          setRemoteDeleteDisabled(false);
+        } else {
+          setFilesPending(0);
+          setRemoteDeleteDisabled(true);
+        }
       } else {
-        setResult(data.deleted ?? null);
-        setFilesPending(data.files_pending_remote_delete ?? 0);
-        setRemoteDeleteDisabled(data.remote_delete_disabled === true);
+        // Shouldn't be reachable: response.ok was true so it's a 2xx, which
+        // narrows to no-data | success in the schema. Defensive fallback.
+        console.warn('[DeleteMyData] unexpected response shape on 2xx:', data);
       }
 
       onDeleted?.();
