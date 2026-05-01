@@ -29,6 +29,7 @@ import {
 } from '../_shared/tiers';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { AssistantBlock } from '../../shared/chat-blocks';
+import type { StreamingBlocksMap } from '../../shared/streaming-blocks';
 import { microToUsd } from '../../shared/pricing';
 
 /**
@@ -920,33 +921,9 @@ function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void
   }
 }
 
-/**
- * Discriminated union for blocks we accumulate from the SSE stream. Used by
- * two consumers with different fidelity requirements:
- *
- *   - `buildAssistantBlocksForCountTokens` (kill-switch / reconcile): only
- *     `text`, `thinking`, and `server_tool_use` are submitted to Anthropic's
- *     count_tokens endpoint. The two `*_tool_result` types are captured but
- *     skipped on that path (Anthropic doesn't accept them on the assistant
- *     turn going IN to count_tokens — they're a response artifact).
- *   - `collectAssistantBlocksForAnalytics`: emits all five types verbatim
- *     into `logging_messages.content_blocks` so analytics can fork/replay
- *     the turn via the Messages API, where these blocks are valid history.
- */
-type StreamingBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string; signature: string }
-  | {
-      type: 'server_tool_use';
-      id: string;
-      name: string;
-      input_json_raw: string;
-      input: Record<string, unknown> | null;
-    }
-  | { type: 'web_search_tool_result'; tool_use_id: string; content: unknown }
-  | { type: 'code_execution_tool_result'; tool_use_id: string; content: unknown };
-
-type StreamingBlocksMap = Map<number, StreamingBlock>;
+// `StreamingBlock` / `StreamingBlocksMap` shared with the client-side
+// accumulator — see `shared/streaming-blocks.ts` for the union shape and
+// the rationale.
 
 /**
  * In-progress assistant-turn content accumulated from SSE `content_block_*`

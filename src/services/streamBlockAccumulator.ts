@@ -6,6 +6,7 @@
 //  - Surface partial text/thinking on mid-stream kill so users see what
 //    they saw streamed.
 import type { AssistantBlock } from '../../shared/chat-blocks';
+import type { StreamingBlock } from '../../shared/streaming-blocks';
 
 export interface RawSseEvent {
   type: string;
@@ -14,32 +15,11 @@ export interface RawSseEvent {
   delta?: Record<string, unknown>;
 }
 
-type InternalBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string; signature: string }
-  | {
-      type: 'server_tool_use';
-      id: string;
-      name: string;
-      input_json_raw: string;
-      input: Record<string, unknown> | null;
-    }
-  | {
-      type: 'web_search_tool_result';
-      tool_use_id: string;
-      content: unknown;
-    }
-  | {
-      type: 'code_execution_tool_result';
-      tool_use_id: string;
-      content: unknown;
-    };
-
 export class StreamBlockAccumulator {
   // Block content keyed by SSE `index`. Map preserves insertion order, but we
   // sort numerically when emitting because index values can arrive out of
   // order in theory (worker sometimes interleaves polling).
-  private readonly blocks = new Map<number, InternalBlock>();
+  private readonly blocks = new Map<number, StreamingBlock>();
   // Per-instance one-shot warning gates so a stream that emits 50 unknown
   // blocks of the same type only logs once rather than spamming devtools.
   private readonly warnedUnknownTypes = new Set<string>();
@@ -156,7 +136,7 @@ export class StreamBlockAccumulator {
     }
   }
 
-  _entries(): Array<[number, InternalBlock]> {
+  _entries(): Array<[number, StreamingBlock]> {
     return Array.from(this.blocks.entries());
   }
 }
