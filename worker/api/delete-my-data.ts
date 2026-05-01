@@ -400,11 +400,35 @@ export async function handler(
     // human can see what went wrong. If this also fails we still return
     // the same incident_id, so the user has something to quote.
     try {
-      if (userFileIds.length > 0) {
-        await recordCascadeFailure(sql, incidentId, userId, e);
-      }
+      await recordCascadeFailure(sql, incidentId, userId, e);
     } catch (auditErr) {
       console.error('[delete-my-data] audit-row failure transition also failed:', auditErr);
+      // The original audit row is now stuck in 'pending' state but the
+      // cascade actually rolled back. A future retry job seeing 'pending'
+      // would mistakenly replay file deletes that never happened. Insert
+      // a sibling diagnostic so an operator can find these stuck rows.
+      try {
+        await sql`
+          INSERT INTO logging_errors (
+            error_id, error_name, error_message, user_id, request_metadata
+          )
+          VALUES (
+            ${crypto.randomUUID()},
+            'delete_my_data_audit_transition_failed',
+            ${`Could not transition incident ${incidentId} to failed status; cascade rolled back but original row remains 'pending'`},
+            ${null},
+            ${JSON.stringify({
+              user_id: userId,
+              original_incident_id: incidentId,
+              file_ids_promised: userFileIds,
+              cascade_error: e instanceof Error ? e.message : String(e),
+              transition_error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+            })}
+          )
+        `;
+      } catch (siblingErr) {
+        console.error('[delete-my-data] sibling diagnostic insert also failed:', siblingErr);
+      }
     }
     return classifyDbError(e, incidentId);
   }
@@ -433,16 +457,38 @@ export async function handler(
       console.error('[delete-my-data] BYOK delete failed (post-cascade):', e);
       // Mirror the main cascade catch: transition the audit row to a failure
       // incident so the operator sees what went wrong instead of finding a
-      // pending-files row dangling. Gated on userFileIds.length > 0 because
-      // that's the only path that inserted the audit row in the first place
-      // (recordCascadeFailure is UPDATE-only and would silently no-op
-      // otherwise).
+      // pending-files row dangling. The audit row is always inserted in
+      // Phase 2a (regardless of userFileIds.length), so recordCascadeFailure
+      // always has something to UPDATE.
       try {
-        if (userFileIds.length > 0) {
-          await recordCascadeFailure(sql, incidentId, userId, e);
-        }
+        await recordCascadeFailure(sql, incidentId, userId, e);
       } catch (auditErr) {
         console.error('[delete-my-data] BYOK audit-row failure transition also failed:', auditErr);
+        // Sibling diagnostic so the stuck 'pending' row is findable. Same
+        // structure as the cascade-catch fallback above.
+        try {
+          await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'delete_my_data_audit_transition_failed',
+              ${`Could not transition incident ${incidentId} to failed status; BYOK delete failed and original row remains 'pending'`},
+              ${null},
+              ${JSON.stringify({
+                user_id: userId,
+                original_incident_id: incidentId,
+                file_ids_promised: userFileIds,
+                stage: 'byok_delete',
+                cascade_error: e instanceof Error ? e.message : String(e),
+                transition_error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+              })}
+            )
+          `;
+        } catch (siblingErr) {
+          console.error('[delete-my-data] BYOK sibling diagnostic insert also failed:', siblingErr);
+        }
       }
       return classifyDbError(e, incidentId);
     }
