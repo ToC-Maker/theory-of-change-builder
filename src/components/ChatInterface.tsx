@@ -1804,7 +1804,7 @@ export function ChatInterface({
                     cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
                     cache_read_input_tokens: usage.cache_read_input_tokens || 0,
                     web_search_requests: usage.server_tool_use?.web_search_requests || 0,
-                    cost_usd: runningCostUsd ?? undefined,
+                    cost_usd: runningCostUsdRef.current ?? undefined,
                   }
                 : undefined,
             };
@@ -2706,7 +2706,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
                     cache_read_input_tokens: usage.cache_read_input_tokens || 0,
                     web_search_requests: usage.server_tool_use?.web_search_requests || 0,
-                    cost_usd: runningCostUsd ?? undefined,
+                    cost_usd: runningCostUsdRef.current ?? undefined,
                   }
                 : undefined,
             };
