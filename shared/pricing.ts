@@ -108,3 +108,25 @@ export const WEB_SEARCH_USD_PER_USE = 0.01;
 
 /** Default ephemeral cache TTL in milliseconds (5 minutes). */
 export const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Convert a µUSD cost (integer) to USD (float).
+ *
+ * Splits the integer division so the whole-dollar part stays in BigInt
+ * arithmetic and only the sub-µUSD remainder goes through `Number`. This
+ * preserves integer precision for the dollar component well past the
+ * Number.MAX_SAFE_INTEGER threshold, while still rounding the fractional
+ * part to 6 decimals (the unit of µUSD).
+ *
+ * Accepts the union of types Postgres + the in-process counters can hand
+ * back: `bigint` (computed locally), `number` (small values where BigInt
+ * was unnecessary). `null`/`undefined` collapse to 0 so "no spend yet"
+ * rows don't need a separate branch at every call site.
+ */
+export function microToUsd(micro: bigint | number | null | undefined): number {
+  if (micro === null || micro === undefined) return 0;
+  const asBig = typeof micro === 'bigint' ? micro : BigInt(Math.trunc(Number(micro)));
+  const whole = asBig / 1_000_000n;
+  const frac = Number(asBig % 1_000_000n) / 1_000_000;
+  return Number(whole) + frac;
+}

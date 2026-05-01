@@ -8,16 +8,7 @@ import {
   signAuthLinkCookie,
   buildAuthLinkCookieHeader,
 } from '../_shared/anon-id';
-
-function microToUsd(micro: bigint | number | null | undefined): number {
-  if (micro === null || micro === undefined) return 0;
-  const asBig = typeof micro === 'bigint' ? micro : BigInt(Math.trunc(Number(micro)));
-  // Preserve up to 6 decimals of precision while staying within Number range.
-  // Divide in two steps to keep the integer part accurate for large values.
-  const whole = asBig / 1_000_000n;
-  const frac = Number(asBig % 1_000_000n) / 1_000_000;
-  return Number(whole) + frac;
-}
+import { microToUsd } from '../../shared/pricing';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   try {

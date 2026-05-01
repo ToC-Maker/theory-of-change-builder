@@ -29,6 +29,7 @@ import {
 } from '../_shared/tiers';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { AssistantBlock } from '../../shared/chat-blocks';
+import { microToUsd } from '../../shared/pricing';
 
 /**
  * HTTP streaming proxy for Anthropic's /v1/messages endpoint with server-side
@@ -82,12 +83,6 @@ function jsonError(
   altSvcHeaders: Record<string, string>,
 ): Response {
   return Response.json(body, { status, headers: altSvcHeaders });
-}
-
-function microToUsd(micro: bigint): number {
-  const whole = micro / 1_000_000n;
-  const frac = Number(micro % 1_000_000n) / 1_000_000;
-  return Number(whole) + frac;
 }
 
 function firstOfNextMonthUtcIso(): string {
