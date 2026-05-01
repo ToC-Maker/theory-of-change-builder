@@ -2749,7 +2749,57 @@ export async function handler(
       // Wait for the SSE stream to finish (natural end, kill-switch, or
       // client-cancel). Once `tracked.done` resolves, the accumulator is
       // stable — no further transform() callbacks will mutate it.
-      await tracked.done;
+      //
+      // Cap the wait so a stuck upstream (typical when the client disconnects
+      // mid-stream and the abort doesn't propagate cleanly into the tee) can't
+      // eat the entire ctx.waitUntil time budget. Without this, every Entered
+      // gets stuck here and never reaches CostComputed, which is the dominant
+      // failure mode observed in V33MO0XP and the 2026-05-01 byok-10 trace
+      // (7 of 11 reconciles bailed at this await).
+      const TRACKED_DONE_TIMEOUT_MS = 12_000;
+      let trackedDoneTimedOut = false;
+      await Promise.race([
+        tracked.done,
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            trackedDoneTimedOut = true;
+            resolve();
+          }, TRACKED_DONE_TIMEOUT_MS);
+        }),
+      ]);
+      if (trackedDoneTimedOut && loggingMessageId) {
+        try {
+          await sql`
+            INSERT INTO logging_errors (
+              error_id, error_name, error_message, user_id, chart_id,
+              request_metadata
+            )
+            VALUES (
+              ${crypto.randomUUID()},
+              'DiagnosticReconcileTrackedDoneTimeout',
+              ${`tracked.done did not resolve within ${TRACKED_DONE_TIMEOUT_MS}ms; proceeding with partial state`},
+              ${actorId},
+              ${chartId ?? null},
+              ${JSON.stringify({
+                logging_message_id: loggingMessageId,
+                tier,
+                model,
+                killed: teeCtx.killed.v,
+                message_delta_seen: teeCtx.messageDeltaSeen,
+                accumulator,
+                live_web_search_count: teeCtx.streamingContent.webSearchCount,
+                last_poll_output_tokens: teeCtx.lastPollOutputTokens,
+                timeout_ms: TRACKED_DONE_TIMEOUT_MS,
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+              })}
+            )
+            ON CONFLICT (error_id) DO NOTHING
+          `;
+        } catch (e) {
+          console.error('tracked-done-timeout diagnostic insert failed:', e);
+        }
+      }
 
       // When the stream is killed mid-flight, Anthropic's message_delta never
       // arrives — which means the accumulator's `web_search_requests` stays 0
