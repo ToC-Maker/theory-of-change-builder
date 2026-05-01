@@ -9,3 +9,6 @@ policies
 # Human-maintained docs (prettier's markdown table expansion is intrusive).
 CLAUDE.md
 README.md
+
+# Code-review subagent reports — generated artifacts, not project source.
+reviews/

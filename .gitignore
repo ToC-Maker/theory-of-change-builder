@@ -41,3 +41,6 @@ test-database.js
 
 # Internal planning
 plans/
+
+# Code-review subagent reports
+reviews/
