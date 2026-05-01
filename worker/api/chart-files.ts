@@ -1,6 +1,7 @@
 import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
+import { fanOutAnthropicFileDeletes } from '../_shared/anthropic-files';
 
 // Dual handler wired from worker/index.ts:
 //   GET /api/files/:file_id       -> HEAD check for client rehydration
@@ -154,47 +155,13 @@ async function handleBulkDelete(
 
   const apiKey = env.ANTHROPIC_API_KEY;
   if (apiKey && fileIds.length > 0) {
-    // Fire-and-forget Anthropic DELETEs. A 404 at Anthropic is fine (file
-    // already gone); non-2xx/non-404 just gets logged. We don't rollback
-    // the DB delete on upstream failures — orphan-cleanup sweeps catch
-    // stragglers.
-    //
-    // Concurrency is capped at 6 so a Clear-Chat on a 500-file chart
-    // doesn't fan out 500 simultaneous HTTP connections from the isolate
-    // (Workers has a subrequest limit and the fan-out would starve other
-    // in-flight requests).
-    const CONCURRENCY = 6;
-    const deleteOne = async (fid: string) => {
-      try {
-        const upstream = await fetch(
-          `https://api.anthropic.com/v1/files/${encodeURIComponent(fid)}`,
-          {
-            method: 'DELETE',
-            headers: {
-              'x-api-key': apiKey,
-              'anthropic-version': '2023-06-01',
-              'anthropic-beta': 'files-api-2025-04-14',
-            },
-          },
-        );
-        if (!upstream.ok && upstream.status !== 404) {
-          const errText = await upstream.text().catch(() => '');
-          console.error(
-            `[chart-files] Anthropic DELETE ${upstream.status} for file_id=${fid}: ${errText}`,
-          );
-        }
-      } catch (err) {
-        console.error(`[chart-files] Anthropic DELETE fetch failed for file_id=${fid}:`, err);
-      }
-    };
-
+    // Fire-and-forget Anthropic DELETEs via the shared bounded fan-out. A 404
+    // at Anthropic is fine (file already gone); non-2xx/non-404 gets logged
+    // by the helper. We don't rollback the DB delete on upstream failures —
+    // orphan-cleanup sweeps catch stragglers, so the failed-id list is
+    // discarded here (delete-my-data uses it, we don't).
     ctx.waitUntil(
-      (async () => {
-        for (let i = 0; i < fileIds.length; i += CONCURRENCY) {
-          const chunk = fileIds.slice(i, i + CONCURRENCY);
-          await Promise.all(chunk.map(deleteOne));
-        }
-      })(),
+      fanOutAnthropicFileDeletes(apiKey, fileIds, '[chart-files]').then(() => undefined),
     );
   }
 

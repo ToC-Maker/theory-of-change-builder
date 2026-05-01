@@ -8,6 +8,10 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { resolveAnonActor } from '../_shared/anon-id';
+import {
+  deleteOneAnthropicFile as sharedDeleteOneAnthropicFile,
+  fanOutAnthropicFileDeletes,
+} from '../_shared/anthropic-files';
 
 // ---------------------------------------------------------------------------
 // Cookie-clearing helpers (exported for unit tests).
@@ -45,51 +49,24 @@ export function buildClearedCookieHeaders(): string[] {
 
 // ---------------------------------------------------------------------------
 // Anthropic Files API DELETE fan-out.
+//
+// Delegates to the shared helper in worker/_shared/anthropic-files.ts so the
+// same logic backs the Clear-Chat path in chart-files.ts. We re-export under
+// the historical names so existing unit tests keep working without churn; the
+// `[delete-my-data]` log prefix is preserved.
 // ---------------------------------------------------------------------------
 
-const ANTHROPIC_DELETE_CONCURRENCY = 6;
+const LOG_PREFIX = '[delete-my-data]';
 
-// Per-id DELETE outcome. 200/204/404 (already gone) all count as success.
-// Exported for unit tests (so we don't have to mock the per-batch loop).
-export async function deleteOneAnthropicFile(apiKey: string, fid: string): Promise<boolean> {
-  try {
-    const upstream = await fetch(`https://api.anthropic.com/v1/files/${encodeURIComponent(fid)}`, {
-      method: 'DELETE',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'files-api-2025-04-14',
-      },
-    });
-    if (upstream.ok || upstream.status === 404) return true;
-    const errText = await upstream.text().catch(() => '');
-    console.error(
-      `[delete-my-data] Anthropic DELETE ${upstream.status} for file_id=${fid}: ${errText}`,
-    );
-    return false;
-  } catch (err) {
-    console.error(`[delete-my-data] Anthropic DELETE fetch failed for file_id=${fid}:`, err);
-    return false;
-  }
+export function deleteOneAnthropicFile(apiKey: string, fid: string): Promise<boolean> {
+  return sharedDeleteOneAnthropicFile(apiKey, fid, LOG_PREFIX);
 }
 
-// Returns the file_ids that did NOT delete successfully so the caller can
-// keep them in the dead-letter row for a later retry. Exported for tests.
-export async function fanOutAnthropicDeletes(
+export function fanOutAnthropicDeletes(
   apiKey: string,
   fileIds: readonly string[],
 ): Promise<string[]> {
-  const failed: string[] = [];
-  for (let i = 0; i < fileIds.length; i += ANTHROPIC_DELETE_CONCURRENCY) {
-    const chunk = fileIds.slice(i, i + ANTHROPIC_DELETE_CONCURRENCY);
-    const results = await Promise.all(
-      chunk.map(
-        async (fid): Promise<[string, boolean]> => [fid, await deleteOneAnthropicFile(apiKey, fid)],
-      ),
-    );
-    for (const [fid, ok] of results) if (!ok) failed.push(fid);
-  }
-  return failed;
+  return fanOutAnthropicFileDeletes(apiKey, fileIds, LOG_PREFIX);
 }
 
 // ---------------------------------------------------------------------------
