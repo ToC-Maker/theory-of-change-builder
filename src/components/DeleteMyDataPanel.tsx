@@ -125,6 +125,30 @@ export function DeleteMyDataPanel({ className, onDeleted }: DeleteMyDataPanelPro
       // someone else. See AuthButton's logout flow for the same call.
       clearAllByokLocalState();
 
+      // Wipe chat history + reconcile-cost retry queue from localStorage.
+      // The privacy-policy commitment for "Delete all my data" covers
+      // client-side state too, and these keys hold conversation content
+      // (signed thinking + tool blocks) and pending reconcile-cost POSTs
+      // tied to logging_message_ids that we just deleted server-side.
+      try {
+        const keys = Object.keys(localStorage);
+        for (const k of keys) {
+          if (k.startsWith('chatHistory_') || k === 'byok-reconcile-pending') {
+            try {
+              localStorage.removeItem(k);
+            } catch {
+              /* per-key failures are best-effort */
+            }
+          }
+        }
+      } catch {
+        // Iteration itself failed (private browsing / quota). The chat
+        // history that survives here is worthless without server-side
+        // counterparts (logging_messages rows are gone), but log so the
+        // user can manually clear if they care.
+        console.warn('[DeleteMyData] localStorage chat-history sweep failed');
+      }
+
       if (data.no_data) {
         setNoData(true);
       } else {
