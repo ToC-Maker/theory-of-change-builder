@@ -1,20 +1,6 @@
-// Discriminated union for chat content blocks. Mirrors Anthropic's wire shape
-// for the subset of fields we round-trip:
-//
-//   - Assistant turns may include text, thinking (with signature), and
-//     server-tool blocks (web_search / code_execution and their paired
-//     results). Anthropic verifies signed thinking on replay; we preserve
-//     the signature byte-identical.
-//   - User turns are text plus optional document attachments referenced by
-//     Anthropic Files API id.
-//
-// Lives in shared/ so both the client (localStorage persistence + ship-on-
-// send) and worker (analytics capture in logging_messages.content_blocks)
-// agree on the shape. No runtime validator: the only sources of these
-// blocks are (a) our own SSE accumulator in chatService.ts, fully under
-// our control, and (b) localStorage we wrote ourselves on a prior turn —
-// also trusted. If we ever introduce an untrusted ingestion path
-// (cross-device sync, import from another tool), add a parser then.
+// Discriminated union for chat content blocks. Mirrors Anthropic's wire
+// shape; the thinking `signature` must round-trip byte-identical for replay
+// verification or Anthropic 400s.
 
 /** Plain visible text emitted by the model or supplied by the user. */
 export interface TextBlock {
@@ -23,30 +9,14 @@ export interface TextBlock {
 }
 
 /**
- * Extended thinking block. Opus 4.5+ keeps prior-turn thinking blocks
- * across non-tool-result follow-ups, so we preserve them in localStorage
- * and ship them back on every send. The `signature` is Anthropic's
- * tamper-detection token over the block — must round-trip byte-identical
- * or replay 400s. Stored as a JSON string field; the client→worker→
- * Anthropic path is JSON.stringify all the way through (no Postgres
- * normalization in the user-facing path), so byte-identity holds.
+ * Finalized extended-thinking block. `signature` is non-empty here — callers
+ * can rely on that post-stream. The mid-stream variant (signature may be `''`
+ * until the final `signature_delta` arrives) lives in `shared/streaming-blocks.ts`.
  */
 export interface ThinkingBlock {
   type: 'thinking';
   thinking: string;
   signature: string;
-}
-
-/**
- * Client-side tool invocation by the model. We don't currently expose
- * client-side tools in the chat UI, but the type is here so the schema
- * doesn't have to migrate when we do (e.g. user-defined extensions).
- */
-export interface ToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
 }
 
 /**
@@ -88,9 +58,18 @@ export interface DocumentBlock {
 export type AssistantBlock =
   | TextBlock
   | ThinkingBlock
-  | ToolUseBlock
   | ServerToolUseBlock
   | WebSearchToolResultBlock
   | CodeExecutionToolResultBlock;
 
 export type UserBlock = TextBlock | DocumentBlock;
+
+/**
+ * Exhaustiveness guard for discriminated-union switches over chat blocks.
+ * Compile-time: residual `never` confirms every variant was handled. Runtime:
+ * if Anthropic sends a new block type we haven't modeled, throw rather than
+ * silently mis-route it through a fallthrough default.
+ */
+export function assertNeverBlock(block: never): never {
+  throw new Error(`Unhandled chat block variant: ${JSON.stringify(block)}`);
+}

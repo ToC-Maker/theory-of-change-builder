@@ -5,7 +5,7 @@
 //  - Drop unpaired tool_use / tool_result blocks; orphans 400 on replay.
 //  - Surface partial text/thinking on mid-stream kill so users see what
 //    they saw streamed.
-import type { AssistantBlock } from '../../shared/chat-blocks';
+import { assertNeverBlock, type AssistantBlock } from '../../shared/chat-blocks';
 import type { StreamingBlock } from '../../shared/streaming-blocks';
 
 export interface RawSseEvent {
@@ -16,13 +16,22 @@ export interface RawSseEvent {
 }
 
 export class StreamBlockAccumulator {
-  // Block content keyed by SSE `index`. Map preserves insertion order, but we
-  // sort numerically when emitting because index values can arrive out of
-  // order in theory (worker sometimes interleaves polling).
+  // Block content keyed by SSE `index`; numerically sorted on emit (indices
+  // need not arrive in order).
   private readonly blocks = new Map<number, StreamingBlock>();
   // Per-instance one-shot warning gates so a stream that emits 50 unknown
   // blocks of the same type only logs once rather than spamming devtools.
   private readonly warnedUnknownTypes = new Set<string>();
+  // Indices we dropped at content_block_start (unknown block type). Tracked
+  // so the matching content_block_stop / content_block_delta don't trigger a
+  // separate "orphan" warn — we already surfaced the drop at start.
+  private readonly droppedIndices = new Set<number>();
+  // Orphan deltas/stops mean an SSE event arrived for an index we never saw
+  // a content_block_start for. One warn per stream per kind so a fully torn
+  // stream (e.g. a mid-flight reconnect that loses many start frames)
+  // surfaces the silent-drop without flooding.
+  private warnedOrphanDelta = false;
+  private warnedOrphanStop = false;
 
   handleEvent(event: RawSseEvent): void {
     const idx = typeof event.index === 'number' ? event.index : -1;
@@ -64,7 +73,9 @@ export class StreamBlockAccumulator {
       } else {
         // Unknown block type. Best-effort: drop and warn (once per type per
         // session) so a future Anthropic block kind we don't model surfaces
-        // in devtools instead of disappearing silently.
+        // in devtools instead of disappearing silently. Remember the index
+        // so its later delta/stop events don't double-warn as orphans.
+        this.droppedIndices.add(idx);
         const typeKey = typeof cbType === 'string' ? cbType : `<${typeof cbType}>`;
         if (!this.warnedUnknownTypes.has(typeKey)) {
           this.warnedUnknownTypes.add(typeKey);
@@ -80,7 +91,18 @@ export class StreamBlockAccumulator {
       const d = event.delta;
       if (idx < 0 || !d || typeof d !== 'object') return;
       const existing = this.blocks.get(idx);
-      if (!existing) return;
+      if (!existing) {
+        // Suppress orphan warn for indices we dropped at start (unknown
+        // block type already warned there) — only surface the truly
+        // unexpected case where no start was ever seen.
+        if (!this.droppedIndices.has(idx) && !this.warnedOrphanDelta) {
+          this.warnedOrphanDelta = true;
+          console.warn(
+            `[StreamBlockAccumulator] orphan delta at index ${idx} — likely SSE-stream split`,
+          );
+        }
+        return;
+      }
       const dtype = d.type;
       if (dtype === 'text_delta' && existing.type === 'text' && typeof d.text === 'string') {
         existing.text += d.text;
@@ -111,7 +133,18 @@ export class StreamBlockAccumulator {
     if (event.type === 'content_block_stop') {
       if (idx < 0) return;
       const existing = this.blocks.get(idx);
-      if (!existing) return;
+      if (!existing) {
+        // Suppress orphan warn for indices we dropped at start (unknown
+        // block type already warned there) — only surface the truly
+        // unexpected case where no start was ever seen.
+        if (!this.droppedIndices.has(idx) && !this.warnedOrphanStop) {
+          this.warnedOrphanStop = true;
+          console.warn(
+            `[StreamBlockAccumulator] orphan stop at index ${idx} — likely SSE-stream split`,
+          );
+        }
+        return;
+      }
       if (existing.type === 'server_tool_use' && existing.input === null) {
         // Parse accumulated partial_json into a concrete object. Empty raw
         // → {} (some tools take no input). Malformed → leave input null;
@@ -161,53 +194,70 @@ export function toAssistantContentBlocks(acc: StreamBlockAccumulator): Assistant
   const toolUseIds = new Set<string>();
   const toolResultIds = new Set<string>();
   for (const [, block] of sorted) {
-    if (block.type === 'server_tool_use' && block.input !== null) {
-      toolUseIds.add(block.id);
-    } else if (
-      block.type === 'web_search_tool_result' ||
-      block.type === 'code_execution_tool_result'
-    ) {
-      toolResultIds.add(block.tool_use_id);
+    switch (block.type) {
+      case 'text':
+      case 'thinking':
+        // Not a tool block; nothing to pair.
+        break;
+      case 'server_tool_use':
+        if (block.input !== null) toolUseIds.add(block.id);
+        break;
+      case 'web_search_tool_result':
+      case 'code_execution_tool_result':
+        toolResultIds.add(block.tool_use_id);
+        break;
+      default:
+        // Exhaustiveness: any new StreamingBlock variant must opt in here.
+        assertNeverBlock(block);
     }
   }
 
   const out: AssistantBlock[] = [];
   for (const [, block] of sorted) {
-    if (block.type === 'text') {
-      // Skip empty text blocks — Anthropic rejects empty text content on replay.
-      if (block.text.length > 0) {
-        out.push({ type: 'text', text: block.text });
-      }
-    } else if (block.type === 'thinking') {
-      // Skip empty thinking — same reasoning.
-      if (block.thinking.length > 0 || block.signature.length > 0) {
-        out.push({ type: 'thinking', thinking: block.thinking, signature: block.signature });
-      }
-    } else if (block.type === 'server_tool_use') {
-      // Drop if input still null (malformed JSON) OR if no paired result.
-      if (block.input === null) continue;
-      if (!toolResultIds.has(block.id)) continue;
-      out.push({
-        type: 'server_tool_use',
-        id: block.id,
-        name: block.name,
-        input: block.input,
-      });
-    } else if (block.type === 'web_search_tool_result') {
-      // Drop if no matching server_tool_use (orphan).
-      if (!toolUseIds.has(block.tool_use_id)) continue;
-      out.push({
-        type: 'web_search_tool_result',
-        tool_use_id: block.tool_use_id,
-        content: block.content,
-      });
-    } else if (block.type === 'code_execution_tool_result') {
-      if (!toolUseIds.has(block.tool_use_id)) continue;
-      out.push({
-        type: 'code_execution_tool_result',
-        tool_use_id: block.tool_use_id,
-        content: block.content,
-      });
+    switch (block.type) {
+      case 'text':
+        // Skip empty text blocks — Anthropic rejects empty text content on replay.
+        if (block.text.length > 0) {
+          out.push({ type: 'text', text: block.text });
+        }
+        break;
+      case 'thinking':
+        // Skip empty thinking — same reasoning.
+        if (block.thinking.length > 0 || block.signature.length > 0) {
+          out.push({ type: 'thinking', thinking: block.thinking, signature: block.signature });
+        }
+        break;
+      case 'server_tool_use':
+        // Drop if input still null (malformed JSON) OR if no paired result.
+        if (block.input === null) break;
+        if (!toolResultIds.has(block.id)) break;
+        out.push({
+          type: 'server_tool_use',
+          id: block.id,
+          name: block.name,
+          input: block.input,
+        });
+        break;
+      case 'web_search_tool_result':
+        // Drop if no matching server_tool_use (orphan).
+        if (!toolUseIds.has(block.tool_use_id)) break;
+        out.push({
+          type: 'web_search_tool_result',
+          tool_use_id: block.tool_use_id,
+          content: block.content,
+        });
+        break;
+      case 'code_execution_tool_result':
+        if (!toolUseIds.has(block.tool_use_id)) break;
+        out.push({
+          type: 'code_execution_tool_result',
+          tool_use_id: block.tool_use_id,
+          content: block.content,
+        });
+        break;
+      default:
+        // Exhaustiveness: any new StreamingBlock variant must opt in here.
+        assertNeverBlock(block);
     }
   }
   return out;

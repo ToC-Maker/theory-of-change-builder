@@ -2,7 +2,7 @@
 // in-memory ChatMessage[] state. Separate from chatService.ts so it stays
 // unit-testable without faking SSE/fetch.
 import type { ChatMessage } from './chatService';
-import type { AssistantBlock } from '../../shared/chat-blocks';
+import { assertNeverBlock, type AssistantBlock } from '../../shared/chat-blocks';
 
 // When `web_search_20260209` is enabled, Anthropic auto-injects a
 // `code_execution` orchestrator that batches web_searches under it.
@@ -21,11 +21,21 @@ import type { AssistantBlock } from '../../shared/chat-blocks';
 // from a mid-stream kill (no signature_delta arrived before abort) and
 // Anthropic 400s on missing signatures during replay verification.
 function isReplayableAssistantBlock(b: AssistantBlock): boolean {
-  if (b.type === 'server_tool_use') return false;
-  if (b.type === 'web_search_tool_result') return false;
-  if (b.type === 'code_execution_tool_result') return false;
-  if (b.type === 'thinking' && b.signature.length === 0) return false;
-  return true;
+  switch (b.type) {
+    case 'text':
+      return true;
+    case 'thinking':
+      // Unsigned thinking = mid-stream kill before signature_delta arrived;
+      // Anthropic 400s on missing signatures during replay verification.
+      return b.signature.length > 0;
+    case 'server_tool_use':
+    case 'web_search_tool_result':
+    case 'code_execution_tool_result':
+      return false;
+    default:
+      // Exhaustiveness: any new AssistantBlock variant must opt in here.
+      return assertNeverBlock(b);
+  }
 }
 
 // Mirror of the worker's buildAssistantBlocksForCountTokens fixup logic
@@ -47,17 +57,30 @@ function isReplayableAssistantBlock(b: AssistantBlock): boolean {
 function fixupAssistantBlocksForReplay(blocks: AssistantBlock[]): AssistantBlock[] {
   const out: AssistantBlock[] = [];
   for (const b of blocks) {
-    if (b.type === 'text') {
-      if (b.text.trim().length === 0) continue;
-      out.push(b);
-    } else if (b.type === 'thinking') {
-      const last = out[out.length - 1];
-      if (last && last.type === 'thinking') {
-        out.push({ type: 'text', text: '.' });
+    switch (b.type) {
+      case 'text':
+        if (b.text.trim().length === 0) continue;
+        out.push(b);
+        break;
+      case 'thinking': {
+        const last = out[out.length - 1];
+        if (last && last.type === 'thinking') {
+          out.push({ type: 'text', text: '.' });
+        }
+        out.push(b);
+        break;
       }
-      out.push(b);
-    } else {
-      out.push(b);
+      case 'server_tool_use':
+      case 'web_search_tool_result':
+      case 'code_execution_tool_result':
+        // Pass-through. `isReplayableAssistantBlock` strips these upstream;
+        // if a future caller skips that filter we keep the input shape
+        // rather than silently dropping data.
+        out.push(b);
+        break;
+      default:
+        // Exhaustiveness: any new AssistantBlock variant must opt in here.
+        assertNeverBlock(b);
     }
   }
   while (out.length > 0) {

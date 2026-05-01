@@ -453,14 +453,36 @@ describe('StreamBlockAccumulator', () => {
       warn.mockRestore();
     });
 
-    it('ignores deltas for indices we never opened', () => {
+    it('ignores deltas for indices we never opened, but warns once', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const acc = new StreamBlockAccumulator();
+      // Two orphan deltas at different indices: the warn is one-shot per
+      // stream so a fully torn SSE doesn't flood devtools.
       acc.handleEvent({
         type: 'content_block_delta',
         index: 99,
         delta: { type: 'text_delta', text: 'orphan' },
       });
+      acc.handleEvent({
+        type: 'content_block_delta',
+        index: 100,
+        delta: { type: 'text_delta', text: 'orphan-2' },
+      });
       expect(toAssistantContentBlocks(acc)).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('orphan delta');
+      warn.mockRestore();
+    });
+
+    it('warns once on orphan content_block_stop for an unknown index', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const acc = new StreamBlockAccumulator();
+      acc.handleEvent({ type: 'content_block_stop', index: 99 });
+      acc.handleEvent({ type: 'content_block_stop', index: 100 });
+      expect(toAssistantContentBlocks(acc)).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('orphan stop');
+      warn.mockRestore();
     });
   });
 });
