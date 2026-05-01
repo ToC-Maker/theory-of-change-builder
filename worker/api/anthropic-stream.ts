@@ -4,6 +4,7 @@ import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
 import { isUserOptedOut } from '../_shared/logging-optout';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
+import { toBigInt } from '../_shared/bigint';
 import {
   resolveAnonActor,
   mergeAnonUsageIntoAuth,
@@ -791,14 +792,6 @@ async function reserveCost(
   };
 }
 
-function toBigInt(v: bigint | number | string | null | undefined): bigint {
-  if (v === null || v === undefined) return 0n;
-  if (typeof v === 'bigint') return v;
-  if (typeof v === 'number') return BigInt(Math.trunc(v));
-  // Neon returns BIGINT as string — BigInt('123') works.
-  return BigInt(v);
-}
-
 // --- Keepalive (inherited, unchanged behavior) --------------------------
 
 /**
@@ -1185,24 +1178,41 @@ export function buildAssistantBlocksForCountTokens(
   }
   // Rule: final block cannot be `thinking`, and a trailing text block cannot
   // end with whitespace. `server_tool_use` at the tail is OK.
-  while (assistantBlocks.length > 0) {
+  //
+  // Two explicit fixup steps (the previous `while` loop iterated at most
+  // twice, but the bound was implicit in the control flow):
+  //
+  //   Step 1 — strip the trailing block if it's text that right-trims to
+  //   empty. The earlier filter at line 1158 rejects whitespace-only text
+  //   blocks, so this only fires for an edge case where the filter's
+  //   `.trim()` (both sides) and this step's `\s+$` (right-only) disagree
+  //   on what counts as empty — defensive but cheap.
+  //
+  //   Step 2 — examine the (possibly new) trailing block. If it's text,
+  //   right-trim into place. If it's thinking, append a "." text block;
+  //   the API rejects a trailing thinking block, but dropping it would
+  //   discard the assistant turn's most expensive output.
+  if (assistantBlocks.length > 0) {
     const last = assistantBlocks[assistantBlocks.length - 1];
-    if (last.type === 'thinking') {
-      assistantBlocks.push({ type: 'text', text: '.' });
-      break;
-    }
     if (last.type === 'text') {
       const text = typeof last.text === 'string' ? last.text : '';
       const trimmed = text.replace(/\s+$/u, '');
       if (trimmed.length === 0) {
         assistantBlocks.pop();
-        continue;
       }
+    }
+  }
+  if (assistantBlocks.length > 0) {
+    const last = assistantBlocks[assistantBlocks.length - 1];
+    if (last.type === 'thinking') {
+      assistantBlocks.push({ type: 'text', text: '.' });
+    } else if (last.type === 'text') {
+      const text = typeof last.text === 'string' ? last.text : '';
+      const trimmed = text.replace(/\s+$/u, '');
       if (trimmed.length !== text.length) {
         assistantBlocks[assistantBlocks.length - 1] = { type: 'text', text: trimmed };
       }
     }
-    break;
   }
   return assistantBlocks;
 }
@@ -1641,33 +1651,11 @@ function createCostTrackingStream(
     // exists; if not, this is chart_deleted, otherwise it's a file within the
     // chart that was garbage-collected. If the lookup errors, surface that
     // honestly as classification_unavailable so the UI can prompt a reload
-    // instead of sending the user after a non-existent file.
-    let kind: 'chart_deleted' | 'file_unavailable' | 'classification_unavailable' =
-      'file_unavailable';
-    if (teeCtx.chartId) {
-      try {
-        const rows = await teeCtx.sql`SELECT 1 FROM charts WHERE id = ${teeCtx.chartId} LIMIT 1`;
-        if (rows.length === 0) kind = 'chart_deleted';
-      } catch (e) {
-        console.error('chart existence lookup failed during not_found interception:', e);
-        kind = 'classification_unavailable';
-      }
-    }
-
-    let payload: Record<string, string>;
-    if (kind === 'chart_deleted') {
-      payload = { type: 'chart_deleted' };
-    } else if (kind === 'classification_unavailable') {
-      payload = {
-        type: 'classification_unavailable',
-        message: 'Something went wrong, please reload.',
-      };
-    } else {
-      payload = {
-        type: 'file_unavailable',
-        message: 'A file referenced by this chat is no longer available.',
-      };
-    }
+    // instead of sending the user after a non-existent file. Reuses the
+    // top-level helper that the HTTP-404 path also calls so the two paths
+    // can't drift on classification semantics.
+    const kind = await classifyNotFound(teeCtx.sql, teeCtx.chartId);
+    const payload = notFoundPayload(kind, 'type');
     const frame = encoder.encode(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
     try {
       controller.enqueue(frame);
@@ -1763,19 +1751,14 @@ function createCostTrackingStream(
             // web_search_requests field stays 0 until message_delta.
             if (fireKillIfOverThreshold(controller)) return false;
           }
-        } else if (cbType === 'web_search_tool_result') {
-          // Anthropic delivers the resolved result in this single block_start
-          // event (no deltas follow). Capture verbatim for analytics replay.
+        } else if (cbType === 'web_search_tool_result' || cbType === 'code_execution_tool_result') {
+          // Both tool_result types carry the resolved result inline on the
+          // block_start event (no deltas follow) and share the same
+          // `{ tool_use_id, content }` envelope; the only difference is the
+          // discriminant. Capture verbatim for analytics replay.
           const tuid = typeof cbr.tool_use_id === 'string' ? cbr.tool_use_id : '';
           teeCtx.streamingContent.blocks.set(idx, {
-            type: 'web_search_tool_result',
-            tool_use_id: tuid,
-            content: cbr.content,
-          });
-        } else if (cbType === 'code_execution_tool_result') {
-          const tuid = typeof cbr.tool_use_id === 'string' ? cbr.tool_use_id : '';
-          teeCtx.streamingContent.blocks.set(idx, {
-            type: 'code_execution_tool_result',
+            type: cbType,
             tool_use_id: tuid,
             content: cbr.content,
           });
@@ -2309,6 +2292,36 @@ async function classifyNotFound(
   }
 }
 
+/**
+ * Build the JSON envelope for the typed not-found responses. Two consumers
+ * use this with different keys:
+ *  - SSE error frame: `fieldName='type'` (matches the `type` discriminant
+ *    the client's stream parser keys on).
+ *  - HTTP 404 JSON body: `fieldName='error'` (matches the `error` field
+ *    `jsonError()` envelopes use everywhere else).
+ *
+ * Per-kind copy is centralized here so the client-facing strings can't
+ * drift between the SSE and HTTP paths.
+ */
+function notFoundPayload(
+  kind: 'chart_deleted' | 'file_unavailable' | 'classification_unavailable',
+  fieldName: 'type' | 'error',
+): Record<string, string> {
+  if (kind === 'chart_deleted') {
+    return { [fieldName]: 'chart_deleted' };
+  }
+  if (kind === 'classification_unavailable') {
+    return {
+      [fieldName]: 'classification_unavailable',
+      message: 'Something went wrong, please reload.',
+    };
+  }
+  return {
+    [fieldName]: 'file_unavailable',
+    message: 'A file referenced by this chat is no longer available.',
+  };
+}
+
 // --- Main handler -------------------------------------------------------
 
 export async function handler(
@@ -2649,21 +2662,7 @@ export async function handler(
     // file-unavailable synthesis path, so the client doesn't see a raw 404.
     if (upstream.status === 404) {
       const kind = await classifyNotFound(sql, chartId);
-      let payload: Record<string, string>;
-      if (kind === 'chart_deleted') {
-        payload = { error: 'chart_deleted' };
-      } else if (kind === 'classification_unavailable') {
-        payload = {
-          error: 'classification_unavailable',
-          message: 'Something went wrong, please reload.',
-        };
-      } else {
-        payload = {
-          error: 'file_unavailable',
-          message: 'A file referenced by this chat is no longer available.',
-        };
-      }
-      return jsonError(payload, 404, altSvcHeaders);
+      return jsonError(notFoundPayload(kind, 'error'), 404, altSvcHeaders);
     }
 
     // Sanitize: Anthropic's error bodies can carry BYOK account context (org

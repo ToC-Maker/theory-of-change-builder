@@ -2,6 +2,7 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { resolveAnonActor } from '../_shared/anon-id';
+import { toBigInt } from '../_shared/bigint';
 
 /**
  * Client-side reconcile fallback. The streaming worker's post-stream IIFE
@@ -132,7 +133,9 @@ export function computeReconcileOutcome(
   if (row.user_id !== actorId) {
     return { kind: 'forbidden' };
   }
-  const previousCost = BigInt(row.cost_micro_usd);
+  // Driver-version-tolerant coerce: see worker/_shared/bigint.ts. Tests
+  // exercise both `bigint` and `number` row shapes (Neon legacy rows).
+  const previousCost = toBigInt(row.cost_micro_usd);
   const newCost = clientCost > previousCost ? clientCost : previousCost;
   const applied = newCost > previousCost;
   return { kind: 'apply', previousCost, newCost, applied };
