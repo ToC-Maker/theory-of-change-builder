@@ -1173,7 +1173,7 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  * Rebuild the streaming assistant turn as a count_tokens-compatible content-
  * block array. Skips half-streamed thinking (no signature yet — Anthropic
  * rejects those). Normalizes the message shape to Anthropic's validation
- * rules, all empirically confirmed (2026-04-24) against /v1/messages/count_tokens:
+ * rules, all empirically confirmed against /v1/messages/count_tokens:
  *
  *   1. Final block cannot be `thinking`.
  *   2. Final block cannot end with trailing whitespace (space, newline, tab) —
@@ -1243,8 +1243,8 @@ export function buildAssistantBlocksForCountTokens(
   }
   // Rules 1 + 2: the final block cannot be `thinking` and a trailing text
   // block cannot end with whitespace. `server_tool_use` at the tail is OK
-  // (verified via count_tokens probe 2026-04-24), so only `thinking`
-  // requires an appended "." terminator.
+  // (verified via count_tokens probe), so only `thinking` requires an
+  // appended "." terminator.
   while (assistantBlocks.length > 0) {
     const last = assistantBlocks[assistantBlocks.length - 1];
     if (last.type === 'thinking') {
@@ -1502,8 +1502,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // The client's chatService SSE parser keys events by the `type` field in
   // the JSON data payload (it doesn't read the SSE `event:` header), so the
   // type *must* be inside the JSON — otherwise the running_cost branch
-  // never matches and the payload is silently discarded. This was the bug
-  // behind "'so far' never updated" reports.
+  // never matches and the payload is silently discarded.
   teeCtx.pendingRunningCostFrame = new TextEncoder().encode(
     `event: running_cost\ndata: ${JSON.stringify({
       type: 'running_cost',
@@ -1940,9 +1939,8 @@ function createCostTrackingStream(
     //     mergeUsage doc). Without this emit, a kill landing before the first
     //     5s polling tick records ZERO cost for the turn — even though
     //     Anthropic already billed the cache writes at prompt-processing time.
-    //     This was the bug behind the BYOK "$X this chart" counter
-    //     undercounting cache costs by ~75% on chart 7DGgVcEy (10 quick
-    //     kills, $1.58 actual vs $0.38 displayed).
+    //     This causes the BYOK "$X this chart" counter to undercount cache
+    //     costs substantially on chats with many quick kills.
     //   - message_delta: the authoritative final usage. Polling can be up to
     //     5s stale at message_stop, so this final frame is what makes the
     //     counter converge with what reconcile writes to user_api_usage.
@@ -2264,10 +2262,10 @@ function createCostTrackingStream(
         }
       }
       // Flush any pending running_cost frame from a poll that completed
-      // between chunks. Without this the frame sat in teeCtx until kill or
-      // end-of-stream, so the client's "$X so far" stayed frozen on the
-      // message_start estimate through the whole turn — exactly the bug
-      // reported when a web-search-heavy turn showed "stuck at $0.14".
+      // between chunks. Without this the frame sits in teeCtx until kill or
+      // end-of-stream, so the client's "$X so far" stays frozen on the
+      // message_start estimate through the whole turn — particularly visible
+      // on long server-tool-heavy turns where polling has time to advance.
       if (teeCtx.pendingRunningCostFrame !== null) {
         flushPendingPollerFrames(controller);
       }
@@ -2845,9 +2843,8 @@ export async function handler(
       // Cap the wait so a stuck upstream (typical when the client disconnects
       // mid-stream and the abort doesn't propagate cleanly into the tee) can't
       // eat the entire ctx.waitUntil time budget. Without this, every Entered
-      // gets stuck here and never reaches CostComputed, which is the dominant
-      // failure mode observed in V33MO0XP and the 2026-05-01 byok-10 trace
-      // (7 of 11 reconciles bailed at this await).
+      // gets stuck here and never reaches CostComputed, which is a dominant
+      // failure mode for reconciles bailing at this await.
       const TRACKED_DONE_TIMEOUT_MS = 12_000;
       let trackedDoneTimedOut = false;
       await Promise.race([

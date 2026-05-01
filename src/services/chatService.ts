@@ -186,11 +186,10 @@ function newIdempotencyKey(): string {
 // Failed POSTs to /api/reconcile-cost (typically because the user's network
 // dropped between the SSE stream finishing and the reconcile fetch firing,
 // e.g. ERR_NETWORK_CHANGED / ERR_CONNECTION_RESET) are stashed in localStorage
-// so we can retry them after the network comes back. The 2026-05-01 byok-11
-// trace had one such turn (msg=487ffb0b, cost=$0.054491) lost this way — the
-// streaming-worker reconcile likely also bailed because the client closed
-// the SSE connection mid-flight, leaving only the message_start floor recorded
-// server-side.
+// so we can retry them after the network comes back. Without this retry, a
+// turn where the client closes the SSE connection mid-flight leaves only the
+// message_start floor recorded server-side — the streaming-worker reconcile
+// likely also bailed for the same network reason.
 //
 // Drain triggers (any of):
 //   - `online` event on window (fires when the OS regains connectivity)
