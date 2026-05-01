@@ -284,5 +284,118 @@ describe('buildOutgoingMessages', () => {
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
     });
+
+    it('appends "." after trailing thinking exposed by stripped server_tool_use', () => {
+      // Production repro: a kill drops a trailing server_tool_use after a
+      // signed thinking block. After isReplayableAssistantBlock filters the
+      // tool block, thinking is the new last block — Anthropic 400s with
+      // "final assistant content cannot be `thinking`". The fixup must
+      // append a minimal text block so the shape stays valid on replay.
+      const messages: ChatMessage[] = [
+        mkUser('research this'),
+        mkAssistant({
+          content: '',
+          content_blocks: [
+            { type: 'thinking', thinking: 'plan the search', signature: 'sig_a==' },
+            {
+              type: 'server_tool_use',
+              id: 'srvtoolu_1',
+              name: 'web_search',
+              input: { query: 'x' },
+            },
+          ],
+        }),
+        mkUser('continue'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'plan the search', signature: 'sig_a==' },
+          { type: 'text', text: '.' },
+        ],
+      });
+    });
+
+    it('inserts "." between adjacent thinking blocks orphaned by stripped server_tool_use', () => {
+      // Two signed thinkings with a server_tool_use between them: filtering
+      // the tool block makes the thinkings adjacent, which Anthropic rejects
+      // ("thinking blocks must remain as they were in the original response").
+      // Intersperse a minimal text block to keep the shape valid.
+      const messages: ChatMessage[] = [
+        mkUser('hi'),
+        mkAssistant({
+          content: 'final answer',
+          content_blocks: [
+            { type: 'thinking', thinking: 'first', signature: 'sig_1==' },
+            {
+              type: 'server_tool_use',
+              id: 'srvtoolu_1',
+              name: 'web_search',
+              input: { query: 'x' },
+            },
+            { type: 'thinking', thinking: 'second', signature: 'sig_2==' },
+            { type: 'text', text: 'final answer' },
+          ],
+        }),
+        mkUser('next'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'first', signature: 'sig_1==' },
+          { type: 'text', text: '.' },
+          { type: 'thinking', thinking: 'second', signature: 'sig_2==' },
+          { type: 'text', text: 'final answer' },
+        ],
+      });
+    });
+
+    it('trims trailing whitespace from the last text block', () => {
+      // A half-streamed text block ending at a word boundary often has a
+      // trailing space/newline. Anthropic rejects "final text block ends
+      // with whitespace" on the assistant turn going IN.
+      const messages: ChatMessage[] = [
+        mkUser('hi'),
+        mkAssistant({
+          content: 'reply  ',
+          content_blocks: [
+            { type: 'thinking', thinking: 't', signature: 'sig==' },
+            { type: 'text', text: 'reply  \n' },
+          ],
+        }),
+        mkUser('next'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 't', signature: 'sig==' },
+          { type: 'text', text: 'reply' },
+        ],
+      });
+    });
+
+    it('drops whitespace-only text blocks during fixup', () => {
+      // Empty/whitespace-only text blocks fail Anthropic's non-empty
+      // validation. Drop them entirely; the surrounding blocks stand.
+      const messages: ChatMessage[] = [
+        mkUser('hi'),
+        mkAssistant({
+          content: 'real answer',
+          content_blocks: [
+            { type: 'text', text: '   ' },
+            { type: 'text', text: 'real answer' },
+          ],
+        }),
+        mkUser('next'),
+      ];
+      const out = buildOutgoingMessages(messages, { attachedFileIds: [], lastIndex: 2 });
+      expect(out[1]).toEqual({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'real answer' }],
+      });
+    });
   });
 });

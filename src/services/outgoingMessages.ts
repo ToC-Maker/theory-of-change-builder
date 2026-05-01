@@ -28,6 +28,59 @@ function isReplayableAssistantBlock(b: AssistantBlock): boolean {
   return true;
 }
 
+// Mirror of the worker's buildAssistantBlocksForCountTokens fixup logic
+// (worker/api/anthropic-stream.ts). Anthropic enforces these shape rules
+// on prior assistant turns during user replay too, not just on count_tokens
+// inputs:
+//
+//   1. Final block cannot be `thinking` (must be text, or thinking
+//      followed by text). Trigger: a kill drops a trailing server_tool_use
+//      after a signed thinking, leaving thinking as the last block.
+//   2. Final text block cannot end with trailing whitespace.
+//   3. Text blocks must be non-empty and non-whitespace-only.
+//   4. Two `thinking` blocks cannot be adjacent — happens when the
+//      `isReplayableAssistantBlock` filter removes a server_tool_use that
+//      sat between them.
+//
+// A single "." costs ~1 token; cheap enough to apply unconditionally
+// rather than detect-and-only-pad.
+function fixupAssistantBlocksForReplay(blocks: AssistantBlock[]): AssistantBlock[] {
+  const out: AssistantBlock[] = [];
+  for (const b of blocks) {
+    if (b.type === 'text') {
+      if (b.text.trim().length === 0) continue;
+      out.push(b);
+    } else if (b.type === 'thinking') {
+      const last = out[out.length - 1];
+      if (last && last.type === 'thinking') {
+        out.push({ type: 'text', text: '.' });
+      }
+      out.push(b);
+    } else {
+      out.push(b);
+    }
+  }
+  while (out.length > 0) {
+    const last = out[out.length - 1];
+    if (last.type === 'thinking') {
+      out.push({ type: 'text', text: '.' });
+      break;
+    }
+    if (last.type === 'text') {
+      const trimmed = last.text.replace(/\s+$/u, '');
+      if (trimmed.length === 0) {
+        out.pop();
+        continue;
+      }
+      if (trimmed.length !== last.text.length) {
+        out[out.length - 1] = { type: 'text', text: trimmed };
+      }
+    }
+    break;
+  }
+  return out;
+}
+
 interface OutgoingUserContent {
   role: 'user';
   content:
@@ -84,8 +137,12 @@ export function buildOutgoingMessages(
     const blocks = msg.content_blocks;
     if (blocks && blocks.length > 0) {
       const replayable = blocks.filter(isReplayableAssistantBlock);
-      if (replayable.length > 0) {
-        return { role: 'assistant', content: replayable };
+      // Trailing-shape fixup must run after the filter — dropping a
+      // trailing server_tool_use can expose a thinking block as the new
+      // tail, which Anthropic 400s on. See fixupAssistantBlocksForReplay.
+      const fixed = fixupAssistantBlocksForReplay(replayable);
+      if (fixed.length > 0) {
+        return { role: 'assistant', content: fixed };
       }
       // Filter dropped everything (e.g. turn was tool-only, killed before
       // any thinking signature arrived). Fall through to text content.
