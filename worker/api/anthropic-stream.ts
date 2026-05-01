@@ -968,8 +968,12 @@ type PollingState =
  * the handler. Tagged union: `over_threshold` is the ordinary cumulative-cost
  * path (parse_frame or poll); `compute_error` is the fail-closed kill
  * synthesized when computeCostMicroUsd throws (cost-table bug).
+ *
+ * Exported so `isCostCapKill` (the discriminator behind
+ * `logging_messages.was_killed`) has a stable parameter type and is callable
+ * from unit tests.
  */
-type KillDiagnostic =
+export type KillDiagnostic =
   | {
       kind: 'over_threshold';
       source: 'parse_frame' | 'poll';
@@ -990,6 +994,20 @@ type KillDiagnostic =
       live_web_search_count: number;
       fired_at_ms: number;
     };
+
+/**
+ * The discriminator behind `logging_messages.was_killed`. Returns true iff a
+ * cost-cap kill site set `killDiagnostic` (parse-frame / poll over-threshold,
+ * or the fail-closed compute_error path).
+ *
+ * Callers must NOT use `teeCtx.killed.v` here: that flag is also flipped by
+ * non-cost-cap terminations (e.g. `not_found_error` interception sets
+ * `killed.v` for flow control without a cost-cap kill). Treating those as
+ * "killed by cost cap" would over-count was_killed.
+ */
+export function isCostCapKill(killDiagnostic: KillDiagnostic | null): boolean {
+  return killDiagnostic !== null;
+}
 
 type SseTeeContext = {
   accumulator: UsageAccumulator;
@@ -1059,7 +1077,8 @@ type SseTeeContext = {
   /**
    * Captured when the kill switch fires; written during post-stream reconcile
    * rather than from the kill site itself because ctx.waitUntil is scoped to
-   * the handler. Null if the stream wasn't killed by the cost-cap path.
+   * the handler. Null if the stream wasn't killed by the cost-cap path. See
+   * `isCostCapKill` for the discriminator that drives was_killed.
    */
   killDiagnostic: KillDiagnostic | null;
   /**
@@ -3159,7 +3178,7 @@ export async function handler(
       if (loggingMessageId) {
         const optedOut = await isUserOptedOut(sql, actor.authenticated ? actorId : null);
         if (!optedOut) {
-          const wasKilledByCostCap = teeCtx.killDiagnostic !== null;
+          const wasKilledByCostCap = isCostCapKill(teeCtx.killDiagnostic);
           // Only UPDATE when the cost-cap kill actually fired — column defaults
           // to FALSE, so writing FALSE here is a no-op DB round-trip. Skipping
           // it also avoids any future risk of a retry path overwriting a

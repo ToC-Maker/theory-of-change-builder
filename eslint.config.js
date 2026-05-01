@@ -6,7 +6,10 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage'] },
+  // `.claude/worktrees/` holds peer agent checkouts (gitignored). Each contains
+  // a sibling tsconfig that confuses typescript-eslint's project resolution
+  // ("multiple candidate TSConfigRootDirs are present"). Skip them outright.
+  { ignores: ['dist', 'coverage', '.claude'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

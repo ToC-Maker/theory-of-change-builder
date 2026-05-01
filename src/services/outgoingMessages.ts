@@ -181,6 +181,19 @@ export function buildOutgoingMessages(
         { messageId: msg.id, content: msg.content.slice(0, 100) },
       );
     }
+    // Anthropic 400s on an empty assistant turn ("content: must contain at
+    // least one block / non-empty string"). Trigger: a kill landed before any
+    // text_delta arrived AND content_blocks either was missing or got fully
+    // filtered out (tool-only turn, partial thinking with no signature, etc).
+    // Substitute a single-period placeholder so the conversation alternation
+    // still works on replay; warn so the lossy turn is visible in devtools.
+    if (msg.content.length === 0) {
+      console.warn(
+        '[outgoingMessages] assistant turn has empty content with no replayable blocks; substituting placeholder text',
+        { messageId: msg.id, hadBlocks: blocks !== undefined, blockCount: blocks?.length ?? 0 },
+      );
+      return { role: 'assistant', content: '.' };
+    }
     return { role: 'assistant', content: msg.content };
   });
 }

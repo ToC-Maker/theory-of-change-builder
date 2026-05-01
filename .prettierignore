@@ -12,3 +12,6 @@ README.md
 
 # Code-review subagent reports — generated artifacts, not project source.
 reviews/
+
+# Peer agent worktrees — gitignored, not part of this checkout's source.
+.claude/

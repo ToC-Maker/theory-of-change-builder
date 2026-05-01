@@ -90,7 +90,13 @@ const ERROR_NAME_FILES_PENDING = 'delete_my_data_files_pending';
 const ERROR_NAME_CASCADE_FAILED = 'delete_my_data_failed';
 const ERROR_NAME_AUDIT_TRANSITION_FAILED = 'delete_my_data_audit_transition_failed';
 
-async function insertPendingAuditRow(
+// Exported for unit tests: callers (or test stubs) can pass a recording `sql`
+// stub and assert what gets bound. The real `sql` parameter binding above
+// (user_id = ${null}) is the load-bearing privacy guarantee — the audit row
+// must NOT carry a user_id, otherwise the `DELETE FROM logging_errors WHERE
+// user_id = ${userId}` step inside the cascade would wipe the row that
+// records the cascade itself.
+export async function insertPendingAuditRow(
   sql: Sql,
   errorId: string,
   userId: string,
@@ -290,6 +296,91 @@ async function resolveIdentity(request: Request, env: Env): Promise<IdentityResu
 }
 
 // ---------------------------------------------------------------------------
+// Cascade-statement builders. Extracted so a recording `sql` stub in unit
+// tests can assert the exact set of tables touched by the auth vs anon
+// transactions. The structural difference IS the privacy guarantee:
+//   - Anon path must NOT touch user_byok_keys (no fresh JWT == no BYOK delete
+//     authority). buildByokDeleteStatements returns [] for !authenticated.
+//   - Neither path touches user_api_usage (Art 6(1)(f) carve-out, LIA §1B).
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the array of pending statements for the Phase 2b cascade
+ * transaction (charts + logging_*  + chart_files + chart_permissions).
+ * Caller hands the array to `sql.transaction(...)`.
+ *
+ * Auth gets one extra statement: `DELETE FROM logging_preferences` (anon has
+ * no server-side preferences row to wipe — it's keyed on Auth0 sub). The BYOK
+ * row is handled separately in `buildByokDeleteStatements` — keeping the BYOK
+ * delete out of this cascade lets us use RETURNING to discover whether a row
+ * actually existed.
+ */
+export function buildCascadeStatements(
+  sql: Sql,
+  authenticated: boolean,
+  userId: string,
+  soleOwnedIds: readonly string[],
+  collabEditedIds: readonly string[],
+): unknown[] {
+  const stmts: unknown[] = [
+    soleOwnedIds.length > 0
+      ? sql`DELETE FROM charts WHERE id = ANY(${soleOwnedIds}::text[]) AND user_id = ${userId}`
+      : sql`SELECT 1 WHERE FALSE`,
+    collabEditedIds.length > 0
+      ? sql`UPDATE charts SET user_id = NULL WHERE id = ANY(${collabEditedIds}::text[]) AND user_id = ${userId}`
+      : sql`SELECT 1 WHERE FALSE`,
+    sql`DELETE FROM logging_messages WHERE user_id = ${userId}`,
+    sql`DELETE FROM logging_snapshots WHERE session_id IN (
+          SELECT session_id FROM logging_sessions WHERE user_id = ${userId}
+        )`,
+    sql`DELETE FROM logging_sessions WHERE user_id = ${userId}`,
+    sql`DELETE FROM logging_errors WHERE user_id = ${userId}`,
+  ];
+  if (authenticated) {
+    stmts.push(sql`DELETE FROM logging_preferences WHERE user_id = ${userId}`);
+  }
+  stmts.push(
+    sql`DELETE FROM chart_files WHERE user_id = ${userId}`,
+    sql`DELETE FROM chart_permissions WHERE user_id = ${userId}`,
+  );
+  return stmts;
+}
+
+/**
+ * Returns the BYOK delete transaction's statements: empty for anon, two
+ * statements (zeroize then DELETE … RETURNING) for auth. Anon explicitly
+ * does NOT delete the BYOK blob — the JWT is the BYOK authority, and an
+ * anon caller (even one whose `tocb_auth_link` resolves to an auth sub) must
+ * obtain a fresh token to wipe it. Mirrors byok-key.ts.
+ *
+ * The empty-array shape for anon is the load-bearing guarantee: handing []
+ * to `sql.transaction([])` is a no-op.
+ */
+export function buildByokDeleteStatements(
+  sql: Sql,
+  authenticated: boolean,
+  userId: string,
+): unknown[] {
+  if (!authenticated) return [];
+  return [
+    sql`UPDATE user_byok_keys SET encrypted_key = '\\x'::bytea WHERE user_id = ${userId}`,
+    sql`DELETE FROM user_byok_keys WHERE user_id = ${userId} RETURNING user_id`,
+  ];
+}
+
+/**
+ * The dispatch decision for "should this caller's request run the BYOK delete
+ * branch?". The rule is "auth only" — full stop. A separate helper (rather
+ * than inlining `if (authenticated)`) captures the rule in one named place,
+ * making it harder to accidentally widen the predicate (e.g. by trusting
+ * `tocb_auth_link` for anon callers, which would let a stale auth-link
+ * cookie wipe the linked user's BYOK key without a fresh JWT).
+ */
+export function shouldRunByokDelete(authenticated: boolean): boolean {
+  return authenticated;
+}
+
+// ---------------------------------------------------------------------------
 // Main handler.
 // ---------------------------------------------------------------------------
 
@@ -413,27 +504,15 @@ export async function handler(
   // requests. That gates BYOK delete behind a fresh JWT, mirroring
   // byok-key.ts, so a stale auth-link cookie can never trigger a BYOK wipe.
   try {
-    const cascadeStatements = [
-      soleOwnedIds.length > 0
-        ? sql`DELETE FROM charts WHERE id = ANY(${soleOwnedIds}::text[]) AND user_id = ${userId}`
-        : sql`SELECT 1 WHERE FALSE`,
-      collabEditedIds.length > 0
-        ? sql`UPDATE charts SET user_id = NULL WHERE id = ANY(${collabEditedIds}::text[]) AND user_id = ${userId}`
-        : sql`SELECT 1 WHERE FALSE`,
-      sql`DELETE FROM logging_messages WHERE user_id = ${userId}`,
-      sql`DELETE FROM logging_snapshots WHERE session_id IN (
-            SELECT session_id FROM logging_sessions WHERE user_id = ${userId}
-          )`,
-      sql`DELETE FROM logging_sessions WHERE user_id = ${userId}`,
-      sql`DELETE FROM logging_errors WHERE user_id = ${userId}`,
-      // logging_preferences only exists for auth users (anon has no opt-out
-      // surface); splice it in at this position when authenticated. Avoids
-      // duplicating the entire transaction array between the two paths.
-      ...(authenticated ? [sql`DELETE FROM logging_preferences WHERE user_id = ${userId}`] : []),
-      sql`DELETE FROM chart_files WHERE user_id = ${userId}`,
-      sql`DELETE FROM chart_permissions WHERE user_id = ${userId}`,
-    ];
-    await sql.transaction(cascadeStatements);
+    await sql.transaction(
+      buildCascadeStatements(
+        sql,
+        authenticated,
+        userId,
+        soleOwnedIds,
+        collabEditedIds,
+      ) as Parameters<typeof sql.transaction>[0],
+    );
   } catch (e) {
     console.error(`${LOG_PREFIX} write transaction failed:`, e);
     // Best-effort: transition the audit row to a failure incident so a
@@ -450,12 +529,13 @@ export async function handler(
   // byok-key.ts; bytea zeroization isn't a security primitive (WAL/replicas
   // may hold the old ciphertext) but it shrinks the in-flight surface.
   let byokDeleted = false;
-  if (authenticated) {
+  if (shouldRunByokDelete(authenticated)) {
     try {
-      const result = (await sql.transaction([
-        sql`UPDATE user_byok_keys SET encrypted_key = '\\x'::bytea WHERE user_id = ${userId}`,
-        sql`DELETE FROM user_byok_keys WHERE user_id = ${userId} RETURNING user_id`,
-      ])) as Array<Array<{ user_id: string }>>;
+      const result = (await sql.transaction(
+        buildByokDeleteStatements(sql, authenticated, userId) as Parameters<
+          typeof sql.transaction
+        >[0],
+      )) as Array<Array<{ user_id: string }>>;
       // sql.transaction returns an array of statement results; the second
       // statement's RETURNING is what we want.
       const deletedRows = result[1] ?? [];
