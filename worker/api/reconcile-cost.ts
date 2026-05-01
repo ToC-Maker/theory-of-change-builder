@@ -34,6 +34,110 @@ import { resolveAnonActor } from '../_shared/anon-id';
  * with the same value are no-ops; with increasing values, the column
  * monotonically rises.
  */
+
+// ---------------------------------------------------------------------------
+// Pure helpers (exported for unit tests).
+//
+// The handler below threads identity → DB row lookup → cost-clamp → DB write.
+// Identity and the DB are environment-bound and exercised manually + via
+// integration tests; the bits below are the call's data-shape decisions and
+// are pure (no I/O), so they're the part we lock down with unit tests.
+// ---------------------------------------------------------------------------
+
+/** Discriminated result of `parseReconcileBody`. Either a parsed value, or a
+ * ready-to-return `{ status, body }` 4xx tuple. The handler converts the 4xx
+ * tuple to `Response.json(body, { status })`. */
+export type ParseReconcileResult =
+  | { ok: true; loggingMessageId: string; clientCost: bigint }
+  | { ok: false; status: number; body: { error: string; detail?: string } };
+
+/**
+ * Validate the JSON body of a `POST /api/reconcile-cost` request.
+ *
+ * Acceptance rules (mirror the historical contract; tests pin these so a
+ * silent loosening here would be visible):
+ *  - `logging_message_id` must be a non-empty string.
+ *  - `cost_micro_usd` may be a string (parsed via BigInt) or a finite
+ *    number (truncated then BigInt-coerced). Anything else is rejected.
+ *  - The resulting bigint must not be negative.
+ *
+ * Returning a discriminated union (rather than throwing) keeps the handler
+ * branch-free at this step: ok → use the value, !ok → forward `body` and
+ * `status` straight into `Response.json`.
+ */
+export function parseReconcileBody(raw: unknown): ParseReconcileResult {
+  if (raw === null || typeof raw !== 'object') {
+    return { ok: false, status: 400, body: { error: 'logging_message_id_required' } };
+  }
+  const body = raw as { logging_message_id?: unknown; cost_micro_usd?: unknown };
+
+  const loggingMessageId = body.logging_message_id;
+  if (typeof loggingMessageId !== 'string' || loggingMessageId.length === 0) {
+    return { ok: false, status: 400, body: { error: 'logging_message_id_required' } };
+  }
+
+  // cost_micro_usd is sent as string by the client (BigInt round-trip via
+  // SSE running_cost frames) but we accept number too in case a future
+  // client changes encoding.
+  let clientCost: bigint;
+  const cost = body.cost_micro_usd;
+  try {
+    if (typeof cost === 'string') {
+      clientCost = BigInt(cost);
+    } else if (typeof cost === 'number' && Number.isFinite(cost)) {
+      clientCost = BigInt(Math.trunc(cost));
+    } else {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'cost_micro_usd_required', detail: 'must be a string or number' },
+      };
+    }
+  } catch {
+    return { ok: false, status: 400, body: { error: 'cost_micro_usd_invalid_integer' } };
+  }
+  if (clientCost < 0n) {
+    return { ok: false, status: 400, body: { error: 'cost_micro_usd_negative' } };
+  }
+
+  return { ok: true, loggingMessageId, clientCost };
+}
+
+/** Discriminated outcome of `computeReconcileOutcome`. */
+export type ReconcileOutcome =
+  | { kind: 'forbidden' }
+  | { kind: 'apply'; previousCost: bigint; newCost: bigint; applied: boolean };
+
+/**
+ * Decide what (if anything) to do with a reconcile request that has already
+ * passed body validation and located its `logging_messages` row.
+ *
+ *  - If the row's `user_id` does not match the caller, return `forbidden`.
+ *    A NULL `user_id` (deleted chart / GDPR-erased row) never matches any
+ *    caller, so it's also rejected here.
+ *  - Otherwise, clamp `clientCost` against the row's existing cost using the
+ *    GREATEST monotonic-floor rule, and report whether the new value would
+ *    actually change the row (`applied`). Equal values short-circuit to
+ *    `applied: false` so the handler can skip the UPDATE.
+ *
+ * The function is total over its inputs and bigint-clean (no Number → bigint
+ * coercions inside), so the GREATEST + idempotency invariants are testable
+ * without spinning up a database.
+ */
+export function computeReconcileOutcome(
+  actorId: string,
+  row: { user_id: string | null; cost_micro_usd: bigint | number },
+  clientCost: bigint,
+): ReconcileOutcome {
+  if (row.user_id !== actorId) {
+    return { kind: 'forbidden' };
+  }
+  const previousCost = BigInt(row.cost_micro_usd);
+  const newCost = clientCost > previousCost ? clientCost : previousCost;
+  const applied = newCost > previousCost;
+  return { kind: 'apply', previousCost, newCost, applied };
+}
+
 export async function handler(request: Request, env: Env): Promise<Response> {
   // Step 1: resolve actor (auth0 JWT, else anon cookie).
   let actorId: string;
@@ -63,40 +167,17 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   }
 
   // Step 2: parse + validate body.
-  let body: { logging_message_id?: unknown; cost_micro_usd?: unknown };
+  let raw: unknown;
   try {
-    body = (await request.json()) as typeof body;
+    raw = await request.json();
   } catch {
     return Response.json({ error: 'invalid_json' }, { status: 400 });
   }
-
-  const loggingMessageId = body.logging_message_id;
-  if (typeof loggingMessageId !== 'string' || loggingMessageId.length === 0) {
-    return Response.json({ error: 'logging_message_id_required' }, { status: 400 });
+  const parsed = parseReconcileBody(raw);
+  if (!parsed.ok) {
+    return Response.json(parsed.body, { status: parsed.status });
   }
-
-  // cost_micro_usd is sent as string by the client (BigInt round-trip via
-  // SSE running_cost frames) but we accept number too in case a future
-  // client changes encoding.
-  let clientCost: bigint;
-  const raw = body.cost_micro_usd;
-  try {
-    if (typeof raw === 'string') {
-      clientCost = BigInt(raw);
-    } else if (typeof raw === 'number' && Number.isFinite(raw)) {
-      clientCost = BigInt(Math.trunc(raw));
-    } else {
-      return Response.json(
-        { error: 'cost_micro_usd_required', detail: 'must be a string or number' },
-        { status: 400 },
-      );
-    }
-  } catch {
-    return Response.json({ error: 'cost_micro_usd_invalid_integer' }, { status: 400 });
-  }
-  if (clientCost < 0n) {
-    return Response.json({ error: 'cost_micro_usd_negative' }, { status: 400 });
-  }
+  const { loggingMessageId, clientCost } = parsed;
 
   const sql = getDb(env);
   const url = new URL(request.url);
@@ -117,16 +198,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'not_found' }, { status: 404 });
   }
   const row = rows[0];
-  if (row.user_id !== actorId) {
+  const outcome = computeReconcileOutcome(actorId, row, clientCost);
+  if (outcome.kind === 'forbidden') {
     // Authoritative reject: only the row owner can reconcile its cost.
     // Includes the case where row.user_id is NULL (chart deleted / data
     // erased) — no caller can match a NULL.
     return Response.json({ error: 'forbidden' }, { status: 403 });
   }
-
-  const previousCost = BigInt(row.cost_micro_usd);
-  const newCost = clientCost > previousCost ? clientCost : previousCost;
-  const applied = newCost > previousCost;
+  const { previousCost, newCost, applied } = outcome;
 
   // Telemetry log (PR-preview-friendly: this lands in `wrangler tail` if
   // attached, plus the diagnostic row below is queryable from the DB).
