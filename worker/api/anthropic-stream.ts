@@ -3116,14 +3116,42 @@ export async function handler(
       // missed a usage event). Logged via DiagnosticReconcileEmptyAccumulator
       // when this happens to a row that DID stream content.
       if (loggingMessageId) {
+        // GREATEST so a tracked.done timeout with empty accumulator
+        // (`actualMicro=0n`) can't clobber the message_start floor or the
+        // client-side reconcile-cost POST that may have landed first.
         try {
           await sql`
           UPDATE logging_messages
-          SET cost_micro_usd = ${actualMicro.toString()}::bigint
+          SET cost_micro_usd = GREATEST(cost_micro_usd, ${actualMicro.toString()}::bigint)
           WHERE message_id = ${loggingMessageId}
         `;
         } catch (e) {
           console.error('logging_messages cost update failed (non-fatal):', e);
+          try {
+            await sql`
+              INSERT INTO logging_errors (
+                error_id, error_name, error_message, user_id, chart_id,
+                request_metadata
+              )
+              VALUES (
+                ${crypto.randomUUID()},
+                'DiagnosticReconcileCostUpdateFailed',
+                ${`logging_messages.cost_micro_usd update failed: ${e instanceof Error ? e.message : String(e)}`},
+                ${actorId},
+                ${chartId ?? null},
+                ${JSON.stringify({
+                  logging_message_id: loggingMessageId,
+                  actual_micro_usd: actualMicro.toString(),
+                  error_message: e instanceof Error ? e.message : String(e),
+                  deployment_host: requestUrl.hostname,
+                  fired_at_ms: Date.now(),
+                })}
+              )
+              ON CONFLICT (error_id) DO NOTHING
+            `;
+          } catch (innerErr) {
+            console.error('cost-update-failed diagnostic insert also failed:', innerErr);
+          }
         }
 
         // Diagnostic: a stream that ended with empty accumulator usage means
