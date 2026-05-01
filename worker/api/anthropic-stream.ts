@@ -838,6 +838,11 @@ function createKeepaliveStream(
 
 // --- Cost-tracking SSE tee ----------------------------------------------
 
+// Distinct from `AnthropicUsage` (worker/_shared/cost.ts) on purpose: this is
+// our internal accumulator state, so every field is required `number` (default
+// 0) and `web_search_requests` is flat for ergonomic ++ arithmetic. Convert to
+// the wire-shaped `AnthropicUsage` (optional fields, nested `server_tool_use`)
+// at the boundary via `accumulatorToUsage`.
 type UsageAccumulator = {
   input_tokens: number;
   output_tokens: number;
@@ -3224,10 +3229,10 @@ export async function handler(
           );
           if (analyticsBlocks.length > 0) {
             try {
-              // Stringify directly (TEXT column, not JSONB) so signed thinking
-              // blocks round-trip byte-identical for replay — Postgres JSONB
-              // would normalize key ordering / whitespace / numbers, which
-              // could break Anthropic signature verification.
+              // Stored as TEXT (not JSONB) so signed-thinking blocks round-trip
+              // byte-identical for replay — see migration `add-chat-content-blocks.sql`
+              // for the column rationale (Postgres JSONB normalizes key ordering /
+              // whitespace / numbers, which would break Anthropic signature verification).
               await sql`
                 UPDATE logging_messages
                 SET content_blocks = ${JSON.stringify(analyticsBlocks)}

@@ -64,7 +64,7 @@ const FIRST_USER_PROMPT =
   'Five people (A, B, C, D, E) sit in a row. A is not at either end. B is two seats to the left of E. C is somewhere to the right of B. D is adjacent to A. Where does each person sit? Show your reasoning.';
 const FOLLOWUP_USER_PROMPT = 'Now swap the positions of A and B. What is the new seating order?';
 
-// --- Step 1: stream the first turn and capture blocks --------------------
+// --- Step 1/3: stream the first turn and capture blocks ------------------
 
 async function streamFirstTurn(): Promise<AssistantBlock[]> {
   const body = {
@@ -134,13 +134,13 @@ async function streamFirstTurn(): Promise<AssistantBlock[]> {
   return toAssistantContentBlocks(accumulator);
 }
 
-// --- Step 3: JSON round-trip --------------------------------------------
+// --- Step 2/3: JSON round-trip (simulates localStorage hop) -------------
 
 function jsonRoundTrip(blocks: AssistantBlock[]): AssistantBlock[] {
   return JSON.parse(JSON.stringify(blocks)) as AssistantBlock[];
 }
 
-// --- Step 5: replay turn (non-streaming) --------------------------------
+// --- Step 3/3: replay turn (non-streaming) ------------------------------
 
 async function postReplayTurn(priorBlocks: AssistantBlock[]): Promise<Response> {
   const body = {

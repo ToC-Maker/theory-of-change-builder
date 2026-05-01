@@ -35,12 +35,14 @@ export interface ServerToolUseBlock {
 
 export interface WebSearchToolResultBlock {
   type: 'web_search_tool_result';
+  // References a prior server_tool_use.id; correlation is not enforced at the type level — Anthropic guarantees it on the wire.
   tool_use_id: string;
   content: unknown;
 }
 
 export interface CodeExecutionToolResultBlock {
   type: 'code_execution_tool_result';
+  // References a prior server_tool_use.id; correlation is not enforced at the type level — Anthropic guarantees it on the wire.
   tool_use_id: string;
   content: unknown;
 }

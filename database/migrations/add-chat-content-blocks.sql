@@ -7,7 +7,7 @@ ALTER TABLE logging_messages
   ADD COLUMN IF NOT EXISTS content_blocks TEXT;
 
 COMMENT ON COLUMN logging_messages.content_blocks IS
-  'Raw client-supplied JSON bytes for the message content blocks discriminated union (see shared/chat-blocks.ts). NULL for legacy rows written before this column existed; analytics treats NULL as text-only fallback to logging_messages.content. Stored as TEXT (not JSONB) so signed thinking blocks round-trip byte-identical for replay/fork via Anthropic API.';
+  'Raw worker-supplied JSON bytes for the message content blocks discriminated union (see shared/chat-blocks.ts). Written by anthropic-stream.ts post-stream (collectAssistantBlocksForAnalytics), not by the client. NULL for legacy rows written before this column existed; analytics treats NULL as text-only fallback to logging_messages.content. Stored as TEXT (not JSONB) so signed thinking blocks round-trip byte-identical for replay/fork via Anthropic API.';
 
 ALTER TABLE logging_messages
   ADD COLUMN IF NOT EXISTS was_killed BOOLEAN NOT NULL DEFAULT FALSE;
