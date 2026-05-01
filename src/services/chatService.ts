@@ -895,15 +895,8 @@ class ChatService {
                     (cb.name ? ` name=${cb.name}` : '') +
                     ` t+${sinceStart}ms Δ${sinceLast}ms`,
                 );
-                // Each thinking block is a fresh chain-of-thought, not a
-                // continuation of the previous one. Reset the internal
-                // accumulator so the next thinking_delta lands on an empty
-                // buffer; the UI state isn't cleared here on purpose —
-                // doing so could unmount the streaming bubble (e.g. when
-                // streamingContent is also empty during tool-use bursts),
-                // taking the "$X so far" counter with it. The first
-                // thinking_delta of the new block will replace the old
-                // text via onThinking(chunk, fullThinking).
+                // Reset on each new thinking block — each is a fresh
+                // chain-of-thought, not a continuation of the prior one.
                 if (cb.type === 'thinking') {
                   fullThinking = '';
                 }

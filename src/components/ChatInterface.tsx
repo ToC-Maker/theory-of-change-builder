@@ -1770,11 +1770,7 @@ export function ChatInterface({
               role: 'assistant',
               content: finalMessage,
               timestamp: new Date(),
-              // Persist structured blocks so the next turn re-ships signed
-              // thinking + tool-use back to Anthropic (Opus 4.7 expects
-              // prior thinking; replay-without-it loses reasoning quality).
-              // Undefined when no blocks (defensive — onComplete should
-              // always pass them, but legacy callers won't).
+              // undefined for legacy turns predating block capture
               content_blocks: contentBlocks && contentBlocks.length > 0 ? contentBlocks : undefined,
               usage: usage
                 ? {

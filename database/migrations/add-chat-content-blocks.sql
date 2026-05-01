@@ -1,20 +1,5 @@
--- Migration: Persist rich content blocks + kill marker for analytics
--- Created: 2026-04-25
---
--- Adds columns to logging_messages so the analytics team can:
---   1. See full assistant content (text + signed thinking + tool_use +
---      tool_results) instead of just cleaned text. Useful for AI quality
---      eval and for forking conversations to test alternative responses.
---   2. Distinguish assistant turns cut short by the cost-cap kill switch
---      from cleanly-completed turns.
---
--- content_blocks is TEXT (not JSONB) so the literal JSON bytes the client
--- supplied round-trip byte-identical. JSONB would normalize key ordering /
--- whitespace / numbers, which could break Anthropic signature verification
--- on replay (the signature covers the block envelope, not just the
--- signature string field).
---
--- Idempotent. Safe to re-run.
+-- Add content_blocks (TEXT) + was_killed columns to logging_messages.
+-- Idempotent. Created 2026-04-25.
 
 BEGIN;
 
