@@ -3242,7 +3242,7 @@ export async function handler(
                 )
                 VALUES (
                   ${crypto.randomUUID()},
-                  'analytics_was_killed_update_failed',
+                  'DiagnosticWasKilledUpdateFailed',
                   ${`logging_messages.was_killed update failed: ${e instanceof Error ? e.message : String(e)}`},
                   ${actorId},
                   ${chartId ?? null},
@@ -3290,7 +3290,7 @@ export async function handler(
                   )
                   VALUES (
                     ${crypto.randomUUID()},
-                    'analytics_content_blocks_update_failed',
+                    'DiagnosticContentBlocksUpdateFailed',
                     ${`logging_messages.content_blocks update failed: ${e instanceof Error ? e.message : String(e)}`},
                     ${actorId},
                     ${chartId ?? null},
