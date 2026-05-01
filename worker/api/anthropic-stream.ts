@@ -3229,18 +3229,21 @@ export async function handler(
         const optedOut = await isUserOptedOut(sql, actor.authenticated ? actorId : null);
         if (!optedOut) {
           const wasKilledByCostCap = teeCtx.killDiagnostic !== null;
-          // Always-on: was_killed reflects whether the cost-cap kill fired,
-          // independent of how many content blocks were captured.
-          try {
-            await sql`
-              UPDATE logging_messages
-              SET was_killed = ${wasKilledByCostCap}
-              WHERE message_id = ${loggingMessageId}
-            `;
-          } catch (e) {
-            console.error('logging_messages was_killed update failed (non-fatal):', e);
+          // Only UPDATE when the cost-cap kill actually fired — column defaults
+          // to FALSE, so writing FALSE here is a no-op DB round-trip. Skipping
+          // it also avoids any future risk of a retry path overwriting a
+          // previously-true value (idempotency by omission).
+          if (wasKilledByCostCap)
             try {
               await sql`
+              UPDATE logging_messages
+              SET was_killed = TRUE
+              WHERE message_id = ${loggingMessageId}
+            `;
+            } catch (e) {
+              console.error('logging_messages was_killed update failed (non-fatal):', e);
+              try {
+                await sql`
                 INSERT INTO logging_errors (
                   error_id, error_name, error_message, user_id, chart_id,
                   request_metadata
@@ -3261,10 +3264,10 @@ export async function handler(
                 )
                 ON CONFLICT (error_id) DO NOTHING
               `;
-            } catch (innerErr) {
-              console.error('was_killed-failure diagnostic insert also failed:', innerErr);
+              } catch (innerErr) {
+                console.error('was_killed-failure diagnostic insert also failed:', innerErr);
+              }
             }
-          }
 
           // Conditional: content_blocks only when we captured blocks.
           const analyticsBlocks = collectAssistantBlocksForAnalytics(
