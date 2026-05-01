@@ -4,6 +4,7 @@ import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { decryptByokKey } from '../_shared/byok-crypto';
 import { isUserOptedOut } from '../_shared/logging-optout';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
+import { writeDiagnostic } from '../_shared/diagnostics';
 import { toBigInt } from '../_shared/bigint';
 import {
   resolveAnonActor,
@@ -1946,35 +1947,23 @@ function createCostTrackingStream(
               } catch (uerr) {
                 console.error('message_start floor UPDATE failed:', uerr);
               }
-              try {
-                await teeCtx.sql`
-                  INSERT INTO logging_errors (
-                    error_id, error_name, error_message, user_id, chart_id,
-                    request_metadata
-                  )
-                  VALUES (
-                    ${crypto.randomUUID()},
-                    'DiagnosticMessageStartFloor',
-                    ${`floor=${floorMicro.toString()} µUSD locked at message_start`},
-                    ${teeCtx.actorId},
-                    ${teeCtx.chartId ?? null},
-                    ${JSON.stringify({
-                      logging_message_id: teeCtx.loggingMessageId,
-                      floor_micro_usd: floorMicro.toString(),
-                      floor_usd: microToUsd(floorMicro),
-                      input_tokens: floorMerged.input_tokens,
-                      cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
-                      cache_read_input_tokens: floorMerged.cache_read_input_tokens,
-                      model: teeCtx.model,
-                      deployment_host: teeCtx.deploymentHost,
-                      fired_at_ms: Date.now(),
-                    })}
-                  )
-                  ON CONFLICT (error_id) DO NOTHING
-                `;
-              } catch (derr) {
-                console.error('message_start floor diagnostic insert failed:', derr);
-              }
+              await writeDiagnostic(teeCtx.sql, {
+                error_name: 'DiagnosticMessageStartFloor',
+                error_message: `floor=${floorMicro.toString()} µUSD locked at message_start`,
+                user_id: teeCtx.actorId,
+                chart_id: teeCtx.chartId ?? null,
+                request_metadata: {
+                  logging_message_id: teeCtx.loggingMessageId,
+                  floor_micro_usd: floorMicro.toString(),
+                  floor_usd: microToUsd(floorMicro),
+                  input_tokens: floorMerged.input_tokens,
+                  cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
+                  cache_read_input_tokens: floorMerged.cache_read_input_tokens,
+                  model: teeCtx.model,
+                },
+                deployment_host: teeCtx.deploymentHost,
+                fired_at_ms: Date.now(),
+              });
             })(),
           );
         }
@@ -2765,32 +2754,20 @@ export async function handler(
       // don't pollute logging_errors with anonymous noise. Fire-and-forget;
       // if THIS insert fails the rest of the waitUntil still runs.
       if (loggingMessageId) {
-        try {
-          await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileEntered',
-              'reconcile waitUntil entered (pre tracked.done await)',
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                user_id: actorId,
-                logging_message_id: loggingMessageId,
-                tier,
-                model,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-        } catch (e) {
-          console.error('reconcile-entered diagnostic insert failed:', e);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcileEntered',
+          error_message: 'reconcile waitUntil entered (pre tracked.done await)',
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            user_id: actorId,
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+        });
       }
 
       // Wait for the SSE stream to finish (natural end, kill-switch, or
@@ -2814,37 +2791,25 @@ export async function handler(
         }),
       ]);
       if (trackedDoneTimedOut && loggingMessageId) {
-        try {
-          await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileTrackedDoneTimeout',
-              ${`tracked.done did not resolve within ${TRACKED_DONE_TIMEOUT_MS}ms; proceeding with partial state`},
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                logging_message_id: loggingMessageId,
-                tier,
-                model,
-                killed: teeCtx.killed.v,
-                message_delta_seen: teeCtx.messageDeltaSeen,
-                accumulator,
-                live_web_search_count: teeCtx.streamingContent.webSearchCount,
-                last_poll_output_tokens: teeCtx.lastPollOutputTokens,
-                timeout_ms: TRACKED_DONE_TIMEOUT_MS,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-        } catch (e) {
-          console.error('tracked-done-timeout diagnostic insert failed:', e);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcileTrackedDoneTimeout',
+          error_message: `tracked.done did not resolve within ${TRACKED_DONE_TIMEOUT_MS}ms; proceeding with partial state`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            killed: teeCtx.killed.v,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+            accumulator,
+            live_web_search_count: teeCtx.streamingContent.webSearchCount,
+            last_poll_output_tokens: teeCtx.lastPollOutputTokens,
+            timeout_ms: TRACKED_DONE_TIMEOUT_MS,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+        });
       }
 
       // When the stream is killed mid-flight, Anthropic's message_delta never
@@ -2899,37 +2864,25 @@ export async function handler(
       } catch (e) {
         console.error('Post-stream cost computation failed:', e);
         if (loggingMessageId) {
-          try {
-            await sql`
-              INSERT INTO logging_errors (
-                error_id, error_name, error_message, user_id, chart_id,
-                request_metadata
-              )
-              VALUES (
-                ${crypto.randomUUID()},
-                'DiagnosticReconcileCostComputeFailed',
-                ${`computeCostMicroUsd threw: ${e instanceof Error ? e.message : String(e)}`},
-                ${actorId},
-                ${chartId ?? null},
-                ${JSON.stringify({
-                  logging_message_id: loggingMessageId,
-                  tier,
-                  model,
-                  error_message: e instanceof Error ? e.message : String(e),
-                  error_stack: e instanceof Error ? e.stack : null,
-                  reconciled_accumulator: reconciledAccumulator,
-                  output_source: reconcileOutputSource,
-                  message_delta_seen: teeCtx.messageDeltaSeen,
-                  killed: teeCtx.killed.v,
-                  deployment_host: requestUrl.hostname,
-                  fired_at_ms: Date.now(),
-                })}
-              )
-              ON CONFLICT (error_id) DO NOTHING
-            `;
-          } catch (innerErr) {
-            console.error('cost-compute-failed diagnostic insert failed:', innerErr);
-          }
+          await writeDiagnostic(sql, {
+            error_name: 'DiagnosticReconcileCostComputeFailed',
+            error_message: `computeCostMicroUsd threw: ${e instanceof Error ? e.message : String(e)}`,
+            user_id: actorId,
+            chart_id: chartId ?? null,
+            request_metadata: {
+              logging_message_id: loggingMessageId,
+              tier,
+              model,
+              error_message: e instanceof Error ? e.message : String(e),
+              error_stack: e instanceof Error ? e.stack : null,
+              reconciled_accumulator: reconciledAccumulator,
+              output_source: reconcileOutputSource,
+              message_delta_seen: teeCtx.messageDeltaSeen,
+              killed: teeCtx.killed.v,
+            },
+            deployment_host: requestUrl.hostname,
+            fired_at_ms: Date.now(),
+          });
         }
         // Don't return — fall through with actualMicro=0n so downstream
         // logging_messages UPDATEs (was_killed, content_blocks) still run.
@@ -2964,41 +2917,29 @@ export async function handler(
           output_source: reconcileOutputSource,
         }),
       );
-      try {
-        await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, chart_id,
-            request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'DiagnosticReconcileCostComputed',
-            ${`actual=${actualMicro.toString()} µUSD output=${reconciledAccumulator.output_tokens} source=${reconcileOutputSource}`},
-            ${actorId},
-            ${chartId ?? null},
-            ${JSON.stringify({
-              logging_message_id: loggingMessageId,
-              tier,
-              model,
-              message_delta_seen: teeCtx.messageDeltaSeen,
-              actual_micro_usd: actualMicro.toString(),
-              actual_usd: microToUsd(actualMicro),
-              projected_micro_usd: projected.toString(),
-              input_tokens: reconciledAccumulator.input_tokens,
-              output_tokens: reconciledAccumulator.output_tokens,
-              cache_creation_input_tokens: reconciledAccumulator.cache_creation_input_tokens,
-              cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
-              web_search_requests: reconciledAccumulator.web_search_requests,
-              output_source: reconcileOutputSource,
-              deployment_host: requestUrl.hostname,
-              fired_at_ms: Date.now(),
-            })}
-          )
-          ON CONFLICT (error_id) DO NOTHING
-        `;
-      } catch (e) {
-        console.error('DiagnosticReconcileCostComputed insert failed:', e);
-      }
+      await writeDiagnostic(sql, {
+        error_name: 'DiagnosticReconcileCostComputed',
+        error_message: `actual=${actualMicro.toString()} µUSD output=${reconciledAccumulator.output_tokens} source=${reconcileOutputSource}`,
+        user_id: actorId,
+        chart_id: chartId ?? null,
+        request_metadata: {
+          logging_message_id: loggingMessageId,
+          tier,
+          model,
+          message_delta_seen: teeCtx.messageDeltaSeen,
+          actual_micro_usd: actualMicro.toString(),
+          actual_usd: microToUsd(actualMicro),
+          projected_micro_usd: projected.toString(),
+          input_tokens: reconciledAccumulator.input_tokens,
+          output_tokens: reconciledAccumulator.output_tokens,
+          cache_creation_input_tokens: reconciledAccumulator.cache_creation_input_tokens,
+          cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
+          web_search_requests: reconciledAccumulator.web_search_requests,
+          output_source: reconcileOutputSource,
+        },
+        deployment_host: requestUrl.hostname,
+        fired_at_ms: Date.now(),
+      });
 
       if (isCapped(tier)) {
         const deltaMicro = actualMicro - projected;
@@ -3081,31 +3022,19 @@ export async function handler(
         `;
         } catch (e) {
           console.error('logging_messages cost update failed (non-fatal):', e);
-          try {
-            await sql`
-              INSERT INTO logging_errors (
-                error_id, error_name, error_message, user_id, chart_id,
-                request_metadata
-              )
-              VALUES (
-                ${crypto.randomUUID()},
-                'DiagnosticReconcileCostUpdateFailed',
-                ${`logging_messages.cost_micro_usd update failed: ${e instanceof Error ? e.message : String(e)}`},
-                ${actorId},
-                ${chartId ?? null},
-                ${JSON.stringify({
-                  logging_message_id: loggingMessageId,
-                  actual_micro_usd: actualMicro.toString(),
-                  error_message: e instanceof Error ? e.message : String(e),
-                  deployment_host: requestUrl.hostname,
-                  fired_at_ms: Date.now(),
-                })}
-              )
-              ON CONFLICT (error_id) DO NOTHING
-            `;
-          } catch (innerErr) {
-            console.error('cost-update-failed diagnostic insert also failed:', innerErr);
-          }
+          await writeDiagnostic(sql, {
+            error_name: 'DiagnosticReconcileCostUpdateFailed',
+            error_message: `logging_messages.cost_micro_usd update failed: ${e instanceof Error ? e.message : String(e)}`,
+            user_id: actorId,
+            chart_id: chartId ?? null,
+            request_metadata: {
+              logging_message_id: loggingMessageId,
+              actual_micro_usd: actualMicro.toString(),
+              error_message: e instanceof Error ? e.message : String(e),
+            },
+            deployment_host: requestUrl.hostname,
+            fired_at_ms: Date.now(),
+          });
         }
 
         // Diagnostic: a stream that ended with empty accumulator usage means
@@ -3122,35 +3051,23 @@ export async function handler(
           teeCtx.accumulator.cache_creation_input_tokens === 0 &&
           teeCtx.accumulator.cache_read_input_tokens === 0;
         if (accumulatorEmpty) {
-          try {
-            await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileEmptyAccumulator',
-              ${`Reconcile saw empty accumulator (blocks_count=${blocksCount}, killed=${teeCtx.killed.v}, messageDeltaSeen=${teeCtx.messageDeltaSeen})`},
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                user_id: actorId,
-                logging_message_id: loggingMessageId,
-                blocks_count: blocksCount,
-                tier,
-                model,
-                killed: teeCtx.killed.v,
-                killDiagnosticPresent: teeCtx.killDiagnostic !== null,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-          } catch (innerErr) {
-            console.error('reconcile-empty-accumulator diagnostic insert failed:', innerErr);
-          }
+          await writeDiagnostic(sql, {
+            error_name: 'DiagnosticReconcileEmptyAccumulator',
+            error_message: `Reconcile saw empty accumulator (blocks_count=${blocksCount}, killed=${teeCtx.killed.v}, messageDeltaSeen=${teeCtx.messageDeltaSeen})`,
+            user_id: actorId,
+            chart_id: chartId ?? null,
+            request_metadata: {
+              user_id: actorId,
+              logging_message_id: loggingMessageId,
+              blocks_count: blocksCount,
+              tier,
+              model,
+              killed: teeCtx.killed.v,
+              killDiagnosticPresent: teeCtx.killDiagnostic !== null,
+            },
+            deployment_host: requestUrl.hostname,
+            fired_at_ms: Date.now(),
+          });
         }
       }
 
@@ -3285,38 +3202,26 @@ export async function handler(
       // so its absence is expected, not a signal worth diagnosing. Without
       // this gate every kill writes a noise row.
       if (!teeCtx.killed.v && !teeCtx.messageDeltaSeen) {
-        try {
-          await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, chart_id,
-            request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'DiagnosticReconcileWithoutMessageDelta',
-            ${`Reconcile w/o message_delta: output source=${reconcileOutputSource}, output=${reconciledOutput}, actual=${actualMicro.toString()} µUSD`},
-            ${actorId},
-            ${chartId ?? null},
-            ${JSON.stringify({
-              reconcile_output_source: reconcileOutputSource,
-              reconciled_output_tokens: reconciledOutput,
-              accumulator_output_tokens: accumulator.output_tokens,
-              last_poll_output_tokens: teeCtx.lastPollOutputTokens,
-              projected_micro_usd: projected.toString(),
-              actual_micro_usd: actualMicro.toString(),
-              accumulator: reconciledAccumulator,
-              live_web_search_count: teeCtx.streamingContent.webSearchCount,
-              model,
-              chart_id: chartId,
-              deployment_host: requestUrl.hostname,
-              fired_at_ms: Date.now(),
-            })}
-          )
-          ON CONFLICT (error_id) DO NOTHING
-        `;
-        } catch (e) {
-          console.error('reconcile-without-message_delta diagnostic insert failed:', e);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcileWithoutMessageDelta',
+          error_message: `Reconcile w/o message_delta: output source=${reconcileOutputSource}, output=${reconciledOutput}, actual=${actualMicro.toString()} µUSD`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            reconcile_output_source: reconcileOutputSource,
+            reconciled_output_tokens: reconciledOutput,
+            accumulator_output_tokens: accumulator.output_tokens,
+            last_poll_output_tokens: teeCtx.lastPollOutputTokens,
+            projected_micro_usd: projected.toString(),
+            actual_micro_usd: actualMicro.toString(),
+            accumulator: reconciledAccumulator,
+            live_web_search_count: teeCtx.streamingContent.webSearchCount,
+            model,
+            chart_id: chartId,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+        });
       }
 
       // Persist first-time poll-disable reason to logging_errors. The poller
@@ -3326,35 +3231,29 @@ export async function handler(
       // need to know WHY — rate limit vs upstream 5xx vs shape change — to
       // tune.
       if (teeCtx.pollDisableDiagnostic) {
-        try {
-          const p = teeCtx.pollDisableDiagnostic;
-          await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, chart_id,
-            http_status, request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'DiagnosticPollDisabled',
-            ${`Polling disabled: ${p.reason}${p.error_message ? ` — ${p.error_message}` : ''}`},
-            ${actorId},
-            ${chartId ?? null},
-            ${p.http_status ?? null},
-            ${JSON.stringify({
-              reason: p.reason,
-              http_status: p.http_status,
-              upstream_body: p.upstream_body,
-              error_message: p.error_message,
-              fired_at_ms: p.fired_at_ms,
-              model,
-              deployment_host: requestUrl.hostname,
-            })}
-          )
-          ON CONFLICT (error_id) DO NOTHING
-        `;
-        } catch (e) {
-          console.error('poll-disable diagnostic insert failed (non-fatal):', e);
-        }
+        const p = teeCtx.pollDisableDiagnostic;
+        // Bake fired_at_ms + deployment_host directly into request_metadata
+        // (rather than using the helper's auto-stamp) because (a) this site's
+        // fired_at_ms is `p.fired_at_ms` from the poll-disable event, NOT
+        // Date.now() at reconcile time, and (b) the original key order
+        // intersperses fired_at_ms and deployment_host between other keys —
+        // auto-stamping would append them at the end and drift the JSON shape.
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticPollDisabled',
+          error_message: `Polling disabled: ${p.reason}${p.error_message ? ` — ${p.error_message}` : ''}`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          http_status: p.http_status ?? null,
+          request_metadata: {
+            reason: p.reason,
+            http_status: p.http_status,
+            upstream_body: p.upstream_body,
+            error_message: p.error_message,
+            fired_at_ms: p.fired_at_ms,
+            model,
+            deployment_host: requestUrl.hostname,
+          },
+        });
       }
 
       // Persist kill-switch diagnostics to logging_errors so post-hoc debugging
@@ -3362,54 +3261,46 @@ export async function handler(
       // opt-out, so this lands unconditionally. Minimal payload — no message
       // content.
       if (teeCtx.killDiagnostic) {
-        try {
-          const d = teeCtx.killDiagnostic;
-          // Branch-specific fields (cumulative cost / poll-side tokens vs
-          // compute error message) are added inside the kind dispatch below,
-          // preserving the existing row shape so analytics queries keep working.
-          const diagnosticMetadata: Record<string, unknown> = {
-            kind: d.kind,
-            source: d.source,
-            threshold_micro_usd: d.threshold_micro_usd,
-            actual_reconciled_micro_usd: actualMicro.toString(),
-            projected_micro_usd: projected.toString(),
-            accumulator_at_kill: d.accumulator_at_kill,
-            accumulator_at_reconcile: accumulator,
-            live_web_search_count: d.live_web_search_count,
-            polling_disabled: teeCtx.pollingDisabled,
-            model,
-            chart_id: chartId,
-            logging_message_id: loggingMessageId,
-            deployment_host: requestUrl.hostname,
-          };
-          let errorMessage: string;
-          if (d.kind === 'over_threshold') {
-            diagnosticMetadata.cumulative_micro_usd = d.cumulative_micro_usd;
-            diagnosticMetadata.output_tokens_est = d.output_tokens_est;
-            diagnosticMetadata.count_tokens_total = d.count_tokens_total;
-            errorMessage = `Kill fired from ${d.source}: cumulative=${d.cumulative_micro_usd} µUSD, threshold=${d.threshold_micro_usd} µUSD`;
-          } else {
-            diagnosticMetadata.compute_error_message = d.error_message;
-            errorMessage = `Kill fired from ${d.source} (compute_error): ${d.error_message}; threshold=${d.threshold_micro_usd} µUSD`;
-          }
-          await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, chart_id,
-            request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'DiagnosticKillSwitchFired',
-            ${errorMessage},
-            ${actorId},
-            ${chartId ?? null},
-            ${JSON.stringify(diagnosticMetadata)}
-          )
-          ON CONFLICT (error_id) DO NOTHING
-        `;
-        } catch (e) {
-          console.error('kill diagnostic insert failed (non-fatal):', e);
+        const d = teeCtx.killDiagnostic;
+        // Branch-specific fields (cumulative cost / poll-side tokens vs
+        // compute error message) are added inside the kind dispatch below,
+        // preserving the existing row shape so analytics queries keep working.
+        // No auto-stamp here: the original payload bakes deployment_host
+        // mid-object (before the conditional appends) and never carried a
+        // fired_at_ms, so passing it via request_metadata directly preserves
+        // byte-identical JSON output.
+        const diagnosticMetadata: Record<string, unknown> = {
+          kind: d.kind,
+          source: d.source,
+          threshold_micro_usd: d.threshold_micro_usd,
+          actual_reconciled_micro_usd: actualMicro.toString(),
+          projected_micro_usd: projected.toString(),
+          accumulator_at_kill: d.accumulator_at_kill,
+          accumulator_at_reconcile: accumulator,
+          live_web_search_count: d.live_web_search_count,
+          polling_disabled: teeCtx.pollingDisabled,
+          model,
+          chart_id: chartId,
+          logging_message_id: loggingMessageId,
+          deployment_host: requestUrl.hostname,
+        };
+        let errorMessage: string;
+        if (d.kind === 'over_threshold') {
+          diagnosticMetadata.cumulative_micro_usd = d.cumulative_micro_usd;
+          diagnosticMetadata.output_tokens_est = d.output_tokens_est;
+          diagnosticMetadata.count_tokens_total = d.count_tokens_total;
+          errorMessage = `Kill fired from ${d.source}: cumulative=${d.cumulative_micro_usd} µUSD, threshold=${d.threshold_micro_usd} µUSD`;
+        } else {
+          diagnosticMetadata.compute_error_message = d.error_message;
+          errorMessage = `Kill fired from ${d.source} (compute_error): ${d.error_message}; threshold=${d.threshold_micro_usd} µUSD`;
         }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticKillSwitchFired',
+          error_message: errorMessage,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: diagnosticMetadata,
+        });
       }
 
       // End-of-IIFE marker. If we observe DiagnosticReconcileEntered for a turn
@@ -3417,33 +3308,21 @@ export async function handler(
       // / DiagnosticReconcileCostComputeFailed), it means the IIFE was terminated
       // by Cloudflare's waitUntil time budget rather than by an exception we caught.
       if (loggingMessageId) {
-        try {
-          await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileCompleted',
-              'Reconcile IIFE reached end',
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                logging_message_id: loggingMessageId,
-                tier,
-                model,
-                killed: teeCtx.killed.v,
-                message_delta_seen: teeCtx.messageDeltaSeen,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-        } catch (e) {
-          console.error('reconcile-completed diagnostic insert failed:', e);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcileCompleted',
+          error_message: 'Reconcile IIFE reached end',
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            killed: teeCtx.killed.v,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+        });
       }
     })().catch(async (outerErr) => {
       // Anything that throws inside the IIFE without being caught lands here.
@@ -3453,33 +3332,21 @@ export async function handler(
       // catch together let us tell the two failure modes apart.
       console.error('Reconcile IIFE bailed unhandled:', outerErr);
       if (loggingMessageId) {
-        try {
-          await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileBailedUnhandled',
-              ${`Unhandled throw in reconcile IIFE: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`},
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                logging_message_id: loggingMessageId,
-                tier,
-                model,
-                error_message: outerErr instanceof Error ? outerErr.message : String(outerErr),
-                error_stack: outerErr instanceof Error ? outerErr.stack : null,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-        } catch (innerErr) {
-          console.error('reconcile-bailed diagnostic insert failed:', innerErr);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcileBailedUnhandled',
+          error_message: `Unhandled throw in reconcile IIFE: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            error_message: outerErr instanceof Error ? outerErr.message : String(outerErr),
+            error_stack: outerErr instanceof Error ? outerErr.stack : null,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+        });
       }
     }),
   );
