@@ -97,6 +97,18 @@ function loadChatHistoryWithBackup(storageKey: string): ChatMessage[] {
   }
 }
 
+// Drop legacy customSystemPrompt entry from localStorage (the settings UI
+// that wrote it has been removed; we always use the bundled
+// systemPromptContent now). Module scope so this runs once per page load
+// rather than per ChatInterface mount/route change.
+try {
+  if (localStorage.getItem('customSystemPrompt') !== null) {
+    localStorage.removeItem('customSystemPrompt');
+  }
+} catch {
+  // localStorage unavailable (private browsing / SSR): nothing to clean up.
+}
+
 /**
  * Button that opens AuthButton's API-key settings modal. Dispatches a
  * window-level CustomEvent which AuthButton listens for (see its
@@ -647,11 +659,10 @@ export function ChatInterface({
   const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
-  // Effort defaults to the model's recommended starting point (xhigh on Opus
-  // 4.7, high elsewhere), matching what we hardcoded before this dropdown
-  // existed. `default_effort` is null only for models that don't support
-  // effort at all (haiku); not currently in the picker, but we fall back
-  // safely if that changes.
+  // Per-model `default_effort` is tuned for the quality/cost sweet spot at
+  // first contact (deeper reasoning where it pays off, lower latency where
+  // it doesn't). Falls back to 'high' for models without an effort dial
+  // (haiku-class) so the dropdown always has a valid value.
   const [selectedEffort, setSelectedEffort] = useState<EffortLevel>(
     () => MODEL_CAPABILITIES['claude-opus-4-7'].default_effort ?? 'high',
   );
@@ -673,7 +684,6 @@ export function ChatInterface({
     setSelectedEffort(caps.default_effort ?? 'high');
   }, [selectedModel, selectedEffort]);
 
-  // Get route parameters to create unique storage key
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -929,6 +939,65 @@ export function ChatInterface({
     setIsNearBottom(checkIfNearBottom());
   };
 
+  // Reset all per-stream UI state so the next turn starts clean. Called at
+  // the tail of every onComplete / onError / onCostError callback and the
+  // catch fallback in handleSendMessage / startGeneration; each caller is
+  // responsible for preserving any partial content (via setMessages) BEFORE
+  // invoking this, since this clears streamingMessageRef.current.
+  const resetStreamUiState = useCallback(() => {
+    setIsStreaming(false);
+    setStreamingContent('');
+    setStreamingThinking('');
+    setStreamPhase(null);
+    setRunningCostUsd(null);
+    streamingMessageRef.current = null;
+  }, []);
+
+  // Delta-credit the per-chart and per-key BYOK buckets during a stream so
+  // partial spend (aborted / errored / killed turns) is still recorded.
+  // Skip reasons (logged but not credited): usesByok=false (anon path or
+  // key removed mid-stream); delta<=0 (non-monotonic frame, worker
+  // re-emitted a lower estimate); chartId/keyLast4 null (bucket
+  // misrouting). Mutates lastAppliedMicroRef on credit so the next frame
+  // computes its delta against the new baseline.
+  const creditByokDelta = useCallback(
+    (args: {
+      tag: 'chat' | 'gen';
+      runningUsd: number;
+      usesByok: boolean;
+      lastAppliedMicroRef: { current: number };
+      chartId: string | null;
+      keyLast4: string | null;
+    }): boolean => {
+      const { tag, runningUsd, usesByok, lastAppliedMicroRef, chartId, keyLast4 } = args;
+      if (!usesByok) {
+        console.log(
+          `[BYOK ${tag}] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+            ` skipped: streamUsesByok=false`,
+        );
+        return false;
+      }
+      const newMicro = Math.round(runningUsd * 1_000_000);
+      const deltaMicro = newMicro - lastAppliedMicroRef.current;
+      console.log(
+        `[BYOK ${tag}] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+          ` lastAppliedMicro=${lastAppliedMicroRef.current}` +
+          ` newMicro=${newMicro}` +
+          ` deltaMicro=${deltaMicro}` +
+          ` chartId=${chartId ?? 'null'}` +
+          ` keyLast4=${keyLast4 ?? 'null'}` +
+          ` willCredit=${deltaMicro > 0}`,
+      );
+      if (deltaMicro > 0) {
+        addByokSpend(chartId, keyLast4, deltaMicro / 1_000_000);
+        lastAppliedMicroRef.current = newMicro;
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
   // Reload chat history when route changes
   useEffect(() => {
     try {
@@ -1000,15 +1069,6 @@ export function ChatInterface({
       inputRef.current.focus();
     }
   }, [isCollapsed]);
-
-  // Drop any legacy customSystemPrompt entry from localStorage (the
-  // settings UI that wrote it has been removed; we always use the
-  // bundled systemPromptContent now).
-  useEffect(() => {
-    if (localStorage.getItem('customSystemPrompt') !== null) {
-      localStorage.removeItem('customSystemPrompt');
-    }
-  }, []);
 
   // Auth header helper shared by /api/usage and file-upload callers. Returns
   // an empty object for anonymous visitors or when silent refresh fails;
@@ -1647,7 +1707,6 @@ export function ChatInterface({
     const resolvedChart = await ensureChartExists();
     const resolvedChartId = resolvedChart?.chartId;
 
-    // Generate UUIDs for message logging
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
     // Idempotency key binds the user-perceived turn to a specific worker
@@ -1708,7 +1767,6 @@ export function ChatInterface({
       content: userMessage.content,
     });
 
-    // Create a placeholder streaming message
     streamingMessageRef.current = {
       id: assistantMessageId,
       role: 'assistant',
@@ -1716,7 +1774,6 @@ export function ChatInterface({
       timestamp: new Date(),
     };
 
-    // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
     // Snapshot BYOK + chart identifiers at stream start so onCostUpdate can
@@ -1786,12 +1843,7 @@ export function ChatInterface({
             };
 
             setMessages((prev) => [...prev, assistantMessage]);
-            setIsStreaming(false);
-            setStreamingContent('');
-            setStreamingThinking('');
-            setStreamPhase(null);
-            setRunningCostUsd(null);
-            streamingMessageRef.current = null;
+            resetStreamUiState();
 
             // Refresh the usage progress bar after the server-side tally lands.
             void refreshUsage();
@@ -1899,12 +1951,7 @@ export function ChatInterface({
                 setMessages((prev) => [...prev, errorMessage]);
               }
             }
-            setIsStreaming(false);
-            setStreamingContent('');
-            setStreamingThinking('');
-            setStreamPhase(null);
-            setRunningCostUsd(null);
-            streamingMessageRef.current = null;
+            resetStreamUiState();
           },
           onContentBlocks: (blocks) => {
             // Mirror chatService's accumulator so handleStopStreaming can
@@ -1913,36 +1960,14 @@ export function ChatInterface({
             streamingContentBlocksRef.current = blocks;
           },
           onCostUpdate: (runningUsd: number) => {
-            // Delta-credit the per-chart and per-key BYOK buckets during the
-            // stream so partial costs (aborted, errored, or killed streams)
-            // still record whatever the user was billed up to that point.
-            if (streamUsesByok) {
-              const newMicro = Math.round(runningUsd * 1_000_000);
-              const deltaMicro = newMicro - turnLastAppliedMicroRef.current;
-              // Granular log so we can correlate every running_cost frame
-              // with what gets credited (or skipped). Skip reasons: delta<=0
-              // = non-monotonic frame (worker re-emitted a lower estimate);
-              // chartId/keyLast4 null = bucket misrouting; streamUsesByok
-              // false = anon path, no BYOK accounting at all.
-              console.log(
-                `[BYOK chat] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
-                  ` lastAppliedMicro=${turnLastAppliedMicroRef.current}` +
-                  ` newMicro=${newMicro}` +
-                  ` deltaMicro=${deltaMicro}` +
-                  ` chartId=${streamChartId ?? 'null'}` +
-                  ` keyLast4=${streamKeyLast4 ?? 'null'}` +
-                  ` willCredit=${deltaMicro > 0}`,
-              );
-              if (deltaMicro > 0) {
-                addByokSpend(streamChartId, streamKeyLast4, deltaMicro / 1_000_000);
-                turnLastAppliedMicroRef.current = newMicro;
-              }
-            } else {
-              console.log(
-                `[BYOK chat] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
-                  ` skipped: streamUsesByok=false (anon path)`,
-              );
-            }
+            creditByokDelta({
+              tag: 'chat',
+              runningUsd,
+              usesByok: streamUsesByok,
+              lastAppliedMicroRef: turnLastAppliedMicroRef,
+              chartId: streamChartId,
+              keyLast4: streamKeyLast4,
+            });
             runningCostUsdRef.current = runningUsd;
             setRunningCostUsd(runningUsd);
           },
@@ -1975,12 +2000,7 @@ export function ChatInterface({
               setMessages((prev) => [...prev, stamped]);
             }
             handleCostError(error);
-            setIsStreaming(false);
-            setStreamingContent('');
-            setStreamingThinking('');
-            setStreamPhase(null);
-            setRunningCostUsd(null);
-            streamingMessageRef.current = null;
+            resetStreamUiState();
           },
         },
         signal: abortControllerRef.current?.signal,
@@ -2016,12 +2036,7 @@ export function ChatInterface({
         };
         setMessages((prev) => [...prev, errorMessage]);
       }
-      setIsStreaming(false);
-      setStreamingContent('');
-      setStreamingThinking('');
-      setStreamPhase(null);
-      setRunningCostUsd(null);
-      streamingMessageRef.current = null;
+      resetStreamUiState();
     } finally {
       setIsLoading(false);
       sendInFlightRef.current = false;
@@ -2077,15 +2092,10 @@ export function ChatInterface({
     }
   };
 
-  // Upload a single PDF to the Files API. Returns the new file_id or throws.
-  // Shared by Chat and Generate modes: Chat tracks chips in chatAttachedFiles,
-  // Generate tracks them in generateAttachedChips. Returns early with an error
-  // message if the chart hasn't been saved yet (the worker requires chart_id).
-  // Tracks a chart id/edit token for charts auto-saved during this session.
-  // params.chartId / params.editToken reflect the URL; history.replaceState
-  // below updates the URL without a route re-render, so React Router params
-  // won't catch the change. We read this ref as an additional source of
-  // truth for subsequent uploads in the same session.
+  // Cached chart identity for charts auto-saved this session. ensureChartExists
+  // updates the URL via history.replaceState (no route re-render), so React
+  // Router params lag the actual chart on subsequent calls; these refs are
+  // the synchronous source of truth.
   const autosavedEditTokenRef = useRef<string | null>(null);
   const autosavedChartIdRef = useRef<string | null>(null);
 
@@ -2546,7 +2556,6 @@ export function ChatInterface({
       onGraphUpdate(generatedGraphData);
       setGeneratedGraphData(null); // Clear after loading
 
-      // Add confirmation message
       const confirmMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'assistant',
@@ -2605,7 +2614,6 @@ ${additionalInstructions.trim()}
 
 IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot and Organization Representative, with back-and-forth exchanges that show the thinking process.`;
 
-    // Generate UUIDs for message consistency
     const userMessageId = crypto.randomUUID();
     const generationAssistantId = crypto.randomUUID();
 
@@ -2688,12 +2696,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             };
 
             setMessages((prev) => [...prev, assistantMessage]);
-            setIsStreaming(false);
-            setStreamingContent('');
-            setStreamingThinking('');
-            setStreamPhase(null);
-            setRunningCostUsd(null);
-            streamingMessageRef.current = null;
+            resetStreamUiState();
 
             // Cost + usage tallies are tracked server-side; refresh the
             // progress bar now that the tally has landed.
@@ -2771,12 +2774,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 setMessages((prev) => [...prev, errorMessage]);
               }
             }
-            setIsStreaming(false);
-            setStreamingContent('');
-            setStreamingThinking('');
-            setStreamPhase(null);
-            setRunningCostUsd(null);
-            streamingMessageRef.current = null;
+            resetStreamUiState();
           },
           onContentBlocks: (blocks) => {
             // Mirror chatService's accumulator so handleStopStreaming can
@@ -2785,31 +2783,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             streamingContentBlocksRef.current = blocks;
           },
           onCostUpdate: (runningUsd: number) => {
-            // Delta-credit the per-chart and per-key BYOK buckets during the
-            // stream so partial costs (aborted, errored, or killed streams)
-            // still record whatever the user was billed up to that point.
-            if (streamUsesByok) {
-              const newMicro = Math.round(runningUsd * 1_000_000);
-              const deltaMicro = newMicro - turnLastAppliedMicroRef.current;
-              console.log(
-                `[BYOK gen] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
-                  ` lastAppliedMicro=${turnLastAppliedMicroRef.current}` +
-                  ` newMicro=${newMicro}` +
-                  ` deltaMicro=${deltaMicro}` +
-                  ` chartId=${streamChartId ?? 'null'}` +
-                  ` keyLast4=${streamKeyLast4 ?? 'null'}` +
-                  ` willCredit=${deltaMicro > 0}`,
-              );
-              if (deltaMicro > 0) {
-                addByokSpend(streamChartId, streamKeyLast4, deltaMicro / 1_000_000);
-                turnLastAppliedMicroRef.current = newMicro;
-              }
-            } else {
-              console.log(
-                `[BYOK gen] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
-                  ` skipped: streamUsesByok=false`,
-              );
-            }
+            creditByokDelta({
+              tag: 'gen',
+              runningUsd,
+              usesByok: streamUsesByok,
+              lastAppliedMicroRef: turnLastAppliedMicroRef,
+              chartId: streamChartId,
+              keyLast4: streamKeyLast4,
+            });
             runningCostUsdRef.current = runningUsd;
             setRunningCostUsd(runningUsd);
           },
@@ -2831,12 +2812,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               ]);
             }
             handleCostError(error);
-            setIsStreaming(false);
-            setStreamingContent('');
-            setStreamingThinking('');
-            setStreamPhase(null);
-            setRunningCostUsd(null);
-            streamingMessageRef.current = null;
+            resetStreamUiState();
           },
         },
         signal: abortControllerRef.current?.signal,
@@ -2876,12 +2852,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         };
         setMessages((prev) => [...prev, errorMessage]);
       }
-      setIsStreaming(false);
-      setStreamingContent('');
-      setStreamingThinking('');
-      setStreamPhase(null);
-      setRunningCostUsd(null);
-      streamingMessageRef.current = null;
+      resetStreamUiState();
     } finally {
       setIsLoading(false);
       sendInFlightRef.current = false;
@@ -3377,11 +3348,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             )}
                             <div className="text-xs mt-1 text-gray-500">
                               <div className="flex items-center gap-1.5">
-                                {/* Live-indicator style: solid dot with a
-                                    ping ring. Louder than a 2px pulsing gray
-                                    dot, which was easy to miss — this is the
-                                    visual pattern used for "live" on social
-                                    sites, recognizable at a glance. */}
+                                {/* Loud "live" indicator (solid dot + ping
+                                    ring) so the user can distinguish an
+                                    active stream from a silent stall. */}
                                 <span className="relative inline-flex h-2.5 w-2.5" aria-hidden>
                                   <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping"></span>
                                   <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500"></span>
@@ -3399,15 +3368,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       );
                     })()}
 
-                  {/* Status chip BELOW the streaming bubble — tells the user
-                    "still working on it" next to the partial text, not above
-                    it where they'd scroll past to find it. The phase comes
-                    from chatService's content_block_start dispatch so every
-                    block (thinking, web_search, code_execution, tool results)
-                    maps to exactly one chip, preventing gaps during the long
-                    tool-use stretches of a research-heavy turn. 'writing'
-                    deliberately renders no chip — the streaming bubble
-                    already conveys "typing". */}
+                  {/* Phase chip rendered after the streaming bubble so the
+                    "still working" hint sits next to the partial text. Phase
+                    invariant lives in chatService: sticky `using_tools`
+                    upgrades to `searching` on first server_tool_use=web_search
+                    in a burst; resets on the next text/thinking burst.
+                    `writing` deliberately renders no chip — the bubble itself
+                    already signals typing. */}
                   {streamPhase === 'using_tools' && (
                     <div className="flex justify-start">
                       <div className="bg-amber-50 text-amber-800 rounded-lg rounded-bl-sm p-2 text-sm border border-amber-200">
