@@ -33,39 +33,13 @@ import type { StreamingBlocksMap } from '../../shared/streaming-blocks';
 import { microToUsd } from '../../shared/pricing';
 
 /**
- * HTTP streaming proxy for Anthropic's /v1/messages endpoint with server-side
- * cost enforcement. The pipeline, in order:
- *
- *   1. Body-size clamp (reject 413 if > BODY_SIZE_LIMIT_BYTES, currently 32 MB).
- *   2. JWT verify (if Authorization header present) → actor_id = sub or anon-<uuid>.
- *   3. Tier classification (anon / free / byok). Authenticated users with a row in
- *      user_byok_keys are promoted to the byok tier; header `X-User-Anthropic-Key`
- *      (legacy) is honored only for authenticated callers — from anon it is
- *      dropped to prevent bypassing Turnstile and the lifetime cap.
- *   4. Turnstile session cookie check for anon (skipped if TURNSTILE_SECRET_KEY unset).
- *      Cookie is issued by POST /api/verify-turnstile and bound to the caller's
- *      cookie-pinned anon_id.
- *   5. Idempotency de-dup via idempotency_keys table (60s window).
- *   6. Pre-flight cost estimate via /v1/messages/count_tokens.
- *   7. Atomic reservation against user_api_usage (skipped for BYOK).
- *   8. Upstream fetch with x-api-key = BYOK key if the caller has one, else our
- *      ANTHROPIC_API_KEY. For BYOK: `body.metadata` is stripped entirely so we
- *      don't pollute the user's Anthropic dashboard with our internal user_ids.
- *      Detect Anthropic billing-error → 402 global_budget_exhausted.
- *   9. Stream through a TransformStream that parses SSE usage events and enforces
- *      the mid-stream kill switch: cumulative actual cost > remaining_cap (the
- *      portion of the lifetime cap that was available BEFORE this request's
- *      reservation was deducted). Also intercepts Anthropic `not_found_error`
- *      events and synthesizes `chart_deleted` / `file_unavailable` SSE errors
- *      so the client can react instead of seeing a truncated stream.
- *  10. Post-stream reconcile: adjust user_api_usage + global_monthly_usage for
- *      actual vs projected cost. If the client supplied X-Logging-Message-Id,
- *      writes the actual cost to logging_messages.cost_micro_usd for per-chart
- *      attribution queries.
- *
- * On upstream error after reservation, the reservation is reverted in
- * ctx.waitUntil. BYOK requests bypass steps 7, 9's kill-switch, and 10's
- * reconcile writes.
+ * HTTP streaming proxy for Anthropic's /v1/messages with server-side cost
+ * enforcement: body-clamp → JWT/anon → Turnstile → idempotency → estimate +
+ * reserve → upstream → tee with mid-stream kill → post-stream reconcile.
+ * BYOK callers (authenticated users with a stored Anthropic key) skip the
+ * reservation, mid-stream kill, and reconcile writes; their key bypasses
+ * the per-user cap, but the Anthropic Console cap still applies globally.
+ * Tier predicates / caps live in `worker/_shared/tiers.ts`.
  */
 
 // --- Constants ----------------------------------------------------------
@@ -962,21 +936,63 @@ function newStreamingAssistantContent(): StreamingAssistantContent {
   return { blocks: new Map(), webSearchCount: 0 };
 }
 
+/**
+ * Mid-stream cost polling state. Discriminated union because the four polling
+ * fields are correlated all-or-nothing: either we have everything (env for the
+ * API key, countTokensBase + initialInputTokens for delta-counting) or polling
+ * is disarmed entirely. Partial state would silently disable the kill switch.
+ *
+ * `killThresholdMicro` is independently nullable inside the armed branch — BYOK
+ * arms polling for the running-cost emit (drives the "$X this chart" pill) but
+ * no per-user kill applies, so the threshold is null.
+ *
+ * For free/anon tiers killThresholdMicro is the remaining_cap measured BEFORE
+ * this request's reservation was deducted (effective cap minus prior usage).
+ * Since the reservation was already written, this bounds what the stream can
+ * spend before the cap is truly violated. The effective cap includes a small
+ * overspend tolerance (see tiers.ts).
+ */
+type PollingState =
+  | {
+      armed: true;
+      env: Env;
+      countTokensBase: Record<string, unknown>;
+      initialInputTokens: number;
+      killThresholdMicro: bigint | null;
+    }
+  | { armed: false };
+
+/**
+ * Captured when the kill switch fires; written during post-stream reconcile
+ * rather than from the kill site itself because ctx.waitUntil is scoped to
+ * the handler. Tagged union: `over_threshold` is the ordinary cumulative-cost
+ * path (parse_frame or poll); `compute_error` is the fail-closed kill
+ * synthesized when computeCostMicroUsd throws (cost-table bug).
+ */
+type KillDiagnostic =
+  | {
+      kind: 'over_threshold';
+      source: 'parse_frame' | 'poll';
+      cumulative_micro_usd: string; // BigInt serialized
+      threshold_micro_usd: string; // BigInt serialized
+      accumulator_at_kill: UsageAccumulator;
+      live_web_search_count: number;
+      output_tokens_est?: number; // only set for poll-triggered kills
+      count_tokens_total?: number; // only set for poll-triggered kills
+      fired_at_ms: number;
+    }
+  | {
+      kind: 'compute_error';
+      source: 'parse_frame';
+      error_message: string;
+      threshold_micro_usd: string; // BigInt serialized
+      accumulator_at_kill: UsageAccumulator;
+      live_web_search_count: number;
+      fired_at_ms: number;
+    };
+
 type SseTeeContext = {
   accumulator: UsageAccumulator;
-  /**
-   * Mid-stream kill threshold in µUSD. When cumulative actual cost exceeds this,
-   * the tee synthesizes a `request_cost_ceiling_exceeded` SSE error and aborts.
-   *
-   * For free/anon tiers this is the remaining_cap measured BEFORE this
-   * request's reservation was deducted (i.e. the effective cap minus the user's
-   * prior usage, where the effective cap includes a small overspend tolerance).
-   * Since the reservation was already written, `remaining_cap` bounds what the
-   * stream can spend before the cap is truly violated.
-   *
-   * For BYOK this is null — no cap applies to a self-funded request.
-   */
-  killThresholdMicro: bigint | null;
   model: string;
   abortController: AbortController;
   /** Set to true when we fire the kill switch so downstream short-circuits. */
@@ -989,11 +1005,8 @@ type SseTeeContext = {
   chartId: string | null;
   /** Neon handle for the chart-existence lookup during file-not-found interception. */
   sql: NeonQueryFunction<false, false>;
-  /**
-   * Env for the count_tokens polling kill switch (Anthropic API key). Null on
-   * BYOK where no kill applies, so polling is skipped.
-   */
-  env: Env | null;
+  /** Polling state — see `PollingState`. */
+  polling: PollingState;
   /**
    * Logging-message id from the X-Logging-Message-Id header. Used by the
    * message_start floor write to UPDATE logging_messages.cost_micro_usd as
@@ -1011,18 +1024,6 @@ type SseTeeContext = {
   ctx: ExecutionContext;
   /** Worker hostname (for `request_metadata.deployment_host` in diagnostics). */
   deploymentHost: string;
-  /**
-   * Stripped count_tokens body (from `stripToCountTokensBody`) minus the
-   * in-progress assistant turn. The poller appends the accumulated assistant
-   * message and POSTs to count_tokens. Null for BYOK (no polling).
-   */
-  countTokensBase: Record<string, unknown> | null;
-  /**
-   * Input-token count returned by pre-stream count_tokens. The poller
-   * subtracts this from each subsequent count_tokens result to derive the
-   * output-token delta for output-cost estimation.
-   */
-  initialInputTokens: number;
   /** In-progress assistant turn accumulated from content_block_* events. */
   streamingContent: StreamingAssistantContent;
   /**
@@ -1056,29 +1057,11 @@ type SseTeeContext = {
    */
   streamDone: { v: boolean };
   /**
-   * Diagnostic payload captured when the kill switch fires, for post-hoc
-   * debugging via `logging_errors`. Written during post-stream reconcile
-   * rather than from the kill site itself because ctx.waitUntil is scoped
-   * to the handler. Null if the stream wasn't killed.
+   * Captured when the kill switch fires; written during post-stream reconcile
+   * rather than from the kill site itself because ctx.waitUntil is scoped to
+   * the handler. Null if the stream wasn't killed by the cost-cap path.
    */
-  killDiagnostic: {
-    source: 'parse_frame' | 'poll';
-    /**
-     * Distinguishes a normal threshold-crossing kill from the fail-closed
-     * kill synthesized when computeCostMicroUsd throws (cost-table bug).
-     * Absent / undefined means the ordinary over-threshold path fired.
-     */
-    reason?: 'kill_compute_error';
-    cumulative_micro_usd: string; // BigInt serialized
-    threshold_micro_usd: string; // BigInt serialized
-    accumulator_at_kill: UsageAccumulator;
-    live_web_search_count: number;
-    output_tokens_est?: number; // only set for poll-triggered kills
-    count_tokens_total?: number; // only set for poll-triggered kills
-    /** Only set when reason === 'kill_compute_error'. */
-    compute_error_message?: string;
-    fired_at_ms: number; // Date.now()
-  } | null;
+  killDiagnostic: KillDiagnostic | null;
   /**
    * Diagnostic for the first time polling gets disabled, written to
    * logging_errors from reconcile. Captures WHY the poller silently
@@ -1141,27 +1124,7 @@ const POLL_COUNT_TOKENS_INTERVAL_MS = 5_000;
  * and silently returns. The original end-of-stream `message_delta` kill still
  * acts as a backstop. No user-visible error on poll failure.
  */
-/**
- * Rebuild the streaming assistant turn as a count_tokens-compatible content-
- * block array. Skips half-streamed thinking (no signature yet — Anthropic
- * rejects those). Normalizes the message shape to Anthropic's validation
- * rules, all empirically confirmed against /v1/messages/count_tokens:
- *
- *   1. Final block cannot be `thinking`.
- *   2. Final block cannot end with trailing whitespace (space, newline, tab) —
- *      even if it has real content before. A half-streamed text_delta ending
- *      at a word boundary fails this rule often, which used to silently
- *      disable the poller.
- *   3. Text blocks must be non-empty and must contain non-whitespace.
- *   4. Two `thinking` blocks cannot be adjacent in the assistant message
- *      without a text block between them (otherwise Anthropic complains
- *      that the thinking blocks "must remain as they were in the original
- *      response"). Intersperse a minimal text block.
- *
- * We append / intersperse a single period when needed — ~1 extra token per
- * call, trivial for budgeting. Shared between the mid-stream poller and
- * post-stream reconcile so the token-counting rules stay consistent.
- */
+/** Rebuild the streaming assistant turn as a count_tokens-compatible content-block array. */
 export function buildAssistantBlocksForCountTokens(
   teeCtx: SseTeeContext,
 ): Array<Record<string, unknown>> {
@@ -1172,18 +1135,13 @@ export function buildAssistantBlocksForCountTokens(
     if (!block) continue;
     if (block.type === 'text') {
       if (block.text.length === 0) continue;
-      // Rule 3: skip empty/whitespace-only text blocks. They'd fail the
-      // "text content blocks must be non-empty / must contain non-whitespace"
-      // validation.
+      // Rule: text blocks must be non-empty and contain non-whitespace.
       if (block.text.trim().length === 0) continue;
       assistantBlocks.push({ type: 'text', text: block.text });
     } else if (block.type === 'thinking') {
       if (block.thinking.length === 0) continue;
       if (!block.signature) continue;
-      // Rule 4: avoid adjacent thinking blocks by inserting a "." between
-      // them. The model never emits two thinking blocks back-to-back in
-      // practice, but if an intermediate text/tool block was skipped
-      // (e.g. empty text) we'd produce an invalid message shape.
+      // Rule: two thinking blocks cannot be adjacent — splice a minimal text block.
       const last = assistantBlocks[assistantBlocks.length - 1];
       if (last && last.type === 'thinking') {
         assistantBlocks.push({ type: 'text', text: '.' });
@@ -1194,10 +1152,7 @@ export function buildAssistantBlocksForCountTokens(
         signature: block.signature,
       });
     } else if (block.type === 'server_tool_use') {
-      // Skip if input hasn't parsed yet — either the block is still
-      // streaming (poll hit mid-block) or the partial JSON was malformed.
-      // Including an unparsed block would either serialize `null` input
-      // (400) or omit a required field.
+      // Rule: skip unparsed input — null serialization or omitted required field 400s.
       if (block.input === null) continue;
       assistantBlocks.push({
         type: 'server_tool_use',
@@ -1206,17 +1161,11 @@ export function buildAssistantBlocksForCountTokens(
         input: block.input,
       });
     }
-    // web_search_tool_result and code_execution_tool_result are intentionally
-    // skipped on the count_tokens path. Anthropic accepts them on history in
-    // the Messages API (where analytics replay sends them) but rejects them
-    // on the assistant turn going IN to count_tokens — they're a response-
-    // side artifact, not input. The polling kill-switch only needs an output-
-    // token estimate, which the text/thinking blocks already cover.
+    // tool_result blocks are response artifacts; count_tokens rejects them on the
+    // assistant turn going IN. Analytics replay (Messages API) keeps them.
   }
-  // Rules 1 + 2: the final block cannot be `thinking` and a trailing text
-  // block cannot end with whitespace. `server_tool_use` at the tail is OK
-  // (verified via count_tokens probe), so only `thinking` requires an
-  // appended "." terminator.
+  // Rule: final block cannot be `thinking`, and a trailing text block cannot
+  // end with whitespace. `server_tool_use` at the tail is OK.
   while (assistantBlocks.length > 0) {
     const last = assistantBlocks[assistantBlocks.length - 1];
     if (last.type === 'thinking') {
@@ -1303,14 +1252,15 @@ export function collectAssistantBlocksForAnalytics(blocks: StreamingBlocksMap): 
  * should fall back to char-based estimate or the last-poll stash.
  */
 async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | null> {
-  if (!teeCtx.env || !teeCtx.countTokensBase) return null;
+  if (!teeCtx.polling.armed) return null;
+  const polling = teeCtx.polling;
   const assistantBlocks = buildAssistantBlocksForCountTokens(teeCtx);
   if (assistantBlocks.length === 0) return 0;
-  const priorMessages = Array.isArray(teeCtx.countTokensBase.messages)
-    ? teeCtx.countTokensBase.messages
+  const priorMessages = Array.isArray(polling.countTokensBase.messages)
+    ? polling.countTokensBase.messages
     : [];
   const body = {
-    ...teeCtx.countTokensBase,
+    ...polling.countTokensBase,
     messages: [...priorMessages, { role: 'assistant', content: assistantBlocks }],
   };
   try {
@@ -1318,7 +1268,7 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': teeCtx.env.ANTHROPIC_API_KEY,
+        'x-api-key': polling.env.ANTHROPIC_API_KEY,
         'anthropic-version': ANTHROPIC_VERSION,
         'anthropic-beta': ANTHROPIC_BETA,
       },
@@ -1327,7 +1277,7 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
     if (!resp.ok) return null;
     const data = (await resp.json()) as { input_tokens?: number };
     if (typeof data.input_tokens !== 'number') return null;
-    return Math.max(0, data.input_tokens - teeCtx.initialInputTokens);
+    return Math.max(0, data.input_tokens - polling.initialInputTokens);
   } catch {
     return null;
   }
@@ -1336,12 +1286,11 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
 async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
   if (teeCtx.streamDone.v) return;
-  // killThresholdMicro=null is the BYOK path (no cap, so no kill switch).
-  // We still run polling for those streams because the running_cost frame
-  // it emits is the only way the BYOK "$X this chart" pill captures
-  // mid-stream output cost when the user kills before message_delta. Kill
-  // logic below is gated separately on the threshold.
-  if (!teeCtx.env || !teeCtx.countTokensBase) return;
+  // Polling unarmed is the BYOK-probe-failed path (no baseline → can't compute
+  // delta). For armed BYOK streams (killThresholdMicro=null), the running_cost
+  // emit still fires below; the kill check is gated separately on the threshold.
+  if (!teeCtx.polling.armed) return;
+  const polling = teeCtx.polling;
 
   const assistantBlocks = buildAssistantBlocksForCountTokens(teeCtx);
   if (assistantBlocks.length === 0) return;
@@ -1351,11 +1300,11 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // once message_start arrives. If even zero output would overshoot, the
   // pre-stream reserve would have rejected; we're defensive but shouldn't
   // have work to do here.
-  const priorMessages = Array.isArray(teeCtx.countTokensBase.messages)
-    ? teeCtx.countTokensBase.messages
+  const priorMessages = Array.isArray(polling.countTokensBase.messages)
+    ? polling.countTokensBase.messages
     : [];
   const pollBody = {
-    ...teeCtx.countTokensBase,
+    ...polling.countTokensBase,
     messages: [...priorMessages, { role: 'assistant', content: assistantBlocks }],
   };
 
@@ -1365,7 +1314,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': teeCtx.env.ANTHROPIC_API_KEY,
+        'x-api-key': polling.env.ANTHROPIC_API_KEY,
         'anthropic-version': ANTHROPIC_VERSION,
         'anthropic-beta': ANTHROPIC_BETA,
       },
@@ -1437,7 +1386,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // same body without the appended assistant message, so the delta is the
   // token count of the in-progress assistant content. Clamp to ≥ 0 in case of
   // counter drift.
-  const outputTokensSoFar = Math.max(0, totalInputTokens - teeCtx.initialInputTokens);
+  const outputTokensSoFar = Math.max(0, totalInputTokens - polling.initialInputTokens);
   // Stash for reconcile fallback: if the stream dies without message_delta,
   // this is the best output-token number we have (modulo content that
   // streamed between the last successful poll and the kill).
@@ -1501,25 +1450,26 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       output_tokens_est: outputTokensSoFar,
       total_input_tokens: totalInputTokens,
       web_searches: teeCtx.streamingContent.webSearchCount,
-      kill_threshold_micro_usd: teeCtx.killThresholdMicro?.toString() ?? null,
+      kill_threshold_micro_usd: polling.killThresholdMicro?.toString() ?? null,
     }),
   );
 
   // BYOK streams (killThresholdMicro=null) emit running_cost frames but
   // skip the cap-enforcement branch below.
-  if (teeCtx.killThresholdMicro !== null && estimatedMicro > teeCtx.killThresholdMicro) {
+  if (polling.killThresholdMicro !== null && estimatedMicro > polling.killThresholdMicro) {
     // Race: if another path (parseFrame kill, abort, etc.) already fired, skip.
     if (teeCtx.killed.v) return;
     const payload = JSON.stringify({
       type: 'request_cost_ceiling_exceeded',
-      limit_usd: microToUsd(teeCtx.killThresholdMicro),
+      limit_usd: microToUsd(polling.killThresholdMicro),
     });
     teeCtx.pendingKillFrame = new TextEncoder().encode(`event: error\ndata: ${payload}\n\n`);
     teeCtx.killed.v = true;
     teeCtx.killDiagnostic = {
+      kind: 'over_threshold',
       source: 'poll',
       cumulative_micro_usd: estimatedMicro.toString(),
-      threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+      threshold_micro_usd: polling.killThresholdMicro.toString(),
       accumulator_at_kill: { ...teeCtx.accumulator },
       live_web_search_count: teeCtx.streamingContent.webSearchCount,
       output_tokens_est: outputTokensSoFar,
@@ -1530,7 +1480,7 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
       JSON.stringify({
         event: 'poll_kill_triggered',
         estimatedCostMicroUsd: estimatedMicro.toString(),
-        thresholdMicroUsd: teeCtx.killThresholdMicro.toString(),
+        thresholdMicroUsd: polling.killThresholdMicro.toString(),
         outputTokensEst: outputTokensSoFar,
         webSearches: teeCtx.streamingContent.webSearchCount,
       }),
@@ -1621,7 +1571,7 @@ function createCostTrackingStream(
   // needs ticks even when killThresholdMicro is null, otherwise mid-stream
   // output cost is invisible until message_delta — and message_delta never
   // fires on a user-kill).
-  if (teeCtx.env !== null && teeCtx.countTokensBase !== null) {
+  if (teeCtx.polling.armed) {
     pollTimer = setInterval(() => {
       if (teeCtx.killed.v || teeCtx.pollingDisabled) {
         clearPollTimer(teeCtx.killed.v ? 'killed' : 'polling_disabled');
@@ -1940,10 +1890,15 @@ function createCostTrackingStream(
         );
         try {
           controller.enqueue(frame);
-        } catch {
-          // Controller closed (downstream cancelled). Reconcile still
-          // writes the authoritative figure to the DB; the client just
-          // misses the tick.
+        } catch (enqueueErr) {
+          // Controller closed (downstream cancelled). Reconcile still writes
+          // the authoritative figure to the DB; the client just misses the
+          // tick. Warn so wrangler tail surfaces controller-closed cases that
+          // would otherwise look like a missing usage event.
+          console.warn(
+            `running_cost enqueue failed at ${eventType} (controller closed):`,
+            enqueueErr,
+          );
         }
 
         // Lock in a server-known cost floor on message_start. This is the
@@ -2051,8 +2006,12 @@ function createCostTrackingStream(
   function fireKillIfOverThreshold(
     controller: TransformStreamDefaultController<Uint8Array>,
   ): boolean {
-    if (teeCtx.killThresholdMicro === null) return false;
+    // Threshold lives inside polling state; if polling never armed (BYOK probe
+    // failed) or BYOK explicitly disabled the cap (killThresholdMicro=null),
+    // the parse-frame kill is a no-op.
+    if (!teeCtx.polling.armed || teeCtx.polling.killThresholdMicro === null) return false;
     if (teeCtx.killed.v) return false;
+    const killThresholdMicro = teeCtx.polling.killThresholdMicro;
 
     let cumulativeMicro: bigint;
     try {
@@ -2060,23 +2019,22 @@ function createCostTrackingStream(
     } catch (e) {
       // A cost-table bug must not silently disable the kill switch — that
       // leaves spend unbounded. Fail closed: synthesize a kill with a
-      // distinct diagnostic reason so the reconcile path records WHY the
+      // distinct diagnostic kind so the reconcile path records WHY the
       // stream was torn down without a cumulative figure.
       console.error('cost compute failed; firing kill fail-closed:', e);
       teeCtx.killed.v = true;
       teeCtx.killDiagnostic = {
+        kind: 'compute_error',
         source: 'parse_frame',
-        reason: 'kill_compute_error',
-        cumulative_micro_usd: '0',
-        threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+        error_message: e instanceof Error ? e.message : String(e),
+        threshold_micro_usd: killThresholdMicro.toString(),
         accumulator_at_kill: { ...teeCtx.accumulator },
         live_web_search_count: teeCtx.streamingContent.webSearchCount,
-        compute_error_message: e instanceof Error ? e.message : String(e),
         fired_at_ms: Date.now(),
       };
       const payload = JSON.stringify({
         type: 'request_cost_ceiling_exceeded',
-        limit_usd: microToUsd(teeCtx.killThresholdMicro),
+        limit_usd: microToUsd(killThresholdMicro),
       });
       const killFrame = encoder.encode(`event: error\ndata: ${payload}\n\n`);
       try {
@@ -2108,20 +2066,21 @@ function createCostTrackingStream(
       cumulativeMicro += BigInt(liveWebExtra) * BigInt(WEB_SEARCH_MICRO_USD_PER_USE);
     }
 
-    if (cumulativeMicro <= teeCtx.killThresholdMicro) return false;
+    if (cumulativeMicro <= killThresholdMicro) return false;
 
     teeCtx.killed.v = true;
     teeCtx.killDiagnostic = {
+      kind: 'over_threshold',
       source: 'parse_frame',
       cumulative_micro_usd: cumulativeMicro.toString(),
-      threshold_micro_usd: teeCtx.killThresholdMicro.toString(),
+      threshold_micro_usd: killThresholdMicro.toString(),
       accumulator_at_kill: { ...teeCtx.accumulator },
       live_web_search_count: teeCtx.streamingContent.webSearchCount,
       fired_at_ms: Date.now(),
     };
     const payload = JSON.stringify({
       type: 'request_cost_ceiling_exceeded',
-      limit_usd: microToUsd(teeCtx.killThresholdMicro),
+      limit_usd: microToUsd(killThresholdMicro),
     });
     const killFrame = encoder.encode(`event: error\ndata: ${payload}\n\n`);
     try {
@@ -2729,29 +2688,32 @@ export async function handler(
     ? EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected)
     : null;
 
+  // Polling arms when count_tokens is reachable (a baseline body exists). BYOK
+  // gets a baseline from the upfront probe in step 6+7; probe failure leaves
+  // countTokensBase=null and disarms polling for that stream — preferable to
+  // running with a bad baseline and inflating the BYOK pill.
+  const polling: PollingState = countTokensBase
+    ? {
+        armed: true,
+        env,
+        countTokensBase,
+        initialInputTokens,
+        killThresholdMicro,
+      }
+    : { armed: false };
+
   const teeCtx: SseTeeContext = {
     accumulator,
-    killThresholdMicro,
     model,
     abortController,
     killed,
     chartId,
     sql,
-    // count_tokens polling. Originally a kill-switch gated on capped tier,
-    // but BYOK now uses the same poll cycle to emit running_cost frames
-    // that drive the BYOK "$X this chart" pill. Both env and countTokensBase
-    // must be non-null for the timer to arm; for BYOK, countTokensBase
-    // comes from the upfront probe (see the BYOK branch in the request
-    // handler) and stays null on probe failure, which keeps polling
-    // disarmed for that stream rather than letting it run with a bad
-    // baseline.
-    env,
+    polling,
     loggingMessageId,
     actorId,
     ctx,
     deploymentHost: requestUrl.hostname,
-    countTokensBase,
-    initialInputTokens,
     streamingContent: newStreamingAssistantContent(),
     pendingKillFrame: null,
     pendingRunningCostFrame: null,
@@ -3379,28 +3341,34 @@ export async function handler(
       if (teeCtx.killDiagnostic) {
         try {
           const d = teeCtx.killDiagnostic;
-          const diagnosticMetadata = {
+          // Branch-specific fields (cumulative cost / poll-side tokens vs
+          // compute error message) are added inside the kind dispatch below,
+          // preserving the existing row shape so analytics queries keep working.
+          const diagnosticMetadata: Record<string, unknown> = {
+            kind: d.kind,
             source: d.source,
-            cumulative_micro_usd: d.cumulative_micro_usd,
             threshold_micro_usd: d.threshold_micro_usd,
             actual_reconciled_micro_usd: actualMicro.toString(),
             projected_micro_usd: projected.toString(),
             accumulator_at_kill: d.accumulator_at_kill,
             accumulator_at_reconcile: accumulator,
             live_web_search_count: d.live_web_search_count,
-            output_tokens_est: d.output_tokens_est,
-            count_tokens_total: d.count_tokens_total,
             polling_disabled: teeCtx.pollingDisabled,
             model,
             chart_id: chartId,
             logging_message_id: loggingMessageId,
-            // Worker hostname of the request that produced this kill. Lets us
-            // tell prod (`theory-of-change-builder.*`) apart from branch
-            // previews (`<branch>-theory-of-change-builder.*`) without a
-            // separate env var — preview URLs have no log streams anyway so
-            // DB rows are the only signal we have.
             deployment_host: requestUrl.hostname,
           };
+          let errorMessage: string;
+          if (d.kind === 'over_threshold') {
+            diagnosticMetadata.cumulative_micro_usd = d.cumulative_micro_usd;
+            diagnosticMetadata.output_tokens_est = d.output_tokens_est;
+            diagnosticMetadata.count_tokens_total = d.count_tokens_total;
+            errorMessage = `Kill fired from ${d.source}: cumulative=${d.cumulative_micro_usd} µUSD, threshold=${d.threshold_micro_usd} µUSD`;
+          } else {
+            diagnosticMetadata.compute_error_message = d.error_message;
+            errorMessage = `Kill fired from ${d.source} (compute_error): ${d.error_message}; threshold=${d.threshold_micro_usd} µUSD`;
+          }
           await sql`
           INSERT INTO logging_errors (
             error_id, error_name, error_message, user_id, chart_id,
@@ -3409,7 +3377,7 @@ export async function handler(
           VALUES (
             ${crypto.randomUUID()},
             'DiagnosticKillSwitchFired',
-            ${`Kill fired from ${d.source}: cumulative=${d.cumulative_micro_usd} µUSD, threshold=${d.threshold_micro_usd} µUSD`},
+            ${errorMessage},
             ${actorId},
             ${chartId ?? null},
             ${JSON.stringify(diagnosticMetadata)}
