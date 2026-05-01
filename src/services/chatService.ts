@@ -601,6 +601,16 @@ class ChatService {
       callbacks.onCostUpdate?.(computeRunningCost());
     };
 
+    // Latest cost_micro_usd value seen on a running_cost SSE frame. The
+    // worker's streaming reconcile (ctx.waitUntil IIFE) is the primary
+    // path that writes this to logging_messages.cost_micro_usd, but it can
+    // be killed by Cloudflare's waitUntil time budget on streams whose
+    // tracked.done hangs (e.g. when the user's connection drops). When the
+    // stream ends here — for any reason — we POST this figure to
+    // /api/reconcile-cost as a fallback so the per-chart pill converges
+    // even if the streaming reconcile bailed.
+    let lastCostMicroUsd: bigint | null = null;
+
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -795,6 +805,23 @@ class ChatService {
                 usage = { ...(usage ?? {}), ...event.usage } as AnthropicUsage;
                 updateUsage(event.usage);
               } else if (event.type === 'running_cost' && typeof event.cost_usd === 'number') {
+                // Capture the µUSD figure for the post-stream reconcile POST.
+                // The string carries BigInt-precision (the cost is computed
+                // server-side as bigint and serialized as a string to avoid JS
+                // number precision loss); we keep it as bigint client-side so
+                // the round-trip to /api/reconcile-cost is byte-identical.
+                if (typeof event.cost_micro_usd === 'string') {
+                  try {
+                    const parsed = BigInt(event.cost_micro_usd);
+                    if (parsed >= 0n && (lastCostMicroUsd === null || parsed >= lastCostMicroUsd)) {
+                      lastCostMicroUsd = parsed;
+                    }
+                  } catch {
+                    // Bad string from server — ignore this frame; later frames
+                    // overwrite. Console.warn would be too noisy; the next
+                    // running_cost frame is typically <5s away.
+                  }
+                }
                 // Worker-synthesized event: the server-side count_tokens
                 // poller has a fresh cumulative-cost estimate. Anthropic's
                 // own usage fields only fire at message_start/message_delta,
@@ -934,6 +961,56 @@ class ChatService {
       throw e;
     } finally {
       reader.releaseLock();
+
+      // Client-side reconcile fallback. Fires for every stream end (success,
+      // user abort, connection drop, error) so that the per-chart pill
+      // converges to the last-seen running_cost even if the worker's
+      // ctx.waitUntil IIFE bails on its time budget. Idempotent server-side
+      // (GREATEST(existing, value)), so a successful streaming reconcile
+      // followed by this POST is a no-op.
+      //
+      // Best-effort: failures here don't surface to the caller. We don't
+      // pass `signal` so a user-initiated abort of the stream doesn't also
+      // cancel this fallback.
+      const loggingMessageIdForReconcile = extraHeaders?.['X-Logging-Message-Id'];
+      if (loggingMessageIdForReconcile && lastCostMicroUsd !== null && lastCostMicroUsd > 0n) {
+        const reconcileHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (this.authToken) {
+          reconcileHeaders['Authorization'] = `Bearer ${this.authToken}`;
+        }
+        try {
+          const resp = await fetch('/api/reconcile-cost', {
+            method: 'POST',
+            headers: reconcileHeaders,
+            body: JSON.stringify({
+              logging_message_id: loggingMessageIdForReconcile,
+              cost_micro_usd: lastCostMicroUsd.toString(),
+            }),
+            credentials: 'include',
+          });
+          let resultStr = 'no-body';
+          if (resp.ok) {
+            const result = await resp.json().catch(() => null);
+            resultStr = result ? JSON.stringify(result) : 'parse-error';
+          } else {
+            resultStr = `error:${resp.status}`;
+          }
+          console.log(
+            `[ChatService] reconcile-cost: status=${resp.status}` +
+              ` sent=${lastCostMicroUsd.toString()}µUSD` +
+              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…` +
+              ` result=${resultStr}`,
+          );
+        } catch (reconcileErr) {
+          console.warn(
+            `[ChatService] reconcile-cost POST failed (sent=${lastCostMicroUsd.toString()}µUSD,` +
+              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…):`,
+            reconcileErr,
+          );
+        }
+      }
     }
 
     // Stream ended without message_stop — treat as incomplete
