@@ -1023,6 +1023,23 @@ type SseTeeContext = {
    */
   env: Env | null;
   /**
+   * Logging-message id from the X-Logging-Message-Id header. Used by the
+   * message_start floor write to UPDATE logging_messages.cost_micro_usd as
+   * soon as we know the input cost, so a downstream reconcile bail can't
+   * leave the per-chart pill at 0 for a message we already billed for.
+   */
+  loggingMessageId: string | null;
+  /** Actor id (auth0 sub or anon-${uuid}). Used for diagnostic rows fired from inside parseFrame. */
+  actorId: string;
+  /**
+   * ExecutionContext, plumbed through so parseFrame can ctx.waitUntil()
+   * its own DB writes (e.g. the message_start floor) without the outer
+   * handler having to schedule them.
+   */
+  ctx: ExecutionContext;
+  /** Worker hostname (for `request_metadata.deployment_host` in diagnostics). */
+  deploymentHost: string;
+  /**
    * Stripped count_tokens body (from `stripToCountTokensBody`) minus the
    * in-progress assistant turn. The poller appends the accumulated assistant
    * message and POSTs to count_tokens. Null for BYOK (no polling).
@@ -1958,6 +1975,77 @@ function createCostTrackingStream(
           // writes the authoritative figure to the DB; the client just
           // misses the tick.
         }
+
+        // Lock in a server-known cost floor on message_start. This is the
+        // first time we see Anthropic's authoritative input_tokens +
+        // cache_read/cache_creation breakdown. Persisting it to
+        // logging_messages.cost_micro_usd here means a subsequent reconcile
+        // bail (waitUntil budget kill, tracked.done timeout, etc.) can't
+        // leave the per-chart pill at 0 — we already have the input cost
+        // recorded. UPDATE uses GREATEST so it's a no-op if the row was
+        // already written by an earlier pass.
+        //
+        // Fire-and-forget via teeCtx.ctx.waitUntil so the stream isn't
+        // blocked on Postgres; the diagnostic insert doubles as observability
+        // (one DiagnosticMessageStartFloor row per stream that fires this).
+        if (eventType === 'message_start' && teeCtx.loggingMessageId) {
+          const floorMicro = finalMicro;
+          const floorMerged = { ...merged };
+          teeCtx.ctx.waitUntil(
+            (async () => {
+              console.log(
+                JSON.stringify({
+                  event: 'message_start_floor_persist',
+                  logging_message_id: teeCtx.loggingMessageId,
+                  floor_micro_usd: floorMicro.toString(),
+                  floor_usd: microToUsd(floorMicro),
+                  input_tokens: floorMerged.input_tokens,
+                  cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
+                  cache_read_input_tokens: floorMerged.cache_read_input_tokens,
+                  model: teeCtx.model,
+                }),
+              );
+              try {
+                await teeCtx.sql`
+                  UPDATE logging_messages
+                  SET cost_micro_usd = GREATEST(cost_micro_usd, ${floorMicro.toString()}::bigint)
+                  WHERE message_id = ${teeCtx.loggingMessageId}
+                `;
+              } catch (uerr) {
+                console.error('message_start floor UPDATE failed:', uerr);
+              }
+              try {
+                await teeCtx.sql`
+                  INSERT INTO logging_errors (
+                    error_id, error_name, error_message, user_id, chart_id,
+                    request_metadata
+                  )
+                  VALUES (
+                    ${crypto.randomUUID()},
+                    'DiagnosticMessageStartFloor',
+                    ${`floor=${floorMicro.toString()} µUSD locked at message_start`},
+                    ${teeCtx.actorId},
+                    ${teeCtx.chartId ?? null},
+                    ${JSON.stringify({
+                      logging_message_id: teeCtx.loggingMessageId,
+                      floor_micro_usd: floorMicro.toString(),
+                      floor_usd: microToUsd(floorMicro),
+                      input_tokens: floorMerged.input_tokens,
+                      cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
+                      cache_read_input_tokens: floorMerged.cache_read_input_tokens,
+                      model: teeCtx.model,
+                      deployment_host: teeCtx.deploymentHost,
+                      fired_at_ms: Date.now(),
+                    })}
+                  )
+                  ON CONFLICT (error_id) DO NOTHING
+                `;
+              } catch (derr) {
+                console.error('message_start floor diagnostic insert failed:', derr);
+              }
+            })(),
+          );
+        }
       } catch (e) {
         console.error(`running_cost emit failed at ${eventType}:`, e);
       }
@@ -2688,6 +2776,10 @@ export async function handler(
     // disarmed for that stream rather than letting it run with a bad
     // baseline.
     env,
+    loggingMessageId,
+    actorId,
+    ctx,
+    deploymentHost: requestUrl.hostname,
     countTokensBase,
     initialInputTokens,
     streamingContent: newStreamingAssistantContent(),
