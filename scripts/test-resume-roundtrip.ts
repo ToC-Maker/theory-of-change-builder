@@ -35,6 +35,11 @@
  */
 
 import type { AssistantBlock } from '../shared/chat-blocks';
+import {
+  StreamBlockAccumulator,
+  toAssistantContentBlocks,
+  type RawSseEvent,
+} from '../src/services/streamBlockAccumulator';
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 if (!API_KEY) {
@@ -58,190 +63,6 @@ const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const FIRST_USER_PROMPT =
   'Five people (A, B, C, D, E) sit in a row. A is not at either end. B is two seats to the left of E. C is somewhere to the right of B. D is adjacent to A. Where does each person sit? Show your reasoning.';
 const FOLLOWUP_USER_PROMPT = 'Now swap the positions of A and B. What is the new seating order?';
-
-// --- Internal accumulator (mirrors src/services/streamBlockAccumulator.ts) ---
-//
-// Duplicated here rather than imported because the client accumulator lives
-// under src/, which is browser-targeted (DOM lib, no @types/node). Pulling it
-// into a Node tsx script would require a third tsconfig include path. The
-// shape is small enough that re-implementing inline is cheaper than that
-// plumbing, and we cross-check against the real type via the AssistantBlock
-// import below.
-
-interface RawSseEvent {
-  type: string;
-  index?: number;
-  content_block?: Record<string, unknown>;
-  delta?: Record<string, unknown>;
-}
-
-type InternalBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; thinking: string; signature: string }
-  | {
-      type: 'server_tool_use';
-      id: string;
-      name: string;
-      input_json_raw: string;
-      input: Record<string, unknown> | null;
-    }
-  | {
-      type: 'web_search_tool_result';
-      tool_use_id: string;
-      content: unknown;
-    }
-  | {
-      type: 'code_execution_tool_result';
-      tool_use_id: string;
-      content: unknown;
-    };
-
-class StreamBlockAccumulator {
-  private readonly blocks = new Map<number, InternalBlock>();
-
-  handleEvent(event: RawSseEvent): void {
-    const idx = typeof event.index === 'number' ? event.index : -1;
-    if (event.type === 'content_block_start') {
-      const cb = event.content_block;
-      if (idx < 0 || !cb || typeof cb !== 'object') return;
-      const cbType = cb.type;
-      if (cbType === 'text') {
-        this.blocks.set(idx, { type: 'text', text: '' });
-      } else if (cbType === 'thinking') {
-        this.blocks.set(idx, { type: 'thinking', thinking: '', signature: '' });
-      } else if (cbType === 'server_tool_use') {
-        const id = typeof cb.id === 'string' ? cb.id : '';
-        const name = typeof cb.name === 'string' ? cb.name : '';
-        this.blocks.set(idx, {
-          type: 'server_tool_use',
-          id,
-          name,
-          input_json_raw: '',
-          input: null,
-        });
-      } else if (cbType === 'web_search_tool_result') {
-        const tool_use_id = typeof cb.tool_use_id === 'string' ? cb.tool_use_id : '';
-        this.blocks.set(idx, {
-          type: 'web_search_tool_result',
-          tool_use_id,
-          content: cb.content,
-        });
-      } else if (cbType === 'code_execution_tool_result') {
-        const tool_use_id = typeof cb.tool_use_id === 'string' ? cb.tool_use_id : '';
-        this.blocks.set(idx, {
-          type: 'code_execution_tool_result',
-          tool_use_id,
-          content: cb.content,
-        });
-      }
-      return;
-    }
-
-    if (event.type === 'content_block_delta') {
-      const d = event.delta;
-      if (idx < 0 || !d || typeof d !== 'object') return;
-      const existing = this.blocks.get(idx);
-      if (!existing) return;
-      const dtype = d.type;
-      if (dtype === 'text_delta' && existing.type === 'text' && typeof d.text === 'string') {
-        existing.text += d.text;
-      } else if (
-        dtype === 'thinking_delta' &&
-        existing.type === 'thinking' &&
-        typeof d.thinking === 'string'
-      ) {
-        existing.thinking += d.thinking;
-      } else if (
-        dtype === 'signature_delta' &&
-        existing.type === 'thinking' &&
-        typeof d.signature === 'string'
-      ) {
-        // Concatenate raw — Anthropic signatures are base64-ASCII and must
-        // round-trip byte-identical for replay verification.
-        existing.signature += d.signature;
-      } else if (
-        dtype === 'input_json_delta' &&
-        existing.type === 'server_tool_use' &&
-        typeof d.partial_json === 'string'
-      ) {
-        existing.input_json_raw += d.partial_json;
-      }
-      return;
-    }
-
-    if (event.type === 'content_block_stop') {
-      if (idx < 0) return;
-      const existing = this.blocks.get(idx);
-      if (!existing) return;
-      if (existing.type === 'server_tool_use' && existing.input === null) {
-        const raw = existing.input_json_raw;
-        try {
-          const parsed = JSON.parse(raw.length === 0 ? '{}' : raw) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            existing.input = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // Malformed JSON: input stays null; emit-time drop.
-        }
-      }
-      return;
-    }
-  }
-
-  toAssistantBlocks(): AssistantBlock[] {
-    const sorted = Array.from(this.blocks.entries()).sort(([a], [b]) => a - b);
-
-    const toolUseIds = new Set<string>();
-    const toolResultIds = new Set<string>();
-    for (const [, block] of sorted) {
-      if (block.type === 'server_tool_use' && block.input !== null) {
-        toolUseIds.add(block.id);
-      } else if (
-        block.type === 'web_search_tool_result' ||
-        block.type === 'code_execution_tool_result'
-      ) {
-        toolResultIds.add(block.tool_use_id);
-      }
-    }
-
-    const out: AssistantBlock[] = [];
-    for (const [, block] of sorted) {
-      if (block.type === 'text') {
-        if (block.text.length > 0) {
-          out.push({ type: 'text', text: block.text });
-        }
-      } else if (block.type === 'thinking') {
-        if (block.thinking.length > 0 || block.signature.length > 0) {
-          out.push({ type: 'thinking', thinking: block.thinking, signature: block.signature });
-        }
-      } else if (block.type === 'server_tool_use') {
-        if (block.input === null) continue;
-        if (!toolResultIds.has(block.id)) continue;
-        out.push({
-          type: 'server_tool_use',
-          id: block.id,
-          name: block.name,
-          input: block.input,
-        });
-      } else if (block.type === 'web_search_tool_result') {
-        if (!toolUseIds.has(block.tool_use_id)) continue;
-        out.push({
-          type: 'web_search_tool_result',
-          tool_use_id: block.tool_use_id,
-          content: block.content,
-        });
-      } else if (block.type === 'code_execution_tool_result') {
-        if (!toolUseIds.has(block.tool_use_id)) continue;
-        out.push({
-          type: 'code_execution_tool_result',
-          tool_use_id: block.tool_use_id,
-          content: block.content,
-        });
-      }
-    }
-    return out;
-  }
-}
 
 // --- Step 1: stream the first turn and capture blocks --------------------
 
@@ -310,7 +131,7 @@ async function streamFirstTurn(): Promise<AssistantBlock[]> {
     }
   }
 
-  return accumulator.toAssistantBlocks();
+  return toAssistantContentBlocks(accumulator);
 }
 
 // --- Step 3: JSON round-trip --------------------------------------------

@@ -7,7 +7,7 @@
 //    they saw streamed.
 import type { AssistantBlock } from '../../shared/chat-blocks';
 
-interface RawSseEvent {
+export interface RawSseEvent {
   type: string;
   index?: number;
   content_block?: Record<string, unknown>;

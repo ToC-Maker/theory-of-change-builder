@@ -137,7 +137,7 @@ See `database/schema.sql` for full schema. Key tables:
 - **chart_permissions**: User access control with approval workflow
 - **user_api_usage**: Per-user cumulative AI spend, in micro-USD (see Cost accounting below). Replaces the legacy `user_token_usage` table.
 - **global_monthly_usage**: Observability-only table tracking aggregate monthly spend. Enforcement is via the Anthropic Console customer-set cap, not this table.
-- **logging_messages**: AI improvement logs. `cost_micro_usd` column stores per-message cost.
+- **logging_messages**: AI improvement logs. `cost_micro_usd` stores per-message cost. `content_blocks` (TEXT, not JSONB — so signed-thinking blocks round-trip byte-identical for replay/fork) holds the raw assistant turn (text + thinking + tool_use + tool_results). `was_killed` (BOOLEAN) is true iff the cost-cap kill switch fired for this turn — distinct from user-aborted (Stop button) and from transport failures, neither of which set it.
 - **logging_snapshots**: Graph-state snapshots after each AI edit, correlated to the triggering message. Used for replay and eval of AI edit outcomes.
 - **logging_errors**: Client-side error reports plus kill-switch diagnostics and server-side service errors. Each row is stamped with `deployment_host` (inside `request_metadata` JSONB) so staging vs prod can be separated.
 - **user_byok_keys**: Encrypted blobs of user-supplied Anthropic API keys (column `encrypted_key` as `BYTEA`).
@@ -155,6 +155,10 @@ Migrations in `database/migrations/` are applied manually against staging and pr
 All server-side cost accounting uses **micro-USD** (1_000_000 µUSD = $1) as the integer unit. Rate tables live in `worker/_shared/cost.ts`. Per-user cumulative spend is stored in `user_api_usage`; global monthly spend in `global_monthly_usage` (observability only — enforcement is the Anthropic Console customer-set cap). Per-message cost lands in `logging_messages.cost_micro_usd`. Tier caps and infra limits are constants in `worker/_shared/tiers.ts`.
 
 The legacy `POST /api/updateTokenUsage` endpoint and `user_token_usage` table have been replaced by server-side SSE parsing in `worker/api/anthropic-stream.ts`. The client no longer reports token usage; the Worker observes it from Anthropic's `message_delta.usage` events and UPSERTs into `user_api_usage` via `ctx.waitUntil()`.
+
+Two writers update `logging_messages.cost_micro_usd`: (1) the post-stream IIFE in `worker/api/anthropic-stream.ts`, and (2) `POST /api/reconcile-cost` (`worker/api/reconcile-cost.ts`) — a client-driven fallback for streams where `ctx.waitUntil()` was killed by Cloudflare's time budget before the IIFE finished, leaving the row at the input-only floor. The endpoint clamps `GREATEST(existing, client_value)`, so the client can only push the cost up; combined with the message_start floor it cannot under-report. `reconcile-cost` does NOT touch `user_api_usage` (the cap was already enforced by the pre-stream reservation).
+
+`POST /api/count-tokens-estimate` (`worker/api/count-tokens-estimate.ts`) is a thin pass-through to Anthropic's `/v1/messages/count_tokens` plus a server-side cost projection. It strips Files-API `document` blocks (count_tokens rejects them), bucket-counts cached file tokens by draft vs history (so the client can apply cache-write 1.25× to the draft side and cache-read 0.1× to history), and returns `{input_tokens, estimated_cost_usd, ...}` for the composer's pre-send estimate. No usage is billed because `count_tokens` is a free Anthropic endpoint.
 
 ## BYOK (Bring Your Own Key)
 
@@ -214,6 +218,15 @@ Anon users must solve a Cloudflare Turnstile challenge before the first AI reque
 ### Cost Cap 402 / 429s
 A 402 from `/api/anthropic-stream` means the user hit their per-user lifetime cap in `user_api_usage` (see `worker/_shared/tiers.ts` for caps per tier). Supplying a BYOK key bypasses the lifetime cap; the Anthropic Console customer-set cap still applies globally and will surface as a 429 upstream.
 
+### count_tokens Assistant-Turn Validation
+The mid-stream cost-cap poller and the post-stream reconcile both call `/v1/messages/count_tokens` on a partial assistant turn. Anthropic's count_tokens validator is stricter than `/v1/messages` itself; four rules trip on half-streamed shapes (all empirically confirmed against the live endpoint):
+1. Final block cannot be `thinking` (append a `.` text block).
+2. Final block cannot end with trailing whitespace (rstrip; drop block if it'd become empty).
+3. Text blocks must be non-empty and contain non-whitespace.
+4. Two `thinking` blocks cannot be adjacent without a text block between them.
+
+Any new code that builds an assistant turn for count_tokens must go through `buildAssistantBlocksForCountTokens` in `worker/api/anthropic-stream.ts` so these rules stay enforced; rolling your own can silently disable the kill-switch poller.
+
 ### PDF Handling
 PDFs are not parsed client-side. `src/utils/fileParser.ts:validatePdf` runs
 a lightweight header scan that extracts `{pageCount, sizeBytes}` from the
@@ -240,7 +253,9 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)
-- `worker/api/anthropic-stream.ts` - AI streaming proxy (SSE, usage UPSERT, kill-switch, Turnstile gate)
+- `worker/api/anthropic-stream.ts` - AI streaming proxy (SSE, usage UPSERT, kill-switch, Turnstile gate). Exports `buildAssistantBlocksForCountTokens` (count_tokens validation rules) and `collectAssistantBlocksForAnalytics` (raw `content_blocks` capture).
+- `worker/api/reconcile-cost.ts` - Client-driven fallback that pushes the running cost figure when the streaming reconcile IIFE was killed by `ctx.waitUntil()` time budget; clamps `GREATEST(existing, client)` so it can only push up. Updates `logging_messages.cost_micro_usd` only — never `user_api_usage`.
+- `worker/api/count-tokens-estimate.ts` - Pre-send cost projection. Strips Files-API `document` blocks (count_tokens 400s on them), splits cached file tokens by draft vs history so the client prices cache-write vs cache-read correctly.
 - `worker/api/verify-turnstile.ts` - Turnstile challenge verification, issues `tocb_anon` session cookie
 - `worker/api/upload-file.ts` - Anthropic Files API upload proxy, records rows in `chart_files`
 - `worker/api/chart-files.ts` - `chart_files` cleanup (clear-chat and per-chart erasure)
