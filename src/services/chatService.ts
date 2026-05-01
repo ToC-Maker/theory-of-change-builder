@@ -238,9 +238,13 @@ function readPendingReconciles(): PendingReconcile[] {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isPendingReconcile);
-  } catch {
+  } catch (e) {
     // Corrupt JSON: discard. Better to lose the queue than to keep retrying
-    // on every drain cycle with a parse error.
+    // on every drain cycle with a parse error. Surface the discard so the
+    // event is visible in devtools rather than silently zeroing out a queue
+    // the user expected to drain — corruption from a partial-write or a
+    // disk-full at write time would otherwise look identical to "queue empty".
+    console.warn('[ChatService] discarding corrupt reconcile queue:', e);
     return [];
   }
 }
@@ -1194,9 +1198,16 @@ class ChatService {
           });
           let resultStr = 'no-body';
           if (resp.ok) {
-            directReconcileSucceeded = true;
+            // Defer the success flag until after the JSON parse resolves.
+            // If the body comes back malformed we don't want the post-success
+            // drain to fire on what was a partially-broken response — better
+            // to leave the queue alone and let the next successful reconcile
+            // (or `online` event) drain it.
             const result = await resp.json().catch(() => null);
             resultStr = result ? JSON.stringify(result) : 'parse-error';
+            if (result !== null) {
+              directReconcileSucceeded = true;
+            }
           } else {
             resultStr = `error:${resp.status}`;
             // 5xx → enqueue for retry. 4xx → drop (definitive reject).

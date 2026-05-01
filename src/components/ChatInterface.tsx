@@ -88,10 +88,22 @@ function loadChatHistoryWithBackup(storageKey: string): ChatMessage[] {
     );
     try {
       localStorage.setItem(backupKey, savedMessages);
-      localStorage.removeItem(storageKey);
     } catch (backupErr) {
-      // Quota / private browsing — nothing more to do; we already logged.
+      // Quota / private browsing — best-effort backup failed. Log but
+      // continue: forensic value of a corrupt blob in a near-full
+      // localStorage is essentially zero, and the more important thing is
+      // to clear the original key so the next save lands cleanly.
+      // Without the unconditional removeItem below, a quota-failed backup
+      // would leave the corrupt blob at storageKey and the save-effect
+      // overwrite hazard would return on the next user message.
       console.warn('[ChatHistory] backup-on-corrupt write failed:', backupErr);
+    }
+    try {
+      localStorage.removeItem(storageKey);
+    } catch (removeErr) {
+      // removeItem failing is bizarre (it's allowed even when quota-full)
+      // but quota engines have edge cases. Log; the next save will overwrite.
+      console.warn('[ChatHistory] removeItem after corrupt parse failed:', removeErr);
     }
     return [];
   }
@@ -172,18 +184,35 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
 };
 
 /**
- * Self-contained model picker. Self-contained so we can drop one in the
- * Chat composer AND the Generate composer without sharing a click-outside
- * ref between the two. Keeps `selected`/`onSelect` lifted in the parent so
- * the choice persists across mode switches.
+ * Generic dropdown shell shared by `ModelDropdown` and `EffortDropdown`.
+ * Both pickers shipped near-identical click-outside detection + open-state
+ * scaffolding (~50 lines duplicated); the only differences were the option
+ * set, the rendered label, and a couple of width/title constants.
+ *
+ * Kept self-contained (open state lives inside) so a Chat-composer instance
+ * and a Generate-composer instance don't share click-outside refs and
+ * accidentally close each other when both are visible.
  */
-function ModelDropdown({
+function Picker<T extends string>({
+  options,
   selected,
   onSelect,
+  renderLabel,
+  buttonWidthClass,
+  menuWidthClass,
+  title,
   className = '',
 }: {
-  selected: ModelKey;
-  onSelect: (model: ModelKey) => void;
+  options: readonly T[];
+  selected: T;
+  onSelect: (value: T) => void;
+  renderLabel: (value: T) => React.ReactNode;
+  /** Tailwind width class for the trigger button (e.g. `w-[140px]`). */
+  buttonWidthClass: string;
+  /** Tailwind width class for the dropdown menu (e.g. `w-[200px]`). */
+  menuWidthClass: string;
+  /** Native `title` attribute on the trigger; tooltips the picker's purpose. */
+  title: string;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -201,29 +230,31 @@ function ModelDropdown({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-[140px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
-        title="Select AI Model"
+        className={`${buttonWidthClass} text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between`}
+        title={title}
       >
-        <span className="font-medium">{MODELS[selected]}</span>
+        <span className="font-medium">{renderLabel(selected)}</span>
         <ChevronDownIcon
           className={`w-3 h-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
       </button>
       {open && (
-        <div className="absolute bottom-full mb-1 left-0 w-[200px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
-          {Object.entries(MODELS).map(([key, name]) => (
+        <div
+          className={`absolute bottom-full mb-1 left-0 ${menuWidthClass} bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50`}
+        >
+          {options.map((value) => (
             <button
-              key={key}
+              key={value}
               type="button"
               onClick={() => {
-                onSelect(key as ModelKey);
+                onSelect(value);
                 setOpen(false);
               }}
               className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
-                selected === key ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+                selected === value ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
               }`}
             >
-              {name}
+              {renderLabel(value)}
             </button>
           ))}
         </div>
@@ -232,12 +263,35 @@ function ModelDropdown({
   );
 }
 
+const MODEL_KEYS = Object.keys(MODELS) as readonly ModelKey[];
+
+function ModelDropdown({
+  selected,
+  onSelect,
+  className = '',
+}: {
+  selected: ModelKey;
+  onSelect: (model: ModelKey) => void;
+  className?: string;
+}) {
+  return (
+    <Picker<ModelKey>
+      options={MODEL_KEYS}
+      selected={selected}
+      onSelect={onSelect}
+      renderLabel={(key) => MODELS[key]}
+      buttonWidthClass="w-[140px]"
+      menuWidthClass="w-[200px]"
+      title="Select AI Model"
+      className={className}
+    />
+  );
+}
+
 /**
- * Effort-level picker. Mirrors `ModelDropdown`'s self-contained pattern so it
- * can drop into both composers without sharing click-outside state. Hidden
- * when `MODEL_CAPABILITIES[model].supports_output_config_effort` is false; the
- * available level set is read from the same capabilities entry so a model
- * that doesn't accept e.g. `xhigh` can't have it offered.
+ * Effort-level picker. Hidden when the model doesn't accept an effort knob;
+ * the available level set comes from `MODEL_CAPABILITIES[model].effort_levels`
+ * so a model that doesn't accept e.g. `xhigh` can't have it offered.
  */
 function EffortDropdown({
   model,
@@ -250,54 +304,19 @@ function EffortDropdown({
   onSelect: (effort: EffortLevel) => void;
   className?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const handle = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [open]);
-
   const caps = MODEL_CAPABILITIES[model];
   if (!caps.supports_output_config_effort) return null;
-  const levels = caps.effort_levels;
-
   return (
-    <div className={`relative ${className}`} ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-[110px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
-        title="Effort: trades response thoroughness against token usage"
-      >
-        <span className="font-medium">{EFFORT_LABELS[selected]}</span>
-        <ChevronDownIcon
-          className={`w-3 h-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
-      {open && (
-        <div className="absolute bottom-full mb-1 left-0 w-[160px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
-          {levels.map((level) => (
-            <button
-              key={level}
-              type="button"
-              onClick={() => {
-                onSelect(level);
-                setOpen(false);
-              }}
-              className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
-                selected === level ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
-              }`}
-            >
-              {EFFORT_LABELS[level]}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <Picker<EffortLevel>
+      options={caps.effort_levels}
+      selected={selected}
+      onSelect={onSelect}
+      renderLabel={(level) => EFFORT_LABELS[level]}
+      buttonWidthClass="w-[110px]"
+      menuWidthClass="w-[160px]"
+      title="Effort: trades response thoroughness against token usage"
+      className={className}
+    />
   );
 }
 
@@ -1929,14 +1948,28 @@ export function ChatInterface({
               // Preserve any partial that streamed before the error so the
               // user can read what they got + see the actual failure inline.
               // Without this the partial vanishes and the user has no signal
-              // beyond the chat resetting.
+              // beyond the chat resetting. Mirror the `aborted` and
+              // `cap_exceeded` paths: capture content_blocks too so the
+              // half-built turn (text + signed thinking + paired tool blocks)
+              // round-trips into the next request. `isReplayableAssistantBlock`
+              // strips unsigned thinking and orphan tool blocks, and
+              // `fixupAssistantBlocksForReplay` handles trailing-shape edge
+              // cases — worst case Anthropic 400s on retry, best case the user
+              // recovers from a network blip without losing context.
               const partial = streamingMessageRef.current;
-              if (partial && partial.content.length > 0) {
+              const partialBlocks = streamingContentBlocksRef.current;
+              const hasBlocks = partialBlocks.length > 0;
+              const hasText = !!partial && partial.content.length > 0;
+              if (partial && (hasText || hasBlocks)) {
                 const stamped: ChatMessage = {
                   ...partial,
                   was_killed: true,
                   kill_reason: 'error',
                   kill_message: error,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant errored before writing a visible response.)_',
+                  content_blocks: hasBlocks ? partialBlocks : undefined,
                 };
                 setMessages((prev) => [...prev, stamped]);
               } else {
@@ -2750,18 +2783,27 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           onError: (error: string) => {
             // See chat-site commentary: keyword classifier is the legacy
             // fallback for generic error strings; structured shapes arrive via
-            // onCostError below.
+            // onCostError below. Mirror the Chat-site error path: preserve
+            // partial content_blocks so signed thinking + paired tool blocks
+            // round-trip into the next request after a transient failure.
             const classified = classifyCostError(error);
             if (classified) {
               setCostErrorBanner(classified);
             } else {
               const partial = streamingMessageRef.current;
-              if (partial && partial.content.length > 0) {
+              const partialBlocks = streamingContentBlocksRef.current;
+              const hasBlocks = partialBlocks.length > 0;
+              const hasText = !!partial && partial.content.length > 0;
+              if (partial && (hasText || hasBlocks)) {
                 const stamped: ChatMessage = {
                   ...partial,
                   was_killed: true,
                   kill_reason: 'error',
                   kill_message: error,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant errored before writing a visible response.)_',
+                  content_blocks: hasBlocks ? partialBlocks : undefined,
                 };
                 setMessages((prev) => [...prev, stamped]);
               } else {

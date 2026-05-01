@@ -32,6 +32,12 @@ export class StreamBlockAccumulator {
   // surfaces the silent-drop without flooding.
   private warnedOrphanDelta = false;
   private warnedOrphanStop = false;
+  // Same one-shot pattern for malformed server_tool_use input JSON. A torn
+  // stream can produce multiple unparseable inputs in a row (e.g. truncated
+  // mid-object across N tool blocks); without the gate that's N near-
+  // identical warns. Surfacing the first occurrence is enough to flag the
+  // drop in devtools.
+  private warnedInputParse = false;
 
   handleEvent(event: RawSseEvent): void {
     const idx = typeof event.index === 'number' ? event.index : -1;
@@ -158,11 +164,15 @@ export class StreamBlockAccumulator {
         } catch (e) {
           // Malformed JSON: input stays null; emit-time drop. Warn so the
           // dropped tool block (and its now-orphaned tool_result) doesn't
-          // disappear from history without a trace.
-          console.warn(
-            '[streamBlockAccumulator] failed to parse server_tool_use input_json; block will drop on emit',
-            { idx, partial: existing.input_json_raw.slice(0, 200), error: String(e) },
-          );
+          // disappear from history without a trace. One-shot per stream so
+          // a torn stream with N unparseable inputs doesn't flood devtools.
+          if (!this.warnedInputParse) {
+            this.warnedInputParse = true;
+            console.warn(
+              '[streamBlockAccumulator] failed to parse server_tool_use input_json; block will drop on emit',
+              { idx, partial: existing.input_json_raw.slice(0, 200), error: String(e) },
+            );
+          }
         }
       }
       return;
