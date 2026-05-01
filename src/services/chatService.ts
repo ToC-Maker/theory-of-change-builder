@@ -179,6 +179,192 @@ function newIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// ----------------------------------------------------------------------------
+// Pending-reconcile retry queue
+// ----------------------------------------------------------------------------
+//
+// Failed POSTs to /api/reconcile-cost (typically because the user's network
+// dropped between the SSE stream finishing and the reconcile fetch firing,
+// e.g. ERR_NETWORK_CHANGED / ERR_CONNECTION_RESET) are stashed in localStorage
+// so we can retry them after the network comes back. The 2026-05-01 byok-11
+// trace had one such turn (msg=487ffb0b, cost=$0.054491) lost this way — the
+// streaming-worker reconcile likely also bailed because the client closed
+// the SSE connection mid-flight, leaving only the message_start floor recorded
+// server-side.
+//
+// Drain triggers (any of):
+//   - `online` event on window (fires when the OS regains connectivity)
+//   - After every successful reconcile-cost POST (opportunistic; the network
+//     just proved it works, so opportunistically replay anything queued)
+//
+// Note: not draining on app load. The `online` listener handles network-
+// restoration after a hard offline period, and the post-success drain handles
+// "the next time the user does anything." A reload while offline doesn't help
+// (the queue can't drain until connectivity returns), and a reload while
+// online with no other activity is rare enough not to optimize for.
+//
+// Staleness GC: items older than 7 days are dropped. If a reconcile has been
+// failing for a week, the original logging_messages row probably already has
+// the message_start floor written, and the per-message cost figure has had
+// plenty of time to converge via the streaming-side IIFE on subsequent
+// successful runs. Bound the queue size to keep localStorage healthy.
+
+const PENDING_RECONCILE_KEY = 'byok-reconcile-pending';
+const PENDING_RECONCILE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface PendingReconcile {
+  logging_message_id: string;
+  cost_micro_usd: string;
+  queued_at: number;
+}
+
+function isPendingReconcile(v: unknown): v is PendingReconcile {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.logging_message_id === 'string' &&
+    o.logging_message_id.length > 0 &&
+    typeof o.cost_micro_usd === 'string' &&
+    o.cost_micro_usd.length > 0 &&
+    typeof o.queued_at === 'number' &&
+    Number.isFinite(o.queued_at)
+  );
+}
+
+function readPendingReconciles(): PendingReconcile[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(PENDING_RECONCILE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isPendingReconcile);
+  } catch {
+    // Corrupt JSON: discard. Better to lose the queue than to keep retrying
+    // on every drain cycle with a parse error.
+    return [];
+  }
+}
+
+function writePendingReconciles(items: PendingReconcile[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (items.length === 0) {
+      localStorage.removeItem(PENDING_RECONCILE_KEY);
+    } else {
+      localStorage.setItem(PENDING_RECONCILE_KEY, JSON.stringify(items));
+    }
+  } catch (e) {
+    // Quota exceeded / private browsing: ignore. The reconcile is best-effort
+    // and the worker-side message_start floor still locked in input cost.
+    console.warn('[ChatService] failed to persist pending reconciles:', e);
+  }
+}
+
+/**
+ * Add a reconcile to the retry queue, deduplicating by logging_message_id so
+ * retried-and-still-failing entries don't pile up across attempts. Always
+ * stamps the latest queued_at so the staleness GC measures from the most
+ * recent attempt rather than the first.
+ */
+function enqueuePendingReconcile(entry: {
+  logging_message_id: string;
+  cost_micro_usd: string;
+}): void {
+  const existing = readPendingReconciles().filter(
+    (p) => p.logging_message_id !== entry.logging_message_id,
+  );
+  existing.push({
+    logging_message_id: entry.logging_message_id,
+    cost_micro_usd: entry.cost_micro_usd,
+    queued_at: Date.now(),
+  });
+  writePendingReconciles(existing);
+  console.log(
+    `[ChatService] queued pending reconcile: msg=${entry.logging_message_id.slice(0, 8)}…` +
+      ` cost=${entry.cost_micro_usd}µUSD queue_size=${existing.length}`,
+  );
+}
+
+/**
+ * Attempt to POST every queued reconcile. Items that succeed (HTTP 2xx) or
+ * get a definitive client-side rejection (4xx — bad shape, forbidden, not
+ * found) are removed. Items that hit a network error or 5xx stay queued for
+ * the next drain. Stale items (>7d) are GC'd unconditionally.
+ *
+ * Best-effort: this never throws. Callers fire-and-forget.
+ */
+async function drainPendingReconciles(authToken: string | null): Promise<void> {
+  const all = readPendingReconciles();
+  if (all.length === 0) return;
+
+  const now = Date.now();
+  const fresh = all.filter((p) => now - p.queued_at < PENDING_RECONCILE_STALE_MS);
+  const dropped = all.length - fresh.length;
+  if (dropped > 0) {
+    console.log(
+      `[ChatService] dropping ${dropped} stale pending reconciles (>${PENDING_RECONCILE_STALE_MS}ms)`,
+    );
+  }
+  if (fresh.length === 0) {
+    writePendingReconciles([]);
+    return;
+  }
+
+  console.log(`[ChatService] draining ${fresh.length} pending reconciles`);
+  const remaining: PendingReconcile[] = [];
+  for (const item of fresh) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    let result: 'ok' | 'drop' | 'retry' = 'retry';
+    try {
+      const resp = await fetch('/api/reconcile-cost', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          logging_message_id: item.logging_message_id,
+          cost_micro_usd: item.cost_micro_usd,
+        }),
+        credentials: 'include',
+      });
+      if (resp.ok) {
+        result = 'ok';
+        let body = 'no-body';
+        try {
+          const j = (await resp.json()) as unknown;
+          body = JSON.stringify(j);
+        } catch {
+          /* ignore */
+        }
+        console.log(
+          `[ChatService] drained reconcile: msg=${item.logging_message_id.slice(0, 8)}…` +
+            ` cost=${item.cost_micro_usd}µUSD result=${body}`,
+        );
+      } else if (resp.status >= 400 && resp.status < 500) {
+        // 401/403/404/etc — definitive reject. The row is gone or the caller
+        // can't claim it. Retrying won't help; drop and move on.
+        result = 'drop';
+        console.warn(
+          `[ChatService] dropping pending reconcile (${resp.status}): msg=${item.logging_message_id.slice(0, 8)}…`,
+        );
+      } else {
+        // 5xx — server-side blip, retry next time.
+        console.warn(
+          `[ChatService] retry-on-next-drain (${resp.status}): msg=${item.logging_message_id.slice(0, 8)}…`,
+        );
+      }
+    } catch (e) {
+      // Network error: keep for next drain.
+      console.warn(
+        `[ChatService] retry-on-next-drain (network): msg=${item.logging_message_id.slice(0, 8)}…`,
+        e,
+      );
+    }
+    if (result === 'retry') remaining.push(item);
+  }
+  writePendingReconciles(remaining);
+}
+
 export interface StreamCallbacks {
   onContent?: (chunk: string, fullContent: string) => void;
   /**
@@ -418,6 +604,20 @@ class ChatService {
   private readonly STREAM_API_URL = '/api/anthropic-stream';
   private authToken: string | null = null;
 
+  constructor() {
+    // Drain queued reconciles when the OS reports connectivity is back. This
+    // is the primary recovery path for the network-drop-mid-stream case
+    // (ERR_NETWORK_CHANGED / ERR_CONNECTION_RESET): the original reconcile
+    // POST gets enqueued in localStorage, then this listener replays it once
+    // the network heals.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        console.log('[ChatService] online event fired, draining pending reconciles');
+        void drainPendingReconciles(this.authToken);
+      });
+    }
+  }
+
   private static isNetworkError(error: Error): boolean {
     return (
       error.name === 'TypeError' ||
@@ -427,7 +627,15 @@ class ChatService {
   }
 
   setAuthToken(token: string | null) {
+    const wasNull = this.authToken === null;
     this.authToken = token;
+    // First time we get a real token (post-Auth0 hydration): drain the queue.
+    // Catches the "user reloads while offline, comes back online before the
+    // first stream" flow — without this, queued reconciles linger until the
+    // user starts another stream.
+    if (wasNull && token !== null) {
+      void drainPendingReconciles(token);
+    }
   }
 
   private async streamFromApi(
@@ -980,35 +1188,61 @@ class ChatService {
         if (this.authToken) {
           reconcileHeaders['Authorization'] = `Bearer ${this.authToken}`;
         }
+        const costMicroStr = lastCostMicroUsd.toString();
+        let directReconcileSucceeded = false;
         try {
           const resp = await fetch('/api/reconcile-cost', {
             method: 'POST',
             headers: reconcileHeaders,
             body: JSON.stringify({
               logging_message_id: loggingMessageIdForReconcile,
-              cost_micro_usd: lastCostMicroUsd.toString(),
+              cost_micro_usd: costMicroStr,
             }),
             credentials: 'include',
           });
           let resultStr = 'no-body';
           if (resp.ok) {
+            directReconcileSucceeded = true;
             const result = await resp.json().catch(() => null);
             resultStr = result ? JSON.stringify(result) : 'parse-error';
           } else {
             resultStr = `error:${resp.status}`;
+            // 5xx → enqueue for retry. 4xx → drop (definitive reject).
+            if (resp.status >= 500) {
+              enqueuePendingReconcile({
+                logging_message_id: loggingMessageIdForReconcile,
+                cost_micro_usd: costMicroStr,
+              });
+            }
           }
           console.log(
             `[ChatService] reconcile-cost: status=${resp.status}` +
-              ` sent=${lastCostMicroUsd.toString()}µUSD` +
+              ` sent=${costMicroStr}µUSD` +
               ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…` +
               ` result=${resultStr}`,
           );
         } catch (reconcileErr) {
+          // Network error — the typical path for ERR_NETWORK_CHANGED /
+          // ERR_CONNECTION_RESET when the user's connection drops mid-stream.
+          // Stash for retry on the next `online` event or next successful
+          // reconcile.
+          enqueuePendingReconcile({
+            logging_message_id: loggingMessageIdForReconcile,
+            cost_micro_usd: costMicroStr,
+          });
           console.warn(
-            `[ChatService] reconcile-cost POST failed (sent=${lastCostMicroUsd.toString()}µUSD,` +
+            `[ChatService] reconcile-cost POST failed, queued for retry (sent=${costMicroStr}µUSD,` +
               ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…):`,
             reconcileErr,
           );
+        }
+
+        // Opportunistic drain after a successful direct reconcile. The
+        // network just proved it works, and the worker just woke up — replay
+        // anything queued from earlier failures. Best-effort: this fires
+        // even if the queue is empty (drainPendingReconciles bails fast).
+        if (directReconcileSucceeded) {
+          void drainPendingReconciles(this.authToken);
         }
       }
     }
