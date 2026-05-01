@@ -321,14 +321,17 @@ export async function handler(
   // wipe it (we set user_id = NULL on this row; real user_id lives in
   // request_metadata), so even if the cascade itself fails we still have
   // an incident record we can return as `error_id`.
+  //
+  // Inserted unconditionally — even when userFileIds is empty — so that
+  // charts-only / BYOK-only users hitting a cascade failure get a queryable
+  // incident_id back. The "0 file(s)" message is correct for those rows;
+  // the retry job filters on file_ids.length > 0 before replaying anything.
   const incidentId = crypto.randomUUID();
-  if (userFileIds.length > 0) {
-    try {
-      await insertPendingAuditRow(sql, incidentId, userId, userFileIds);
-    } catch (e) {
-      console.error('[delete-my-data] audit-row insert failed; refusing to cascade:', e);
-      return classifyDbError(e);
-    }
+  try {
+    await insertPendingAuditRow(sql, incidentId, userId, userFileIds);
+  } catch (e) {
+    console.error('[delete-my-data] audit-row insert failed; refusing to cascade:', e);
+    return classifyDbError(e);
   }
 
   // --- Phase 2b: write transaction -----------------------------------------
