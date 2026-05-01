@@ -55,6 +55,49 @@ import {
 } from '@heroicons/react/24/outline';
 
 /**
+ * Load chat history from localStorage, moving any corrupt blob aside to a
+ * timestamped backup key before returning [].
+ *
+ * Without the backup-aside, a corrupt parse + the user typing one new message
+ * would have the save effect overwrite the unparseable blob with a single-
+ * message array — silently destroying any history we might have recovered
+ * forensically (or by hand-editing localStorage). Moving the bad blob to
+ * `${storageKey}_corrupt_${ts}` preserves it without blocking normal use.
+ */
+function loadChatHistoryWithBackup(storageKey: string): ChatMessage[] {
+  let savedMessages: string | null;
+  try {
+    savedMessages = localStorage.getItem(storageKey);
+  } catch (e) {
+    console.error('[ChatHistory] localStorage.getItem failed:', e);
+    return [];
+  }
+  if (!savedMessages) return [];
+  try {
+    type StoredMessage = Omit<ChatMessage, 'timestamp'> & { timestamp: string };
+    const parsed = JSON.parse(savedMessages) as StoredMessage[];
+    return parsed.map((msg) => ({
+      ...msg,
+      timestamp: new Date(msg.timestamp),
+    }));
+  } catch (e) {
+    const backupKey = `${storageKey}_corrupt_${Date.now()}`;
+    console.warn(
+      `[ChatHistory] parse failed for ${storageKey}; preserving raw blob at ${backupKey}:`,
+      e,
+    );
+    try {
+      localStorage.setItem(backupKey, savedMessages);
+      localStorage.removeItem(storageKey);
+    } catch (backupErr) {
+      // Quota / private browsing — nothing more to do; we already logged.
+      console.warn('[ChatHistory] backup-on-corrupt write failed:', backupErr);
+    }
+    return [];
+  }
+}
+
+/**
  * Button that opens AuthButton's API-key settings modal. Dispatches a
  * window-level CustomEvent which AuthButton listens for (see its
  * useEffect). Used from cap banners and the Generate-mode key gate so
@@ -670,24 +713,9 @@ export function ChatInterface({
   }, [params.chartId, params.editToken, params.filename, location.pathname]);
 
   // Load chat history from localStorage on mount
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    try {
-      const storageKey = getStorageKey();
-      const savedMessages = localStorage.getItem(storageKey);
-      if (savedMessages) {
-        type StoredMessage = Omit<ChatMessage, 'timestamp'> & { timestamp: string };
-        const parsed = JSON.parse(savedMessages) as StoredMessage[];
-        // Convert timestamp strings back to Date objects
-        return parsed.map((msg) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp),
-        }));
-      }
-    } catch (error) {
-      console.error('Failed to load chat history:', error);
-    }
-    return [];
-  });
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    loadChatHistoryWithBackup(getStorageKey()),
+  );
 
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -943,21 +971,7 @@ export function ChatInterface({
         return;
       }
 
-      const storageKey = getStorageKey();
-      const savedMessages = localStorage.getItem(storageKey);
-      if (savedMessages) {
-        type StoredMessage = Omit<ChatMessage, 'timestamp'> & { timestamp: string };
-        const parsed = JSON.parse(savedMessages) as StoredMessage[];
-        // Convert timestamp strings back to Date objects
-        const loadedMessages: ChatMessage[] = parsed.map((msg) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp),
-        }));
-        setMessages(loadedMessages);
-      } else {
-        // Clear messages if no saved history for this route
-        setMessages([]);
-      }
+      setMessages(loadChatHistoryWithBackup(getStorageKey()));
     } catch (error) {
       console.error('Failed to load chat history on route change:', error);
       setMessages([]);
