@@ -14,12 +14,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   try {
     // Resolve actor id: verified JWT sub for authenticated users, anon-<ip-hash> otherwise.
     let userId: string | null = null;
+    let jwtVerified = false;
     const authHeader = request.headers.get('authorization');
     const token = extractToken(authHeader);
     if (token) {
       try {
         const decoded = await verifyToken(token, env);
         userId = decoded.sub;
+        jwtVerified = true;
       } catch (err) {
         if (err instanceof JWKSFetchError) {
           return Response.json({ error: 'Authentication service unavailable' }, { status: 502 });
@@ -64,14 +66,22 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         FROM user_api_usage
         WHERE user_id = ${userId}
       `,
-      // Only meaningful for authenticated users; anon can never have a BYOK row.
+      // BYOK lookup requires a verified JWT, NOT just a non-anon user_id.
+      // resolveAnonActor returns the auth sub via tocb_auth_link (Policy B
+      // cap preservation across sign-out), so a logged-out user can land
+      // here with userId=`auth0|...` despite having no JWT. Without
+      // jwtVerified guarding the query, the server reports tier='byok' to
+      // an unauthenticated caller — misleading (the user can't actually
+      // use BYOK without a JWT, since /api/anthropic-stream requires it
+      // for decryption).
+      //
       // key_last4 round-trips so the client can rebuild byok-spend-key-<last4>
       // bucket lookups after a page reload (submitKey only fires on first
       // submission; without this, keyLast4 stays null and per-key spend
       // tracking silently breaks).
-      userId.startsWith('anon-')
-        ? Promise.resolve([] as { user_id: string; key_last4: string | null }[])
-        : sql`SELECT user_id, key_last4 FROM user_byok_keys WHERE user_id = ${userId}`,
+      jwtVerified
+        ? sql`SELECT user_id, key_last4 FROM user_byok_keys WHERE user_id = ${userId}`
+        : Promise.resolve([] as { user_id: string; key_last4: string | null }[]),
     ]);
 
     const hasByok = byokRows.length > 0;
