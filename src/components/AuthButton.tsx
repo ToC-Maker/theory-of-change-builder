@@ -316,7 +316,6 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
 
 const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => {
   const { user, isAuthenticated, isLoading, loginWithRedirect, logout } = useAuth0();
-  const { clearKey } = useApiKey();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
@@ -417,21 +416,14 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
                 Data & Privacy
               </button>
               <button
-                onClick={async () => {
+                onClick={() => {
                   setShowDropdown(false);
-                  // Wipe BYOK state before handing control to Auth0. If the
-                  // user signs in as someone else on the same browser we
-                  // must not leak the previous account's spend counters or
-                  // the `byok_use_for_chat` preference. clearKey() also
-                  // calls DELETE /api/byok-key while the Auth0 session is
-                  // still valid so the server-side encrypted key is also
-                  // removed. clearAllByokLocalState() is belt-and-braces
-                  // in case clearKey throws before its localStorage wipe.
-                  try {
-                    await clearKey();
-                  } catch (err) {
-                    console.error('[AuthButton] clearKey on logout failed:', err);
-                  }
+                  // Wipe BYOK localStorage so user-B logging in on user-A's
+                  // browser doesn't inherit A's spend counters or
+                  // `byok_use_for_chat` preference. The server-side encrypted
+                  // key is per-user (keyed by Auth0 sub) and intentionally
+                  // preserved across sign-out so users don't have to re-enter
+                  // it next time they sign in.
                   clearAllByokLocalState();
                   logout({ logoutParams: { returnTo: window.location.origin } });
                 }}
