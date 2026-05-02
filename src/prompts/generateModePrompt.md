@@ -3,6 +3,7 @@
 The AI acts as an expert Strategy Co-Pilot specializing in creating world-class Theory of Change conversations. The task is to generate a realistic, comprehensive conversation between a Strategy Co-Pilot and an organization representative that follows the gold standard ToC development process with rigorous source-based evidence.
 
 ## The AI's Role:
+
 - The AI is the **Strategy Co-Pilot** in the conversation
 - The AI must demonstrate evidence-based thinking, counterfactual discipline, and honest uncertainty
 - Challenge vague claims and demand concrete evidence **with specific citations**
@@ -15,6 +16,7 @@ The AI acts as an expert Strategy Co-Pilot specializing in creating world-class 
 ## Source-Rich Evidence Requirements:
 
 ### 1. Mine All Sources Thoroughly
+
 - **Extract every URL, citation, and reference** from the provided documents
 - **Use specific data points**: numbers, percentages, timeframes, case studies
 - **Reference external validation**: media coverage, regulatory filings, third-party evaluations
@@ -22,13 +24,16 @@ The AI acts as an expert Strategy Co-Pilot specializing in creating world-class 
 - **Cross-reference claims** across multiple sources when available
 
 ### 2. Rich Connection Justification
+
 For EVERY connection arrow, the AI provides:
+
 - **Evidence**: 2-3 specific data points with source citations
 - **Assumptions**: Detailed underlying beliefs with testability indicators
 - **Confidence rationale**: Why this specific percentage, with supporting/contrary evidence
 - **Source validation**: Links to external verification where available
 
 ### 3. Authentic Dialogue with Source Integration
+
 - Strategy Co-Pilot frequently references specific documents: "I see in your Charity Commission filing that..."
 - Organization representative provides context: "Yes, and as mentioned in our EA Forum post from 2023..."
 - Natural source-checking: "Can you walk me through the evidence behind that 80% productivity figure?"
@@ -36,18 +41,19 @@ For EVERY connection arrow, the AI provides:
 - **Structure Reminders**: Strategy Co-Pilot ensures all outcome layers go in separate columns of the same "Outcomes" section, not separate sections
 - **Individual Analysis**: "Let's analyze each outcome systematically:
   • **Founders receive funding** - what outcomes need to happen for this?
-    - Investors have access to high-quality charity evaluations
-    - Founders demonstrate evidence-based impact potential
-    - Trust established between funders and charity sector
-  • **Charities reach beneficiaries at scale** - what outcomes need to emerge for this?
-    - Effective operational systems developed
-    - Local partnerships and distribution channels established
-    - Cost-effective delivery models proven
-  • **Social problems are measurably reduced** - what needs to happen for this?
-    - Interventions target root causes effectively
-    - Sufficient scale and duration of programs"
+  - Investors have access to high-quality charity evaluations
+  - Founders demonstrate evidence-based impact potential
+  - Trust established between funders and charity sector
+    • **Charities reach beneficiaries at scale** - what outcomes need to emerge for this?
+  - Effective operational systems developed
+  - Local partnerships and distribution channels established
+  - Cost-effective delivery models proven
+    • **Social problems are measurably reduced** - what needs to happen for this?
+  - Interventions target root causes effectively
+  - Sufficient scale and duration of programs"
 
 ### 4. Evidence-Based Standards (Enhanced)
+
 - **Never accept unsourced claims**: Every major assertion needs a citation
 - **Triangulate evidence**: Use multiple sources to validate key points
 - **Flag data quality**: Distinguish between self-reported vs. third-party verified metrics
@@ -55,15 +61,16 @@ For EVERY connection arrow, the AI provides:
 - **External validation**: Use media coverage, regulatory filings, alumni outcomes
 
 ### 5. Gold Standard Quality with Source Integration
+
 - **Intrinsically Valuable End Goal**: Validated by mission statements and external coverage
 - **Multi-Layer Structure**: Each layer supported by specific evidence from documents
 - **Counterfactual Specificity**: "According to your fundraiser posts, what wouldn't exist without you?"
 - **Testable Assumptions**: Each assumption includes monitoring approach with cited precedents
 - **Non-Linear Patterns**: Supported by case studies and concrete examples from the documents
 - **CRITICAL Structure Rule**: All outcome layers (Layer 1, Layer 2, Layer 3, etc.) must be organized as separate COLUMNS within a single "Outcomes" section, NOT as separate sections
-- **CRITICAL Connectivity Rules**: 
+- **CRITICAL Connectivity Rules**:
   - Every node except those in the first section (Inputs) MUST have at least 1 incoming connection
-  - Every node except those in the final section (Goal) MUST have at least 1 outgoing connection  
+  - Every node except those in the final section (Goal) MUST have at least 1 outgoing connection
   - All Input nodes MUST connect to at least one Output node (no unused inputs)
   - All nodes must eventually trace back to at least one Input node (no orphaned nodes)
   - Connections should follow proper sequential flow through adjacent layers - avoid excessive layer-skipping
@@ -80,15 +87,19 @@ For EVERY connection arrow, the AI provides:
   - Every connection and outcome in the JSON should have been explicitly discussed and agreed upon in the conversation
 
 ### 6. Connection Evidence Standards
+
 Every connection must include:
+
 - **Primary evidence**: Direct quotes/data from organizational documents with specific page numbers and URLs
-- **Secondary validation**: External sources (media, regulators, third parties) with full citations and links  
+- **Secondary validation**: External sources (media, regulators, third parties) with full citations and links
 - **Specific metrics**: Actual numbers with confidence intervals and sample sizes when available
 - **Source attribution**: Complete citations including publication date, page numbers, and working URLs
 - **Quality assessment**: Explicit flags for self-reported vs. verified data, potential biases, and methodological limitations
 
 ### 7. Assumption Depth Requirements
+
 Each assumption should include:
+
 - **Underlying belief**: What exactly is being assumed?
 - **Evidence basis**: What supports this belief (with citations)?
 - **Testability**: How could this be monitored/verified?
@@ -96,9 +107,10 @@ Each assumption should include:
 - **Historical validation**: Has this assumption held true in similar cases?
 
 ## Document Analysis Instructions:
+
 1. **Extract Key Facts**: Mission, activities, outcomes, evidence, metrics
 2. **Identify Stakeholders**: Who benefits, who participates, who funds
-3. **Find Evidence**: Concrete data, success rates, impact measurements  
+3. **Find Evidence**: Concrete data, success rates, impact measurements
 4. **Note Assumptions**: What the organization believes but may not have proven
 5. **Spot Gaps**: Missing connections, weak evidence, unclear logic
 
@@ -125,74 +137,75 @@ This prompt is for generating Theory of Change conversations that end with compl
 
 [GRAPH_JSON]
 {
-  "title": "Theory of Change for [Organization Name]",
-  "sections": [
-    {
-      "title": "Inputs", 
-      "columns": [
-        {
-          "nodes": [
-            {
-              "id": "input-1", 
-              "title": "Organization secures diversified funding from individual donors and institutional grants",
-              "text": "Detailed description with context based on conversation discussion",
-              "connections": [
-                {
-                  "targetId": "output-1",
-                  "confidence": 75,
-                  "evidence": "Our 2023 annual report shows 67% of participants say their projects improved after working with us, but this is self-reported so could have selection bias (Annual Report 2023, p.15, https://organization.com/reports/2023). An independent evaluator found a 52% improvement rate, which is lower but more reliable (External Evaluation 2024, https://evaluator.org/report-2024).",
-                  "assumptions": "We're assuming people are honest when they say we helped them improve, not just telling us what we want to hear. Also assuming the improvements we measure actually last and aren't just temporary. The external evaluation should be catching real effects, not just coincidence."
-                }
-              ],
-              "yPosition": 100, // First node at 100, next would be at 300, then 500, etc. (200px spacing)
-              "width": 192,
-              "color": "#E3F2FD"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "title": "Outputs",
-      "columns": [
-        {
-          "nodes": [...]
-        }
-      ]
-    },
-    {
-      "title": "Outcomes", 
-      "columns": [
-        {
-          "nodes": [
-            // Layer 3 outcomes (furthest from impact)
-          ]
-        },
-        {
-          "nodes": [
-            // Layer 2 outcomes (intermediate)
-          ]
-        },
-        {
-          "nodes": [
-            // Layer 1 outcomes (closest to impact)
-          ]
-        }
-      ]
-    },
-    {
-      "title": "Goal",
-      "columns": [
-        {
-          "nodes": [...]
-        }
-      ]
-    }
-  ]
+"title": "Theory of Change for [Organization Name]",
+"sections": [
+{
+"title": "Inputs",
+"columns": [
+{
+"nodes": [
+{
+"id": "input-1",
+"title": "Organization secures diversified funding from individual donors and institutional grants",
+"text": "Detailed description with context based on conversation discussion",
+"connections": [
+{
+"targetId": "output-1",
+"confidence": 75,
+"evidence": "Our 2023 annual report shows 67% of participants say their projects improved after working with us, but this is self-reported so could have selection bias (Annual Report 2023, p.15, https://organization.com/reports/2023). An independent evaluator found a 52% improvement rate, which is lower but more reliable (External Evaluation 2024, https://evaluator.org/report-2024).",
+"assumptions": "We're assuming people are honest when they say we helped them improve, not just telling us what we want to hear. Also assuming the improvements we measure actually last and aren't just temporary. The external evaluation should be catching real effects, not just coincidence."
+}
+],
+"yPosition": 100, // First node at 100, next would be at 300, then 500, etc. (200px spacing)
+"width": 192,
+"color": "#E3F2FD"
+}
+]
+}
+]
+},
+{
+"title": "Outputs",
+"columns": [
+{
+"nodes": [...]
+}
+]
+},
+{
+"title": "Outcomes",
+"columns": [
+{
+"nodes": [
+// Layer 3 outcomes (furthest from impact)
+]
+},
+{
+"nodes": [
+// Layer 2 outcomes (intermediate)
+]
+},
+{
+"nodes": [
+// Layer 1 outcomes (closest to impact)
+]
+}
+]
+},
+{
+"title": "Goal",
+"columns": [
+{
+"nodes": [...]
+}
+]
+}
+]
 }
 [/GRAPH_JSON]
 
 ## Key Insights from This ToC:
+
 - **Critical Assumptions**: [List 2-3 most important testable assumptions with monitoring approaches and source citations]
 - **Weakest Links**: [Identify lowest confidence connections with specific evidence gaps and contradictory sources]
 - **Evidence Quality Assessment**: [Distinguish self-reported vs. third-party validated metrics with sources]
@@ -200,6 +213,7 @@ This prompt is for generating Theory of Change conversations that end with compl
 ```
 
 ## Quality Standards:
+
 - Conversation should be 3000-5000 words (longer due to source integration)
 - Include at least 5 evidence-based challenges with specific source citations
 - Show 3-4 refinements based on cross-referenced document evidence
@@ -214,6 +228,7 @@ This prompt is for generating Theory of Change conversations that end with compl
 - **ENFORCE CONSISTENCY**: JSON node titles must exactly match conversation language, use full sentences, and avoid layer-skipping connections unless explicitly discussed
 
 ## Example Evidence Integration:
+
 **Strategy Co-Pilot**: "I notice in the EA Forum post from 2022 there is mention of £800/month costs, but the Charity Commission filing shows different expense patterns. And The Economist piece from 2018 suggested £6,000/year. Help me understand how these figures reconcile..."
 
 **Organization Rep**: "Good catch. The £800/month was historical, the £6,000/year was our initial projection, and as you can see in our latest Manifund update, we've actually achieved better cost-effectiveness with the diversified funding from SFF, AISTO, and EAIF..."

@@ -1,0 +1,132 @@
+// Single source of truth for Anthropic pricing + per-model capabilities.
+//
+// Both the Worker (integer µUSD BigInt arithmetic for cost-accurate reservation
+// and reconcile) and the frontend (float USD for composer estimates and the
+// per-message display) import from here, so a rate change touches one file.
+// The worker converts to integer ratios at load time; the frontend uses the
+// floats directly. Values verified against
+// https://platform.claude.com/docs/en/about-claude/models/overview (capabilities)
+// and https://platform.claude.com/docs/en/about-claude/pricing (rates).
+
+export interface ModelPricing {
+  /** USD per million input tokens (uncached). */
+  input_usd_per_mtok: number;
+  /** USD per million output tokens (includes extended thinking; no surcharge). */
+  output_usd_per_mtok: number;
+}
+
+// `as const satisfies Record<string, ModelPricing>` keeps the values typed as
+// the exact object literals (so `keyof typeof MODEL_PRICING` gives us the
+// `ModelId` union) while still enforcing that every entry conforms to
+// `ModelPricing`. A bare `Record<string, ModelPricing>` would widen the keys
+// to `string` and make lookups return `ModelPricing` at the type level
+// while actually returning `undefined` at runtime for unknown keys — a
+// correctness trap.
+export const MODEL_PRICING = {
+  'claude-opus-4-7': { input_usd_per_mtok: 5, output_usd_per_mtok: 25 },
+  'claude-opus-4-6': { input_usd_per_mtok: 5, output_usd_per_mtok: 25 },
+  'claude-sonnet-4-6': { input_usd_per_mtok: 3, output_usd_per_mtok: 15 },
+  'claude-haiku-4-5': { input_usd_per_mtok: 1, output_usd_per_mtok: 5 },
+} as const satisfies Record<string, ModelPricing>;
+
+/** Union of all known model IDs. Derived from `MODEL_PRICING` keys. */
+export type ModelId = keyof typeof MODEL_PRICING;
+
+/**
+ * `output_config.effort` levels Anthropic accepts. `xhigh` is Opus 4.7 only.
+ * `high` matches the API default (omitting the parameter is equivalent).
+ * Order is significant: low → max is increasing thoroughness, used by the UI
+ * dropdown.
+ */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+export interface ModelCapabilities {
+  /** Total context window in tokens (input + output combined). */
+  context_window_tokens: number;
+  /** Maximum output tokens the synchronous Messages API will emit. */
+  max_output_tokens: number;
+  /** Whether this model supports extended / adaptive thinking blocks. */
+  supports_extended_thinking: boolean;
+  /** Whether this model accepts `output_config: {effort}`. */
+  supports_output_config_effort: boolean;
+  /**
+   * Effort levels accepted by this model. Empty when the model does not
+   * support effort. Populated low → max so the UI can iterate in display order.
+   */
+  effort_levels: readonly EffortLevel[];
+  /** Default effort to seed the UI with (must appear in `effort_levels`). */
+  default_effort: EffortLevel | null;
+}
+
+// Keyed by `ModelId` so adding a model to `MODEL_PRICING` forces a matching
+// capabilities entry (TS error on the `satisfies` clause otherwise).
+export const MODEL_CAPABILITIES = {
+  'claude-opus-4-7': {
+    context_window_tokens: 1_000_000,
+    max_output_tokens: 128_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: true,
+    effort_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    default_effort: 'xhigh',
+  },
+  'claude-opus-4-6': {
+    context_window_tokens: 1_000_000,
+    max_output_tokens: 128_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: true,
+    effort_levels: ['low', 'medium', 'high', 'max'],
+    default_effort: 'high',
+  },
+  'claude-sonnet-4-6': {
+    context_window_tokens: 1_000_000,
+    max_output_tokens: 64_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: true,
+    effort_levels: ['low', 'medium', 'high', 'max'],
+    default_effort: 'high',
+  },
+  'claude-haiku-4-5': {
+    context_window_tokens: 200_000,
+    max_output_tokens: 64_000,
+    supports_extended_thinking: true,
+    supports_output_config_effort: false,
+    effort_levels: [],
+    default_effort: null,
+  },
+} as const satisfies Record<ModelId, ModelCapabilities>;
+
+// Ephemeral prompt-cache multipliers applied to the input rate.
+// Write (default 5-minute TTL) is 1.25× base input; reads are 0.1×.
+// Anthropic also offers a "1h" TTL with a 2× write multiplier which we
+// don't use; add an entry here if we start setting `ttl: "1h"` anywhere.
+export const CACHE_WRITE_5M_MULTIPLIER = 1.25;
+export const CACHE_READ_MULTIPLIER = 0.1;
+
+/** Server-tool web_search: flat USD per invocation. */
+export const WEB_SEARCH_USD_PER_USE = 0.01;
+
+/** Default ephemeral cache TTL in milliseconds (5 minutes). */
+export const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Convert a µUSD cost (integer) to USD (float).
+ *
+ * Splits the integer division so the whole-dollar part stays in BigInt
+ * arithmetic and only the sub-µUSD remainder goes through `Number`. This
+ * preserves integer precision for the dollar component well past the
+ * Number.MAX_SAFE_INTEGER threshold, while still rounding the fractional
+ * part to 6 decimals (the unit of µUSD).
+ *
+ * Accepts the union of types Postgres + the in-process counters can hand
+ * back: `bigint` (computed locally), `number` (small values where BigInt
+ * was unnecessary). `null`/`undefined` collapse to 0 so "no spend yet"
+ * rows don't need a separate branch at every call site.
+ */
+export function microToUsd(micro: bigint | number | null | undefined): number {
+  if (micro === null || micro === undefined) return 0;
+  const asBig = typeof micro === 'bigint' ? micro : BigInt(Math.trunc(Number(micro)));
+  const whole = asBig / 1_000_000n;
+  const frac = Number(asBig % 1_000_000n) / 1_000_000;
+  return Number(whole) + frac;
+}

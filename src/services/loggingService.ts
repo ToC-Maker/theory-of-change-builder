@@ -1,7 +1,7 @@
 import { ToCData } from '../types';
 import { EditInstruction } from '../utils/graphEdits';
 
-const API_BASE = '/.netlify/functions';
+const API_BASE = '/api';
 
 export interface SaveSnapshotParams {
   session_id: string;
@@ -100,7 +100,7 @@ class LoggingServiceClass {
    */
   private async fetchWithCircuitBreaker(
     url: string,
-    options: RequestInit
+    options: RequestInit,
   ): Promise<Response | undefined> {
     if (this.shouldSkipLogging()) return undefined;
 
@@ -166,18 +166,15 @@ class LoggingServiceClass {
     const sessionId = crypto.randomUUID();
 
     try {
-      const response = await this.fetchWithCircuitBreaker(
-        `${API_BASE}/logging-createSession`,
-        {
-          method: 'POST',
-          headers: this.buildHeaders(),
-          body: JSON.stringify({
-            session_id: sessionId,
-            chart_id: chartId,
-            user_agent: navigator.userAgent,
-          }),
-        }
-      );
+      const response = await this.fetchWithCircuitBreaker(`${API_BASE}/logging-createSession`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({
+          session_id: sessionId,
+          chart_id: chartId,
+          user_agent: navigator.userAgent,
+        }),
+      });
 
       if (!response) {
         return null; // Circuit breaker open
@@ -209,14 +206,11 @@ class LoggingServiceClass {
     if (!this.currentSessionId || this.shouldSkipLogging()) return;
 
     try {
-      await this.fetchWithCircuitBreaker(
-        `${API_BASE}/logging-endSession`,
-        {
-          method: 'POST',
-          headers: this.buildHeaders(),
-          body: JSON.stringify({ session_id: this.currentSessionId }),
-        }
-      );
+      await this.fetchWithCircuitBreaker(`${API_BASE}/logging-endSession`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ session_id: this.currentSessionId }),
+      });
       this.clearSession();
     } catch (error) {
       console.error('[LoggingService] Failed to end session:', error);
@@ -229,10 +223,9 @@ class LoggingServiceClass {
    */
   endSessionBeacon(): void {
     if (!this.currentSessionId || !this.isLoggingEnabled()) return;
-    const blob = new Blob(
-      [JSON.stringify({ session_id: this.currentSessionId })],
-      { type: 'application/json' }
-    );
+    const blob = new Blob([JSON.stringify({ session_id: this.currentSessionId })], {
+      type: 'application/json',
+    });
     const queued = navigator.sendBeacon(`${API_BASE}/logging-endSession`, blob);
     if (!queued) {
       console.warn('[LoggingService] sendBeacon failed — payload may exceed ~64KB limit');
@@ -329,9 +322,7 @@ class LoggingServiceClass {
         body: JSON.stringify({ opted_out: optOut }),
       });
       if (!response.ok) {
-        console.error(
-          `[LoggingService] Server rejected preference sync: HTTP ${response.status}`
-        );
+        console.error(`[LoggingService] Server rejected preference sync: HTTP ${response.status}`);
       }
     } catch (error) {
       console.error('[LoggingService] Failed to sync preference to server:', error);
@@ -354,7 +345,7 @@ class LoggingServiceClass {
       });
       if (!response.ok) {
         console.warn(
-          `[LoggingService] Failed to fetch preference from server: HTTP ${response.status}`
+          `[LoggingService] Failed to fetch preference from server: HTTP ${response.status}`,
         );
         return;
       }
@@ -454,7 +445,9 @@ class LoggingServiceClass {
       const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
       const queued = navigator.sendBeacon(url, blob);
       if (!queued) {
-        console.error('[LoggingService] sendBeacon failed — browser beacon queue may be full or payload too large');
+        console.error(
+          '[LoggingService] sendBeacon failed — browser beacon queue may be full or payload too large',
+        );
       }
     } catch (beaconErr) {
       console.error('[LoggingService] sendBeacon fallback error:', beaconErr);
@@ -473,14 +466,11 @@ class LoggingServiceClass {
     if (!this.isLoggingEnabled()) return;
 
     try {
-      await this.fetchWithCircuitBreaker(
-        `${API_BASE}/logging-saveSnapshot`,
-        {
-          method: 'POST',
-          headers: this.buildHeaders(),
-          body: JSON.stringify(params),
-        }
-      );
+      await this.fetchWithCircuitBreaker(`${API_BASE}/logging-saveSnapshot`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(params),
+      });
     } catch (error) {
       console.error('[LoggingService] Failed to save snapshot:', error);
       // Don't throw - logging failures shouldn't break the app
@@ -521,10 +511,7 @@ class LoggingServiceClass {
         this.pendingSnapshot = null;
         return;
       }
-      const blob = new Blob(
-        [JSON.stringify(this.pendingSnapshot)],
-        { type: 'application/json' }
-      );
+      const blob = new Blob([JSON.stringify(this.pendingSnapshot)], { type: 'application/json' });
       const queued = navigator.sendBeacon(`${API_BASE}/logging-saveSnapshot`, blob);
       if (!queued) {
         console.warn('[LoggingService] sendBeacon failed — payload may exceed ~64KB limit');
@@ -549,23 +536,39 @@ class LoggingServiceClass {
     usage_output_tokens?: number;
     usage_total_tokens?: number;
   }): Promise<void> {
-    // Skip if user has opted out or no active session
-    if (!this.isLoggingEnabled() || !this.currentSessionId) {
-      return;
+    if (!this.isLoggingEnabled()) return;
+
+    // Skip empty content. Happens when a stream aborted before any text
+    // arrived (stream complete with chunks=2 / bytes=~0 was observed in
+    // prod). The server would 400 anyway and there's no audit value in
+    // logging "". A genuine stripped-to-empty assistant reply would be
+    // caught upstream: we log the raw pre-clean content, which is only
+    // empty if nothing streamed.
+    if (data.content.length === 0) return;
+
+    // If a session initialization is in flight (typical on first load —
+    // initializeSession is fired from App.tsx but not awaited), wait for
+    // it before bailing out. Without this the user's first message of the
+    // visit silently skips logging because currentSessionId is still null
+    // when logUserMessage fires.
+    if (!this.currentSessionId && this.initializingPromise) {
+      try {
+        await this.initializingPromise;
+      } catch {
+        /* fall through to the null check below */
+      }
     }
+    if (!this.currentSessionId) return;
 
     try {
-      await this.fetchWithCircuitBreaker(
-        `${API_BASE}/logging-saveMessage`,
-        {
-          method: 'POST',
-          headers: this.buildHeaders(),
-          body: JSON.stringify({
-            session_id: this.currentSessionId,
-            ...data,
-          }),
-        }
-      );
+      await this.fetchWithCircuitBreaker(`${API_BASE}/logging-saveMessage`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify({
+          session_id: this.currentSessionId,
+          ...data,
+        }),
+      });
     } catch (error) {
       console.error('[LoggingService] Failed to save message:', error);
       // Don't throw - logging failures shouldn't break the app
@@ -578,14 +581,17 @@ class LoggingServiceClass {
 
   /**
    * Log a user or assistant message. Guards on active session internally.
+   * chartId defaults to the service's current chart but can be passed in
+   * so a caller that knows the id can skip the race against session init.
    */
   logUserMessage(params: {
     messageId: string;
     role: 'user' | 'assistant';
     content: string;
+    chartId?: string;
     tokenUsage?: { input_tokens?: number; output_tokens?: number };
   }): void {
-    const chartId = this.currentChartId;
+    const chartId = params.chartId ?? this.currentChartId ?? this.initializingChartId;
     if (!chartId) return;
 
     this.saveMessage({
@@ -623,7 +629,7 @@ class LoggingServiceClass {
       triggered_by_message_id: params.messageId,
       edit_instructions: params.editInstructions,
       edit_success: params.success,
-      error_message: params.success ? null : (params.error || 'Unknown error'),
+      error_message: params.success ? null : params.error || 'Unknown error',
     });
   }
 }

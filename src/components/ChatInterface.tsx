@@ -1,34 +1,147 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useRef, useEffect, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { useParams, useLocation } from 'react-router-dom';
-import { chatService, ChatMessage } from '../services/chatService';
-import { applyEdits, cleanResponseContent } from '../utils/graphEdits';
+import remarkGfm from 'remark-gfm';
+import { useParams, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth0 } from '@auth0/auth0-react';
+import {
+  chatService,
+  ChatMessage,
+  type CostError,
+  type StreamPhase,
+} from '../services/chatService';
+import type { AssistantBlock } from '../../shared/chat-blocks';
+import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
+import { ChartService } from '../services/chartService';
+import { buildOutgoingMessages } from '../services/outgoingMessages';
+import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
-import { useApiKey, validateApiKey } from '../contexts/ApiKeyContext';
+import { useApiKey } from '../contexts/useApiKey';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
+import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
-import { MDXEditorComponent } from './MDXEditor';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
+import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
+import { getFreshIdToken } from '../utils/auth';
+import { DonateCta } from './ByokPanel';
+import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
+import type { ToCData } from '../types';
+import {
+  formatCostUsd,
+  estimateCostLowBound,
+  roughInputTokensFromChars,
+  MODEL_INPUT_RATES_USD_PER_MTOK,
+  CACHE_WRITE_MULTIPLIER,
+  CACHE_READ_MULTIPLIER_VALUE,
+  CACHE_TTL_MILLIS,
+} from '../utils/cost';
 import {
   ChevronLeftIcon,
-  Cog6ToothIcon,
   MagnifyingGlassIcon,
   ChevronDownIcon,
   PaperAirplaneIcon,
+  PaperClipIcon,
   CloudArrowUpIcon,
   XMarkIcon,
   DocumentPlusIcon,
   ArrowUpTrayIcon,
   ChatBubbleLeftRightIcon,
   DocumentTextIcon,
-  MagnifyingGlassCircleIcon,
   StopIcon,
-  SparklesIcon
+  SparklesIcon,
+  PencilSquareIcon,
+  KeyIcon,
 } from '@heroicons/react/24/outline';
 
-export type AIMode = 'chat' | 'generate' | 'search';
+/**
+ * Load chat history from localStorage, moving any corrupt blob aside to a
+ * timestamped backup key before returning [].
+ *
+ * Without the backup-aside, a corrupt parse + the user typing one new message
+ * would have the save effect overwrite the unparseable blob with a single-
+ * message array — silently destroying any history we might have recovered
+ * forensically (or by hand-editing localStorage). Moving the bad blob to
+ * `${storageKey}_corrupt_${ts}` preserves it without blocking normal use.
+ */
+function loadChatHistoryWithBackup(storageKey: string): ChatMessage[] {
+  let savedMessages: string | null;
+  try {
+    savedMessages = localStorage.getItem(storageKey);
+  } catch (e) {
+    console.error('[ChatHistory] localStorage.getItem failed:', e);
+    return [];
+  }
+  if (!savedMessages) return [];
+  try {
+    type StoredMessage = Omit<ChatMessage, 'timestamp'> & { timestamp: string };
+    const parsed = JSON.parse(savedMessages) as StoredMessage[];
+    return parsed.map((msg) => ({
+      ...msg,
+      timestamp: new Date(msg.timestamp),
+    }));
+  } catch (e) {
+    const backupKey = `${storageKey}_corrupt_${Date.now()}`;
+    console.warn(
+      `[ChatHistory] parse failed for ${storageKey}; preserving raw blob at ${backupKey}:`,
+      e,
+    );
+    try {
+      localStorage.setItem(backupKey, savedMessages);
+    } catch (backupErr) {
+      // Quota / private browsing — best-effort backup failed. Log but
+      // continue: forensic value of a corrupt blob in a near-full
+      // localStorage is essentially zero, and the more important thing is
+      // to clear the original key so the next save lands cleanly.
+      // Without the unconditional removeItem below, a quota-failed backup
+      // would leave the corrupt blob at storageKey and the save-effect
+      // overwrite hazard would return on the next user message.
+      console.warn('[ChatHistory] backup-on-corrupt write failed:', backupErr);
+    }
+    try {
+      localStorage.removeItem(storageKey);
+    } catch (removeErr) {
+      // removeItem failing is bizarre (it's allowed even when quota-full)
+      // but quota engines have edge cases. Log; the next save will overwrite.
+      console.warn('[ChatHistory] removeItem after corrupt parse failed:', removeErr);
+    }
+    return [];
+  }
+}
+
+// Drop legacy customSystemPrompt entry from localStorage (the settings UI
+// that wrote it has been removed; we always use the bundled
+// systemPromptContent now). Module scope so this runs once per page load
+// rather than per ChatInterface mount/route change.
+try {
+  if (localStorage.getItem('customSystemPrompt') !== null) {
+    localStorage.removeItem('customSystemPrompt');
+  }
+} catch {
+  // localStorage unavailable (private browsing / SSR): nothing to clean up.
+}
+
+/**
+ * Button that opens AuthButton's API-key settings modal. Dispatches a
+ * window-level CustomEvent which AuthButton listens for (see its
+ * useEffect). Used from cap banners and the Generate-mode key gate so
+ * we don't render the full BYOK instructions inline anymore — they live
+ * in the modal alongside the rest of the key management UI.
+ */
+function AddApiKeyButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new CustomEvent('tocb:openApiKeyModal'))}
+      className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+    >
+      <KeyIcon className="w-4 h-4" aria-hidden />
+      Add your Anthropic API key
+    </button>
+  );
+}
+
+export type AIMode = 'chat' | 'generate';
 
 interface UploadedFile {
   file: File;
@@ -37,38 +150,569 @@ interface UploadedFile {
   errorMessage?: string;
 }
 
-interface SearchResult {
-  title: string;
-  url: string;
-  content: string;
-  score: number;
-}
-
 interface ChatInterfaceProps {
   height?: number;
   isCollapsed: boolean;
   onToggle: () => void;
-  graphData?: any;
-  onGraphUpdate?: (newGraphData: any) => void;
+  graphData?: ToCData | null;
+  onGraphUpdate?: (newGraphData: ToCData) => void;
   highlightedNodes?: Set<string>;
+  // Called when an action in Chat/Generate (e.g. auto-saving the chart on
+  // first file upload) creates a new chart row. The parent uses this to
+  // sync its own state (currentEditToken/currentChartId) without needing
+  // a full navigation — URL is updated in place via history.replaceState.
+  onChartCreated?: (editToken: string, chartId: string) => void;
 }
 
 const MODELS = {
   'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-  'claude-opus-4-6': 'Claude Opus 4.6',
+  'claude-opus-4-7': 'Claude Opus 4.7',
 } as const;
 
-export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGraphUpdate, highlightedNodes = new Set() }: ChatInterfaceProps) {
-  const { apiKey, setApiKey, isConfigured } = useApiKey();
-  const [currentMode, setCurrentMode] = useState<AIMode>('chat');
-  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-6');
+type ModelKey = keyof typeof MODELS;
 
-  // Get route parameters to create unique storage key
+/**
+ * Display labels for the effort dropdown. Order is fixed via
+ * `MODEL_CAPABILITIES[model].effort_levels`; this map only owns the copy.
+ */
+const EFFORT_LABELS: Record<EffortLevel, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+};
+
+/**
+ * Generic dropdown shell shared by `ModelDropdown` and `EffortDropdown`.
+ * Both pickers shipped near-identical click-outside detection + open-state
+ * scaffolding (~50 lines duplicated); the only differences were the option
+ * set, the rendered label, and a couple of width/title constants.
+ *
+ * Kept self-contained (open state lives inside) so a Chat-composer instance
+ * and a Generate-composer instance don't share click-outside refs and
+ * accidentally close each other when both are visible.
+ */
+function Picker<T extends string>({
+  options,
+  selected,
+  onSelect,
+  renderLabel,
+  buttonWidthClass,
+  menuWidthClass,
+  title,
+  className = '',
+}: {
+  options: readonly T[];
+  selected: T;
+  onSelect: (value: T) => void;
+  renderLabel: (value: T) => React.ReactNode;
+  /** Tailwind width class for the trigger button (e.g. `w-[140px]`). */
+  buttonWidthClass: string;
+  /** Tailwind width class for the dropdown menu (e.g. `w-[200px]`). */
+  menuWidthClass: string;
+  /** Native `title` attribute on the trigger; tooltips the picker's purpose. */
+  title: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handle = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+  return (
+    <div className={`relative ${className}`} ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`${buttonWidthClass} text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between`}
+        title={title}
+      >
+        <span className="font-medium">{renderLabel(selected)}</span>
+        <ChevronDownIcon
+          className={`w-3 h-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <div
+          className={`absolute bottom-full mb-1 left-0 ${menuWidthClass} bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50`}
+        >
+          {options.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                onSelect(value);
+                setOpen(false);
+              }}
+              className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
+                selected === value ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
+              }`}
+            >
+              {renderLabel(value)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const MODEL_KEYS = Object.keys(MODELS) as readonly ModelKey[];
+
+function ModelDropdown({
+  selected,
+  onSelect,
+  className = '',
+}: {
+  selected: ModelKey;
+  onSelect: (model: ModelKey) => void;
+  className?: string;
+}) {
+  return (
+    <Picker<ModelKey>
+      options={MODEL_KEYS}
+      selected={selected}
+      onSelect={onSelect}
+      renderLabel={(key) => MODELS[key]}
+      buttonWidthClass="w-[140px]"
+      menuWidthClass="w-[200px]"
+      title="Select AI Model"
+      className={className}
+    />
+  );
+}
+
+/**
+ * Effort-level picker. Hidden when the model doesn't accept an effort knob;
+ * the available level set comes from `MODEL_CAPABILITIES[model].effort_levels`
+ * so a model that doesn't accept e.g. `xhigh` can't have it offered.
+ */
+function EffortDropdown({
+  model,
+  selected,
+  onSelect,
+  className = '',
+}: {
+  model: ModelKey;
+  selected: EffortLevel;
+  onSelect: (effort: EffortLevel) => void;
+  className?: string;
+}) {
+  const caps = MODEL_CAPABILITIES[model];
+  if (!caps.supports_output_config_effort) return null;
+  return (
+    <Picker<EffortLevel>
+      options={caps.effort_levels}
+      selected={selected}
+      onSelect={onSelect}
+      renderLabel={(level) => EFFORT_LABELS[level]}
+      buttonWidthClass="w-[110px]"
+      menuWidthClass="w-[160px]"
+      title="Effort: trades response thoroughness against token usage"
+      className={className}
+    />
+  );
+}
+
+// Cloudflare Turnstile site key for anonymous rate-limit enforcement.
+// Public (surfaced in the bundle by Vite). Unset in dev = widget skipped,
+// mirroring the server-side behavior (U9 skips verification when its
+// secret is absent).
+const TURNSTILE_SITE_KEY: string =
+  (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ?? '';
+
+const TURNSTILE_SCRIPT_SRC =
+  'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
+
+// User-facing copy for each cost-error category. Reused by both the legacy
+// keyword classifier (classifyCostError) and the structured handler
+// (handleCostError), so copy stays consistent between the two paths.
+type CostErrorKind =
+  | 'lifetime_cap'
+  | 'global_budget'
+  | 'turnstile'
+  | 'body_too_large'
+  | 'service_unavailable';
+
+const COST_ERROR_COPY: Record<CostErrorKind, string> = {
+  lifetime_cap:
+    "You've reached the free quota. Bring your own Anthropic key to keep going, or donate to help us keep the free tier available for others.",
+  global_budget:
+    "We've hit our shared monthly AI spend cap. Bring your own Anthropic key to keep going, or donate to help us raise the cap and keep this tool sustainable.",
+  turnstile: 'Please complete the challenge before sending.',
+  body_too_large: 'Your message is too large. Try a shorter message or fewer attachments.',
+  service_unavailable: 'Service temporarily unavailable. Please try again shortly.',
+};
+
+// Keyword table for classifyCostError(). Order matters: first match wins.
+const COST_ERROR_CATEGORIES: ReadonlyArray<readonly [CostErrorKind, readonly string[]]> = [
+  ['lifetime_cap', ['lifetime_cap_reached', 'free quota']],
+  ['global_budget', ['global_budget_exhausted', 'shared budget']],
+  ['turnstile', ['turnstile_required', 'turnstile_failed']],
+  ['body_too_large', ['body_too_large', 'payload too large']],
+  [
+    'service_unavailable',
+    ['database_unavailable', 'estimation_unavailable', 'authentication_service_unavailable'],
+  ],
+];
+
+// Global reference to Cloudflare's injected helper. We attach it via the
+// raw <script> element because we don't ship @marsidev/react-turnstile in
+// the bundle.
+interface TurnstileGlobal {
+  render: (
+    container: HTMLElement,
+    options: {
+      sitekey: string;
+      callback: (token: string) => void;
+      'error-callback'?: (err: unknown) => void;
+      'expired-callback'?: () => void;
+    },
+  ) => string;
+  reset: (widgetId?: string) => void;
+  remove: (widgetId?: string) => void;
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileGlobal;
+  }
+}
+
+/**
+ * Renders a Cloudflare Turnstile challenge widget. Loads the CF script
+ * lazily, renders into a div we control, and surfaces the verification
+ * token via `onToken`. `null` is emitted when the token expires or errors
+ * so the caller can disable the send button until re-challenged.
+ *
+ * Noop when `siteKey` is empty. U9's server-side verification is also
+ * skipped when the corresponding secret is unset, so empty-key deployments
+ * stay functional anonymously.
+ */
+function TurnstileWidget({
+  siteKey,
+  onToken,
+}: {
+  siteKey: string;
+  onToken: (token: string | null) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetIdRef = useRef<string | null>(null);
+  // Flips true when the CF iframe has actually fired its `load` event, i.e.
+  // the challenge UI is drawn and ready for the user. Stays false through
+  // the full loading window: script-download → render() → iframe creation
+  // → iframe paint. A 5s timeout fallback hides the placeholder regardless
+  // in case the load event never fires (offline iframe, adblock quirks).
+  const [rendered, setRendered] = useState(false);
+
+  useEffect(() => {
+    if (!siteKey) return;
+
+    let cancelled = false;
+    setRendered(false);
+    let mutationObserver: MutationObserver | null = null;
+    let loadListener: ((ev: Event) => void) | null = null;
+    let loadTarget: HTMLIFrameElement | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const markRendered = () => {
+      if (!cancelled) setRendered(true);
+    };
+
+    const attachLoadListener = (iframe: HTMLIFrameElement) => {
+      loadTarget = iframe;
+      loadListener = () => markRendered();
+      iframe.addEventListener('load', loadListener);
+    };
+
+    const waitForIframe = () => {
+      if (!containerRef.current) return false;
+      const iframe = containerRef.current.querySelector('iframe');
+      if (iframe) {
+        attachLoadListener(iframe);
+        return true;
+      }
+      return false;
+    };
+
+    const renderWidget = () => {
+      if (cancelled || !containerRef.current || !window.turnstile) return;
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        callback: (token: string) => onToken(token),
+        'expired-callback': () => onToken(null),
+        'error-callback': () => onToken(null),
+      });
+      if (!widgetIdRef.current) return;
+      // render() returns synchronously once the DOM node is queued, but the
+      // iframe isn't always present in this tick and its content needs more
+      // time to paint. Wait for the iframe's load event so the placeholder
+      // covers the full visual gap.
+      if (!waitForIframe() && containerRef.current) {
+        mutationObserver = new MutationObserver(() => {
+          if (waitForIframe()) {
+            mutationObserver?.disconnect();
+            mutationObserver = null;
+          }
+        });
+        mutationObserver.observe(containerRef.current, {
+          childList: true,
+          subtree: true,
+        });
+      }
+      // Safety: if load never fires (adblock, offline iframe shell), hide
+      // the placeholder after 5s so the user sees whatever state the widget
+      // is actually in.
+      fallbackTimer = setTimeout(markRendered, 5_000);
+    };
+
+    // The explicit render mode requires the script to be loaded once; we
+    // reuse the same <script> element across mounts to avoid re-fetching.
+    const existing = document.getElementById(TURNSTILE_SCRIPT_ID);
+    if (window.turnstile) {
+      renderWidget();
+    } else if (existing) {
+      existing.addEventListener('load', renderWidget, { once: true });
+    } else {
+      const script = document.createElement('script');
+      script.id = TURNSTILE_SCRIPT_ID;
+      script.src = TURNSTILE_SCRIPT_SRC;
+      script.async = true;
+      script.defer = true;
+      script.addEventListener('load', renderWidget, { once: true });
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      const widgetId = widgetIdRef.current;
+      widgetIdRef.current = null;
+      mutationObserver?.disconnect();
+      mutationObserver = null;
+      if (loadTarget && loadListener) {
+        loadTarget.removeEventListener('load', loadListener);
+      }
+      loadTarget = null;
+      loadListener = null;
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      // `remove` is idempotent; guard only because `turnstile` may be gone
+      // on hot reload.
+      try {
+        if (widgetId && window.turnstile) window.turnstile.remove(widgetId);
+      } catch {
+        // widget already removed
+      }
+    };
+  }, [siteKey, onToken]);
+
+  if (!siteKey) return null;
+  // The placeholder sits on top of the widget container via absolute
+  // positioning and matches Turnstile's default widget size (300×65) so the
+  // UI doesn't jump when the iframe paints. `rendered` flips true once
+  // `render()` returns — strictly that's before the iframe is fully drawn,
+  // but CF fills the iframe fast enough that the 50-100ms gap isn't
+  // perceptible; the far slower window is the script-download phase before
+  // render() has even run.
+  return (
+    <div className="relative inline-block min-h-[65px] min-w-[300px]">
+      <div ref={containerRef} className="cf-turnstile" />
+      {!rendered && (
+        <div
+          className="absolute inset-0 flex items-center justify-center gap-2 rounded-md border border-gray-200 bg-gray-50 text-sm text-gray-600"
+          role="status"
+          aria-live="polite"
+        >
+          <span
+            className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"
+            aria-hidden
+          />
+          <span>Loading challenge…</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Memoized single-message renderer. React.memo'd because otherwise every
+ * keystroke in the composer re-parses every historical assistant message's
+ * markdown (ReactMarkdown is not cheap on a long conversation). Assistant
+ * messages render flush with the scrollable container; user messages
+ * stay as a right-aligned blue bubble. Both sides use remark-gfm so
+ * tables/strikethrough/task lists work in either direction. message.content
+ * is pre-cleaned in onComplete — no per-render cleaning here.
+ */
+const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
+  const proseClass =
+    'text-left prose prose-sm max-w-none ' +
+    'prose-table:block prose-table:overflow-x-auto ' +
+    'prose-pre:overflow-x-auto';
+
+  if (message.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] px-3 py-2 rounded-lg rounded-br-sm bg-blue-500 text-white text-sm">
+          <div
+            className={
+              `${proseClass} prose-invert ` +
+              // prose-invert picks light-gray colors tuned for dark-slate
+              // backgrounds; on blue-500 they read muted. Pin each prose
+              // element to white explicitly so markdown text matches the
+              // surrounding "text-white" bubble.
+              'prose-headings:text-white prose-p:text-white prose-strong:text-white ' +
+              'prose-em:text-white prose-li:text-white prose-code:text-white ' +
+              'prose-a:text-white prose-a:underline marker:text-white'
+            }
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          </div>
+          <div className="text-xs mt-1 opacity-70 text-blue-100">
+            <div>
+              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </div>
+            {message.usage &&
+              typeof message.usage.cost_usd === 'number' &&
+              message.usage.cost_usd > 0 && (
+                <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
+              )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Persisted thinking blocks (from prior streams that completed or were
+  // killed mid-flight). Concatenated with double newlines because Anthropic
+  // sometimes emits multiple thinking blocks per turn (one per major chain-
+  // of-thought chunk). Empty when the turn had no thinking blocks (legacy
+  // entries, non-thinking models, or web-search-only turns).
+  const persistedThinking =
+    message.content_blocks
+      ?.filter(
+        (b): b is { type: 'thinking'; thinking: string; signature: string } =>
+          b.type === 'thinking',
+      )
+      .map((b) => b.thinking)
+      .filter((t) => t.length > 0)
+      .join('\n\n') ?? '';
+
+  return (
+    <div className="w-full text-sm text-gray-800">
+      <div
+        className={
+          `${proseClass} ` +
+          'prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 ' +
+          'prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800'
+        }
+      >
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      </div>
+      {persistedThinking && (
+        // Mirrors the streamingThinking disclosure used during live streams
+        // (text-xs muted, SparklesIcon, hover affordance) so the visual
+        // language is the same: "click to peek at how Claude reasoned about
+        // this turn." Stays closed by default — most users won't open it,
+        // and the prose flow shouldn't be dominated by reasoning text.
+        <details className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">
+          <summary className="cursor-pointer select-none text-gray-600 hover:text-gray-800 inline-flex items-center gap-1">
+            <SparklesIcon className="w-3.5 h-3.5 text-purple-500" aria-hidden />
+            <span>Show thinking</span>
+          </summary>
+          <div className="mt-1 whitespace-pre-wrap italic text-gray-600 leading-relaxed">
+            {persistedThinking}
+          </div>
+        </details>
+      )}
+      <div className="text-xs mt-1 text-gray-500 opacity-70">
+        <div>
+          {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </div>
+        {message.usage &&
+          typeof message.usage.cost_usd === 'number' &&
+          message.usage.cost_usd > 0 && (
+            <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
+          )}
+        {message.was_killed && (
+          // Specific copy per kill_reason. cap_exceeded directs the user to
+          // the unblock path; aborted is a neutral "Stopped" so the bubble
+          // visually distinguishes from a complete response; error surfaces
+          // the actual upstream/network failure verbatim so the user can
+          // diagnose without opening devtools.
+          <div className="mt-1 inline-flex items-center gap-1 text-amber-700">
+            <StopIcon className="w-3 h-3" aria-hidden />
+            <span>
+              {message.kill_reason === 'cap_exceeded'
+                ? 'Cost limit reached — sign in or add an API key to continue.'
+                : message.kill_reason === 'aborted'
+                  ? 'Stopped.'
+                  : message.kill_reason === 'error'
+                    ? `Error: ${message.kill_message ?? 'Connection lost.'}`
+                    : 'Response was interrupted.'}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+export function ChatInterface({
+  isCollapsed,
+  onToggle,
+  graphData,
+  onGraphUpdate,
+  highlightedNodes = new Set(),
+  onChartCreated,
+}: ChatInterfaceProps) {
+  const { hasKey, keyLast4, verified, keyVersion } = useApiKey();
+  const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
+  const [currentMode, setCurrentMode] = useState<AIMode>('chat');
+  const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
+  // Per-model `default_effort` is tuned for the quality/cost sweet spot at
+  // first contact (deeper reasoning where it pays off, lower latency where
+  // it doesn't). Falls back to 'high' for models without an effort dial
+  // (haiku-class) so the dropdown always has a valid value.
+  const [selectedEffort, setSelectedEffort] = useState<EffortLevel>(
+    () => MODEL_CAPABILITIES['claude-opus-4-7'].default_effort ?? 'high',
+  );
+
+  // When the user switches models, clamp effort to a level the new model
+  // accepts. Keeping effort across model swaps preserves user intent (a user
+  // who picked "low" on Opus probably also wants "low" on Sonnet); we only
+  // overwrite when the chosen level isn't valid (e.g. xhigh after switching
+  // off Opus 4.7) or the new model doesn't support effort at all.
+  useEffect(() => {
+    const caps = MODEL_CAPABILITIES[selectedModel];
+    if (!caps.supports_output_config_effort) return;
+    // `effort_levels` is a `readonly` tuple narrowed via `as const`; widen
+    // here so `includes()` accepts the broader `EffortLevel` union we hold
+    // in state. Without the cast TS rejects `xhigh` against a Sonnet tuple
+    // even though we want exactly that "is the current effort still valid?"
+    // answer.
+    if ((caps.effort_levels as readonly EffortLevel[]).includes(selectedEffort)) return;
+    setSelectedEffort(caps.default_effort ?? 'high');
+  }, [selectedModel, selectedEffort]);
+
   const params = useParams<{ filename?: string; chartId?: string; editToken?: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // BYOK spend displayed in the sidebar pill. Derived from localStorage via a
+  // custom event subscription, so it updates live as streams credit spend.
+  const chartByokSpendUsd = useChartByokSpendUsd(params.chartId ?? params.editToken ?? null);
 
   // Create a unique storage key based on the current route
-  const getStorageKey = () => {
+  const getStorageKey = useCallback(() => {
     if (params.chartId) {
       return `chatHistory_chart_${params.chartId}`;
     } else if (params.editToken) {
@@ -81,102 +725,219 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       // Fallback for any other routes
       return `chatHistory_${location.pathname.replace(/\//g, '_')}`;
     }
-  };
+  }, [params.chartId, params.editToken, params.filename, location.pathname]);
 
   // Load chat history from localStorage on mount
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    try {
-      const storageKey = getStorageKey();
-      const savedMessages = localStorage.getItem(storageKey);
-      if (savedMessages) {
-        const parsed = JSON.parse(savedMessages);
-        // Convert timestamp strings back to Date objects
-        return parsed.map((msg: any) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp)
-        }));
-      }
-    } catch (error) {
-      console.error('Failed to load chat history:', error);
-    }
-    return [];
-  });
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    loadChatHistoryWithBackup(getStorageKey()),
+  );
 
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  // Live thinking text from Anthropic's extended-thinking blocks. Rendered
+  // as a collapsible summary alongside the streamed reply so users can see
+  // the model's reasoning rather than just a "Thinking…" spinner.
+  const [streamingThinking, setStreamingThinking] = useState('');
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isThinking, setIsThinking] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [apiKeyError, setApiKeyError] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  // Fine-grained status: the chip renderer picks one of these, so the
+  // composer shows continuous feedback through a web-search-heavy turn
+  // (which cycles through many short tool-use blocks) rather than
+  // flickering on the narrow `web_search` sub-block only.
+  const [streamPhase, setStreamPhase] = useState<StreamPhase | null>(null);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [extendedThinkingEnabled, setExtendedThinkingEnabled] = useState(true);
+  // Extended thinking is always enabled on Opus 4.7; the server defaults to
+  // adaptive thinking when extendedThinkingEnabled is omitted/true.
+
+  // Usage / progress bar state populated from /api/usage. `tier` is one of
+  // 'anon' | 'free' | 'byok' (see worker/_shared/tiers.ts); null until the
+  // first fetch returns.
+  const [usage, setUsage] = useState<{
+    used_usd: number;
+    limit_usd: number;
+    tier: string;
+  } | null>(null);
+
+  // Running cost for the in-flight assistant turn (updated via onCostUpdate).
+  const [runningCostUsd, setRunningCostUsd] = useState<number | null>(null);
+  // Ref-mirror so onComplete can read the latest cost — the closure captured
+  // at handleSend time would otherwise see a stale value.
+  const runningCostUsdRef = useRef<number | null>(null);
+  // Running tally of BYOK spend (in µUSD) already credited to the
+  // chart/key buckets for the current turn. Each onCostUpdate computes a
+  // delta against this ref so aborted streams still capture the portion
+  // that was actually billed. Reset to 0 at the start of each handleSend.
+  const turnLastAppliedMicroRef = useRef<number>(0);
+
+  // Pre-send cost estimates (input-only lower bound from count_tokens).
+  // Separate slots so the Chat composer estimate and the Generate panel
+  // estimate can update independently; both are debounced to avoid
+  // hammering /api/count-tokens-estimate on every keystroke.
+  const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
+  // Last upstream message from /api/count-tokens-estimate when it fails.
+  // Rendered inline so shape issues (file_id unresolvable, etc.) surface
+  // to the user instead of silently falling back to a char-based estimate.
+  const [composerEstimateError, setComposerEstimateError] = useState<string | null>(null);
+  // file_ids that /api/count-tokens-estimate couldn't price (e.g. Anthropic's
+  // count_tokens endpoint rejected them, or they're awaiting upload). Surfaced
+  // so the user knows the estimate excludes those files and the real billed
+  // amount will be higher.
+  const [composerUncountedFileIds, setComposerUncountedFileIds] = useState<string[]>([]);
+  const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
+
+  // Derived cap-gate flags, computed from the cached usage snapshot +
+  // latest composer estimate. Declared AFTER composerEstimateUsd since
+  // wouldExceedCap reads it — moving these earlier would TDZ-error.
+  //
+  //   capAlreadyReached: the user's prior cumulative usage is already at
+  //     or over the free-tier cap. Nothing they can send will succeed;
+  //     only BYOK unlocks new turns.
+  //
+  //   wouldExceedCap: prior usage is under the cap but the projected cost
+  //     of the in-flight draft would push it over. Sending this specific
+  //     message would fail the server's reservation; we block client-side
+  //     to avoid the round-trip (and the confusing Turnstile-before-cap
+  //     ordering on the server).
+  //
+  // BYOK tier skips both — they're self-funded.
+  const capped = usage != null && usage.tier !== 'byok';
+  const capAlreadyReached = capped && usage.used_usd >= usage.limit_usd;
+  const wouldExceedCap =
+    capped &&
+    !capAlreadyReached &&
+    composerEstimateUsd > 0 &&
+    usage.used_usd + composerEstimateUsd > usage.limit_usd;
+  // Loading flag so the composer can show a spinner while the debounced
+  // fetch is in flight; avoids displaying a stale number that's about to
+  // change, and signals to the user that the field is being updated.
+  const [estimatingCost, setEstimatingCost] = useState<boolean>(false);
+
+  // Inline error banner shown under the last user message when the server
+  // rejects the request on cost/quota grounds (429/402). Persists the chat
+  // history (decision 8).
+  const [costErrorBanner, setCostErrorBanner] = useState<{
+    kind: CostErrorKind;
+    message: string;
+  } | null>(null);
+
+  // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
+  // succeeds; the Worker sets an httpOnly `tocb_anon` cookie that rides along
+  // automatically on subsequent same-origin fetches. We don't carry the raw
+  // token around — it's single-use and irrelevant after verification.
+  // Reset to `false` whenever the Worker returns `turnstile_required` mid-flow
+  // (cookie expired / IP changed) so the widget re-renders for a fresh solve.
+  //
+  // `null` = probe in flight (on first load for anon users): we don't yet
+  // know if the browser holds a still-valid cookie. Render neither widget
+  // nor composer during this (~100ms) window so we don't flash the "please
+  // verify" banner for returning users who are already verified.
+  const [hasTurnstileSession, setHasTurnstileSession] = useState<boolean | null>(null);
+  // Inline error copy shown adjacent to the Turnstile widget after a failed
+  // verification, so the user knows to retry the challenge rather than just
+  // seeing a silent re-render.
+  const [turnstileError, setTurnstileError] = useState<string | null>(null);
+
+  // BYOK panel state for 402/kill recovery.
+  //
+  // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
+  // is handled by calling refreshUsage(), which flips the derived
+  // `capAlreadyReached` flag and shows the composer-side banner. A
+  // separate mode would double-render the panel. Voluntary key entry
+  // now lives in the profile-dropdown modal, not inline.
+  const [byokPanelMode, setByokPanelMode] = useState<'request_cut_off' | 'global_budget' | null>(
+    null,
+  );
+
+  // Files attached in Chat mode (separate from Generate-mode `files`). These
+  // can be inline text (content in-memory) or Anthropic Files API uploads
+  // (stored as file_id). Only `fileId` is sent to the worker on submit.
+  const [chatAttachedFiles, setChatAttachedFiles] = useState<
+    Array<
+      AttachedFile & {
+        // discriminated: text files carry inline content; upload files carry fileId
+        kind: 'text' | 'upload';
+        content?: string; // text files only
+        fileId?: string; // upload files only
+        raw?: File; // retained for retry
+      }
+    >
+  >([]);
 
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [additionalInstructions, setAdditionalInstructions] = useState('');
-  const [conversationStarted, setConversationStarted] = useState(false);
-  const [fullConversation, setFullConversation] = useState('');
-  const [generatedGraphData, setGeneratedGraphData] = useState<any>(null);
-
-  // Search mode state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchAnswer, setSearchAnswer] = useState('');
-
-  // Settings modal state
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [customSystemPrompt, setCustomSystemPrompt] = useState<string>(
-    localStorage.getItem('customSystemPrompt') || ''
-  );
-  const [tempSystemPrompt, setTempSystemPrompt] = useState(
-    localStorage.getItem('customSystemPrompt') || systemPromptContent
+  const [generatedGraphData, setGeneratedGraphData] = useState<ToCData | null>(null);
+  // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
+  // list of {id, file_id} chips so the chip area can render them with the
+  // same AttachedFilesBar as Chat mode. Text/markdown files continue to be
+  // inlined via the existing `files` state.
+  const [generateAttachedChips, setGenerateAttachedChips] = useState<
+    Array<AttachedFile & { kind?: 'upload'; fileId?: string; raw?: File }>
+  >([]);
+  const generateAttachedFileIds = React.useMemo(
+    () =>
+      generateAttachedChips
+        .filter((f) => f.status === 'ready' && f.fileId)
+        .map((f) => f.fileId!) as string[],
+    [generateAttachedChips],
   );
 
   // Get selected nodes info from graphData and highlightedNodes
   const selectedNodes = React.useMemo(() => {
-    if (!graphData || !highlightedNodes.size) return []
+    if (!graphData || !highlightedNodes.size) return [];
 
-    const nodes: Array<{id: string, title: string, path: string}> = []
+    const nodes: Array<{ id: string; title: string; path: string }> = [];
 
-    graphData.sections?.forEach((section: any, sectionIndex: number) => {
-      section.columns?.forEach((column: any, columnIndex: number) => {
-        column.nodes?.forEach((node: any) => {
+    graphData.sections?.forEach((section, sectionIndex) => {
+      section.columns?.forEach((column, columnIndex) => {
+        column.nodes?.forEach((node) => {
           if (highlightedNodes.has(node.id)) {
-            const sectionTitle = section.title || `Section ${sectionIndex + 1}`
-            const path = `${sectionTitle} → Column ${columnIndex + 1}`
+            const sectionTitle = section.title || `Section ${sectionIndex + 1}`;
+            const path = `${sectionTitle} → Column ${columnIndex + 1}`;
             nodes.push({
               id: node.id,
               title: node.title || 'Untitled',
-              path: path
-            })
+              path: path,
+            });
           }
-        })
-      })
-    })
+        });
+      });
+    });
 
-    return nodes
-  }, [graphData, highlightedNodes])
-
-  // Initialize temp prompt when modal opens
-  useEffect(() => {
-    if (showSettingsModal) {
-      const promptToUse = customSystemPrompt.trim() ? customSystemPrompt : systemPromptContent;
-      console.log('Setting temp prompt:', { customSystemPrompt, systemPromptContent: systemPromptContent.substring(0, 100) + '...', promptToUse: promptToUse.substring(0, 100) + '...' });
-      setTempSystemPrompt(promptToUse);
-    }
-  }, [showSettingsModal]);
+    return nodes;
+  }, [graphData, highlightedNodes]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMessageRef = useRef<ChatMessage | null>(null);
+  // Mirror of chatService's block accumulator, updated on each
+  // content_block_stop via the onContentBlocks callback. Read synchronously
+  // by handleStopStreaming so user-aborted partial assistant turns preserve
+  // signed thinking + tool blocks (otherwise they only have plain text and
+  // the next "continue" turn loses Opus 4.7's reasoning continuity).
+  const streamingContentBlocksRef = useRef<AssistantBlock[]>([]);
+  // Synchronous guard against double-send for both handleSendMessage and
+  // startGeneration. handleSendMessage awaits ensureChartExists() before
+  // flipping isStreaming/isLoading, so a second Enter racing in during that
+  // ~80ms window passes the React-state guard and fires a duplicate
+  // request. startGeneration's window is narrower (one render tick) but
+  // also exists because it has no in-handler guard at all. The ref flips
+  // synchronously so the second call early-returns immediately. Shared
+  // because chat-mode and generate-mode are mutually exclusive UI states,
+  // so the two handlers can't run concurrently.
+  const sendInFlightRef = useRef(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const modelDropdownRef = useRef<HTMLDivElement>(null);
+  // Set to true by ensureChartExists right before it navigates to the new
+  // /edit/<token> URL. The route-change effect reads + clears it; when
+  // set, it skips the usual "load from localStorage" step so the user's
+  // in-flight messages (e.g. the message they just sent that triggered
+  // auto-create) aren't wiped mid-flight. ensureChartExists separately
+  // migrates the old URL's localStorage key to the new one so a later
+  // refresh also finds the history.
+  const justAutoCreatedRef = useRef(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
 
   const scrollToBottom = () => {
@@ -197,36 +958,99 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     setIsNearBottom(checkIfNearBottom());
   };
 
+  // Reset all per-stream UI state so the next turn starts clean. Called at
+  // the tail of every onComplete / onError / onCostError callback and the
+  // catch fallback in handleSendMessage / startGeneration; each caller is
+  // responsible for preserving any partial content (via setMessages) BEFORE
+  // invoking this, since this clears streamingMessageRef.current.
+  const resetStreamUiState = useCallback(() => {
+    setIsStreaming(false);
+    setStreamingContent('');
+    setStreamingThinking('');
+    setStreamPhase(null);
+    setRunningCostUsd(null);
+    streamingMessageRef.current = null;
+  }, []);
+
+  // Delta-credit the per-chart and per-key BYOK buckets during a stream so
+  // partial spend (aborted / errored / killed turns) is still recorded.
+  // Skip reasons (logged but not credited): usesByok=false (anon path or
+  // key removed mid-stream); delta<=0 (non-monotonic frame, worker
+  // re-emitted a lower estimate); chartId/keyLast4 null (bucket
+  // misrouting). Mutates lastAppliedMicroRef on credit so the next frame
+  // computes its delta against the new baseline.
+  const creditByokDelta = useCallback(
+    (args: {
+      tag: 'chat' | 'gen';
+      runningUsd: number;
+      usesByok: boolean;
+      lastAppliedMicroRef: { current: number };
+      chartId: string | null;
+      keyLast4: string | null;
+    }): boolean => {
+      const { tag, runningUsd, usesByok, lastAppliedMicroRef, chartId, keyLast4 } = args;
+      if (!usesByok) {
+        console.log(
+          `[BYOK ${tag}] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+            ` skipped: streamUsesByok=false`,
+        );
+        return false;
+      }
+      const newMicro = Math.round(runningUsd * 1_000_000);
+      const deltaMicro = newMicro - lastAppliedMicroRef.current;
+      console.log(
+        `[BYOK ${tag}] onCostUpdate runningUsd=$${runningUsd.toFixed(6)}` +
+          ` lastAppliedMicro=${lastAppliedMicroRef.current}` +
+          ` newMicro=${newMicro}` +
+          ` deltaMicro=${deltaMicro}` +
+          ` chartId=${chartId ?? 'null'}` +
+          ` keyLast4=${keyLast4 ?? 'null'}` +
+          ` willCredit=${deltaMicro > 0}`,
+      );
+      if (deltaMicro > 0) {
+        addByokSpend(chartId, keyLast4, deltaMicro / 1_000_000);
+        lastAppliedMicroRef.current = newMicro;
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+
   // Reload chat history when route changes
   useEffect(() => {
     try {
-      // Clear chat when navigating to root path (new ToC)
+      // Auto-create navigation (handleSendMessage → ensureChartExists →
+      // navigate /edit/<newToken>): the user's messages are mid-flight and
+      // belong to this chart. Skip the load-from-localStorage branch so we
+      // don't wipe them; ensureChartExists already migrated the previous
+      // storage key to the new one for the refresh case.
+      if (justAutoCreatedRef.current) {
+        justAutoCreatedRef.current = false;
+        return;
+      }
+      // At the root path (new ToC), start with an empty in-memory chat but
+      // DON'T touch localStorage. Previously this branch did a
+      // `removeItem(chatHistory_root)`, which wiped the session of any user
+      // who'd been chatting on `/` while a chart was auto-created underneath
+      // via replaceState (React Router's `params.editToken` stayed `undefined`
+      // until a reload, so the save effect was writing to chatHistory_root).
+      // The transient visit to `/` after an Auth0 redirect would then destroy
+      // their chat. With replaceState fixed (see ensureChartExists), saves
+      // never land in chatHistory_root in the first place — but we still
+      // avoid wiping any stray entry: it's harmless to leave around and
+      // destructive to delete on a route change alone.
       if (location.pathname === '/') {
         setMessages([]);
-        const storageKey = getStorageKey();
-        localStorage.removeItem(storageKey);
         return;
       }
 
-      const storageKey = getStorageKey();
-      const savedMessages = localStorage.getItem(storageKey);
-      if (savedMessages) {
-        const parsed = JSON.parse(savedMessages);
-        // Convert timestamp strings back to Date objects
-        const loadedMessages = parsed.map((msg: any) => ({
-          ...msg,
-          timestamp: new Date(msg.timestamp)
-        }));
-        setMessages(loadedMessages);
-      } else {
-        // Clear messages if no saved history for this route
-        setMessages([]);
-      }
+      setMessages(loadChatHistoryWithBackup(getStorageKey()));
     } catch (error) {
       console.error('Failed to load chat history on route change:', error);
       setMessages([]);
     }
-  }, [params.chartId, params.editToken, params.filename, location.pathname]);
+  }, [params.chartId, params.editToken, params.filename, location.pathname, getStorageKey]);
 
   // Save messages to localStorage whenever they change
   useEffect(() => {
@@ -239,7 +1063,7 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     } catch (error) {
       console.error('Failed to save chat history:', error);
     }
-  }, [messages]);
+  }, [messages, getStorageKey]);
 
   useEffect(() => {
     scrollToBottom();
@@ -265,101 +1089,695 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     }
   }, [isCollapsed]);
 
-  useEffect(() => {
-    // Initialize API key input with current value
-    setApiKeyInput(apiKey);
-  }, [apiKey]);
+  // Auth header helper shared by /api/usage and file-upload callers. Returns
+  // an empty object for anonymous visitors or when silent refresh fails;
+  // those requests hit the worker anonymously and rely on the Turnstile
+  // token for quota attribution.
+  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    if (!isAuthenticated) return {};
+    const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+  }, [isAuthenticated, getIdTokenClaims, getAccessTokenSilently]);
 
-  // Save custom system prompt to localStorage when it changes
-  useEffect(() => {
-    if (customSystemPrompt) {
-      localStorage.setItem('customSystemPrompt', customSystemPrompt);
-    } else {
-      localStorage.removeItem('customSystemPrompt');
+  // Poll /api/usage on mount and after each stream completion. The worker
+  // tallies cost/usage server-side (U9); we just render the progress bar.
+  const refreshUsage = useCallback(async () => {
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch('/api/usage', { headers, credentials: 'include' });
+      if (!response.ok) return; // transient errors: keep prior state
+      const data = await response.json();
+      setUsage(data);
+    } catch (err) {
+      // Silently swallow — a missing progress bar is acceptable; the
+      // authoritative enforcement lives server-side.
+      console.warn('[ChatInterface] refreshUsage failed:', err);
     }
-  }, [customSystemPrompt]);
+  }, [getAuthHeaders]);
 
-  // Close model dropdown when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
-        setShowModelDropdown(false);
+    // Re-fetch on mount and whenever the user adds/removes their BYOK key
+    // (keyVersion bumps in ApiKeyContext). Without the keyVersion trigger,
+    // the sidebar still shows the free-tier progress bar after a key is
+    // added until the next stream completes.
+    void refreshUsage();
+  }, [refreshUsage, keyVersion]);
+
+  // When the user adds a verified key via the settings modal, dismiss any
+  // sticky cap banners that require explicit clearing. capAlreadyReached /
+  // wouldExceedCap self-clear through the tier flip when usage refetches
+  // (tier becomes 'byok', `capped` goes false), but `byokPanelMode` is
+  // server-event-driven and used to be cleared by ByokPanel.onSubmitted —
+  // with the inline panel gone, we reconcile here instead.
+  useEffect(() => {
+    if (hasKey && verified && byokPanelMode) {
+      setByokPanelMode(null);
+      setCostErrorBanner(null);
+    }
+  }, [hasKey, verified, byokPanelMode]);
+
+  // Classify a streaming error string into a cost/quota category if it
+  // matches one of U9's error payloads. Keyword-based detection covers the
+  // legacy error-string path; structured errors from `onCostError` skip this
+  // classifier and go through `handleCostError` below.
+  const classifyCostError = useCallback((message: string) => {
+    const lower = message.toLowerCase();
+    for (const [kind, keywords] of COST_ERROR_CATEGORIES) {
+      if (keywords.some((k) => lower.includes(k))) {
+        return { kind, message: COST_ERROR_COPY[kind] };
       }
-    };
-
-    if (showModelDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showModelDropdown]);
+    return null;
+  }, []);
 
-  const handleSaveApiKey = () => {
-    const validation = validateApiKey(apiKeyInput);
-    
-    if (!validation.isValid) {
-      setApiKeyError(validation.error || 'Invalid API key');
+  // Structured cost-error handler. Maps CostErrorType → UI state transition
+  // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
+  // under the last user message so BYOK retries can reuse the same messages
+  // array — plan v2 decision 8).
+  const handleCostError = useCallback(
+    (error: CostError) => {
+      switch (error.type) {
+        case 'turnstile_required':
+          // Cookie expired or IP changed mid-flow. Bring the widget back so
+          // the user can re-solve, and clear any stale error copy.
+          setHasTurnstileSession(false);
+          setTurnstileError(null);
+          return;
+        case 'turnstile_failed':
+          // Siteverify rejected. Keep the widget visible, surface the error.
+          setHasTurnstileSession(false);
+          setTurnstileError('Challenge failed; please try again.');
+          return;
+        case 'idempotent_replay':
+          // Silent: the user double-clicked or the browser replayed. The
+          // original request is already in flight or completed on the server;
+          // surfacing an error would confuse them.
+          return;
+        case 'lifetime_cap_reached':
+          // Server rejected the preflight reservation — our local usage
+          // snapshot was stale. Refresh so `capAlreadyReached` flips and
+          // the composer-side cap banner + ByokPanel + DonateCta appear.
+          // No separate mode state: that would double-render the panel.
+          setCostErrorBanner(null);
+          void refreshUsage();
+          return;
+        case 'global_budget_exhausted':
+          setByokPanelMode('global_budget');
+          setCostErrorBanner(null);
+          return;
+        case 'request_cost_ceiling_exceeded':
+          // Mid-stream kill: the message already ran part-way, the reconcile
+          // path is writing the actual cost to the DB right now. Surface the
+          // cut-off-specific ByokPanel header and refresh usage so the cap
+          // bar reflects reality — otherwise it stays at the pre-stream
+          // snapshot until manual reload.
+          setByokPanelMode('request_cut_off');
+          setCostErrorBanner(null);
+          void refreshUsage();
+          return;
+        case 'body_too_large':
+          setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
+          return;
+        case 'chart_deleted':
+          setCostErrorBanner({
+            kind: 'service_unavailable',
+            message: 'This chart was deleted in another tab. Reload the page to continue.',
+          });
+          return;
+        case 'file_unavailable':
+          setCostErrorBanner({
+            kind: 'service_unavailable',
+            message: 'A file referenced by this chat is no longer available. Remove it and retry.',
+          });
+          return;
+        default: {
+          // database_unavailable / estimation_unavailable /
+          // authentication_service_unavailable / invalid_token all fall
+          // through to a generic service banner. When the server included
+          // an upstream_message (e.g. Anthropic's count_tokens 429 reason,
+          // Neon timeout detail, Auth0 JWKS error), surface it so the user
+          // has something specific to try or report rather than just
+          // "something broke."
+          const data = error.data as
+            | { upstream_status?: number; upstream_message?: string }
+            | undefined;
+          const upstreamMessage =
+            typeof data?.upstream_message === 'string' ? data.upstream_message : null;
+          const upstreamStatus =
+            typeof data?.upstream_status === 'number' ? data.upstream_status : null;
+          const detail = upstreamMessage
+            ? `${COST_ERROR_COPY.service_unavailable} (${error.type}${upstreamStatus ? ` ${upstreamStatus}` : ''}: ${upstreamMessage})`
+            : `${COST_ERROR_COPY.service_unavailable} (${error.type})`;
+          setCostErrorBanner({ kind: 'service_unavailable', message: detail });
+        }
+      }
+    },
+    [refreshUsage],
+  );
+
+  // Page-load probe: ask the worker whether an existing tocb_anon cookie is
+  // still valid for this caller. The cookie is httpOnly so the client can't
+  // read it directly; this lets a returning anon visitor skip the widget for
+  // the remaining 24h window instead of re-solving on every refresh.
+  // Authenticated users and environments without a site key get promoted to
+  // `valid` immediately (no gate to render).
+  useEffect(() => {
+    if (isAuthenticated || !TURNSTILE_SITE_KEY) {
+      setHasTurnstileSession(true);
       return;
     }
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch('/api/verify-turnstile', {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          setHasTurnstileSession(false);
+          return;
+        }
+        const data = (await response.json()) as { valid?: boolean };
+        setHasTurnstileSession(data.valid === true);
+      } catch {
+        // Network error: fall back to showing the widget rather than silently
+        // blocking the composer.
+        setHasTurnstileSession(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [isAuthenticated]);
 
-    setApiKey(apiKeyInput);
-    setApiKeyError('');
-  };
+  // Turnstile: exchange the raw token for an httpOnly session cookie. After a
+  // successful verify the widget is hidden (hasTurnstileSession=true) and the
+  // browser rides the cookie on subsequent /api/anthropic-stream requests.
+  // Failures keep the widget visible with an inline error. Called by the
+  // TurnstileWidget on solve, expiry, or error (null payload).
+  const handleTurnstileToken = useCallback(
+    async (token: string | null) => {
+      if (!token) {
+        // Widget reports expiry or error — force a re-render with a prompt.
+        setHasTurnstileSession(false);
+        return;
+      }
+      try {
+        const response = await fetch('/api/verify-turnstile', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        if (response.ok) {
+          setHasTurnstileSession(true);
+          setTurnstileError(null);
+          // Actor identity may have changed at the same time (IP flip or
+          // cookie renewal), which would mean a different row in
+          // user_api_usage. Refresh so the UI's usage bar + wouldExceedCap
+          // gate reflect the current identity, not the stale one.
+          void refreshUsage();
+          return;
+        }
+        // Treat 401 turnstile_failed the same as any other non-200: keep the
+        // widget visible, show an error. Other statuses (5xx, 501) also fall
+        // through — the user can re-solve to retry.
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        const message =
+          body.error === 'turnstile_failed'
+            ? 'Challenge failed; please try again.'
+            : 'Verification failed; please try again.';
+        setHasTurnstileSession(false);
+        setTurnstileError(message);
+      } catch (err) {
+        console.warn('[ChatInterface] verify-turnstile failed:', err);
+        setHasTurnstileSession(false);
+        setTurnstileError('Network error while verifying; please try again.');
+      }
+    },
+    [refreshUsage],
+  );
 
-  const handleApiKeyKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSaveApiKey();
-    }
-  };
+  // Defer inputValue for the estimate effect so React yields to urgent
+  // user-input renders during a paste + rapid typing. Without this, the
+  // 600ms debounce still gets re-scheduled on every keystroke of a fast
+  // paste, and the effect hook's cleanup+schedule adds up when the value
+  // is huge.
+  const deferredInputValue = useDeferredValue(inputValue);
+
+  // Refs mirroring values we WANT the estimate to read on fire but NOT
+  // to retrigger it. Anthropic's count_tokens is rate-limited (Tier 1:
+  // 100 RPM); re-running the estimate every time the user nudges a node
+  // burns budget for no user benefit — the result is only consumed at
+  // send time.
+  const graphDataRef = useRef(graphData);
+  useEffect(() => {
+    graphDataRef.current = graphData;
+  }, [graphData]);
+
+  // Debounced input-cost estimate for the Chat composer. Mirrors the
+  // request shape streamMessage assembles so the number reflects actual
+  // billing, not just the visible textarea:
+  //   - system: baseSystemPrompt + chatModePromptContent
+  //   - messages: full history + current draft, with [CURRENT_GRAPH_DATA]
+  //     JSON appended to the draft (chatService.ts:546-557)
+  //   - cache_control: ephemeral, defaulting to 5m TTL per Anthropic docs
+  //
+  // Rate-limit hygiene: 600ms debounce + graphData read via ref so graph
+  // nudges don't refire the effect. Tier 1 is 100 RPM; a continuously-
+  // typing user would otherwise fire ~100 RPM alone between pauses.
+  //
+  // Cache accounting: count_tokens returns a flat input-token count with no
+  // write-vs-read split. We approximate by timing the last assistant turn:
+  //   cold (no prior turn or last turn > 5m ago) → tokens × rate × 1.25
+  //     (cache-write multiplier)
+  //   warm (last turn within 5m) → new-draft chars at full rate,
+  //     system+history at 0.1× (cache-read multiplier)
+  // Anthropic's default ephemeral TTL is 5m (optional "1h" if we set it;
+  // we don't, so 5m it is).
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      const attachedChars = chatAttachedFiles
+        .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
+        .reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
+      const draftChars = deferredInputValue.length + attachedChars;
+      // File uploads count as draft content even without any typed text —
+      // a PDF alone can be 100k+ tokens and the composer should show that
+      // BEFORE the user starts typing. Previously this early-return hid
+      // the estimate until the user typed a character.
+      const hasUploadedFiles = chatAttachedFiles.some(
+        (f) => f.kind === 'upload' && f.status === 'ready' && f.fileId,
+      );
+      if (draftChars === 0 && messages.length === 0 && !hasUploadedFiles) {
+        setComposerEstimateUsd(0);
+        setEstimatingCost(false);
+        return;
+      }
+
+      const inlineSections = chatAttachedFiles
+        .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
+        .map((f) => `=== ${f.filename} ===\n${f.content}`);
+      let draftBody =
+        inlineSections.length > 0
+          ? `${deferredInputValue}\n\n${inlineSections.join('\n\n')}`
+          : deferredInputValue;
+
+      // Mirror chatService.ts:551-557: the last user message gets graph data
+      // appended inside [CURRENT_GRAPH_DATA] tags. Read graph via ref so
+      // node nudges don't retrigger the estimate.
+      const currentGraph = graphDataRef.current;
+      if (currentGraph) {
+        try {
+          const dataWithPaths = addNodePaths(currentGraph);
+          draftBody += `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`;
+        } catch {
+          // addNodePaths shape mismatch; skip rather than break the estimate.
+        }
+      }
+
+      // Anthropic-Files-API uploads (PDFs): send as `document` content blocks
+      // so count_tokens counts the PDF text. Without this the estimate
+      // silently ignores the attached PDFs' token cost — easy to hit a
+      // 429 at send-time from a "safe-looking" composer number.
+      const uploadFiles = chatAttachedFiles.filter(
+        (f) => f.kind === 'upload' && f.status === 'ready' && f.fileId,
+      );
+      const userContent: unknown =
+        uploadFiles.length > 0
+          ? [
+              ...uploadFiles.map((f) => ({
+                type: 'document' as const,
+                source: { type: 'file' as const, file_id: f.fileId! },
+              })),
+              { type: 'text' as const, text: draftBody },
+            ]
+          : draftBody;
+
+      const systemPrompt = `${systemPromptContent}\n\n${chatModePromptContent}`;
+      // Mirror the outgoing-messages shape that streamMessage actually
+      // ships, so the estimate counts signed thinking + tool blocks on
+      // prior assistant turns. Using m.content (text only) here was
+      // undercounting by however many tokens the persisted thinking
+      // blocks added — visible after a cap kill + BYOK + "continue", where
+      // the actual send carries the partial assistant turn but the estimate
+      // didn't.
+      const historyForEstimate = buildOutgoingMessages(messages, {
+        attachedFileIds: [],
+        lastIndex: -1, // no in-flight user turn appended via this call
+      });
+      const hasDraftContent = draftBody.length > 0 || uploadFiles.length > 0;
+      const messagesForEstimate = hasDraftContent
+        ? [...historyForEstimate, { role: 'user' as const, content: userContent }]
+        : historyForEstimate;
+
+      // Cache warmth: cached for CACHE_TTL_MILLIS after the last assistant
+      // turn (shared constant, default 5m ephemeral TTL from Anthropic).
+      const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+      const cacheWarm =
+        !!lastAssistant && Date.now() - lastAssistant.timestamp.getTime() < CACHE_TTL_MILLIS;
+
+      setEstimatingCost(true);
+      void (async () => {
+        try {
+          const response = await fetch('/api/count-tokens-estimate', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: selectedModel,
+              system: [{ type: 'text', text: systemPrompt }],
+              messages: messagesForEstimate,
+            }),
+          });
+          if (!response.ok) {
+            // Surface upstream detail so shape issues (e.g. file_id
+            // unresolvable in count_tokens, beta header mismatch) are
+            // diagnosable from the composer instead of silently falling
+            // back to the local char estimate.
+            let upstreamMessage: string | null = null;
+            try {
+              const body = (await response.json()) as { upstream_message?: string };
+              if (typeof body.upstream_message === 'string')
+                upstreamMessage = body.upstream_message;
+            } catch {
+              /* non-JSON body */
+            }
+            setComposerEstimateError(upstreamMessage);
+            throw new Error(`status ${response.status}`);
+          }
+          setComposerEstimateError(null);
+          const data = (await response.json()) as {
+            input_tokens?: number;
+            estimated_cost_usd?: number;
+            cached_file_tokens?: number;
+            cached_file_tokens_draft?: number;
+            cached_file_tokens_history?: number;
+            uncounted_file_ids?: string[];
+          };
+          setComposerUncountedFileIds(
+            Array.isArray(data.uncounted_file_ids) ? data.uncounted_file_ids : [],
+          );
+          const totalTokens = data.input_tokens ?? 0;
+          const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
+          // Server returns input_tokens already including the precise
+          // cached token counts for any attached files (from
+          // chart_files.input_tokens, counted at upload time). We just need
+          // to split the total into draft-side vs history-side for the
+          // warm-cache 1.25× / 0.1× multipliers. Char-to-token ratio is
+          // ~4:1 for text; for PDF tokens we trust the server's per-bucket
+          // split (draft = last message, history = earlier messages) from
+          // count-tokens-estimate.ts.
+          const CHAR_PER_TOKEN = 4;
+          const draftTextTokensEst = Math.ceil(draftBody.length / CHAR_PER_TOKEN);
+          const draftPdfTokens = data.cached_file_tokens_draft ?? 0;
+          const historyPdfTokens = data.cached_file_tokens_history ?? 0;
+          const draftTokensEst = draftTextTokensEst + draftPdfTokens;
+          const historyCharSum =
+            systemPrompt.length +
+            messages.reduce(
+              (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
+              0,
+            );
+          const historyTokensEst = Math.ceil(historyCharSum / CHAR_PER_TOKEN) + historyPdfTokens;
+          const denom = draftTokensEst + historyTokensEst;
+          const draftOnlyTokens =
+            totalTokens > 0 && denom > 0 ? Math.round(totalTokens * (draftTokensEst / denom)) : 0;
+          const cachedTokens = Math.max(0, totalTokens - draftOnlyTokens);
+          // Warm-cache: prior system+history read at 0.1×. The *new draft*
+          // isn't free either — top-level `cache_control: {ephemeral}`
+          // auto-extends the breakpoint to include the latest turn, so
+          // the draft tokens get written to cache at 1.25× (same write
+          // multiplier as the cold path). Not applying 1.25× to the draft
+          // under-estimated warm-cache turns by the write markup, which
+          // is exactly what we observed on a large paste (estimate $0.85
+          // vs billed $1.10 — the ~20% gap matches the 1/1.25 factor).
+          const estimate = cacheWarm
+            ? (draftOnlyTokens * inputRate * CACHE_WRITE_MULTIPLIER +
+                cachedTokens * inputRate * CACHE_READ_MULTIPLIER_VALUE) /
+              1_000_000
+            : (totalTokens * inputRate * CACHE_WRITE_MULTIPLIER) / 1_000_000;
+          setComposerEstimateUsd(estimate);
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          // Network-level failure (CORS, offline, DNS). Mirror the !response.ok
+          // branch by setting composerEstimateError so the UI shows a
+          // degraded-estimate banner instead of presenting the local char
+          // fallback as if it were precise.
+          setComposerEstimateError('Estimate unavailable; showing rough value');
+          const historyChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+          const tokens = roughInputTokensFromChars(
+            systemPrompt.length + historyChars + draftChars,
+            selectedModel,
+          );
+          setComposerEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+        } finally {
+          setEstimatingCost(false);
+        }
+      })();
+    }, 600);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [deferredInputValue, chatAttachedFiles, selectedModel, messages]);
+
+  // Debounced input-cost estimate for Generate mode. Assembles the same
+  // prompt shape startGeneration() builds (system prompt + document
+  // content + optional additional instructions) and runs it through
+  // count-tokens-estimate. Unlike Chat, this is a one-shot request so the
+  // estimate reflects what a single Generate click will cost.
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      const readyTextFiles = files.filter((f) => f.status === 'ready');
+      if (
+        readyTextFiles.length === 0 &&
+        generateAttachedFileIds.length === 0 &&
+        !additionalInstructions.trim()
+      ) {
+        setGenerateEstimateUsd(0);
+        return;
+      }
+
+      const documentContent = readyTextFiles
+        .map((f) => `=== ${f.file.name} ===\n${f.content}`)
+        .join('\n\n');
+      const assembled = `${generateModePromptContent}\n\n## Document Content:\n${documentContent}\n\n${
+        additionalInstructions.trim()
+          ? `## Additional Instructions:\n${additionalInstructions.trim()}\n\n`
+          : ''
+      }`;
+
+      const systemPromptForEstimate = `${systemPromptContent}\n\n${generateModePromptContent}`;
+
+      setEstimatingCost(true);
+      void (async () => {
+        try {
+          const response = await fetch('/api/count-tokens-estimate', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: selectedModel,
+              system: [{ type: 'text', text: systemPromptForEstimate }],
+              messages: [{ role: 'user', content: assembled }],
+            }),
+          });
+          if (!response.ok) {
+            // Surface upstream detail so shape issues (e.g. file_id
+            // unresolvable in count_tokens, beta header mismatch) are
+            // diagnosable from the composer instead of silently falling
+            // back to the local char estimate.
+            let upstreamMessage: string | null = null;
+            try {
+              const body = (await response.json()) as { upstream_message?: string };
+              if (typeof body.upstream_message === 'string')
+                upstreamMessage = body.upstream_message;
+            } catch {
+              /* non-JSON body */
+            }
+            setComposerEstimateError(upstreamMessage);
+            throw new Error(`status ${response.status}`);
+          }
+          setComposerEstimateError(null);
+          const data = (await response.json()) as {
+            input_tokens?: number;
+            estimated_cost_usd?: number;
+          };
+          const totalTokens = data.input_tokens ?? 0;
+          const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[selectedModel] ?? 5;
+          // Generate is one-shot with a fresh user turn each click; the
+          // system prompt caches across runs but the documents don't, so
+          // the system prompt gets cache-write on first submit. Apply the
+          // write multiplier to the whole count — matches startGeneration's
+          // actual behavior on the first click and is close enough for
+          // consecutive clicks too (output cost shown live dominates).
+          const estimate = (totalTokens * inputRate * CACHE_WRITE_MULTIPLIER) / 1_000_000;
+          setGenerateEstimateUsd(estimate);
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          // Network-level failure. Mirror the !response.ok branch so the UI
+          // shows a degraded-estimate indicator rather than silently falling
+          // back to the char-based estimate and presenting it as precise.
+          setComposerEstimateError('Estimate unavailable; showing rough value');
+          const chars =
+            systemPromptForEstimate.length +
+            assembled.length +
+            readyTextFiles.reduce((sum, f) => sum + (f.content?.length ?? 0), 0);
+          const tokens = roughInputTokensFromChars(chars, selectedModel);
+          setGenerateEstimateUsd(estimateCostLowBound(tokens, selectedModel));
+        } finally {
+          setEstimatingCost(false);
+        }
+      })();
+    }, 600);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [files, additionalInstructions, generateAttachedFileIds, selectedModel]);
 
   const handleStopStreaming = () => {
+    // Don't gate the whole handler on abortControllerRef.current being
+    // truthy. The Stop button is rendered whenever isStreaming is true,
+    // but the ref can be null at the moment the user clicks if a stream
+    // just finished naturally and React hasn't committed setIsStreaming
+    // (false) yet, or for the (theoretical) sub-millisecond gap between
+    // setIsStreaming(true) and ref assignment in handleSendMessage.
+    // Previously the entire body short-circuited in those windows, so
+    // the click visibly did nothing — the user reported needing two
+    // clicks to actually stop. Now the abort call is the only thing
+    // gated; the state cleanup runs unconditionally, so the button
+    // always responds the first time it's pressed.
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      setIsStreaming(false);
-      setIsLoading(false);
-      setStreamingContent('');
-      setIsSearching(false);
-      setIsThinking(false);
-
-      // If there's a streaming message, finalize it with current content
-      if (streamingMessageRef.current && streamingContent) {
-        const finalMessage: ChatMessage = {
-          ...streamingMessageRef.current,
-          content: streamingContent
-        };
-        setMessages(prev => [...prev, finalMessage]);
-        streamingMessageRef.current = null;
-      }
     }
+    setIsStreaming(false);
+    setIsLoading(false);
+    setStreamingContent('');
+    setStreamingThinking('');
+    setStreamPhase(null);
+
+    // Finalize a partial assistant turn when the user clicked Stop. Two
+    // signals to preserve: visible text (streamingContent) AND structured
+    // blocks (streamingContentBlocksRef, captured per content_block_stop
+    // via onContentBlocks). A turn that streamed only thinking + no text
+    // shows up as blocks-but-no-content; without the blocks check those
+    // would silently vanish.
+    const partialBlocks = streamingContentBlocksRef.current;
+    const hasBlocks = partialBlocks.length > 0;
+    const hasText = streamingContent.length > 0;
+    if (streamingMessageRef.current && (hasText || hasBlocks)) {
+      const finalMessage: ChatMessage = {
+        ...streamingMessageRef.current,
+        content: hasText
+          ? streamingContent
+          : '_(Assistant was stopped before writing a visible response.)_',
+        was_killed: true,
+        kill_reason: 'aborted',
+        content_blocks: hasBlocks ? partialBlocks : undefined,
+      };
+      setMessages((prev) => [...prev, finalMessage]);
+      streamingMessageRef.current = null;
+    }
+    streamingContentBlocksRef.current = [];
   };
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isStreaming) return;
+    // Synchronous double-send guard. Two rapid Enters (or click + Enter)
+    // both pass the React-state guard above because setIsStreaming/
+    // setIsLoading don't fire until after `await ensureChartExists()`
+    // below. The ref flips before any await, so the second call returns
+    // here. Reset in the `finally` block at the end of this handler.
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
 
-    // Generate UUIDs for message logging
+    // Reject sends while any chip is still uploading. The server would accept
+    // the request but the files wouldn't be attached; better to fail loud
+    // client-side.
+    if (chatAttachedFiles.some((f) => f.status === 'uploading')) {
+      sendInFlightRef.current = false;
+      return;
+    }
+
+    // Block client-side when we already know the send will fail the
+    // server's reservation. Avoids the round-trip, and more importantly
+    // avoids the Turnstile-checks-first race where the user sees a
+    // Turnstile re-challenge instead of the BYOK path they actually need.
+    // UI already renders a warning + BYOK panel in this state; the send
+    // button is also disabled, this is a defense-in-depth guard.
+    if (capAlreadyReached || wouldExceedCap) {
+      sendInFlightRef.current = false;
+      return;
+    }
+
+    // Persist the chart NOW, before we log the user message. Without this,
+    // a first send on the `/` root URL has no chart_id → loggingService's
+    // session can't init → logUserMessage silently drops the message, and
+    // the worker's X-Logging-Message-Id is never sent, so the reconcile
+    // can't populate logging_messages.cost_micro_usd either. Idempotent
+    // when the chart already exists. Capture the canonical chartId here
+    // so the stream headers downstream use the 12-char id and not the
+    // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
+    const resolvedChart = await ensureChartExists();
+    const resolvedChartId = resolvedChart?.chartId;
+
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
+    // Idempotency key binds the user-perceived turn to a specific worker
+    // request; on network retry the worker returns the cached response
+    // instead of re-billing Anthropic. Forwarded once U10's chatService
+    // accepts the param.
+    const idempotencyKey = crypto.randomUUID();
+
+    // Fold attached text-file contents into the user message so the model
+    // sees them inline. File-API uploads (PDFs) are referenced by file_id
+    // only — see `attachedFileIds`.
+    const inlineFileSections = chatAttachedFiles
+      .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
+      .map((f) => `=== ${f.filename} ===\n${f.content}`);
+    const attachedFileIds = chatAttachedFiles
+      .filter((f) => f.kind === 'upload' && f.status === 'ready' && f.fileId)
+      .map((f) => f.fileId!) as string[];
+
+    const userMessageBody =
+      inlineFileSections.length > 0
+        ? `${inputValue.trim()}\n\n${inlineFileSections.join('\n\n')}`
+        : inputValue.trim();
 
     const userMessage: ChatMessage = {
       id: userMessageId,
       role: 'user',
-      content: inputValue.trim(),
-      timestamp: new Date()
+      content: userMessageBody,
+      timestamp: new Date(),
+      // Attach file_ids to the message so they persist with chat history
+      // (localStorage round-trip) and follow-up turns re-emit document
+      // blocks to Anthropic for the full conversation context.
+      attachedFileIds: attachedFileIds.length > 0 ? attachedFileIds : undefined,
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
+    // Clear the chip tray now that the files are in-flight with the message.
+    setChatAttachedFiles([]);
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
+    setStreamingThinking('');
+    streamingContentBlocksRef.current = [];
+    setCostErrorBanner(null);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
 
-    // Set thinking state if extended thinking is enabled
-    if (extendedThinkingEnabled) {
-      setIsThinking(true);
-    }
+    // Extended thinking is always on; seed the phase as 'thinking' until the
+    // first content_block_start arrives (which will overwrite it anyway).
+    // This covers the pre-stream/connection window where no blocks have
+    // reached the client yet.
+    setStreamPhase('thinking');
 
     // Log user message (fire and forget)
     loggingService.logUserMessage({
@@ -368,163 +1786,293 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       content: userMessage.content,
     });
 
-    // Create a placeholder streaming message
     streamingMessageRef.current = {
       id: assistantMessageId,
       role: 'assistant',
       content: '',
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
-    // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
+    // Snapshot BYOK + chart identifiers at stream start so onCostUpdate can
+    // credit partial spend to the right bucket even if state changes mid-stream
+    // (e.g. user navigates away). Use delta accumulation so aborted streams
+    // still record the portion that was billed.
+    //
+    // Prefer resolvedChart over params here. On the first send from `/`,
+    // ensureChartExists has just navigate()'d to /edit/<editToken>, but
+    // this handler's closure was created on the previous (root-URL) render
+    // and so still holds the OLD params with both fields undefined. Reading
+    // params here would yield streamChartId=null, addByokSpend(null,...)
+    // would skip the per-chart bucket write, and turn 1's cost (the biggest
+    // cache_write of the conversation) would silently disappear from the
+    // "$X this chart" pill. resolvedChart.editToken is fresh from the
+    // ensureChartExists return value and matches the key the
+    // useChartByokSpendUsd reader uses (which sees the new params on the
+    // next render).
+    const streamChartId = resolvedChart?.editToken ?? params.chartId ?? params.editToken ?? null;
+    const streamKeyLast4 = keyLast4;
+    const streamUsesByok = hasKey;
+    turnLastAppliedMicroRef.current = 0;
+
     try {
-      await chatService.streamMessage(
-        [...messages, userMessage],
-        graphData,
-        'chat',
-        apiKey,
-        {
-          onSearchStart: () => {
-            setIsSearching(true);
+      await chatService.streamMessage({
+        messages: [...messages, userMessage],
+        currentGraphData: graphData,
+        mode: 'chat',
+        callbacks: {
+          onStreamPhase: (phase) => {
+            setStreamPhase(phase);
           },
-          onSearchComplete: (results?: any[]) => {
-            setIsSearching(false);
-            // Update search section with results from chat searches
-            if (results && results.length > 0) {
-              setSearchResults(results.map(result => ({
-                title: result.title || '',
-                url: result.url || '',
-                content: result.content || '',
-                score: result.score || 0
-              })));
-            }
-          },
-          onContent: (chunk: string, fullContent: string) => {
-            // Clear thinking state when content starts streaming
-            if (isThinking) {
-              setIsThinking(false);
-            }
+          onContent: (_chunk: string, fullContent: string) => {
             setStreamingContent(fullContent);
-          },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
-          const assistantMessage: ChatMessage = {
-            id: assistantMessageId,
-            role: 'assistant',
-            content: finalMessage,
-            timestamp: new Date(),
-            usage: usage ? {
-              input_tokens: usage.input_tokens || 0,
-              output_tokens: usage.output_tokens || 0,
-              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
-            } : undefined
-          };
-
-          setMessages(prev => [...prev, assistantMessage]);
-          setIsStreaming(false);
-          setStreamingContent('');
-          setIsThinking(false);
-          streamingMessageRef.current = null;
-
-          // Log assistant message (fire and forget)
-          loggingService.logUserMessage({
-            messageId: assistantMessageId,
-            role: 'assistant',
-            content: finalMessage,
-            tokenUsage: usage ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens } : undefined,
-          });
-
-          // Track token usage in database
-          if (usage?.input_tokens && params.editToken) {
-            const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            fetch('/.netlify/functions/updateTokenUsage', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
-            }).catch(err => console.error('Failed to update token usage:', err));
-          }
-
-          // Handle edit instructions if present
-          if (editInstructions && onGraphUpdate && graphData) {
-            console.log('Edit instructions detected in ChatInterface:', editInstructions);
-            try {
-              const updatedGraph = applyEdits(graphData, editInstructions);
-              onGraphUpdate(updatedGraph);
-
-              // Log successful AI edit
-              loggingService.logAIEdit({
-                graphData: updatedGraph,
-                messageId: assistantMessageId,
-                editInstructions,
-                success: true,
-              });
-            } catch (error) {
-              console.error('Error applying graph edits:', error);
-
-              // Log failed AI edit
-              loggingService.logAIEdit({
-                graphData: graphData, // Original unchanged graph
-                messageId: assistantMessageId,
-                editInstructions,
-                success: false,
-                error: error instanceof Error ? error.message : 'Unknown error',
-              });
-
-              // Add an error message to the chat
-              const errorMessage: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
-                timestamp: new Date()
-              };
-              setMessages(prev => [...prev, errorMessage]);
+            // Mirror into the ref so onCostError can preserve the partial
+            // text when the stream is killed mid-turn. Without this the
+            // ref's `content` stays at '' (only ever assigned at stream
+            // start) and the kill-recovery path falls back to the
+            // "cut off before writing a visible response" placeholder —
+            // even when text deltas did arrive.
+            if (streamingMessageRef.current) {
+              streamingMessageRef.current.content = fullContent;
             }
-          } else {
-            console.log('No edit instructions, callback, or graph data:', {
-              hasEditInstructions: !!editInstructions,
-              hasCallback: !!onGraphUpdate,
-              hasGraphData: !!graphData
+          },
+          onThinking: (_chunk: string, fullThinking: string) => {
+            setStreamingThinking(fullThinking);
+          },
+          onComplete: (finalMessage, editInstructions, usage, rawMessage, contentBlocks) => {
+            const assistantMessage: ChatMessage = {
+              id: assistantMessageId,
+              role: 'assistant',
+              content: finalMessage,
+              timestamp: new Date(),
+              // undefined for legacy turns predating block capture
+              content_blocks: contentBlocks && contentBlocks.length > 0 ? contentBlocks : undefined,
+              usage: usage
+                ? {
+                    input_tokens: usage.input_tokens || 0,
+                    output_tokens: usage.output_tokens || 0,
+                    total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+                    cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+                    web_search_requests: usage.server_tool_use?.web_search_requests || 0,
+                    cost_usd: runningCostUsdRef.current ?? undefined,
+                  }
+                : undefined,
+            };
+
+            setMessages((prev) => [...prev, assistantMessage]);
+            resetStreamUiState();
+
+            // Refresh the usage progress bar after the server-side tally lands.
+            void refreshUsage();
+
+            // Log the RAW streamed content (pre-clean) so the audit trail
+            // captures exactly what Claude produced, including
+            // [EDIT_INSTRUCTIONS] / [CURRENT_GRAPH_DATA] / [SELECTED_NODES]
+            // blocks. The displayed message above uses the cleaned version;
+            // they're different views of the same event, not duplicates.
+            // Snapshots still carry parsed edit_instructions separately for
+            // structured queries.
+            loggingService.logUserMessage({
+              messageId: assistantMessageId,
+              role: 'assistant',
+              content: rawMessage ?? finalMessage,
+              tokenUsage: usage
+                ? { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens }
+                : undefined,
             });
-          }
+
+            // Cost + usage tallies are tracked server-side in anthropic-stream.ts
+            // via SSE `message_delta.usage` parsing.
+
+            // Handle edit instructions if present. Check length — an empty
+            // array is truthy in JS, so omitting this check causes the
+            // whole graph-update + snapshot path to run for every reply
+            // that parsed to zero edits (leading to a 500 on saveSnapshot
+            // when the assistant message wasn't persisted).
+            if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
+              console.log('Edit instructions detected in ChatInterface:', editInstructions);
+              try {
+                const updatedGraph = applyEdits(graphData, editInstructions);
+                onGraphUpdate(updatedGraph);
+
+                // Log successful AI edit
+                loggingService.logAIEdit({
+                  graphData: updatedGraph,
+                  messageId: assistantMessageId,
+                  editInstructions,
+                  success: true,
+                });
+              } catch (error) {
+                console.error('Error applying graph edits:', error);
+
+                // Log failed AI edit
+                loggingService.logAIEdit({
+                  graphData: graphData, // Original unchanged graph
+                  messageId: assistantMessageId,
+                  editInstructions,
+                  success: false,
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                });
+
+                // Add an error message to the chat
+                const errorMessage: ChatMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
+            } else {
+              console.log('No edit instructions, callback, or graph data:', {
+                hasEditInstructions: !!editInstructions,
+                hasCallback: !!onGraphUpdate,
+                hasGraphData: !!graphData,
+              });
+            }
+          },
+          onError: (error: string) => {
+            // Legacy keyword-based classifier for generic error strings. New
+            // shapes (turnstile_required, idempotent_replay, body_too_large, …)
+            // arrive via onCostError below with structured data; we don't rely
+            // on the error-string path for them.
+            const classified = classifyCostError(error);
+            if (classified) {
+              // Surface as inline banner, don't pollute chat history
+              // (decision 8: preserve chat history on quota/cost failures so
+              // BYOK-recovered retries re-use the same messages array).
+              setCostErrorBanner(classified);
+            } else {
+              // Preserve any partial that streamed before the error so the
+              // user can read what they got + see the actual failure inline.
+              // Without this the partial vanishes and the user has no signal
+              // beyond the chat resetting. Mirror the `aborted` and
+              // `cap_exceeded` paths: capture content_blocks too so the
+              // half-built turn (text + signed thinking + paired tool blocks)
+              // round-trips into the next request. `isReplayableAssistantBlock`
+              // strips unsigned thinking and orphan tool blocks, and
+              // `fixupAssistantBlocksForReplay` handles trailing-shape edge
+              // cases — worst case Anthropic 400s on retry, best case the user
+              // recovers from a network blip without losing context.
+              const partial = streamingMessageRef.current;
+              const partialBlocks = streamingContentBlocksRef.current;
+              const hasBlocks = partialBlocks.length > 0;
+              const hasText = !!partial && partial.content.length > 0;
+              if (partial && (hasText || hasBlocks)) {
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'error',
+                  kill_message: error,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant errored before writing a visible response.)_',
+                  content_blocks: hasBlocks ? partialBlocks : undefined,
+                };
+                setMessages((prev) => [...prev, stamped]);
+              } else {
+                // No visible partial — surface the error as a fresh assistant
+                // turn so the user still sees what went wrong.
+                const errorMessage: ChatMessage = {
+                  id: assistantMessageId,
+                  role: 'assistant',
+                  content: `Error: ${error}`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
+            }
+            resetStreamUiState();
+          },
+          onContentBlocks: (blocks) => {
+            // Mirror chatService's accumulator so handleStopStreaming can
+            // read it synchronously when the user clicks Stop (the service's
+            // own AbortError catch fires too late for that path).
+            streamingContentBlocksRef.current = blocks;
+          },
+          onCostUpdate: (runningUsd: number) => {
+            creditByokDelta({
+              tag: 'chat',
+              runningUsd,
+              usesByok: streamUsesByok,
+              lastAppliedMicroRef: turnLastAppliedMicroRef,
+              chartId: streamChartId,
+              keyLast4: streamKeyLast4,
+            });
+            runningCostUsdRef.current = runningUsd;
+            setRunningCostUsd(runningUsd);
+          },
+          onCostError: (error) => {
+            // Preserve whatever partial content streamed before the kill so the
+            // user can still read it. Without this the entire assistant turn
+            // would vanish from the chat window on a mid-stream cap hit. Even
+            // when no visible text arrived (model was still thinking), keep a
+            // placeholder so the conversation history shows the turn happened.
+            const partial = streamingMessageRef.current;
+            if (partial) {
+              const hasText = partial.content.length > 0;
+              // Stamp the partial assistant turn with was_killed=true so the
+              // bubble shows an "interrupted" indicator. Capture the partial
+              // content_blocks too: when the user follows up with "continue",
+              // the next request ships the half-built turn (text + signed
+              // thinking + paired tool blocks) so Anthropic resumes from
+              // where the kill landed.
+              const partialBlocks = error.partialContentBlocks;
+              const stamped: ChatMessage = {
+                ...partial,
+                was_killed: true,
+                kill_reason: 'cap_exceeded',
+                content_blocks:
+                  partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
+                content: hasText
+                  ? partial.content
+                  : '_(Assistant was cut off before writing a visible response.)_',
+              };
+              setMessages((prev) => [...prev, stamped]);
+            }
+            handleCostError(error);
+            resetStreamUiState();
+          },
         },
-        onError: (error: string) => {
-          const errorMessage: ChatMessage = {
-            id: assistantMessageId,
-            role: 'assistant',
-            content: `Error: ${error}`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, errorMessage]);
-          setIsStreaming(false);
-          setStreamingContent('');
-          setIsSearching(false);
-          setIsThinking(false);
-          streamingMessageRef.current = null;
-        }
-      },
-      abortControllerRef.current?.signal, // signal parameter
-      selectedModel,
-      webSearchEnabled,
-      customSystemPrompt,
-      highlightedNodes,
-      extendedThinkingEnabled
-      );
+        signal: abortControllerRef.current?.signal,
+        model: selectedModel,
+        webSearchEnabled,
+        highlightedNodes,
+        extendedThinkingEnabled: true,
+        effort: selectedEffort,
+        attachedFileIds,
+        idempotencyKey,
+        chartId: resolvedChartId,
+        // For anon charts the worker's file-ownership gate in
+        // anthropic-stream.ts requires the editToken. Owned charts
+        // authorize via the JWT; passing the token alongside is harmless.
+        editToken: resolvedChart?.editToken,
+        loggingMessageId: userMessageId,
+        // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
+      });
     } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your request.',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-      setIsStreaming(false);
-      setStreamingContent('');
-      setIsSearching(false);
-      setIsThinking(false);
-      streamingMessageRef.current = null;
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Sorry, there was an error processing your request.';
+      const classified = classifyCostError(message);
+      if (classified) {
+        setCostErrorBanner(classified);
+      } else {
+        const errorMessage: ChatMessage = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your request.',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      }
+      resetStreamUiState();
     } finally {
       setIsLoading(false);
+      sendInFlightRef.current = false;
     }
   };
 
@@ -538,6 +2086,8 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 
   const clearChat = () => {
     setMessages([]);
+    setChatAttachedFiles([]);
+    setCostErrorBanner(null);
     // Clear chat history from localStorage
     try {
       const storageKey = getStorageKey();
@@ -545,53 +2095,493 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
     } catch (error) {
       console.error('Failed to clear chat history from localStorage:', error);
     }
-  };
 
-
-  const handleFileUpload = async (selectedFiles: FileList) => {
-    const newFiles: UploadedFile[] = [];
-
-    for (let i = 0; i < selectedFiles.length; i++) {
-      const file = selectedFiles[i];
-      const uploadedFile: UploadedFile = {
-        file,
-        content: '',
-        status: 'reading'
-      };
-      newFiles.push(uploadedFile);
-    }
-
-    setFiles(prev => [...prev, ...newFiles]);
-
-    // Parse file contents using our new parser
-    for (let i = 0; i < newFiles.length; i++) {
-      const uploadedFile = newFiles[i];
-      try {
-        const result = await parseFile(uploadedFile.file);
-
-        if (result.success) {
-          uploadedFile.content = result.content;
-          uploadedFile.status = 'ready';
-        } else {
-          console.error('Error parsing file:', result.error);
-          uploadedFile.content = '';
-          uploadedFile.status = 'error';
-          uploadedFile.errorMessage = result.error;
+    // Fire-and-forget: purge server-side Files API uploads tied to this
+    // chart so we don't leak Anthropic storage. The user-visible response
+    // doesn't wait on this — they've already moved on.
+    //
+    // For anon charts the worker requires the editToken (header or query
+    // param); owned charts use the JWT via getAuthHeaders(). If we only
+    // have the editToken (route `/edit/<token>`, no cached chartId yet)
+    // skip — we don't have a real chart_id to send anyway.
+    const chartIdForCleanup = params.chartId ?? autosavedChartIdRef.current;
+    const editTokenForCleanup = params.editToken ?? autosavedEditTokenRef.current;
+    if (chartIdForCleanup) {
+      void (async () => {
+        try {
+          const headers = await getAuthHeaders();
+          if (editTokenForCleanup) {
+            headers['X-Edit-Token'] = editTokenForCleanup;
+          }
+          await fetch(`/api/chart-files?chart_id=${encodeURIComponent(chartIdForCleanup)}`, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers,
+          });
+        } catch (err) {
+          console.warn('[ChatInterface] chart-files cleanup failed:', err);
         }
-      } catch (error) {
-        console.error('Error reading file:', error);
-        uploadedFile.status = 'error';
-      }
-
-      setFiles(prev => prev.map(f =>
-        f.file === uploadedFile.file ? uploadedFile : f
-      ));
+      })();
     }
   };
+
+  // Cached chart identity for charts auto-saved this session. ensureChartExists
+  // updates the URL via history.replaceState (no route re-render), so React
+  // Router params lag the actual chart on subsequent calls; these refs are
+  // the synchronous source of truth.
+  const autosavedEditTokenRef = useRef<string | null>(null);
+  const autosavedChartIdRef = useRef<string | null>(null);
+
+  /**
+   * Ensure the chat has a persisted chart before doing anything that needs a
+   * chart_id (file uploads, logging, per-chart BYOK spend, etc.). For the
+   * `/` root route this lazily POSTs `/api/charts` on demand; for the
+   * `/edit/<token>` and `/chart/<id>` routes the chart already exists and
+   * we just return its id. Idempotent — safe to call multiple times.
+   *
+   * Side effects on first creation: navigates to `/edit/<editToken>` (with
+   * replace=true so the back button doesn't return to `/`) and fires
+   * `onChartCreated`, which in App.tsx triggers `initializeLogging` — so
+   * the logging session is up before the first saveMessage lands.
+   */
+  const ensureChartExists = useCallback(async (): Promise<{
+    chartId: string;
+    editToken: string;
+  } | null> => {
+    // 1. Already have both (route param, autosave ref, or previous lookup).
+    const existingChartId = params.chartId ?? autosavedChartIdRef.current;
+    const existingEditToken = params.editToken ?? autosavedEditTokenRef.current;
+    if (existingChartId && existingEditToken) {
+      return { chartId: existingChartId, editToken: existingEditToken };
+    }
+    // 2. Have editToken but no chartId — happens on `/edit/<token>` after a
+    //    page reload, since autosavedChartIdRef is memory-only. Resolve via
+    //    the API rather than creating a new chart (which would strand the
+    //    user's existing one). Also guards against the past bug where
+    //    editToken (36 chars) fell through as chart_id (VARCHAR(12)).
+    if (existingEditToken && !existingChartId) {
+      try {
+        const resolved = await ChartService.getChartByEditToken(existingEditToken);
+        autosavedChartIdRef.current = resolved.chartId;
+        autosavedEditTokenRef.current = existingEditToken;
+        return { chartId: resolved.chartId, editToken: existingEditToken };
+      } catch (e) {
+        // Do NOT fall through to createChart — we already have an editToken
+        // pointing at a real chart, creating a new one would strand the
+        // user's existing chart under a different URL and they'd lose their
+        // work. Surface the error via the cost-error banner (reusing the
+        // service_unavailable kind since it's the same "try again" shape)
+        // and return null so the caller knows not to proceed.
+        console.error('[ChatInterface] getChartByEditToken failed:', e);
+        setCostErrorBanner({
+          kind: 'service_unavailable',
+          message:
+            "Couldn't load your chart. Check your connection and try again — " +
+            "we won't create a duplicate while the existing chart is still around.",
+        });
+        return null;
+      }
+    }
+    // 3. No chart yet — auto-save.
+    if (!graphData) return null;
+    try {
+      const created = await ChartService.createChart(graphData);
+      ChartService.saveEditToken(created.chartId, created.editToken);
+      autosavedEditTokenRef.current = created.editToken;
+      autosavedChartIdRef.current = created.chartId;
+      // Migrate any chat history already persisted under the pre-navigation
+      // URL's storage key to the new chart's key. Covers the refresh-after-
+      // send case (user sends a message on `/`, we auto-create a chart, the
+      // message gets saved under `chatHistory_root` by the save-effect
+      // before we navigate — without this migration it'd be stranded
+      // there after the URL transitions to `/edit/<token>`).
+      const oldKey = getStorageKey();
+      const newKey = `chatHistory_edit_${created.editToken}`;
+      if (oldKey !== newKey) {
+        const existing = localStorage.getItem(oldKey);
+        if (existing) {
+          localStorage.setItem(newKey, existing);
+          localStorage.removeItem(oldKey);
+        }
+      }
+      // Use React Router's navigate instead of window.history.replaceState
+      // so useParams()/useLocation() stay in sync with the URL bar. Raw
+      // replaceState bypasses the router, leaving params.editToken stale,
+      // which caused the save-chat effect to keep writing to
+      // chatHistory_root instead of chatHistory_edit_<token> until the
+      // next full reload — so first-message sessions lost their history.
+      // The flag tells the route-change effect NOT to wipe the in-memory
+      // `messages` state during the transition (messages are mid-flight).
+      // `state.skipChartReload` tells ToCViewer's load effect not to
+      // re-fetch the chart from the server (we just created it, it's
+      // already in memory). Without this, the user sees a brief flash of
+      // the loading state every time auto-create fires — on first
+      // message, on every PDF upload, and after Turnstile if that's the
+      // first send.
+      justAutoCreatedRef.current = true;
+      navigate(`/edit/${created.editToken}`, {
+        replace: true,
+        state: { skipChartReload: true },
+      });
+      onChartCreated?.(created.editToken, created.chartId);
+      return { chartId: created.chartId, editToken: created.editToken };
+    } catch (e) {
+      console.error('[ChatInterface] ensureChartExists failed:', e);
+      return null;
+    }
+  }, [params.chartId, params.editToken, graphData, onChartCreated, navigate, getStorageKey]);
+
+  const uploadPdfToFilesApi = useCallback(
+    async (
+      file: File,
+    ): Promise<{ file_id: string; filename: string; size_bytes: number; mime_type: string }> => {
+      // Delegate chart resolution to ensureChartExists so the upload path
+      // can't accidentally use editToken (36 chars) as chart_id (VARCHAR(12))
+      // — the fallback chain in the old inline code did exactly that on
+      // page reloads, producing NeonDbError: value too long for type
+      // character varying(12).
+      const chart = await ensureChartExists();
+      if (!chart) {
+        throw new Error('No chart data available to save');
+      }
+      const chartIdForUpload = chart.chartId;
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('chart_id', chartIdForUpload);
+
+      const headers = await getAuthHeaders();
+      // Anon charts (user_id NULL on the server) require the edit token to
+      // authorize an upload; without it the Worker returns 403 "forbidden"
+      // before ever talking to Anthropic, so page-limit errors get masked.
+      if (chart.editToken) {
+        headers['X-Edit-Token'] = chart.editToken;
+      }
+      const response = await fetch('/api/upload-file', {
+        method: 'POST',
+        credentials: 'include',
+        headers, // multipart boundary set by the browser
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        // Prefer the server's human-readable `upstream_message` over the
+        // machine error code (e.g. "pdf_too_many_pages") — the code is
+        // useful for branching logic but awful as a user-facing error.
+        const friendly =
+          typeof errorBody?.upstream_message === 'string' && errorBody.upstream_message.length > 0
+            ? errorBody.upstream_message
+            : typeof errorBody?.error === 'string'
+              ? errorBody.error
+              : `Upload failed (${response.status})`;
+        throw new Error(friendly);
+      }
+      return response.json();
+    },
+    [getAuthHeaders, ensureChartExists],
+  );
+
+  // Generate-mode file handler. Text files continue to be inlined via the
+  // existing `files` state (parseText-decoded on pick). PDFs route through
+  // the Files API: a chip in `generateAttachedChips` tracks the upload;
+  // `generateAttachedFileIds` is the list forwarded to streamMessage as
+  // document blocks, matching Chat mode.
+  const handleFileUpload = useCallback(
+    async (selectedFiles: FileList | File[]) => {
+      const list = Array.from(selectedFiles);
+      if (list.length === 0) return;
+
+      for (const file of list) {
+        const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+        if (isPdf) {
+          const id = crypto.randomUUID();
+          setGenerateAttachedChips((prev) => [
+            ...prev,
+            {
+              id,
+              filename: file.name,
+              mimeType: file.type || 'application/pdf',
+              sizeBytes: file.size,
+              status: 'uploading',
+              raw: file,
+            },
+          ]);
+          try {
+            const data = await uploadPdfToFilesApi(file);
+            setGenerateAttachedChips((prev) =>
+              prev.map((f) =>
+                f.id === id
+                  ? {
+                      ...f,
+                      status: 'ready',
+                      fileId: data.file_id,
+                      filename: data.filename,
+                      mimeType: data.mime_type,
+                      sizeBytes: data.size_bytes,
+                    }
+                  : f,
+              ),
+            );
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Upload failed';
+            setGenerateAttachedChips((prev) =>
+              prev.map((f) => (f.id === id ? { ...f, status: 'error', error: message } : f)),
+            );
+          }
+          continue;
+        }
+
+        // Text-like file: keep the legacy inline flow.
+        const uploadedFile: UploadedFile = { file, content: '', status: 'reading' };
+        setFiles((prev) => [...prev, uploadedFile]);
+        try {
+          const result = await parseFile(file);
+          if (result.success && result.kind === 'text') {
+            uploadedFile.content = result.content;
+            uploadedFile.status = 'ready';
+          } else if (result.kind === 'error') {
+            console.error('Error parsing file:', result.error);
+            uploadedFile.content = '';
+            uploadedFile.status = 'error';
+            uploadedFile.errorMessage = result.error;
+          }
+        } catch (error) {
+          console.error('Error reading file:', error);
+          uploadedFile.status = 'error';
+        }
+        setFiles((prev) => prev.map((f) => (f.file === uploadedFile.file ? uploadedFile : f)));
+      }
+    },
+    [uploadPdfToFilesApi],
+  );
+
+  // Retry a failed Generate-mode PDF upload in place.
+  const handleGenerateFileRetry = useCallback(
+    (id: string) => {
+      // Snapshot the raw File and flip the chip back to 'uploading' before
+      // kicking the async upload. Doing the mutation + read in two steps
+      // keeps the state updater pure.
+      let file: File | undefined;
+      setGenerateAttachedChips((prev) => {
+        file = prev.find((f) => f.id === id)?.raw;
+        if (!file) return prev;
+        return prev.map((f) => (f.id === id ? { ...f, status: 'uploading', error: undefined } : f));
+      });
+      if (!file) return;
+
+      void (async () => {
+        try {
+          const data = await uploadPdfToFilesApi(file);
+          setGenerateAttachedChips((cur) =>
+            cur.map((f) =>
+              f.id === id
+                ? {
+                    ...f,
+                    status: 'ready',
+                    fileId: data.file_id,
+                    filename: data.filename,
+                    mimeType: data.mime_type,
+                    sizeBytes: data.size_bytes,
+                  }
+                : f,
+            ),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Upload failed';
+          setGenerateAttachedChips((cur) =>
+            cur.map((f) => (f.id === id ? { ...f, status: 'error', error: message } : f)),
+          );
+        }
+      })();
+    },
+    [uploadPdfToFilesApi],
+  );
+
+  const handleGenerateFileRemove = useCallback(
+    (id: string) => {
+      // Same orphan-cleanup posture as handleChatFileRemove: if the
+      // removed chip was an already-uploaded PDF, fire the DELETE so the
+      // Anthropic file + chart_files row don't linger.
+      const removed = generateAttachedChips.find((f) => f.id === id);
+      setGenerateAttachedChips((prev) => prev.filter((f) => f.id !== id));
+      if (removed?.kind === 'upload' && removed.fileId) {
+        const editTokenForCleanup = params.editToken ?? autosavedEditTokenRef.current;
+        void (async () => {
+          try {
+            const headers = await getAuthHeaders();
+            if (editTokenForCleanup) {
+              headers['X-Edit-Token'] = editTokenForCleanup;
+            }
+            await fetch(`/api/files/${encodeURIComponent(removed.fileId!)}`, {
+              method: 'DELETE',
+              headers,
+            });
+          } catch (err) {
+            console.warn('[ChatInterface] delete-file cleanup failed:', err);
+          }
+        })();
+      }
+    },
+    [generateAttachedChips, getAuthHeaders, params.editToken],
+  );
 
   const removeFile = (fileToRemove: File) => {
-    setFiles(prev => prev.filter(f => f.file !== fileToRemove));
+    setFiles((prev) => prev.filter((f) => f.file !== fileToRemove));
   };
+
+  // File inputs for the Chat-mode paperclip. Separate ref so we can reset
+  // the input value after each pick (browsers ignore re-picking the same
+  // file without a clear).
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Upsert a chip into the chat attachment tray, preserving its visual
+  // position on retries: if an entry with the same id already exists we
+  // replace it in place; otherwise we append. Previously we filtered + re-
+  // appended which reordered chips on retry.
+  type ChatChip = (typeof chatAttachedFiles)[number];
+  const upsertChip = useCallback((id: string, next: ChatChip) => {
+    setChatAttachedFiles((prev) => {
+      const idx = prev.findIndex((f) => f.id === id);
+      if (idx === -1) return [...prev, next];
+      const copy = prev.slice();
+      copy[idx] = next;
+      return copy;
+    });
+  }, []);
+
+  // Upload a single file into the chat attachment tray. Text files are
+  // inlined (carries `content`); PDFs are pushed to /api/upload-file and
+  // the returned `file_id` is stored for the next message. On error the
+  // chip flips to an error state with a Retry affordance.
+  const uploadChatFile = useCallback(
+    async (file: File, existingId?: string) => {
+      const id = existingId ?? crypto.randomUUID();
+      const parsed = await parseFile(file);
+
+      if (parsed.kind === 'error') {
+        upsertChip(id, {
+          id,
+          filename: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          sizeBytes: file.size,
+          status: 'error',
+          error: parsed.error,
+          kind: 'text',
+          raw: file,
+        });
+        return;
+      }
+
+      if (parsed.kind === 'text') {
+        upsertChip(id, {
+          id,
+          filename: parsed.filename,
+          mimeType: file.type || 'text/plain',
+          sizeBytes: parsed.sizeBytes,
+          status: 'ready',
+          kind: 'text',
+          content: parsed.content,
+          raw: file,
+        });
+        return;
+      }
+
+      // kind === 'upload' — PDF flow via the Anthropic Files API proxy.
+      // Chip starts in 'uploading', flips to 'ready' once the worker
+      // returns a file_id, or 'error' on failure.
+      upsertChip(id, {
+        id,
+        filename: parsed.filename,
+        mimeType: parsed.mimeType,
+        sizeBytes: parsed.sizeBytes,
+        status: 'uploading',
+        kind: 'upload',
+        raw: file,
+      });
+
+      try {
+        const data = await uploadPdfToFilesApi(file);
+        setChatAttachedFiles((prev) =>
+          prev.map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  status: 'ready',
+                  fileId: data.file_id,
+                  filename: data.filename,
+                  mimeType: data.mime_type,
+                  sizeBytes: data.size_bytes,
+                }
+              : f,
+          ),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Upload failed';
+        setChatAttachedFiles((prev) =>
+          prev.map((f) => (f.id === id ? { ...f, status: 'error', error: message } : f)),
+        );
+      }
+    },
+    [uploadPdfToFilesApi, upsertChip],
+  );
+
+  const handleChatFileSelect = useCallback(
+    (selected: FileList | File[]) => {
+      const list = Array.from(selected);
+      for (const file of list) {
+        void uploadChatFile(file);
+      }
+    },
+    [uploadChatFile],
+  );
+
+  const handleChatFileRemove = useCallback(
+    (id: string) => {
+      // Snapshot the chip before we filter it out so we can tell if it
+      // needs a server-side cleanup (uploaded PDF → chart_files row +
+      // Anthropic Files API entry) or is purely local (text file we
+      // never uploaded, or a still-uploading placeholder with no
+      // file_id yet).
+      const removed = chatAttachedFiles.find((f) => f.id === id);
+      setChatAttachedFiles((prev) => prev.filter((f) => f.id !== id));
+      if (removed?.kind === 'upload' && removed.fileId) {
+        const editTokenForCleanup = params.editToken ?? autosavedEditTokenRef.current;
+        void (async () => {
+          try {
+            const headers = await getAuthHeaders();
+            if (editTokenForCleanup) {
+              headers['X-Edit-Token'] = editTokenForCleanup;
+            }
+            await fetch(`/api/files/${encodeURIComponent(removed.fileId!)}`, {
+              method: 'DELETE',
+              headers,
+            });
+          } catch (err) {
+            // Fire-and-forget — the sweep/clear-chat paths catch orphans
+            // if this DELETE misses. Logging only for visibility.
+            console.warn('[ChatInterface] delete-file cleanup failed:', err);
+          }
+        })();
+      }
+    },
+    [chatAttachedFiles, getAuthHeaders, params.editToken],
+  );
+
+  const handleChatFileRetry = useCallback(
+    (id: string) => {
+      setChatAttachedFiles((prev) => {
+        const target = prev.find((f) => f.id === id);
+        if (target?.raw) {
+          // Re-kick the upload; the existing id is reused so the chip
+          // remains in place and flips back to 'uploading'.
+          void uploadChatFile(target.raw, id);
+        }
+        return prev;
+      });
+    },
+    [uploadChatFile],
+  );
 
   const loadGeneratedGraph = () => {
     if (generatedGraphData && onGraphUpdate) {
@@ -599,36 +2589,45 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
       onGraphUpdate(generatedGraphData);
       setGeneratedGraphData(null); // Clear after loading
 
-      // Add confirmation message
       const confirmMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'assistant',
         content: '🎯 **Graph Loaded!** The Theory of Change has been loaded into your workspace.',
-        timestamp: new Date()
+        timestamp: new Date(),
       };
-      setMessages(prev => [...prev, confirmMessage]);
+      setMessages((prev) => [...prev, confirmMessage]);
     }
   };
 
   const startGeneration = async () => {
-    if (files.filter(f => f.status === 'ready').length === 0) {
+    // Synchronous double-send guard, same as handleSendMessage. See
+    // sendInFlightRef declaration for rationale.
+    if (sendInFlightRef.current) return;
+
+    const readyTextFiles = files.filter((f) => f.status === 'ready').length;
+    const readyPdfFiles = generateAttachedFileIds.length;
+    if (readyTextFiles + readyPdfFiles === 0) {
+      return;
+    }
+    // Block on in-flight PDF uploads so the request doesn't race the file_id.
+    if (generateAttachedChips.some((f) => f.status === 'uploading')) {
       return;
     }
 
+    sendInFlightRef.current = true;
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingContent('');
-    setConversationStarted(true);
+    setStreamingThinking('');
+    streamingContentBlocksRef.current = [];
 
-    // Set thinking state if extended thinking is enabled
-    if (extendedThinkingEnabled) {
-      setIsThinking(true);
-    }
+    // Extended thinking is always on.
+    setStreamPhase('thinking');
 
     // Combine all file contents
     const documentContent = files
-      .filter(f => f.status === 'ready')
-      .map(f => `=== ${f.file.name} ===\n${f.content}`)
+      .filter((f) => f.status === 'ready')
+      .map((f) => `=== ${f.file.name} ===\n${f.content}`)
       .join('\n\n');
 
     // Create the specialized conversation prompt
@@ -637,14 +2636,17 @@ export function ChatInterface({ height, isCollapsed, onToggle, graphData, onGrap
 ## Document Content:
 ${documentContent}
 
-${additionalInstructions.trim() ? `## Additional Instructions:
+${
+  additionalInstructions.trim()
+    ? `## Additional Instructions:
 ${additionalInstructions.trim()}
 
-` : ''}Based on this information, generate a comprehensive Theory of Change development conversation following the gold standard process. The conversation should demonstrate evidence-based thinking, counterfactual discipline, and result in a complete, implementable JSON graph structure.
+`
+    : ''
+}Based on this information, generate a comprehensive Theory of Change development conversation following the gold standard process. The conversation should demonstrate evidence-based thinking, counterfactual discipline, and result in a complete, implementable JSON graph structure.
 
 IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot and Organization Representative, with back-and-forth exchanges that show the thinking process.`;
 
-    // Generate UUIDs for message consistency
     const userMessageId = crypto.randomUUID();
     const generationAssistantId = crypto.randomUUID();
 
@@ -652,7 +2654,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       id: userMessageId,
       role: 'user',
       content: conversationPrompt,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
     // Switch to chat mode to show the generation
@@ -663,131 +2665,239 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       id: generationAssistantId,
       role: 'assistant',
       content: '',
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
     // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
+    // See chat-path comment above; Generate is always BYOK (hasKey required
+    // to render the panel) but still snapshot for parity and to survive the
+    // unlikely case of a key swap mid-stream.
+    //
+    // Generate doesn't go through ensureChartExists (PDFs were uploaded
+    // earlier in the flow, which auto-created the chart and populated the
+    // autosaved* refs). But on the very first send from `/`, params can
+    // still be the pre-navigation snapshot in this closure — same race
+    // as the chat path. Prefer autosavedEditTokenRef which is set
+    // synchronously by the upload's chart-create step, falling back to
+    // params for the path where the user landed on /edit/<token> directly.
+    const streamChartId =
+      autosavedEditTokenRef.current ?? params.chartId ?? params.editToken ?? null;
+    const streamKeyLast4 = keyLast4;
+    const streamUsesByok = hasKey;
+    turnLastAppliedMicroRef.current = 0;
+
     try {
-      await chatService.streamMessage(
-        [generationMessage],
-        graphData,
-        'generate',
-        apiKey,
-        {
-          onContent: (chunk: string, fullContent: string) => {
-            // Clear thinking state when content starts streaming
-            if (isThinking) {
-              setIsThinking(false);
-            }
-            setStreamingContent(fullContent);
+      await chatService.streamMessage({
+        messages: [generationMessage],
+        currentGraphData: graphData,
+        mode: 'generate',
+        callbacks: {
+          onStreamPhase: (phase) => {
+            setStreamPhase(phase);
           },
-          onComplete: (finalMessage: string, editInstructions?: any, usage?: any) => {
-          const assistantMessage: ChatMessage = {
-            id: generationAssistantId,
-            role: 'assistant',
-            content: finalMessage,
-            timestamp: new Date(),
-            usage: usage ? {
-              input_tokens: usage.input_tokens || 0,
-              output_tokens: usage.output_tokens || 0,
-              total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
-            } : undefined
-          };
+          onContent: (_chunk: string, fullContent: string) => {
+            setStreamingContent(fullContent);
+            // Mirror into the ref so onCostError can preserve the partial
+            // text when the stream is killed mid-turn. Without this the
+            // ref's `content` stays at '' (only ever assigned at stream
+            // start) and the kill-recovery path falls back to the
+            // "cut off before writing a visible response" placeholder —
+            // even when text deltas did arrive.
+            if (streamingMessageRef.current) {
+              streamingMessageRef.current.content = fullContent;
+            }
+          },
+          onComplete: (finalMessage, editInstructions, usage) => {
+            const assistantMessage: ChatMessage = {
+              id: generationAssistantId,
+              role: 'assistant',
+              content: finalMessage,
+              timestamp: new Date(),
+              usage: usage
+                ? {
+                    input_tokens: usage.input_tokens || 0,
+                    output_tokens: usage.output_tokens || 0,
+                    total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+                    cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+                    web_search_requests: usage.server_tool_use?.web_search_requests || 0,
+                    cost_usd: runningCostUsdRef.current ?? undefined,
+                  }
+                : undefined,
+            };
 
-          setMessages(prev => [...prev, assistantMessage]);
-          setIsStreaming(false);
-          setStreamingContent('');
-          setIsThinking(false);
-          setFullConversation(finalMessage);
-          streamingMessageRef.current = null;
+            setMessages((prev) => [...prev, assistantMessage]);
+            resetStreamUiState();
 
-          // Track token usage in database
-          if (usage?.input_tokens && params.editToken) {
-            const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            fetch('/.netlify/functions/updateTokenUsage', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editToken: params.editToken, tokensUsed: totalTokens })
-            }).catch(err => console.error('Failed to update token usage:', err));
-          }
+            // Cost + usage tallies are tracked server-side; refresh the
+            // progress bar now that the tally has landed.
+            void refreshUsage();
 
-          // Check for generated graph JSON and store it
-          if (hasGeneratedGraph(finalMessage)) {
-            const generatedGraph = parseGeneratedGraph(finalMessage);
-            console.log('Generated graph:', generatedGraph);
-            console.log('onGraphUpdate available:', !!onGraphUpdate);
+            // Check for generated graph JSON and store it
+            if (hasGeneratedGraph(finalMessage)) {
+              const generatedGraph = parseGeneratedGraph(finalMessage);
+              console.log('Generated graph:', generatedGraph);
+              console.log('onGraphUpdate available:', !!onGraphUpdate);
 
-            if (generatedGraph) {
-              // Store the generated graph for manual loading
-              console.log('Storing generated graph for manual loading');
-              setGeneratedGraphData(generatedGraph);
+              if (generatedGraph) {
+                // Store the generated graph for manual loading
+                console.log('Storing generated graph for manual loading');
+                setGeneratedGraphData(generatedGraph);
 
-              // Add a success message with load button
-              const successMessage: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: '✅ **Graph Generated Successfully!** A complete Theory of Change has been created. Click the button below to load it into your workspace.',
-                timestamp: new Date()
-              };
-              setMessages(prev => [...prev, successMessage]);
+                // Add a success message with load button
+                const successMessage: ChatMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content:
+                    '✅ **Graph Generated Successfully!** A complete Theory of Change has been created. Click the button below to load it into your workspace.',
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, successMessage]);
+              } else {
+                // Add an error message if parsing failed
+                const errorMessage: ChatMessage = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content:
+                    '⚠️ **Graph Parse Error**: The AI generated a complete Theory of Change conversation, but there was an issue parsing the JSON structure. Please check the generated JSON manually.',
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
+            }
+
+            // Handle edit instructions if present (for regular chat mode).
+            // Empty array is truthy; length check avoids triggering the
+            // graph-update + snapshot path when Claude returned no edits.
+            if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
+              try {
+                const updatedGraph = applyEdits(graphData, editInstructions);
+                onGraphUpdate(updatedGraph);
+              } catch (error) {
+                console.error('Error applying graph edits:', error);
+              }
+            }
+          },
+          onError: (error: string) => {
+            // See chat-site commentary: keyword classifier is the legacy
+            // fallback for generic error strings; structured shapes arrive via
+            // onCostError below. Mirror the Chat-site error path: preserve
+            // partial content_blocks so signed thinking + paired tool blocks
+            // round-trip into the next request after a transient failure.
+            const classified = classifyCostError(error);
+            if (classified) {
+              setCostErrorBanner(classified);
             } else {
-              // Add an error message if parsing failed
-              const errorMessage: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: '⚠️ **Graph Parse Error**: The AI generated a complete Theory of Change conversation, but there was an issue parsing the JSON structure. Please check the generated JSON manually.',
-                timestamp: new Date()
-              };
-              setMessages(prev => [...prev, errorMessage]);
+              const partial = streamingMessageRef.current;
+              const partialBlocks = streamingContentBlocksRef.current;
+              const hasBlocks = partialBlocks.length > 0;
+              const hasText = !!partial && partial.content.length > 0;
+              if (partial && (hasText || hasBlocks)) {
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'error',
+                  kill_message: error,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant errored before writing a visible response.)_',
+                  content_blocks: hasBlocks ? partialBlocks : undefined,
+                };
+                setMessages((prev) => [...prev, stamped]);
+              } else {
+                const errorMessage: ChatMessage = {
+                  id: generationAssistantId,
+                  role: 'assistant',
+                  content: `Error: ${error}`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
             }
-          }
-
-          // Handle edit instructions if present (for regular chat mode)
-          if (editInstructions && onGraphUpdate && graphData) {
-            try {
-              const updatedGraph = applyEdits(graphData, editInstructions);
-              onGraphUpdate(updatedGraph);
-            } catch (error) {
-              console.error('Error applying graph edits:', error);
+            resetStreamUiState();
+          },
+          onContentBlocks: (blocks) => {
+            // Mirror chatService's accumulator so handleStopStreaming can
+            // read it synchronously when the user clicks Stop (the service's
+            // own AbortError catch fires too late for that path).
+            streamingContentBlocksRef.current = blocks;
+          },
+          onCostUpdate: (runningUsd: number) => {
+            creditByokDelta({
+              tag: 'gen',
+              runningUsd,
+              usesByok: streamUsesByok,
+              lastAppliedMicroRef: turnLastAppliedMicroRef,
+              chartId: streamChartId,
+              keyLast4: streamKeyLast4,
+            });
+            runningCostUsdRef.current = runningUsd;
+            setRunningCostUsd(runningUsd);
+          },
+          onCostError: (error) => {
+            // Preserve the partial Generate turn (text/thinking streamed
+            // before the kill) so it's still visible in the chat. Even with
+            // no visible text (cut off mid-thinking), keep a placeholder.
+            const partial = streamingMessageRef.current;
+            if (partial) {
+              const hasText = partial.content.length > 0;
+              setMessages((prev) => [
+                ...prev,
+                hasText
+                  ? partial
+                  : {
+                      ...partial,
+                      content: '_(Assistant was cut off before writing a visible response.)_',
+                    },
+              ]);
             }
-          }
+            handleCostError(error);
+            resetStreamUiState();
+          },
         },
-        onError: (error: string) => {
-          const errorMessage: ChatMessage = {
-            id: generationAssistantId,
-            role: 'assistant',
-            content: `Error: ${error}`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, errorMessage]);
-          setIsStreaming(false);
-          setStreamingContent('');
-          streamingMessageRef.current = null;
-        }
-      },
-      abortControllerRef.current?.signal, // signal parameter
-      selectedModel,
-      webSearchEnabled,
-      customSystemPrompt,
-      highlightedNodes,
-      extendedThinkingEnabled
-      );
+        signal: abortControllerRef.current?.signal,
+        model: selectedModel,
+        webSearchEnabled,
+        highlightedNodes,
+        extendedThinkingEnabled: true,
+        effort: selectedEffort,
+        attachedFileIds: generateAttachedFileIds,
+        idempotencyKey: crypto.randomUUID(), // fresh per send: dedupes browser reload / double-click
+        // Generate mode always has a chart by this point (attached files
+        // routed through uploadPdfToFilesApi, which calls ensureChartExists).
+        // Fall back to route params for defense in depth but never leak
+        // editToken through as chart_id.
+        chartId: params.chartId ?? autosavedChartIdRef.current ?? undefined,
+        // For anon charts the worker's file-ownership gate in
+        // anthropic-stream.ts requires the editToken. Owned charts
+        // authorize via the JWT; passing the token alongside is harmless.
+        editToken: params.editToken ?? autosavedEditTokenRef.current ?? undefined,
+        loggingMessageId: userMessageId,
+        // userAnthropicKey: server-stored BYOK; raw key not held client-side.
+      });
     } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: generationAssistantId,
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your request.',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-      setIsStreaming(false);
-      setStreamingContent('');
-      setIsThinking(false);
-      streamingMessageRef.current = null;
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Sorry, there was an error processing your request.';
+      const classified = classifyCostError(message);
+      if (classified) {
+        setCostErrorBanner(classified);
+      } else {
+        const errorMessage: ChatMessage = {
+          id: generationAssistantId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your request.',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      }
+      resetStreamUiState();
     } finally {
       setIsLoading(false);
+      sendInFlightRef.current = false;
     }
   };
 
@@ -795,10 +2905,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     <>
       {/* Mobile overlay backdrop */}
       {!isCollapsed && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
-          onClick={onToggle}
-        />
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden" onClick={onToggle} />
       )}
 
       {/* Mobile floating toggle button - only shown when collapsed on mobile, positioned above JSON dropdown */}
@@ -821,571 +2928,837 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         style={{
           top: '52px',
           bottom: 0,
-          height: 'calc(100vh - 52px)'
+          height: 'calc(100vh - 52px)',
         }}
       >
-      {/* Toggle Button */}
-      <div className="flex-shrink-0 p-2 border-b border-gray-200">
-        <button
-          onClick={onToggle}
-          className="w-full h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-          title={isCollapsed ? "Expand AI Assistant" : "Collapse AI Assistant"}
-        >
-          {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
-          <ChevronLeftIcon className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`} />
-        </button>
-      </div>
+        {/* Toggle Button */}
+        <div className="flex-shrink-0 p-2 border-b border-gray-200">
+          <button
+            onClick={onToggle}
+            className="w-full h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
+            title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+          >
+            {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
+            <ChevronLeftIcon
+              className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
+            />
+          </button>
+        </div>
 
-      {/* Chat Content */}
-      <div className={`flex-1 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}>
-        <div className="h-full flex flex-col">
-          {/* Chat Header */}
-          <div className="p-3 border-b border-gray-200">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                {((currentMode === 'chat' && messages.length > 0) || (currentMode === 'search' && searchResults.length > 0)) && (
+        {/* Chat Content */}
+        <div
+          className={`flex-1 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}
+        >
+          <div className="h-full flex flex-col">
+            {/* Chat Header */}
+            <div className="p-3 border-b border-gray-200">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  {currentMode === 'chat' && messages.length > 0 && (
+                    <button
+                      onClick={() => {
+                        // Destructive: wipes the in-memory chat + attached files +
+                        // any uploaded file chips from the server. Confirm first so
+                        // a mis-click can't silently delete a long conversation.
+                        if (
+                          window.confirm(
+                            'Clear the entire chat? This removes all messages and any files attached in Chat. Your chart and Generate state are unaffected.',
+                          )
+                        ) {
+                          clearChat();
+                        }
+                      }}
+                      className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
+                      title="Clear chat"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Mode Switcher and Model Selector */}
+              <div className="space-y-2">
+                <div className="flex bg-gray-100 rounded-lg p-1">
                   <button
-                    onClick={() => {
-                      if (currentMode === 'chat') clearChat();
-                      if (currentMode === 'search') {
-                        setSearchResults([]);
-                        setSearchAnswer('');
-                        setSearchQuery('');
-                      }
-                    }}
-                    className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
-                    title={currentMode === 'chat' ? 'Clear chat' : 'Clear search'}
+                    onClick={() => setCurrentMode('chat')}
+                    className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
+                      currentMode === 'chat'
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-800'
+                    }`}
                   >
-                    Clear
+                    <ChatBubbleLeftRightIcon className="w-4 h-4" />
+                    <span>Chat</span>
                   </button>
+                  <button
+                    onClick={() => setCurrentMode('generate')}
+                    className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
+                      currentMode === 'generate'
+                        ? 'bg-white text-purple-600 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-800'
+                    }`}
+                  >
+                    <DocumentTextIcon className="w-4 h-4" />
+                    <span>Generate</span>
+                  </button>
+                </div>
+
+                {/* Usage / quota indicator. BYOK users see a pill instead of a
+                progress bar (no shared pool is consumed). Key management
+                (change/remove) lives in the profile dropdown's "Anthropic
+                API key" modal. The per-chart spend figure is a best-effort
+                client-side tally (localStorage); Anthropic's dashboard is
+                the source of truth for billing. */}
+                {usage && (
+                  <div className="mt-2">
+                    {usage.tier === 'byok' ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-gray-700">
+                        <span aria-hidden>🔑</span>
+                        <span>
+                          BYOK{keyLast4 ? ` · ...${keyLast4}` : ''}
+                          {chartByokSpendUsd > 0 && (
+                            <> &middot; {formatCostUsd(chartByokSpendUsd)} this chart</>
+                          )}
+                        </span>
+                      </span>
+                    ) : (
+                      <div>
+                        <div
+                          className="w-full h-1 bg-gray-200 rounded overflow-hidden"
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={usage.limit_usd}
+                          aria-valuenow={usage.used_usd}
+                          aria-label={`AI budget usage: ${formatCostUsd(usage.used_usd)} of ${formatCostUsd(usage.limit_usd)}`}
+                        >
+                          <div
+                            className={`h-full rounded transition-all ${
+                              usage.used_usd >= usage.limit_usd
+                                ? 'bg-red-500'
+                                : usage.used_usd / Math.max(usage.limit_usd, 0.01) > 0.75
+                                  ? 'bg-amber-500'
+                                  : 'bg-blue-500'
+                            }`}
+                            style={{
+                              width: `${Math.min(100, (usage.used_usd / Math.max(usage.limit_usd, 0.01)) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
+                          <span>
+                            Used {formatCostUsd(usage.used_usd)} of {formatCostUsd(usage.limit_usd)}
+                          </span>
+                          {hasKey && (
+                            <span className="inline-flex items-center gap-0.5 text-gray-600">
+                              <span aria-hidden>🔑</span>
+                              <span>Key ready</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Mode Switcher and Model Selector */}
-            <div className="space-y-2">
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => setCurrentMode('chat')}
-                  className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
-                    currentMode === 'chat'
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-800'
-                  }`}
-                >
-                  <ChatBubbleLeftRightIcon className="w-4 h-4" />
-                  <span>Chat</span>
-                </button>
-              <button
-                onClick={() => setCurrentMode('generate')}
-                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
-                  currentMode === 'generate'
-                    ? 'bg-white text-purple-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-800'
-                }`}
-              >
-                <DocumentTextIcon className="w-4 h-4" />
-                <span>Generate</span>
-              </button>
-              <button
-                onClick={() => setCurrentMode('search')}
-                className={`flex-1 px-3 py-1 text-xs font-medium rounded transition-colors flex items-center justify-center gap-1 ${
-                  currentMode === 'search'
-                    ? 'bg-white text-green-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-800'
-                }`}
-              >
-                <MagnifyingGlassCircleIcon className="w-4 h-4" />
-                <span>Search Results</span>
-              </button>
-            </div>
-
-          </div>
-          </div>
-
-
-          {/* Content Area */}
-          <div
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto p-3 space-y-3"
-            onScroll={handleScroll}
-          >
-            {currentMode === 'chat' ? (
-              <>
-                {messages.length === 0 ? (
-                  <div className="text-center text-gray-500 text-sm py-8">
-                    <div className="mb-2"><ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
-                    <p>Type anything to start creating your Theory of Change step-by-step.</p>
-                    <p className="mt-2 text-xs">If you already have a Theory of Change, you can use the flowchart editing features.</p>
-                    <p className="mt-2 text-xs">Or use the "Generate" tab to create a new Theory of Change from existing documents.</p>
-                  </div>
-                ) : null}
-
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] p-2 rounded-lg text-sm ${
-                        message.role === 'user'
-                          ? 'bg-blue-500 text-white rounded-br-sm'
-                          : 'bg-gray-100 text-gray-800 rounded-bl-sm'
-                      }`}
-                    >
-                      {message.role === 'assistant' ? (
-                        <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-                          <ReactMarkdown>{cleanResponseContent(message.content)}</ReactMarkdown>
-                        </div>
-                      ) : (
-                        <div className="whitespace-pre-wrap text-left">{cleanResponseContent(message.content)}</div>
-                      )}
-                      <div className={`text-xs mt-1 opacity-70 ${
-                        message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
-                      }`}>
-                        <div>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        {message.usage && (
-                          <div className="mt-1">
-                            Tokens: {message.usage.input_tokens} in, {message.usage.output_tokens} out ({message.usage.total_tokens} total)
-                          </div>
-                        )}
+            {/* Content Area */}
+            <div
+              ref={chatContainerRef}
+              className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3"
+              onScroll={handleScroll}
+            >
+              {currentMode === 'chat' ? (
+                <>
+                  {messages.length === 0 ? (
+                    <div className="text-center text-gray-500 text-sm py-8">
+                      <div className="mb-2">
+                        <ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto text-gray-400" />
                       </div>
+                      <p>Type anything to start creating your Theory of Change step-by-step.</p>
+                      <p className="mt-2 text-xs">
+                        If you already have a Theory of Change, you can use the flowchart editing
+                        features.
+                      </p>
+                      <p className="mt-2 text-xs">
+                        Or use the "Generate" tab to create a new Theory of Change from existing
+                        documents.
+                      </p>
                     </div>
-                  </div>
-                ))}
-              </>
-            ) : currentMode === 'generate' ? (
-              <div className="space-y-4">
-                <div className="text-center text-gray-500 text-sm py-4">
-                  <div className="mb-2"><DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
-                  <p>Upload documents to generate a Theory of Change conversation</p>
-                </div>
+                  ) : null}
 
-                {/* File Upload */}
-                <div
-                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-gray-400 transition-colors"
-                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-blue-400', 'bg-blue-50'); }}
-                  onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50'); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                    const files = e.dataTransfer.files;
-                    if (files.length > 0) handleFileUpload(files);
-                  }}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
-                    onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
-                    className="hidden"
-                  />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-                  >
-                    <CloudArrowUpIcon className="w-5 h-5" />
-                    Click to upload or drag & drop documents
-                  </button>
-                  <p className="text-xs text-gray-500 text-center mt-2">
-                    Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
-                  </p>
-                </div>
-
-                {/* Uploaded Files */}
-                {files.length > 0 && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
-                    {files.map((file, index) => (
-                      <div key={index} className="p-2 bg-gray-50 rounded">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 flex-1">
-                            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                              file.status === 'ready' ? 'bg-green-400' :
-                              file.status === 'reading' ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'
-                            }`}></div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm text-gray-700 truncate">{file.file.name}</span>
-                                <span className="text-xs text-gray-500">({getFileTypeDescription(file.file.name)})</span>
-                              </div>
-                              {file.status === 'reading' && (
-                                <span className="text-xs text-gray-500">Reading file...</span>
-                              )}
-                              {file.status === 'ready' && file.content && (
-                                <span className="text-xs text-green-600">
-                                  {Math.round(file.content.length / 1000)}KB of text extracted
-                                </span>
-                              )}
-                              {file.status === 'error' && (
-                                <span className="text-xs text-red-600">
-                                  {file.errorMessage || 'Failed to read file'}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => removeFile(file.file)}
-                            className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
-                            title="Remove file"
-                          >
-                            <XMarkIcon className="w-4 h-4" />
-                          </button>
-                        </div>
+                  {messages.map((message) => (
+                    <MessageBubble key={message.id} message={message} />
+                  ))}
+                </>
+              ) : currentMode === 'generate' ? (
+                <div className="space-y-4">
+                  {/* Generate-mode BYOK gate. Generation concentrates cost
+                    (extended thinking + web search + documents) into a
+                    single one-shot request, so we require BYOK up front
+                    before showing any input UI. Once the user submits a
+                    verified key, hasKey flips and the full panel renders
+                    below. */}
+                  {!hasKey || !verified ? (
+                    <div className="space-y-3">
+                      {/* Generate-specific cost heads-up — separate card so
+                        the key affordance stays context-free. */}
+                      <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                        Generate runs a deep analysis of your documents. A single run typically
+                        costs a few dollars — more for large documents or heavy web searching. The
+                        running cost is shown as the answer is written, so you can stop it at any
+                        time if it starts to add up.
                       </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Additional Instructions */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Additional Instructions (Optional)
-                  </label>
-                  <textarea
-                    value={additionalInstructions}
-                    onChange={(e) => setAdditionalInstructions(e.target.value)}
-                    placeholder="Any specific focus areas or requirements for your Theory of Change..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
-                    rows={3}
-                  />
-                </div>
-
-                {/* Generate Button */}
-                <button
-                  onClick={startGeneration}
-                  disabled={files.filter(f => f.status === 'ready').length === 0 || isLoading}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isLoading ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Generating...
-                    </>
+                      <AddApiKeyButton />
+                    </div>
                   ) : (
                     <>
-                      <DocumentPlusIcon className="w-4 h-4" />
-                      Generate Theory of Change
+                      <div className="text-center text-gray-500 text-sm py-4">
+                        <div className="mb-2">
+                          <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
+                        </div>
+                        <p>Upload documents to generate a Theory of Change conversation</p>
+                      </div>
+
+                      {/* File Upload */}
+                      <div
+                        className="border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-gray-400 transition-colors"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.add('border-blue-400', 'bg-blue-50');
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+                          const files = e.dataTransfer.files;
+                          if (files.length > 0) handleFileUpload(files);
+                        }}
+                      >
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
+                          onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+                          className="hidden"
+                        />
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
+                        >
+                          <CloudArrowUpIcon className="w-5 h-5" />
+                          Click to upload or drag & drop documents
+                        </button>
+                        <p className="text-xs text-gray-500 text-center mt-2">
+                          Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
+                        </p>
+                      </div>
+
+                      {/* Generate-mode PDF chips (Files API uploads). */}
+                      {generateAttachedChips.length > 0 && (
+                        <AttachedFilesBar
+                          files={generateAttachedChips}
+                          onRemove={handleGenerateFileRemove}
+                          onRetry={handleGenerateFileRetry}
+                        />
+                      )}
+
+                      {/* Uploaded Files */}
+                      {files.length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
+                          {files.map((file, index) => (
+                            <div key={index} className="p-2 bg-gray-50 rounded">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2 flex-1">
+                                  <div
+                                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                      file.status === 'ready'
+                                        ? 'bg-green-400'
+                                        : file.status === 'reading'
+                                          ? 'bg-yellow-400 animate-pulse'
+                                          : 'bg-red-400'
+                                    }`}
+                                  ></div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-sm text-gray-700 truncate">
+                                        {file.file.name}
+                                      </span>
+                                      <span className="text-xs text-gray-500">
+                                        ({getFileTypeDescription(file.file.name)})
+                                      </span>
+                                    </div>
+                                    {file.status === 'reading' && (
+                                      <span className="text-xs text-gray-500">Reading file...</span>
+                                    )}
+                                    {file.status === 'ready' && file.content && (
+                                      <span className="text-xs text-green-600">
+                                        {Math.round(file.content.length / 1000)}KB of text extracted
+                                      </span>
+                                    )}
+                                    {file.status === 'error' && (
+                                      <span className="text-xs text-red-600">
+                                        {file.errorMessage || 'Failed to read file'}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => removeFile(file.file)}
+                                  className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
+                                  title="Remove file"
+                                >
+                                  <XMarkIcon className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Additional Instructions */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Additional Instructions (Optional)
+                        </label>
+                        <textarea
+                          value={additionalInstructions}
+                          onChange={(e) => setAdditionalInstructions(e.target.value)}
+                          placeholder="Any specific focus areas or requirements for your Theory of Change..."
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                          rows={3}
+                        />
+                      </div>
+
+                      {(generateEstimateUsd > 0 || estimatingCost) && (
+                        <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
+                          {estimatingCost && (
+                            <span
+                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                              aria-label="Recalculating estimate"
+                            />
+                          )}
+                          {generateEstimateUsd > 0 ? (
+                            <span>
+                              Estimated input cost:{' '}
+                              <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is
+                              billed on top as the response streams; hit Stop to abort if it runs
+                              long.
+                            </span>
+                          ) : (
+                            <span className="text-gray-500">Estimating…</span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Model picker. Mirrors the chat composer's pattern;
+                    selectedModel is shared across modes so a user's choice
+                    in one carries to the other. */}
+                      <div className="flex items-center justify-between text-xs text-gray-600">
+                        <span>Model</span>
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                      </div>
+
+                      {/* Effort picker. Hidden when the model doesn't accept
+                          `output_config.effort`; rendered on the same row when
+                          it does so the controls stay visually grouped. */}
+                      {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
+                        <div className="flex items-center justify-between text-xs text-gray-600">
+                          <span>Effort</span>
+                          <EffortDropdown
+                            model={selectedModel}
+                            selected={selectedEffort}
+                            onSelect={setSelectedEffort}
+                          />
+                        </div>
+                      )}
+
+                      {/* Generate button. The BYOK gate is enforced upstream:
+                    this render path is reached only when hasKey && verified,
+                    so we don't need a fallback branch for the unkeyed case. */}
+                      <button
+                        onClick={startGeneration}
+                        disabled={
+                          files.filter((f) => f.status === 'ready').length +
+                            generateAttachedFileIds.length ===
+                            0 ||
+                          generateAttachedChips.some(
+                            (f) => f.status === 'uploading' || f.status === 'error',
+                          ) ||
+                          isLoading
+                        }
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {isLoading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <DocumentPlusIcon className="w-4 h-4" />
+                            Generate Theory of Change
+                          </>
+                        )}
+                      </button>
                     </>
                   )}
-                </button>
-              </div>
-            ) : currentMode === 'search' ? (
-              <div className="space-y-4">
-                {searchResults.length === 0 && !searchAnswer ? (
-                  <div className="text-center text-gray-500 text-sm py-4">
-                    <div className="mb-2"><MagnifyingGlassCircleIcon className="w-8 h-8 mx-auto text-gray-400" /></div>
-                    <p>Web search results will appear here</p>
-                    <p className="mt-2 text-xs">Use the chat to search for current information</p>
-                  </div>
-                ) : null}
-
-                {/* Search Results */}
-                {searchAnswer && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                    <h4 className="text-sm font-medium text-blue-800 mb-2">AI Summary:</h4>
-                    <div className="text-sm text-blue-700">
-                      <ReactMarkdown>{searchAnswer}</ReactMarkdown>
-                    </div>
-                  </div>
-                )}
-
-                {searchResults.length > 0 && (
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-medium text-gray-700">Search Results:</h4>
-                    {searchResults.map((result, index) => (
-                      <div key={index} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                        <h5 className="text-sm font-medium text-gray-800 mb-1">
-                          <a
-                            href={result.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-blue-600 hover:underline"
-                          >
-                            {result.title}
-                          </a>
-                        </h5>
-                        <p className="text-xs text-gray-500 mb-2">{result.url}</p>
-                        <p className="text-sm text-gray-600">{result.content}</p>
-                        <div className="text-xs text-gray-400 mt-2">Score: {result.score.toFixed(2)}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {isSearching && (
-                  <div className="text-center py-4">
-                    <div className="flex items-center justify-center gap-2 text-blue-600">
-                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-sm">Searching...</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : null}
-
-            {/* Chat mode streaming indicators */}
-            {currentMode === 'chat' && (
-              <>
-                {/* Search indicator */}
-                {isSearching && (
-                  <div className="flex justify-start">
-                    <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
-                      <div className="flex items-center gap-2">
-                        <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
-                        <span className="text-blue-700">Searching the web for current information...</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Thinking indicator */}
-                {isThinking && !isSearching && (
-                  <div className="flex justify-start">
-                    <div className="bg-purple-50 text-purple-800 rounded-lg rounded-bl-sm p-2 text-sm border border-purple-200">
-                      <div className="flex items-center gap-2">
-                        <SparklesIcon className="w-4 h-4 animate-pulse text-purple-600" />
-                        <span className="text-purple-700">Thinking about your request...</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Streaming message */}
-                {isStreaming && streamingContent && (
-                  <div className="flex justify-start">
-                    <div className="max-w-[85%] p-2 rounded-lg text-sm bg-gray-100 text-gray-800 rounded-bl-sm">
-                      <div className="text-left prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-200 prose-pre:text-gray-800">
-                        <ReactMarkdown>{streamingContent}</ReactMarkdown>
-                      </div>
-                      <div className="text-xs mt-1 opacity-70 text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
-                          <span>Streaming...</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {isLoading && !isStreaming && !isSearching && (
-                  <div className="flex justify-start">
-                    <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
-                      <div className="flex items-center gap-1">
-                        <div className="flex space-x-1">
-                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                        </div>
-                        <span className="ml-2">Thinking...</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Load Generated Graph Button */}
-            {generatedGraphData && (
-              <div className="px-3 py-2 border-t border-gray-200">
-                <button
-                  onClick={loadGeneratedGraph}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
-                >
-                  <ArrowUpTrayIcon className="w-4 h-4" />
-                  Load Theory of Change into Workspace
-                </button>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input Area */}
-          <div className="p-3 border-t border-gray-200">
-              {currentMode === 'chat' ? (
-                <div className="space-y-2">
-                  {/* Selected Nodes Context */}
-                  {selectedNodes.length > 0 && (
-                    <div className="text-sm text-gray-600 mb-2">
-                      {selectedNodes.length === 1 ? '1 node selected' : `${selectedNodes.length} nodes selected`}
-                    </div>
-                  )}
-                  <textarea
-                    ref={inputRef}
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder="Ask about your Theory of Change..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
-                    disabled={isLoading || isStreaming}
-                    rows={1}
-                    style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
-                    onInput={(e) => {
-                      // Auto-resize textarea based on content
-                      const target = e.target as HTMLTextAreaElement;
-                      target.style.height = 'auto';
-                      const newHeight = Math.min(target.scrollHeight, 128); // Max 8rem (128px)
-                      target.style.height = newHeight + 'px';
-                    }}
-                  />
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => {
-                          setShowSettingsModal(true);
-                        }}
-                        className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                        title="Settings"
-                      >
-                        <Cog6ToothIcon className="w-5 h-5" />
-                      </button>
-                      <button
-                        onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                        className={`p-2 rounded-lg transition-colors ${
-                          webSearchEnabled
-                            ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                        }`}
-                        title={webSearchEnabled ? "Web search enabled" : "Enable web search"}
-                      >
-                        <MagnifyingGlassIcon className="w-5 h-5" />
-                      </button>
-                      <button
-                        onClick={() => setExtendedThinkingEnabled(!extendedThinkingEnabled)}
-                        className={`p-2 rounded-lg transition-colors ${
-                          extendedThinkingEnabled
-                            ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                        }`}
-                        title={extendedThinkingEnabled ? "Extended thinking enabled" : "Enable extended thinking for complex tasks"}
-                      >
-                        <SparklesIcon className="w-5 h-5" />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="relative" ref={modelDropdownRef}>
-                        <button
-                          onClick={() => setShowModelDropdown(!showModelDropdown)}
-                          className="w-[140px] text-xs border border-gray-300 rounded-lg px-2.5 py-2 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 flex items-center justify-between"
-                          title="Select AI Model"
-                        >
-                          <span className="font-medium">{MODELS[selectedModel]}</span>
-                          <ChevronDownIcon className={`w-3 h-3 transition-transform duration-200 ${showModelDropdown ? 'rotate-180' : ''}`} />
-                        </button>
-
-                        {showModelDropdown && (
-                          <div className="absolute bottom-full mb-1 left-0 w-[200px] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50">
-                            {Object.entries(MODELS).map(([key, name]) => (
-                              <button
-                                key={key}
-                                onClick={() => {
-                                  setSelectedModel(key as keyof typeof MODELS);
-                                  setShowModelDropdown(false);
-                                }}
-                                className={`w-full text-left px-2.5 py-2 text-xs hover:bg-gray-50 transition-colors ${
-                                  selectedModel === key ? 'bg-blue-50 text-blue-600' : 'text-gray-700'
-                                }`}
-                              >
-                                {name}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {isStreaming ? (
-                        <button
-                          onClick={handleStopStreaming}
-                          className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
-                          title="Stop generation"
-                        >
-                          <StopIcon className="w-5 h-5" />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={handleSendMessage}
-                          disabled={!inputValue.trim() || isLoading}
-                          className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                          title="Send message"
-                        >
-                          <PaperAirplaneIcon className="w-5 h-5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
                 </div>
               ) : null}
-            </div>
-        </div>
-      </div>
 
-      {/* Settings Modal */}
-      {showSettingsModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-gray-800">Chat Settings</h2>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <XMarkIcon className="w-6 h-6" />
-              </button>
-            </div>
+              {/* Chat mode streaming indicators */}
+              {currentMode === 'chat' && (
+                <>
+                  {/* In-flight assistant turn. Ordering is deliberate:
+                      1. Streaming text bubble (main response)
+                      2. Thinking summary (collapsible) — the model's
+                         reasoning, rendered muted below the answer so
+                         users can expand when curious without it
+                         dominating the conversation view
+                      3. Searching / Thinking status chips BELOW the
+                         bubble — they represent "still working on it,"
+                         which is more legible after the partial text
+                         than crowding above it.
+                    prepareStreamingDisplay hides any in-progress
+                    [EDIT_INSTRUCTIONS]...[/EDIT_INSTRUCTIONS] block whose
+                    closing tag hasn't arrived yet and returns
+                    generatingEdits=true for the dedicated indicator. */}
+                  {isStreaming &&
+                    (streamingContent || streamingThinking) &&
+                    (() => {
+                      const { display, generatingEdits } = streamingContent
+                        ? prepareStreamingDisplay(streamingContent)
+                        : { display: '', generatingEdits: false };
+                      const hasAnything = display || generatingEdits || streamingThinking;
+                      if (!hasAnything) return null;
+                      return (
+                        <div
+                          className="w-full text-sm text-gray-800"
+                          // Only the streaming bubble announces; historical
+                          // messages remain silent so screen readers aren't
+                          // flooded on scrollback. aria-atomic=false so deltas
+                          // are announced incrementally rather than the whole
+                          // bubble repeating on every chunk.
+                          role="log"
+                          aria-live="polite"
+                          aria-atomic="false"
+                        >
+                          <div>
+                            {display && (
+                              <div className="text-left prose prose-sm max-w-none prose-table:block prose-table:overflow-x-auto prose-pre:overflow-x-auto prose-headings:text-gray-800 prose-p:text-gray-800 prose-strong:text-gray-800 prose-code:text-gray-800 prose-pre:bg-gray-100 prose-pre:text-gray-800">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{display}</ReactMarkdown>
+                              </div>
+                            )}
+                            {generatingEdits && (
+                              <div
+                                className={`flex items-center gap-2 text-xs text-amber-800 ${display ? 'mt-2' : ''}`}
+                              >
+                                <PencilSquareIcon
+                                  className="w-4 h-4 animate-pulse text-amber-600"
+                                  aria-hidden
+                                />
+                                <span>Generating edits to the graph…</span>
+                              </div>
+                            )}
+                            {streamingThinking && (
+                              <details
+                                className={`text-xs text-gray-500 ${display || generatingEdits ? 'mt-2 pt-2 border-t border-gray-200' : ''}`}
+                                open={thinkingExpanded}
+                                onToggle={(e) =>
+                                  setThinkingExpanded((e.target as HTMLDetailsElement).open)
+                                }
+                              >
+                                <summary className="cursor-pointer select-none text-gray-600 hover:text-gray-800 inline-flex items-center gap-1">
+                                  <SparklesIcon
+                                    className="w-3.5 h-3.5 text-purple-500"
+                                    aria-hidden
+                                  />
+                                  <span>
+                                    {thinkingExpanded ? 'Hide thinking' : 'Show thinking'}
+                                  </span>
+                                </summary>
+                                <div className="mt-1 whitespace-pre-wrap italic text-gray-600 leading-relaxed">
+                                  {streamingThinking}
+                                </div>
+                              </details>
+                            )}
+                            <div className="text-xs mt-1 text-gray-500">
+                              <div className="flex items-center gap-1.5">
+                                {/* Loud "live" indicator (solid dot + ping
+                                    ring) so the user can distinguish an
+                                    active stream from a silent stall. */}
+                                <span className="relative inline-flex h-2.5 w-2.5" aria-hidden>
+                                  <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 animate-ping"></span>
+                                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500"></span>
+                                </span>
+                                <span>Streaming…</span>
+                                {runningCostUsd != null && (
+                                  <span className="ml-2 text-gray-600">
+                                    · {formatCostUsd(runningCostUsd)} so far
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
-            {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Custom System Prompt
-                  </label>
-                  <p className="text-xs text-gray-500 mb-2">
-                    Override the default system prompt with your own instructions.
-                  </p>
-                  <MDXEditorComponent
-                    markdown={tempSystemPrompt}
-                    onChange={(value) => setTempSystemPrompt(value)}
-                    placeholder="Enter your custom system prompt here..."
-                  />
+                  {/* Phase chip rendered after the streaming bubble so the
+                    "still working" hint sits next to the partial text. Phase
+                    invariant lives in chatService: sticky `using_tools`
+                    upgrades to `searching` on first server_tool_use=web_search
+                    in a burst; resets on the next text/thinking burst.
+                    `writing` deliberately renders no chip — the bubble itself
+                    already signals typing. */}
+                  {streamPhase === 'using_tools' && (
+                    <div className="flex justify-start">
+                      <div className="bg-amber-50 text-amber-800 rounded-lg rounded-bl-sm p-2 text-sm border border-amber-200">
+                        <div className="flex items-center gap-2">
+                          <SparklesIcon className="w-4 h-4 animate-pulse text-amber-600" />
+                          <span className="text-amber-700">Using tools…</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {streamPhase === 'searching' && (
+                    <div className="flex justify-start">
+                      <div className="bg-blue-50 text-blue-800 rounded-lg rounded-bl-sm p-2 text-sm border border-blue-200">
+                        <div className="flex items-center gap-2">
+                          <MagnifyingGlassIcon className="w-4 h-4 animate-spin text-blue-600" />
+                          <span className="text-blue-700">Searching the web…</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {streamPhase === 'thinking' && (
+                    <div className="flex justify-start">
+                      <div className="bg-purple-50 text-purple-800 rounded-lg rounded-bl-sm p-2 text-sm border border-purple-200">
+                        <div className="flex items-center gap-2">
+                          <SparklesIcon className="w-4 h-4 animate-pulse text-purple-600" />
+                          <span className="text-purple-700">Thinking about your request…</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cost-error banner for non-cap errors that don't merit
+                    the full BYOK panel (body-too-large, chart-deleted,
+                    service-unavailable, etc.). Cap/quota errors go
+                    straight to the inline ByokPanel below via
+                    handleCostError. */}
+                  {costErrorBanner && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-900">
+                        {costErrorBanner.message}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* mid-stream-kill (request_cut_off) and global-budget
+                    banners now render in the composer area (below) so they
+                    sit next to the input rather than scrolling away in the
+                    message history. See the composer-side render. */}
+
+                  {isLoading && !isStreaming && !streamPhase && (
+                    <div className="flex justify-start">
+                      <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
+                        <div className="flex items-center gap-1">
+                          <div className="flex space-x-1">
+                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                            <div
+                              className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                              style={{ animationDelay: '0.1s' }}
+                            ></div>
+                            <div
+                              className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                              style={{ animationDelay: '0.2s' }}
+                            ></div>
+                          </div>
+                          <span className="ml-2">Thinking...</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Load Generated Graph Button */}
+              {generatedGraphData && (
+                <div className="px-3 py-2 border-t border-gray-200">
+                  <button
+                    onClick={loadGeneratedGraph}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    <ArrowUpTrayIcon className="w-4 h-4" />
+                    Load Theory of Change into Workspace
+                  </button>
                 </div>
-              </div>
+              )}
+
+              <div ref={messagesEndRef} />
             </div>
 
-            {/* Modal Footer */}
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-between">
-              <button
-                onClick={() => {
-                  setTempSystemPrompt(systemPromptContent);
-                }}
-                className="px-4 py-2 text-sm text-red-600 hover:text-red-700 transition-colors"
-              >
-                Reset to Default
-              </button>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowSettingsModal(false)}
-                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    setCustomSystemPrompt(tempSystemPrompt);
-                    setShowSettingsModal(false);
-                  }}
-                  className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
-                >
-                  Save Changes
-                </button>
-              </div>
+            {/* Input Area */}
+            <div className="p-3 border-t border-gray-200">
+              {currentMode === 'chat' ? (
+                hasTurnstileSession === null ? (
+                  /* Probe in flight: reserve vertical space so the composer
+                     doesn't shift in when it resolves, but render no content.
+                     This avoids flashing the "please verify" banner on reload
+                     for anon visitors who already hold a valid cookie. */
+                  <div className="h-24" aria-hidden />
+                ) : !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
+                  /* Turnstile gate: block the entire composer for anonymous
+                     visitors until they solve the challenge and we exchange
+                     the token for a session cookie. Avoids the old behavior
+                     where users could type + send and then see a cryptic 401
+                     from the Worker. Once `hasTurnstileSession` flips true
+                     the full composer below renders. If the Worker later
+                     returns `turnstile_required` (cookie expired or IP
+                     changed), `handleCostError` flips us back to this branch. */
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                      Solve the challenge below to verify you're human before sending a message.
+                    </div>
+                    <TurnstileWidget siteKey={TURNSTILE_SITE_KEY} onToken={handleTurnstileToken} />
+                    {turnstileError && (
+                      <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                        {turnstileError}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* Selected Nodes Context */}
+                    {selectedNodes.length > 0 && (
+                      <div className="text-sm text-gray-600 mb-2">
+                        {selectedNodes.length === 1
+                          ? '1 node selected'
+                          : `${selectedNodes.length} nodes selected`}
+                      </div>
+                    )}
+                    {!isAuthenticated && !TURNSTILE_SITE_KEY && import.meta.env.DEV ? (
+                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
+                      </div>
+                    ) : null}
+                    {/* Blocking cap warning. Two distinct cases:
+                        - capAlreadyReached: prior cumulative usage already at
+                          or over the cap; no sends possible without BYOK.
+                        - wouldExceedCap: under cap but this draft's estimate
+                          would push over. Message-specific framing so users
+                          understand "this one is too big" vs "you're out."
+                      Composer and send button stay visible but disabled; the
+                      inline BYOK panel is the unblock path. */}
+                    {/* Four cap/quota paths, all shown above the input so
+                      the user can read them next to the action. Priority
+                      from "most recent event" down:
+                        - request_cut_off: mid-stream kill just fired.
+                        - global_budget: Anthropic Console cap hit.
+                        - capAlreadyReached: prior cumulative at/over cap.
+                        - wouldExceedCap: draft's estimate would push over.
+                      DonateCta only on paths where donations are a valid
+                      alternative (capAlreadyReached, global_budget). */}
+                    {byokPanelMode === 'request_cut_off' ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                          Message cut off — your last message used the rest of the free quota. Add
+                          your Anthropic API key to keep going.
+                        </div>
+                        <AddApiKeyButton />
+                      </div>
+                    ) : byokPanelMode === 'global_budget' ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                          We&apos;ve hit our shared monthly spend cap. Everyone on the free tier is
+                          paused until next month&apos;s reset.
+                        </div>
+                        <AddApiKeyButton />
+                        <DonateCta />
+                      </div>
+                    ) : capAlreadyReached ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
+                          You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}. Add
+                          your Anthropic API key to keep going.
+                        </div>
+                        <AddApiKeyButton />
+                        <DonateCta />
+                      </div>
+                    ) : wouldExceedCap ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                          Your next send (includes chat history and attached files) is estimated at{' '}
+                          <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but only{' '}
+                          <strong>
+                            {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}/
+                            {formatCostUsd(usage!.limit_usd)}
+                          </strong>{' '}
+                          left. Add your Anthropic API key to continue.
+                        </div>
+                        <AddApiKeyButton />
+                      </div>
+                    ) : null}
+                    {/* File attachment tray + drop target. Stays mounted so
+                      files dropped on the composer area land here. */}
+                    <AttachedFilesBar
+                      files={chatAttachedFiles}
+                      onRemove={handleChatFileRemove}
+                      onRetry={handleChatFileRetry}
+                      onDropFiles={handleChatFileSelect}
+                    />
+                    <input
+                      ref={chatFileInputRef}
+                      type="file"
+                      multiple
+                      accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
+                      onChange={(e) => {
+                        if (e.target.files) handleChatFileSelect(e.target.files);
+                        // Clear the input so re-picking the same file fires onChange again.
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                    <textarea
+                      ref={inputRef}
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      onKeyPress={handleKeyPress}
+                      placeholder="Ask about your Theory of Change..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
+                      disabled={isLoading || isStreaming}
+                      rows={1}
+                      style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
+                      onInput={(e) => {
+                        // Auto-resize textarea based on content. Skip the
+                        // scrollHeight measurement for large values — it forces
+                        // a full text layout (~50-100ms for a 500KB paste) on
+                        // every keystroke, which was the main culprit of the
+                        // "paste huge text → UI freezes" bug. Anything past
+                        // ~2000 chars is guaranteed to hit the 128px cap
+                        // anyway, so just pin the height directly.
+                        const target = e.target as HTMLTextAreaElement;
+                        if (target.value.length > 2000) {
+                          if (target.style.height !== '128px') {
+                            target.style.height = '128px';
+                          }
+                          return;
+                        }
+                        target.style.height = 'auto';
+                        const newHeight = Math.min(target.scrollHeight, 128);
+                        target.style.height = newHeight + 'px';
+                      }}
+                    />
+                    <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                      {estimatingCost && (
+                        <span
+                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                          aria-label="Recalculating estimate"
+                        />
+                      )}
+                      <span>
+                        Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
+                        live during streaming.
+                      </span>
+                    </div>
+                    {composerEstimateError && (
+                      <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        Estimation failed: {composerEstimateError}. Fell back to a rough local
+                        estimate; the actual reservation may differ.
+                      </div>
+                    )}
+                    {composerUncountedFileIds.length > 0 && (
+                      <div
+                        className="text-xs text-amber-800"
+                        title={`File IDs: ${composerUncountedFileIds.join(', ')}`}
+                      >
+                        {composerUncountedFileIds.length} file
+                        {composerUncountedFileIds.length === 1 ? '' : 's'} couldn't be priced;
+                        estimate excludes them.
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => chatFileInputRef.current?.click()}
+                          className="p-2 rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                          title="Attach a file"
+                          aria-label="Attach a file"
+                        >
+                          <PaperClipIcon className="w-5 h-5" />
+                        </button>
+                        <button
+                          onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                          className={`p-2 rounded-lg transition-colors ${
+                            webSearchEnabled
+                              ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
+                              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          }`}
+                          title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
+                        >
+                          <MagnifyingGlassIcon className="w-5 h-5" />
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <EffortDropdown
+                          model={selectedModel}
+                          selected={selectedEffort}
+                          onSelect={setSelectedEffort}
+                        />
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+
+                        {isStreaming ? (
+                          <button
+                            onClick={handleStopStreaming}
+                            className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                            title="Stop generation"
+                          >
+                            <StopIcon className="w-5 h-5" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={handleSendMessage}
+                            // Use length check rather than trim() — on a huge
+                            // paste, inputValue.trim() would allocate a full
+                            // copy of the string on every render. Whitespace-
+                            // only input still gets rejected at send-time.
+                            // capAlreadyReached / wouldExceedCap disable here
+                            // as a visual cue; handleSendMessage also early-
+                            // returns on both.
+                            disabled={
+                              inputValue.length === 0 ||
+                              isLoading ||
+                              capAlreadyReached ||
+                              wouldExceedCap ||
+                              // Block while any attached file is still uploading
+                              // or has failed: send would either early-return
+                              // server-side or silently drop the errored chip,
+                              // neither of which matches user intent.
+                              chatAttachedFiles.some(
+                                (f) => f.status === 'uploading' || f.status === 'error',
+                              )
+                            }
+                            className="p-2 bg-blue-500 text-white rounded-lg enabled:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            title="Send message"
+                          >
+                            <PaperAirplaneIcon className="w-5 h-5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              ) : null}
             </div>
           </div>
         </div>
-      )}
       </div>
     </>
   );

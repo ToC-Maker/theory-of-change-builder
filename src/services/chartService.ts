@@ -1,6 +1,6 @@
 import { ToCData } from '../types';
 
-const API_BASE = '/.netlify/functions';
+const API_BASE = '/api';
 
 export interface CreateChartResponse {
   chartId: string;
@@ -13,6 +13,11 @@ export interface GetChartResponse {
   chartData: ToCData;
   chartId: string;
   canEdit: boolean;
+  // true iff the server verified the caller's JWT and their sub matches the
+  // chart owner's sub. Used by the client to gate owner-only fetches
+  // (managePermissions) so we don't spam 403s for non-owned charts. Missing
+  // on older server responses, treat `undefined` as `false`.
+  isOwner?: boolean;
 }
 
 export interface UserChart {
@@ -51,7 +56,11 @@ export class ChartService {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.authToken) {
       headers['Authorization'] = `Bearer ${this.authToken}`;
-      console.log('[ChartService] Creating chart with auth token (length:', this.authToken.length, ')');
+      console.log(
+        '[ChartService] Creating chart with auth token (length:',
+        this.authToken.length,
+        ')',
+      );
     } else {
       console.log('[ChartService] Creating chart without auth token (user not authenticated)');
     }
@@ -59,7 +68,7 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/createChart`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ chartData })
+      body: JSON.stringify({ chartData }),
     });
 
     if (!response.ok) {
@@ -93,7 +102,7 @@ export class ChartService {
     params.append('editToken', editToken);
 
     const response = await fetch(`${API_BASE}/getChart?${params}`, {
-      headers
+      headers,
     });
 
     if (!response.ok) {
@@ -102,7 +111,7 @@ export class ChartService {
       try {
         const errorData = await response.json();
         errorMessage = errorData.error || errorMessage;
-      } catch (e) {
+      } catch {
         // If JSON parsing fails, use status-based messages
         if (response.status === 401) {
           errorMessage = 'Authentication required. Please log in to access this chart.';
@@ -117,10 +126,21 @@ export class ChartService {
   }
 
   static async updateChart(editToken: string, chartData: ToCData): Promise<void> {
+    // Attach the Bearer token when one's available so the server can
+    // attribute the edit to the caller — used by worker/api/updateChart.ts
+    // to upsert a chart_permissions row (permission_level='edit') so
+    // non-owned charts the user modifies surface in "My Charts".
+    // Anonymous edits still work (the edit_token is the authorization
+    // gate); they just don't produce an attribution row.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
     const response = await fetch(`${API_BASE}/updateChart`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ editToken, chartData })
+      headers,
+      body: JSON.stringify({ editToken, chartData }),
     });
 
     if (!response.ok) {
@@ -182,7 +202,9 @@ export class ChartService {
   }
 
   // Get permissions for a chart (owner only)
-  static async getChartPermissions(chartId: string): Promise<{ permissions: Permission[]; linkSharingLevel?: string }> {
+  static async getChartPermissions(
+    chartId: string,
+  ): Promise<{ permissions: Permission[]; linkSharingLevel?: 'restricted' | 'viewer' | 'editor' }> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -192,8 +214,8 @@ export class ChartService {
 
     const response = await fetch(`${API_BASE}/managePermissions?${params}`, {
       headers: {
-        'Authorization': `Bearer ${this.authToken}`
-      }
+        Authorization: `Bearer ${this.authToken}`,
+      },
     });
 
     if (!response.ok) {
@@ -207,10 +229,7 @@ export class ChartService {
   }
 
   // Remove permission from a user (owner only)
-  static async removePermission(
-    chartId: string,
-    targetUserId: string
-  ): Promise<void> {
+  static async removePermission(chartId: string, targetUserId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -219,9 +238,9 @@ export class ChartService {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId })
+      body: JSON.stringify({ chartId, targetUserId }),
     });
 
     if (!response.ok) {
@@ -234,7 +253,7 @@ export class ChartService {
   static async updatePermissionLevel(
     chartId: string,
     targetUserId: string,
-    permissionLevel: 'owner' | 'edit'
+    permissionLevel: 'owner' | 'edit',
   ): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
@@ -244,9 +263,9 @@ export class ChartService {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId, permissionLevel })
+      body: JSON.stringify({ chartId, targetUserId, permissionLevel }),
     });
 
     if (!response.ok) {
@@ -258,7 +277,7 @@ export class ChartService {
   // Update link sharing settings (owner only)
   static async updateLinkSharing(
     chartId: string,
-    linkSharingLevel: 'restricted' | 'viewer' | 'editor'
+    linkSharingLevel: 'restricted' | 'viewer' | 'editor',
   ): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
@@ -268,9 +287,9 @@ export class ChartService {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, linkSharingLevel })
+      body: JSON.stringify({ chartId, linkSharingLevel }),
     });
 
     if (!response.ok) {
@@ -280,10 +299,7 @@ export class ChartService {
   }
 
   // Approve a pending access request (owner only)
-  static async approveAccessRequest(
-    chartId: string,
-    targetUserId: string
-  ): Promise<void> {
+  static async approveAccessRequest(chartId: string, targetUserId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -292,9 +308,9 @@ export class ChartService {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId, action: 'approve' })
+      body: JSON.stringify({ chartId, targetUserId, action: 'approve' }),
     });
 
     if (!response.ok) {
@@ -304,10 +320,7 @@ export class ChartService {
   }
 
   // Reject a pending access request (owner only)
-  static async rejectAccessRequest(
-    chartId: string,
-    targetUserId: string
-  ): Promise<void> {
+  static async rejectAccessRequest(chartId: string, targetUserId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -316,9 +329,9 @@ export class ChartService {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.authToken}`
+        Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ chartId, targetUserId, action: 'reject' })
+      body: JSON.stringify({ chartId, targetUserId, action: 'reject' }),
     });
 
     if (!response.ok) {
@@ -327,10 +340,16 @@ export class ChartService {
     }
   }
 
-  // Delete a chart (owner only, or anyone for anonymous charts)
-  static async deleteChart(chartId: string): Promise<void> {
+  // Delete a chart (owner only, or anyone with the edit token for anonymous charts).
+  //
+  // The worker's anon branch requires the editToken in the body (see
+  // worker/api/deleteChart.ts). Authenticated owner deletes don't need it —
+  // the worker takes the chartOwnerId branch and matches by JWT sub against
+  // chart_permissions. Passing undefined in the owner case is fine; the
+  // editToken is only read on the anon branch.
+  static async deleteChart(chartId: string, editToken?: string): Promise<void> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     };
 
     // Add auth header if available (for owned charts)
@@ -338,39 +357,20 @@ export class ChartService {
       headers['Authorization'] = `Bearer ${this.authToken}`;
     }
 
+    const body: { chartId: string; editToken?: string } = { chartId };
+    if (editToken) {
+      body.editToken = editToken;
+    }
+
     const response = await fetch(`${API_BASE}/deleteChart`, {
       method: 'DELETE',
       headers,
-      body: JSON.stringify({ chartId })
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Failed to delete chart');
     }
-  }
-
-  // Get user's total token usage
-  static async getUserTokenUsage(): Promise<{
-    totalTokensUsed: number;
-    lastUpdatedAt: string | null;
-    createdAt: string | null;
-  }> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
-    const response = await fetch(`${API_BASE}/getUserTokenUsage`, {
-      headers: {
-        'Authorization': `Bearer ${this.authToken}`
-      }
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch token usage');
-    }
-
-    return response.json();
   }
 }

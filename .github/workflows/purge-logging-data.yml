@@ -2,7 +2,7 @@ name: Purge old logging data
 
 on:
   schedule:
-    - cron: '0 3 * * 0'  # Weekly, Sundays 03:00 UTC (matches pg_cron schedule)
+    - cron: '0 3 * * 0' # Weekly, Sundays 03:00 UTC (matches pg_cron schedule)
   workflow_dispatch: # Allow manual trigger
 
 jobs:

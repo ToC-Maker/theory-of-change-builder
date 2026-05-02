@@ -1,19 +1,101 @@
-import { type EditInstruction, parseEditInstructions, cleanResponseContent } from '../utils/graphEdits';
+import {
+  type EditInstruction,
+  parseEditInstructions,
+  cleanResponseContent,
+} from '../utils/graphEdits';
 import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { loggingService } from './loggingService';
+import {
+  MODEL_INPUT_RATES_USD_PER_MTOK,
+  MODEL_OUTPUT_RATES_USD_PER_MTOK,
+  WEB_SEARCH_USD_PER_USE,
+} from '../utils/cost';
+import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
+import type { AssistantBlock } from '../../shared/chat-blocks';
+import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockAccumulator';
+import { buildOutgoingMessages } from './outgoingMessages';
+
+export interface AnthropicUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  server_tool_use?: {
+    web_search_requests?: number;
+  };
+}
+
+export interface WebSearchResult {
+  url: string;
+  title?: string;
+  [key: string]: unknown;
+}
+
+export type StreamPhase = 'thinking' | 'writing' | 'using_tools' | 'searching' | 'other';
 
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  /**
+   * Anthropic Files-API `file_id`s attached to this specific turn. Kept on
+   * the message (not just in composer state) so follow-up turns re-emit
+   * document content blocks for the full history — otherwise Anthropic
+   * only sees the PDF on the turn it was uploaded, not subsequent ones.
+   */
+  attachedFileIds?: string[];
+  /**
+   * Structured content blocks captured from the SSE stream for assistant
+   * turns: text, signed thinking (with byte-identical signature), and any
+   * server-tool-use / tool-result pairs. Persisted to localStorage and
+   * re-shipped on the next turn so Opus 4.7 sees prior thinking + tool
+   * blocks as Anthropic expects (replay otherwise loses signed thinking
+   * and reasoning quality). Optional because legacy entries pre-dating
+   * this feature have only `content`; outgoing-message assembly falls back
+   * to the text shape when this is undefined or empty.
+   *
+   * Only set on assistant turns — user turns use `attachedFileIds` for
+   * documents and `content` for text.
+   */
+  content_blocks?: AssistantBlock[];
+  /**
+   * Set true when the assistant turn was interrupted before natural
+   * completion and the partial was preserved. UI shows a subtle indicator
+   * whose copy varies by `kill_reason`. The user can simply send a
+   * follow-up; the partial `content_blocks` round-trip into the next
+   * request so the model picks up where the interruption landed.
+   */
+  was_killed?: boolean;
+  /**
+   * Why the turn was interrupted, used by the UI to render specific copy
+   * (cap-exceeded → "Cost limit reached…", aborted → "Stopped.", error
+   * → the upstream message). Always set together with `was_killed`.
+   */
+  kill_reason?: 'cap_exceeded' | 'aborted' | 'error';
+  /**
+   * Free-form error text from the upstream/network failure. Only set when
+   * `kill_reason === 'error'` — surfaced verbatim in the indicator so the
+   * user sees the actual failure mode (e.g. "fetch failed", "Anthropic
+   * returned 503") rather than a generic "interrupted" message.
+   */
+  kill_message?: string;
   usage?: {
     input_tokens: number;
     output_tokens: number;
     total_tokens: number;
+    // Cache + tool-use fields are optional so older messages (and messages
+    // from streams that didn't report cache hits) still typecheck. They
+    // let the per-message display surface the actual billed breakdown,
+    // not just the tiny "uncached input" number.
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+    web_search_requests?: number;
+    cost_usd?: number;
   };
 }
 
@@ -30,7 +112,384 @@ interface StreamingMetadata {
     network: { effectiveType: string; rtt: number; downlink: number } | null;
     retryAttempt: number;
   };
+  // Index signature lets callers spread metadata into a Record<string, unknown>
+  // context (loggingService request_metadata) without a cast.
+  [key: string]: unknown;
 }
+
+/**
+ * Cost/policy errors surfaced by the worker (U9). These are hard errors that
+ * must NOT be retried; callers render different prompts for each.
+ * Also includes mid-stream synthesized error events (request_cost_ceiling_exceeded,
+ * chart_deleted, file_unavailable) which arrive as SSE `type` fields rather than
+ * HTTP status codes, but share the same callback channel for UI simplicity.
+ */
+export type CostErrorType =
+  | 'lifetime_cap_reached'
+  | 'global_budget_exhausted'
+  | 'turnstile_required'
+  | 'turnstile_failed'
+  | 'invalid_token'
+  | 'idempotent_replay'
+  | 'body_too_large'
+  | 'database_unavailable'
+  | 'estimation_unavailable'
+  | 'authentication_service_unavailable'
+  | 'request_cost_ceiling_exceeded'
+  | 'chart_deleted'
+  | 'file_unavailable';
+
+export interface CostError {
+  type: CostErrorType;
+  /** Raw error payload (HTTP JSON body, or SSE event object). Shape varies by type. */
+  data: unknown;
+  /**
+   * Partial assistant content captured from the SSE stream up to the kill
+   * point. Populated for mid-stream errors so the caller can stash the
+   * half-built turn (text + signed thinking + paired tool blocks) onto a
+   * "was_killed" message — letting the user resume with "continue" because
+   * the partial replays back to Anthropic on the next turn. Undefined for
+   * pre-stream HTTP errors (no blocks could have arrived).
+   */
+  partialContentBlocks?: AssistantBlock[];
+}
+
+/**
+ * Internal marker so the outer catch can distinguish cost errors (which should
+ * exit without retry or generic onError) from transport errors. Using a symbol
+ * property keeps the tag type-safe without `as any` casts at every site.
+ */
+const COST_ERROR_TAG: unique symbol = Symbol('chatService.isCostError');
+interface TaggedError extends Error {
+  [COST_ERROR_TAG]?: true;
+}
+function markAsCostError(err: Error): TaggedError {
+  (err as TaggedError)[COST_ERROR_TAG] = true;
+  return err as TaggedError;
+}
+function isCostError(err: unknown): err is TaggedError {
+  return err instanceof Error && (err as TaggedError)[COST_ERROR_TAG] === true;
+}
+
+/** Fresh idempotency key; uses crypto.randomUUID when available, else a timestamp+random fallback. */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+// ----------------------------------------------------------------------------
+// Pending-reconcile retry queue
+// ----------------------------------------------------------------------------
+//
+// Failed POSTs to /api/reconcile-cost (typically because the user's network
+// dropped between the SSE stream finishing and the reconcile fetch firing,
+// e.g. ERR_NETWORK_CHANGED / ERR_CONNECTION_RESET) are stashed in localStorage
+// so we can retry them after the network comes back. Without this retry, a
+// turn where the client closes the SSE connection mid-flight leaves only the
+// message_start floor recorded server-side — the streaming-worker reconcile
+// likely also bailed for the same network reason.
+//
+// Drain triggers (any of):
+//   - `online` event on window (fires when the OS regains connectivity)
+//   - After every successful reconcile-cost POST (opportunistic; the network
+//     just proved it works, so opportunistically replay anything queued)
+//
+// Note: not draining on app load. The `online` listener handles network-
+// restoration after a hard offline period, and the post-success drain handles
+// "the next time the user does anything." A reload while offline doesn't help
+// (the queue can't drain until connectivity returns), and a reload while
+// online with no other activity is rare enough not to optimize for.
+//
+// Staleness GC: items older than 7 days are dropped. If a reconcile has been
+// failing for a week, the original logging_messages row probably already has
+// the message_start floor written, and the per-message cost figure has had
+// plenty of time to converge via the streaming-side IIFE on subsequent
+// successful runs. Bound the queue size to keep localStorage healthy.
+
+const PENDING_RECONCILE_KEY = 'byok-reconcile-pending';
+const PENDING_RECONCILE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface PendingReconcile {
+  logging_message_id: string;
+  cost_micro_usd: string;
+  queued_at: number;
+}
+
+function isPendingReconcile(v: unknown): v is PendingReconcile {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.logging_message_id === 'string' &&
+    o.logging_message_id.length > 0 &&
+    typeof o.cost_micro_usd === 'string' &&
+    o.cost_micro_usd.length > 0 &&
+    typeof o.queued_at === 'number' &&
+    Number.isFinite(o.queued_at)
+  );
+}
+
+function readPendingReconciles(): PendingReconcile[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(PENDING_RECONCILE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isPendingReconcile);
+  } catch (e) {
+    // Corrupt JSON: discard. Better to lose the queue than to keep retrying
+    // on every drain cycle with a parse error. Surface the discard so the
+    // event is visible in devtools rather than silently zeroing out a queue
+    // the user expected to drain — corruption from a partial-write or a
+    // disk-full at write time would otherwise look identical to "queue empty".
+    console.warn('[ChatService] discarding corrupt reconcile queue:', e);
+    return [];
+  }
+}
+
+function writePendingReconciles(items: PendingReconcile[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (items.length === 0) {
+      localStorage.removeItem(PENDING_RECONCILE_KEY);
+    } else {
+      localStorage.setItem(PENDING_RECONCILE_KEY, JSON.stringify(items));
+    }
+  } catch (e) {
+    // Quota exceeded / private browsing: ignore. The reconcile is best-effort
+    // and the worker-side message_start floor still locked in input cost.
+    console.warn('[ChatService] failed to persist pending reconciles:', e);
+  }
+}
+
+/**
+ * Add a reconcile to the retry queue, deduplicating by logging_message_id so
+ * retried-and-still-failing entries don't pile up across attempts. Always
+ * stamps the latest queued_at so the staleness GC measures from the most
+ * recent attempt rather than the first.
+ */
+function enqueuePendingReconcile(entry: {
+  logging_message_id: string;
+  cost_micro_usd: string;
+}): void {
+  const existing = readPendingReconciles().filter(
+    (p) => p.logging_message_id !== entry.logging_message_id,
+  );
+  existing.push({
+    logging_message_id: entry.logging_message_id,
+    cost_micro_usd: entry.cost_micro_usd,
+    queued_at: Date.now(),
+  });
+  writePendingReconciles(existing);
+  console.log(
+    `[ChatService] queued pending reconcile: msg=${entry.logging_message_id.slice(0, 8)}…` +
+      ` cost=${entry.cost_micro_usd}µUSD queue_size=${existing.length}`,
+  );
+}
+
+/**
+ * Attempt to POST every queued reconcile. Items that succeed (HTTP 2xx) or
+ * get a definitive client-side rejection (4xx — bad shape, forbidden, not
+ * found) are removed. Items that hit a network error or 5xx stay queued for
+ * the next drain. Stale items (>7d) are GC'd unconditionally.
+ *
+ * Best-effort: this never throws. Callers fire-and-forget.
+ */
+async function drainPendingReconciles(authToken: string | null): Promise<void> {
+  const all = readPendingReconciles();
+  if (all.length === 0) return;
+
+  const now = Date.now();
+  const fresh = all.filter((p) => now - p.queued_at < PENDING_RECONCILE_STALE_MS);
+  const dropped = all.length - fresh.length;
+  if (dropped > 0) {
+    console.log(
+      `[ChatService] dropping ${dropped} stale pending reconciles (>${PENDING_RECONCILE_STALE_MS}ms)`,
+    );
+  }
+  if (fresh.length === 0) {
+    writePendingReconciles([]);
+    return;
+  }
+
+  console.log(`[ChatService] draining ${fresh.length} pending reconciles`);
+  const remaining: PendingReconcile[] = [];
+  for (const item of fresh) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    let result: 'ok' | 'drop' | 'retry' = 'retry';
+    try {
+      const resp = await fetch('/api/reconcile-cost', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          logging_message_id: item.logging_message_id,
+          cost_micro_usd: item.cost_micro_usd,
+        }),
+        credentials: 'include',
+      });
+      if (resp.ok) {
+        result = 'ok';
+        let body = 'no-body';
+        try {
+          const j = (await resp.json()) as unknown;
+          body = JSON.stringify(j);
+        } catch {
+          /* ignore */
+        }
+        console.log(
+          `[ChatService] drained reconcile: msg=${item.logging_message_id.slice(0, 8)}…` +
+            ` cost=${item.cost_micro_usd}µUSD result=${body}`,
+        );
+      } else if (resp.status >= 400 && resp.status < 500) {
+        // 401/403/404/etc — definitive reject. The row is gone or the caller
+        // can't claim it. Retrying won't help; drop and move on.
+        result = 'drop';
+        console.warn(
+          `[ChatService] dropping pending reconcile (${resp.status}): msg=${item.logging_message_id.slice(0, 8)}…`,
+        );
+      } else {
+        // 5xx — server-side blip, retry next time.
+        console.warn(
+          `[ChatService] retry-on-next-drain (${resp.status}): msg=${item.logging_message_id.slice(0, 8)}…`,
+        );
+      }
+    } catch (e) {
+      // Network error: keep for next drain.
+      console.warn(
+        `[ChatService] retry-on-next-drain (network): msg=${item.logging_message_id.slice(0, 8)}…`,
+        e,
+      );
+    }
+    if (result === 'retry') remaining.push(item);
+  }
+  writePendingReconciles(remaining);
+}
+
+export interface StreamCallbacks {
+  onContent?: (chunk: string, fullContent: string) => void;
+  /**
+   * Fires on each `thinking_delta` within a `thinking` content block so the
+   * client can show the model's reasoning alongside the streamed reply.
+   * Arguments mirror onContent: the incremental chunk plus the running
+   * accumulation for convenience.
+   */
+  onThinking?: (chunk: string, fullThinking: string) => void;
+  onComplete?: (
+    message: string,
+    editInstructions?: EditInstruction[],
+    usage?: AnthropicUsage,
+    /** Raw pre-cleaned reply (before cleanResponseContent strips
+     *  [EDIT_INSTRUCTIONS] / [CURRENT_GRAPH_DATA] / [SELECTED_NODES]).
+     *  Use this for logging so the audit trail captures exactly what
+     *  the model produced, including cases where cleaning empties the
+     *  displayed `message`. */
+    rawMessage?: string,
+    /** Structured content blocks reconstructed from SSE — text, signed
+     *  thinking, server-tool-use + result pairs — in original block order.
+     *  Caller persists these on the assistant ChatMessage so the next turn
+     *  re-ships them and Opus 4.7 sees prior thinking + tool context. */
+    contentBlocks?: AssistantBlock[],
+  ) => void;
+  onError?: (error: string) => void;
+  onSearchStart?: () => void;
+  onSearchComplete?: (results?: WebSearchResult[]) => void;
+  /**
+   * Fires on every `content_block_start` with a normalized "phase" label so
+   * the UI can render a continuous status chip across the whole turn.
+   * Callers should clear to null on completion.
+   *
+   * Sticky/retroactive: 'using_tools' upgrades to 'searching' retroactively
+   * when a web_search block_start arrives in the same tool-use burst, then
+   * stays sticky until the next text/thinking block resets it (so later
+   * independent tool use doesn't falsely claim "searching").
+   */
+  onStreamPhase?: (phase: StreamPhase) => void;
+  /** Fires on each `message_delta.usage` SSE event with the running USD estimate. */
+  onCostUpdate?: (runningCostUsd: number) => void;
+  /**
+   * Fires after every `content_block_stop` with the current accumulator
+   * snapshot (text + signed thinking + tool_use + tool_results in order).
+   * Lets the caller keep a mirror in a ref so user-abort handlers can stamp
+   * `content_blocks` onto the partial assistant turn synchronously, without
+   * waiting for the chatService's async cleanup that runs after the abort
+   * has already returned. Cheap: fires per block-stop, not per delta.
+   */
+  onContentBlocks?: (blocks: AssistantBlock[]) => void;
+  /**
+   * Fires for cost/policy errors (HTTP 401/402/409/413/429/503 with known shapes,
+   * and mid-stream synthesized error events). Does NOT fall through to the
+   * generic `onError` handler or the H3->H2 retry path.
+   */
+  onCostError?: (error: CostError) => void;
+}
+
+/**
+ * Options for streamMessage. Single options-object instead of long positional
+ * list — simpler to evolve, and callers (ChatInterface) can import and share
+ * this type rather than tracking argument order.
+ *
+ * turnstileToken is NOT listed: Turnstile is cookie-based after the first
+ * verification; the browser auto-sends `tocb_anon` and the Worker reads it.
+ *
+ * userAnthropicKey is kept in the interface for completeness but is normally
+ * undefined — the Worker loads stored BYOK keys from `user_byok_keys` server-side.
+ */
+export type StreamMessageOptions = {
+  messages: ChatMessage[];
+  currentGraphData: unknown;
+  mode: 'chat' | 'generate';
+  callbacks?: StreamCallbacks;
+  signal?: AbortSignal;
+  model?: string;
+  webSearchEnabled?: boolean;
+  highlightedNodes?: Set<string> | string[];
+  extendedThinkingEnabled?: boolean;
+  /**
+   * `output_config.effort` value. Only forwarded when the model's
+   * `supports_output_config_effort` capability is true; otherwise dropped to
+   * avoid Anthropic rejecting the field. Caller is expected to clamp to a
+   * level the model accepts (e.g. `xhigh` is Opus 4.7 only).
+   */
+  effort?: EffortLevel;
+  attachedFileIds?: string[];
+  idempotencyKey?: string;
+  userAnthropicKey?: string;
+  chartId?: string;
+  /**
+   * Anon-chart edit token. Required by the worker's file-ownership gate
+   * in anthropic-stream.ts when the request references file_ids and the
+   * chart has no owner. Owned charts authorize via the JWT; passing this
+   * alongside an Authorization header is harmless — the worker uses it
+   * only when `chart_owner_id IS NULL`.
+   */
+  editToken?: string;
+  loggingMessageId?: string;
+};
+
+/** HTTP status + error.type combinations that map to a CostError and skip retry/fallthrough. */
+const COST_ERROR_MAP: Record<number, CostErrorType[]> = {
+  401: [
+    'turnstile_required',
+    'turnstile_failed',
+    'invalid_token',
+    'authentication_service_unavailable',
+  ],
+  402: ['global_budget_exhausted'],
+  409: ['idempotent_replay'],
+  413: ['body_too_large'],
+  429: ['lifetime_cap_reached'],
+  503: ['database_unavailable', 'estimation_unavailable'],
+};
+
+/** Mid-stream synthesized error event type -> CostErrorType. */
+const MID_STREAM_ERROR_TYPES: Record<string, CostErrorType> = {
+  request_cost_ceiling_exceeded: 'request_cost_ceiling_exceeded',
+  chart_deleted: 'chart_deleted',
+  file_unavailable: 'file_unavailable',
+};
 
 /**
  * Captures timing, protocol, and network metadata during an SSE streaming
@@ -62,7 +521,14 @@ class StreamingContext {
     this.lastChunkTime = this.startTime;
     try {
       if ('connection' in navigator) {
-        const conn = (navigator as any).connection;
+        // Network Information API — still in WICG (not in lib.dom) so we
+        // type the shape we actually touch instead of pulling in globals.
+        interface NavigatorConnectionLike {
+          effectiveType?: string;
+          rtt?: number;
+          downlink?: number;
+        }
+        const conn = (navigator as Navigator & { connection?: NavigatorConnectionLike }).connection;
         if (conn) {
           this.networkInfo = {
             effectiveType: conn.effectiveType ?? 'unknown',
@@ -71,7 +537,9 @@ class StreamingContext {
           };
         }
       }
-    } catch { /* network info unavailable */ }
+    } catch {
+      /* network info unavailable */
+    }
   }
 
   markHeadersReceived(): void {
@@ -100,14 +568,19 @@ class StreamingContext {
   private resolveProtocol(): string | null {
     try {
       const resolved = new URL(this.requestUrl, location.origin).href;
-      const entries = performance.getEntriesByName(resolved, 'resource') as PerformanceResourceTiming[];
+      const entries = performance.getEntriesByName(
+        resolved,
+        'resource',
+      ) as PerformanceResourceTiming[];
       if (entries.length > 0) {
         const last = entries[entries.length - 1];
         if (last.nextHopProtocol) {
           return last.nextHopProtocol;
         }
       }
-    } catch { /* Performance API unavailable */ }
+    } catch {
+      /* Performance API unavailable */
+    }
     return null;
   }
 
@@ -131,31 +604,55 @@ class StreamingContext {
 }
 
 class ChatService {
-  private readonly EDGE_FUNCTION_URL = '/api/anthropic-stream';
+  private readonly STREAM_API_URL = '/api/anthropic-stream';
   private authToken: string | null = null;
 
+  constructor() {
+    // Drain queued reconciles when the OS reports connectivity is back. This
+    // is the primary recovery path for the network-drop-mid-stream case
+    // (ERR_NETWORK_CHANGED / ERR_CONNECTION_RESET): the original reconcile
+    // POST gets enqueued in localStorage, then this listener replays it once
+    // the network heals.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        console.log('[ChatService] online event fired, draining pending reconciles');
+        void drainPendingReconciles(this.authToken);
+      });
+    }
+  }
+
   private static isNetworkError(error: Error): boolean {
-    return error.name === 'TypeError' ||
-           error.message.includes('network') ||
-           error.message.includes('Failed to fetch');
+    return (
+      error.name === 'TypeError' ||
+      error.message.includes('network') ||
+      error.message.includes('Failed to fetch')
+    );
   }
 
   setAuthToken(token: string | null) {
+    const wasNull = this.authToken === null;
     this.authToken = token;
+    // First time we get a real token (post-Auth0 hydration): drain the queue.
+    // Catches the "user reloads while offline, comes back online before the
+    // first stream" flow — without this, queued reconciles linger until the
+    // user starts another stream.
+    if (wasNull && token !== null) {
+      void drainPendingReconciles(token);
+    }
   }
 
-  private async streamFromEdgeFunction(
+  private async streamFromApi(
     url: string,
-    requestBody: any,
-    callbacks: {
-      onContent?: (chunk: string, fullContent: string) => void;
-      onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
-      onError?: (error: string) => void;
-      onSearchStart?: () => void;
-      onSearchComplete?: (results?: any[]) => void;
-    },
+    requestBody: unknown,
+    callbacks: StreamCallbacks,
     signal?: AbortSignal,
-    ctx?: StreamingContext
+    ctx?: StreamingContext,
+    extraHeaders?: Record<string, string>,
+    model: string = 'claude-opus-4-7',
+    mode: 'chat' | 'generate' = 'chat',
+    messages: ChatMessage[] = [],
+    webSearchEnabled: boolean = false,
+    extendedThinkingEnabled: boolean = false,
   ): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -163,12 +660,20 @@ class ChatService {
     if (this.authToken) {
       headers['Authorization'] = `Bearer ${this.authToken}`;
     }
+    if (extraHeaders) {
+      for (const [k, v] of Object.entries(extraHeaders)) {
+        headers[k] = v;
+      }
+    }
 
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
       signal,
+      // Include same-origin cookies so the Turnstile `tocb_anon` cookie
+      // reaches the Worker. Explicit value avoids Safari/cross-origin surprises.
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -176,11 +681,73 @@ class ChatService {
       console.error('[ChatService] API Error Response:', {
         status: response.status,
         statusText: response.statusText,
-        errorData
+        errorData,
       });
-      const msg = errorData?.error?.message || errorData?.error?.type || errorData?.details || `HTTP error! status: ${response.status}`;
+
+      // Cost/policy errors: surface via onCostError and do NOT enter the generic
+      // error path (no retry, no onError). The worker returns these shapes for
+      // predictable status codes — see COST_ERROR_MAP.
+      const errorType: string | undefined =
+        errorData?.error?.type || errorData?.error || errorData?.type;
+      const expectedTypes = COST_ERROR_MAP[response.status];
+      if (
+        expectedTypes &&
+        typeof errorType === 'string' &&
+        expectedTypes.includes(errorType as CostErrorType)
+      ) {
+        callbacks.onCostError?.({ type: errorType as CostErrorType, data: errorData });
+        ctx?.markError();
+
+        // Persist service-class errors to logging_errors so the original
+        // upstream cause (count_tokens rate-limit reason, Neon timeout,
+        // Auth0 JWKS failure, etc.) makes it into the DB. Cap/quota
+        // errors are expected operational states, not diagnostic noise —
+        // skip those. We rely on the worker to have put the upstream
+        // cause in errorData.upstream_message / upstream_status.
+        const SERVICE_ERROR_TYPES = new Set<CostErrorType>([
+          'database_unavailable',
+          'estimation_unavailable',
+          'authentication_service_unavailable',
+        ]);
+        if (SERVICE_ERROR_TYPES.has(errorType as CostErrorType)) {
+          const upstream = errorData as
+            | {
+                upstream_status?: number;
+                upstream_message?: string;
+              }
+            | undefined;
+          loggingService.reportError({
+            error_name: `CostError:${errorType}`,
+            error_message: upstream?.upstream_message ?? `HTTP ${response.status} ${errorType}`,
+            http_status: response.status,
+            request_metadata: {
+              error_type: errorType,
+              upstream_status: upstream?.upstream_status,
+              upstream_message: upstream?.upstream_message,
+              model,
+              mode,
+              messageCount: messages.length,
+              webSearchEnabled,
+              extendedThinkingEnabled,
+              ...(ctx ? ctx.toMetadata().streaming : {}),
+            },
+          });
+        }
+
+        // Signal to the caller that this was a terminal cost error; the outer
+        // try/catch should not re-enter retry or fall through to onError.
+        const err = new Error(`cost_error:${errorType}`);
+        (err as { httpStatus?: number }).httpStatus = response.status;
+        throw markAsCostError(err);
+      }
+
+      const msg =
+        errorData?.error?.message ||
+        errorData?.error?.type ||
+        errorData?.details ||
+        `HTTP error! status: ${response.status}`;
       const err = new Error(msg);
-      (err as any).httpStatus = response.status;
+      (err as Error & { httpStatus?: number }).httpStatus = response.status;
       throw err;
     }
 
@@ -195,8 +762,65 @@ class ChatService {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullContent = '';
-    let usage: any = null;
-    let hasSearched = false;
+    let fullThinking = '';
+    let usage: AnthropicUsage | null = null;
+
+    // Block accumulator runs in parallel with the existing fullContent /
+    // fullThinking string buffers (which power the live UI). On
+    // message_stop we surface the rebuilt AssistantBlock[] to onComplete;
+    // on a mid-stream cost error we attach the partial blocks to the
+    // CostError so the caller can stash them on the "was_killed" turn.
+    const blockAccumulator = new StreamBlockAccumulator();
+
+    // Sticky flag for the 'using_tools' → 'searching' retroactive upgrade.
+    // Set true when a web_search block_start arrives, cleared on the next
+    // text/thinking block_start (i.e. at the start of a new "burst" of
+    // model-visible output). Lets the chip stay on "Searching the web…"
+    // through the entire research loop instead of flickering on each
+    // sub-millisecond web_search block.
+    let sawWebSearchInBurst = false;
+
+    // Block timing: t0 is the first block's timestamp, tLast is the previous
+    // block_start/stop timestamp. Used to surface "this block was only N ms
+    // long" diagnostics when the UI chip looks like it's blinking.
+    const t0 = performance.now();
+    let tLast = t0;
+    const blockStartAt = new Map<number, number>();
+
+    // Running cost accumulators for onCostUpdate. Anthropic's message_delta.usage
+    // is cumulative (each delta carries the latest totals, not an increment), so
+    // Math.max is safe belt-and-suspenders against any out-of-order delivery.
+    const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[model] ?? 5;
+    const outputRate = MODEL_OUTPUT_RATES_USD_PER_MTOK[model] ?? 25;
+    let runningInput = 0;
+    let runningOutput = 0;
+    let runningCacheCreate = 0;
+    let runningCacheRead = 0;
+    let runningWebSearch = 0;
+    const computeRunningCost = () =>
+      (runningInput / 1_000_000) * inputRate +
+      (runningCacheCreate / 1_000_000) * inputRate * 1.25 +
+      (runningCacheRead / 1_000_000) * inputRate * 0.1 +
+      (runningOutput / 1_000_000) * outputRate +
+      runningWebSearch * WEB_SEARCH_USD_PER_USE;
+    const updateUsage = (u: Partial<AnthropicUsage>) => {
+      runningInput = Math.max(runningInput, u.input_tokens ?? 0);
+      runningOutput = Math.max(runningOutput, u.output_tokens ?? 0);
+      runningCacheCreate = Math.max(runningCacheCreate, u.cache_creation_input_tokens ?? 0);
+      runningCacheRead = Math.max(runningCacheRead, u.cache_read_input_tokens ?? 0);
+      runningWebSearch = Math.max(runningWebSearch, u.server_tool_use?.web_search_requests ?? 0);
+      callbacks.onCostUpdate?.(computeRunningCost());
+    };
+
+    // Latest cost_micro_usd value seen on a running_cost SSE frame. The
+    // worker's streaming reconcile (ctx.waitUntil IIFE) is the primary
+    // path that writes this to logging_messages.cost_micro_usd, but it can
+    // be killed by Cloudflare's waitUntil time budget on streams whose
+    // tracked.done hangs (e.g. when the user's connection drops). When the
+    // stream ends here — for any reason — we POST this figure to
+    // /api/reconcile-cost as a fallback so the per-chart pill converges
+    // even if the streaming reconcile bailed.
+    let lastCostMicroUsd: bigint | null = null;
 
     try {
       while (true) {
@@ -219,7 +843,7 @@ class ChatService {
             const data = line.slice(6);
 
             if (data === '[DONE]') {
-              // Don't call onComplete here - wait for message_stop event which has complete usage data
+              // Wait for message_stop, which carries final usage.
               continue;
             }
 
@@ -231,189 +855,632 @@ class ChatService {
             }
 
             try {
-              // Handle web search events
-              if (event.type === 'content_block_start' && event.content_block?.type === 'server_tool_use') {
-                if (event.content_block.name === 'web_search' && !hasSearched) {
-                  callbacks.onSearchStart?.();
-                  hasSearched = true;
+              // Feed every parsed event into the block accumulator first.
+              // This stays decoupled from the rest of the dispatch (which
+              // updates UI state, fires phase callbacks, etc.) so the two
+              // pipelines can't accidentally drop or reorder events.
+              if (
+                event.type === 'content_block_start' ||
+                event.type === 'content_block_delta' ||
+                event.type === 'content_block_stop'
+              ) {
+                blockAccumulator.handleEvent(event);
+              }
+              // Mid-stream synthesized error events from the worker (U9). These
+              // arrive as SSE events rather than HTTP errors because the failure
+              // was detected after streaming began. They terminate the stream
+              // via onCostError without invoking onError or the retry path.
+              if (typeof event.type === 'string' && event.type in MID_STREAM_ERROR_TYPES) {
+                const mappedType = MID_STREAM_ERROR_TYPES[event.type];
+                callbacks.onCostError?.({
+                  type: mappedType,
+                  data: event,
+                  partialContentBlocks: toAssistantContentBlocks(blockAccumulator),
+                });
+                ctx?.markError();
+                throw markAsCostError(new Error(`cost_error:${mappedType}`));
+              }
+
+              // Per-block visibility: one log line per content_block_start
+              // (a couple dozen per turn, not per delta) lets DevTools show
+              // the stream's scaffold — thinking→text→web_search×N→… — so we
+              // can tell at a glance whether e.g. "so far" stopped updating
+              // because no more polls happened, or because the UI ignored a
+              // late running_cost frame.
+              if (event.type === 'content_block_start') {
+                const cb = event.content_block ?? {};
+                const now = performance.now();
+                const sinceStart = Math.round(now - t0);
+                const sinceLast = Math.round(now - tLast);
+                tLast = now;
+                blockStartAt.set(event.index, now);
+                console.log(
+                  `[ChatService] block_start idx=${event.index} type=${cb.type}` +
+                    (cb.name ? ` name=${cb.name}` : '') +
+                    ` t+${sinceStart}ms Δ${sinceLast}ms`,
+                );
+                // Reset on each new thinking block — each is a fresh
+                // chain-of-thought, not a continuation of the prior one.
+                if (cb.type === 'thinking') {
+                  fullThinking = '';
                 }
-              } else if (event.type === 'content_block_start' && event.content_block?.type === 'web_search_tool_result') {
+                // Phase dispatch: map block type+name to a UI phase so the
+                // status chip keeps continuous coverage across the turn.
+                // Every non-text block gets a phase; text defers to the
+                // streaming bubble. See StreamPhase doc for the mapping.
+                let phase: StreamPhase | null = null;
+                if (cb.type === 'thinking') {
+                  phase = 'thinking';
+                  sawWebSearchInBurst = false;
+                } else if (cb.type === 'text') {
+                  phase = 'writing';
+                  sawWebSearchInBurst = false;
+                } else if (
+                  cb.type === 'server_tool_use' ||
+                  cb.type === 'web_search_tool_result' ||
+                  cb.type === 'code_execution_tool_result'
+                ) {
+                  if (cb.type === 'server_tool_use' && cb.name === 'web_search') {
+                    sawWebSearchInBurst = true;
+                  }
+                  phase = sawWebSearchInBurst ? 'searching' : 'using_tools';
+                } else phase = 'other';
+                callbacks.onStreamPhase?.(phase);
+              }
+
+              // Block-stop timing: surfaces the lifetime of each block so we
+              // can explain "the chip blinked" — if a block opens and closes
+              // within a few ms, its phase transition is too fast for the UI
+              // to render visibly.
+              if (event.type === 'content_block_stop') {
+                const now = performance.now();
+                const startedAt = blockStartAt.get(event.index);
+                const dur = startedAt !== undefined ? Math.round(now - startedAt) : -1;
+                const sinceLast = Math.round(now - tLast);
+                tLast = now;
+                blockStartAt.delete(event.index);
+                console.log(
+                  `[ChatService] block_stop  idx=${event.index} dur=${dur}ms Δ${sinceLast}ms`,
+                );
+                // Snapshot the current blocks so the caller can keep a ref in
+                // sync; user-abort then has a synchronously-readable view of
+                // what streamed before the abort. Skip silently if no
+                // listener — most callers don't need it.
+                if (callbacks.onContentBlocks) {
+                  try {
+                    callbacks.onContentBlocks(toAssistantContentBlocks(blockAccumulator));
+                  } catch (cbErr) {
+                    console.warn('[ChatService] onContentBlocks threw:', cbErr);
+                  }
+                }
+              }
+
+              // Handle web search events. Fire on EVERY web_search block, not
+              // just the first: Claude often runs 8+ searches in a single turn
+              // (code_execution orchestrates them one per iteration). Gating to
+              // the first search leaves the UI showing the stale "Thinking..."
+              // chip for the rest of the stream.
+              if (
+                event.type === 'content_block_start' &&
+                event.content_block?.type === 'server_tool_use'
+              ) {
+                if (event.content_block.name === 'web_search') {
+                  callbacks.onSearchStart?.();
+                }
+              } else if (
+                event.type === 'content_block_start' &&
+                event.content_block?.type === 'web_search_tool_result'
+              ) {
                 const searchResults = event.content_block?.content;
                 if (searchResults && Array.isArray(searchResults)) {
                   const formattedResults = searchResults
-                    .filter(result => result.type === 'web_search_result')
-                    .map(result => ({
+                    .filter((result) => result.type === 'web_search_result')
+                    .map((result) => ({
                       title: result.title || 'No title',
                       content: `Web search result from ${result.page_age || 'recent'} - Content integrated in AI response below.`,
                       url: result.url || '#',
-                      score: 0.9
+                      score: 0.9,
                     }));
                   callbacks.onSearchComplete?.(formattedResults);
                 } else {
                   callbacks.onSearchComplete?.();
                 }
-              } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+              } else if (
+                event.type === 'content_block_delta' &&
+                event.delta?.type === 'text_delta'
+              ) {
                 const chunk = event.delta.text;
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);
+              } else if (
+                event.type === 'content_block_delta' &&
+                event.delta?.type === 'thinking_delta'
+              ) {
+                const chunk = typeof event.delta.thinking === 'string' ? event.delta.thinking : '';
+                if (chunk) {
+                  fullThinking += chunk;
+                  callbacks.onThinking?.(chunk, fullThinking);
+                }
               } else if (event.type === 'message_start' && event.message?.usage) {
                 usage = event.message.usage;
+                updateUsage(event.message.usage);
               } else if (event.type === 'message_delta' && event.usage) {
-                usage = { ...usage, ...event.usage };
+                usage = { ...(usage ?? {}), ...event.usage } as AnthropicUsage;
+                updateUsage(event.usage);
+              } else if (event.type === 'running_cost' && typeof event.cost_usd === 'number') {
+                // Capture the µUSD figure for the post-stream reconcile POST.
+                // The string carries BigInt-precision (the cost is computed
+                // server-side as bigint and serialized as a string to avoid JS
+                // number precision loss); we keep it as bigint client-side so
+                // the round-trip to /api/reconcile-cost is byte-identical.
+                if (typeof event.cost_micro_usd === 'string') {
+                  try {
+                    const parsed = BigInt(event.cost_micro_usd);
+                    if (parsed >= 0n && (lastCostMicroUsd === null || parsed >= lastCostMicroUsd)) {
+                      lastCostMicroUsd = parsed;
+                    }
+                  } catch {
+                    // Bad string from server — ignore this frame; later frames
+                    // overwrite. Console.warn would be too noisy; the next
+                    // running_cost frame is typically <5s away.
+                  }
+                }
+                // Worker-synthesized event: the server-side count_tokens
+                // poller has a fresh cumulative-cost estimate. Anthropic's
+                // own usage fields only fire at message_start/message_delta,
+                // so without this the UI "$X so far" stayed frozen through
+                // the whole generation phase. The poller event updates it
+                // every ~5 seconds.
+                //
+                // The worker now embeds the full accumulator snapshot in
+                // the SSE payload (input/output/cache/web_search) so PR-
+                // preview deploys (where wrangler tail isn't available)
+                // can still see the server-side compute by logging the
+                // event payload here.
+                const src = typeof event.source === 'string' ? event.source : 'unknown';
+                const num = (v: unknown) => (typeof v === 'number' ? v : '?');
+                console.log(
+                  `[ChatService] running_cost: $${event.cost_usd.toFixed(6)}` +
+                    ` source=${src}` +
+                    ` output=${num(event.output_tokens_est)}` +
+                    ` input=${num(event.input_tokens)}` +
+                    ` cache_w=${num(event.cache_creation_input_tokens)}` +
+                    ` cache_r=${num(event.cache_read_input_tokens)}` +
+                    ` web_search=${num(event.web_search_requests)}`,
+                );
+                callbacks.onCostUpdate?.(event.cost_usd);
               } else if (event.type === 'message_stop') {
                 ctx?.markComplete();
+                if (ctx) {
+                  const meta = ctx.toMetadata().streaming;
+                  console.log(
+                    `[ChatService] Stream complete:` +
+                      ` duration=${meta.durationMs}ms` +
+                      ` ttfb=${meta.ttfbMs}ms` +
+                      ` chunks=${meta.chunkCount}` +
+                      ` bytes=${meta.bytesReceived}` +
+                      ` protocol=${meta.protocol ?? '?'}`,
+                  );
+                }
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
-                // Separate try so callback bugs aren't reported as streaming failures
+                // Pass raw fullContent so loggers capture exactly what
+                // Claude produced. Display uses cleanContent; audit uses
+                // rawMessage.
+                const contentBlocks = toAssistantContentBlocks(blockAccumulator);
                 try {
-                  callbacks.onComplete?.(cleanContent, editInstructions, usage);
+                  callbacks.onComplete?.(
+                    cleanContent,
+                    editInstructions,
+                    usage ?? undefined,
+                    fullContent,
+                    contentBlocks,
+                  );
                 } catch (callbackErr) {
-                  console.error('[ChatService] onComplete callback error:', callbackErr);
+                  // A throw from the React onComplete handler (e.g. setState
+                  // on an unmounted component, exception inside graphEdits)
+                  // would otherwise leave the user staring at a "complete"
+                  // stream that never rendered. Route it through the standard
+                  // error logging path so the failure reaches logging_errors
+                  // server-side, the same way HTTP/transport failures do.
+                  const cbErr =
+                    callbackErr instanceof Error ? callbackErr : new Error(String(callbackErr));
+                  console.error('[ChatService] onComplete callback error:', cbErr);
+                  loggingService.reportError({
+                    error_name: `onCompleteCallback:${cbErr.name}`,
+                    error_message: cbErr.message,
+                    stack_trace: cbErr.stack,
+                    request_metadata: {
+                      model,
+                      mode,
+                      messageCount: messages.length,
+                      webSearchEnabled,
+                      extendedThinkingEnabled,
+                      contentBlockCount: contentBlocks.length,
+                      editInstructionCount: editInstructions.length,
+                      ...(ctx ? ctx.toMetadata().streaming : {}),
+                    },
+                  });
                 }
                 return;
               }
             } catch (e) {
+              // Cost errors (from HTTP pre-stream or mid-stream synthesized events)
+              // have already invoked onCostError and should propagate unchanged so
+              // the outer catch skips retry and generic onError.
+              if (isCostError(e)) {
+                throw e;
+              }
               console.error('[ChatService] Error processing SSE event:', e);
               // Re-throw to outer handler so StreamingContext diagnostics are
               // included in the error report. Previously this silently returned
               // after calling onError, losing all transport context.
               const wrapped = e instanceof Error ? e : new Error(String(e));
-              (wrapped as any).isSSEProcessingError = true;
+              (wrapped as Error & { isSSEProcessingError?: boolean }).isSSEProcessingError = true;
               throw wrapped;
             }
           }
         }
       }
+    } catch (e) {
+      // Kill-time output cost estimate (closes the K2 gap: kills <5s after
+      // message_start, before the first count_tokens poll has fired and
+      // before any thinking-block signature has arrived, otherwise capture
+      // only the message_start placeholder of 8 output tokens).
+      //
+      // We have the streamed assistant content locally (fullContent +
+      // fullThinking). Tokens-from-chars is rough (≈4 chars/token in
+      // English; varies by tokenizer and content) but it's strictly better
+      // than the 8-token placeholder by orders of magnitude — a sub-5s
+      // kill that streamed 2,000 chars of thinking should credit ~500
+      // tokens of output, not 8.
+      //
+      // Bump runningOutput to max(current, char-estimate) and re-fire
+      // onCostUpdate so the BYOK pill catches up before the catch above
+      // tears down state. The delta-credit logic in the caller handles
+      // the addition idempotently. Skipped on non-abort errors — those
+      // paths show the user an error UI; cost capture isn't user-visible.
+      const isAbort =
+        (e instanceof DOMException && e.name === 'AbortError') || signal?.aborted === true;
+      if (isAbort) {
+        try {
+          const totalChars = fullContent.length + fullThinking.length;
+          if (totalChars > 0) {
+            const estimatedOutputTokens = Math.ceil(totalChars / 4);
+            if (estimatedOutputTokens > runningOutput) {
+              runningOutput = estimatedOutputTokens;
+              const finalCost = computeRunningCost();
+              callbacks.onCostUpdate?.(finalCost);
+              console.log(
+                `[ChatService] kill-time output estimate: chars=${totalChars}` +
+                  ` estTokens=${estimatedOutputTokens} → finalCost=$${finalCost.toFixed(6)}`,
+              );
+            }
+          }
+        } catch (estErr) {
+          console.warn('[ChatService] kill-time cost estimate failed:', estErr);
+        }
+      }
+      throw e;
     } finally {
       reader.releaseLock();
+
+      // Client-side reconcile fallback. Fires for every stream end (success,
+      // user abort, connection drop, error) so that the per-chart pill
+      // converges to the last-seen running_cost even if the worker's
+      // ctx.waitUntil IIFE bails on its time budget. Idempotent server-side
+      // (GREATEST(existing, value)), so a successful streaming reconcile
+      // followed by this POST is a no-op.
+      //
+      // Best-effort: failures here don't surface to the caller. We don't
+      // pass `signal` so a user-initiated abort of the stream doesn't also
+      // cancel this fallback.
+      const loggingMessageIdForReconcile = extraHeaders?.['X-Logging-Message-Id'];
+      if (loggingMessageIdForReconcile && lastCostMicroUsd !== null && lastCostMicroUsd > 0n) {
+        const reconcileHeaders: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (this.authToken) {
+          reconcileHeaders['Authorization'] = `Bearer ${this.authToken}`;
+        }
+        const costMicroStr = lastCostMicroUsd.toString();
+        let directReconcileSucceeded = false;
+        try {
+          const resp = await fetch('/api/reconcile-cost', {
+            method: 'POST',
+            headers: reconcileHeaders,
+            body: JSON.stringify({
+              logging_message_id: loggingMessageIdForReconcile,
+              cost_micro_usd: costMicroStr,
+            }),
+            credentials: 'include',
+          });
+          let resultStr = 'no-body';
+          if (resp.ok) {
+            // Defer the success flag until after the JSON parse resolves.
+            // If the body comes back malformed we don't want the post-success
+            // drain to fire on what was a partially-broken response — better
+            // to leave the queue alone and let the next successful reconcile
+            // (or `online` event) drain it.
+            const result = await resp.json().catch(() => null);
+            resultStr = result ? JSON.stringify(result) : 'parse-error';
+            if (result !== null) {
+              directReconcileSucceeded = true;
+            }
+          } else {
+            resultStr = `error:${resp.status}`;
+            // 5xx → enqueue for retry. 4xx → drop (definitive reject).
+            if (resp.status >= 500) {
+              enqueuePendingReconcile({
+                logging_message_id: loggingMessageIdForReconcile,
+                cost_micro_usd: costMicroStr,
+              });
+            }
+          }
+          console.log(
+            `[ChatService] reconcile-cost: status=${resp.status}` +
+              ` sent=${costMicroStr}µUSD` +
+              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…` +
+              ` result=${resultStr}`,
+          );
+        } catch (reconcileErr) {
+          // Network error — the typical path for ERR_NETWORK_CHANGED /
+          // ERR_CONNECTION_RESET when the user's connection drops mid-stream.
+          // Stash for retry on the next `online` event or next successful
+          // reconcile.
+          enqueuePendingReconcile({
+            logging_message_id: loggingMessageIdForReconcile,
+            cost_micro_usd: costMicroStr,
+          });
+          console.warn(
+            `[ChatService] reconcile-cost POST failed, queued for retry (sent=${costMicroStr}µUSD,` +
+              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…):`,
+            reconcileErr,
+          );
+        }
+
+        // Opportunistic drain after a successful direct reconcile. The
+        // network just proved it works, and the worker just woke up — replay
+        // anything queued from earlier failures. Best-effort: this fires
+        // even if the queue is empty (drainPendingReconciles bails fast).
+        if (directReconcileSucceeded) {
+          void drainPendingReconciles(this.authToken);
+        }
+      }
     }
 
     // Stream ended without message_stop — treat as incomplete
     if (ctx && ctx.phase !== 'complete') {
       throw new Error(
-        `Stream ended unexpectedly in phase "${ctx.phase}" after ${ctx.chunkCount} chunks`
+        `Stream ended unexpectedly in phase "${ctx.phase}" after ${ctx.chunkCount} chunks`,
       );
     }
   }
 
-  async streamMessage(
-    messages: ChatMessage[],
-    currentGraphData: any,
-    mode: 'chat' | 'generate',
-    apiKey: string = '', // API key parameter kept for backward compatibility but not used
-    callbacks: {
-      onContent?: (chunk: string, fullContent: string) => void;
-      onComplete?: (message: string, editInstructions?: EditInstruction[], usage?: any) => void;
-      onError?: (error: string) => void;
-      onSearchStart?: () => void;
-      onSearchComplete?: (results?: any[]) => void;
-    } = {},
-    signal?: AbortSignal,
-    model: string = "claude-opus-4-6",
-    webSearchEnabled: boolean = false,
-    customSystemPrompt?: string,
-    highlightedNodes?: Set<string>,
-    extendedThinkingEnabled: boolean = false
-  ): Promise<void> {
+  async streamMessage(options: StreamMessageOptions): Promise<void> {
+    const {
+      messages,
+      currentGraphData,
+      mode,
+      callbacks = {},
+      signal,
+      model = 'claude-opus-4-7',
+      webSearchEnabled = false,
+      highlightedNodes,
+      extendedThinkingEnabled = false,
+      effort,
+      attachedFileIds = [],
+      idempotencyKey,
+      userAnthropicKey,
+      chartId,
+      editToken,
+      loggingMessageId,
+    } = options;
+
     let ctx: StreamingContext | undefined;
-    let requestBody: any;
-    let serializedBody: string;
-    let retriedWithH2 = false;
+    let requestBody: Record<string, unknown> = {};
+    // Initialize to empty string so TS can prove it's assigned before use in
+    // the catch-block retry guard. The real value is set before streamFromApi.
+    let serializedBody = '';
+    // Captured in the try-block so the H3->H2 retry can reuse most headers.
+    let capturedExtraHeaders: Record<string, string> | undefined;
     try {
       // Process the last user message
       const processedMessages = [...messages];
       const lastIndex = messages.length - 1;
 
+      // Normalize highlightedNodes (options type accepts Set or string[]) into
+      // a Set for O(1) membership checks below.
+      const highlightedSet: Set<string> | undefined = highlightedNodes
+        ? highlightedNodes instanceof Set
+          ? highlightedNodes
+          : new Set(highlightedNodes)
+        : undefined;
+
       if (processedMessages[lastIndex].role === 'user') {
-        // Add graph data - create a copy to avoid modifying the original message
+        // Add graph data - create a copy to avoid modifying the original message.
+        // Shape is intentionally loose here (options.currentGraphData is `unknown`
+        // per the public interface); cast to ToCData because addNodePaths expects it.
         if (currentGraphData) {
-          const dataWithPaths = addNodePaths(currentGraphData);
+          const dataWithPaths = addNodePaths(currentGraphData as import('../types').ToCData);
           processedMessages[lastIndex] = {
             ...processedMessages[lastIndex],
-            content: processedMessages[lastIndex].content + `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`
+            content:
+              processedMessages[lastIndex].content +
+              `\n\n[CURRENT_GRAPH_DATA]\n${JSON.stringify(dataWithPaths, null, 2)}\n[/CURRENT_GRAPH_DATA]`,
           };
         }
 
         // Add selected nodes data after graph data
-        if (highlightedNodes && highlightedNodes.size > 0 && currentGraphData) {
-          const selectedNodesJson: any[] = []
+        if (highlightedSet && highlightedSet.size > 0 && currentGraphData) {
+          interface GraphNodeLike {
+            id?: string;
+            [k: string]: unknown;
+          }
+          interface GraphColumnLike {
+            nodes?: GraphNodeLike[];
+          }
+          interface GraphSectionLike {
+            columns?: GraphColumnLike[];
+          }
+          interface GraphLike {
+            sections?: GraphSectionLike[];
+          }
+          const selectedNodesJson: Array<GraphNodeLike & { path: string }> = [];
+          const graph = currentGraphData as GraphLike;
 
-          currentGraphData.sections?.forEach((section: any, sectionIndex: number) => {
-            section.columns?.forEach((column: any, columnIndex: number) => {
-              column.nodes?.forEach((node: any, nodeIndex: number) => {
-                if (highlightedNodes.has(node.id)) {
+          graph.sections?.forEach((section, sectionIndex) => {
+            section.columns?.forEach((column, columnIndex) => {
+              column.nodes?.forEach((node, nodeIndex) => {
+                if (node.id && highlightedSet.has(node.id)) {
                   // Create a copy with path added
                   const nodeWithPath = {
                     ...node,
-                    path: `sections.${sectionIndex}.columns.${columnIndex}.nodes.${nodeIndex}`
-                  }
-                  selectedNodesJson.push(nodeWithPath)
+                    path: `sections.${sectionIndex}.columns.${columnIndex}.nodes.${nodeIndex}`,
+                  };
+                  selectedNodesJson.push(nodeWithPath);
                 }
-              })
-            })
-          })
+              });
+            });
+          });
 
           if (selectedNodesJson.length > 0) {
             const selectedNodesContent = `\n\n[SELECTED_NODES]\n${JSON.stringify(selectedNodesJson, null, 2)}\n[/SELECTED_NODES]`;
             processedMessages[lastIndex] = {
               ...processedMessages[lastIndex],
-              content: processedMessages[lastIndex].content + selectedNodesContent
+              content: processedMessages[lastIndex].content + selectedNodesContent,
             };
           }
         }
       }
 
-      // Use custom system prompt if provided, otherwise use default
-      let baseSystemPrompt: string;
-      if (customSystemPrompt?.trim()) {
-        baseSystemPrompt = customSystemPrompt;
-      } else {
-        baseSystemPrompt = systemPromptContent;
-      }
+      // Combine the bundled system prompt with the mode-specific suffix.
+      const systemPrompt =
+        mode === 'generate'
+          ? `${systemPromptContent}\n\n${generateModePromptContent}`
+          : `${systemPromptContent}\n\n${chatModePromptContent}`;
 
-      // Combine with mode-specific prompt
-      const systemPrompt = mode === 'generate'
-        ? `${baseSystemPrompt}\n\n${generateModePromptContent}`
-        : `${baseSystemPrompt}\n\n${chatModePromptContent}`;
+      // Build outgoing messages via the shared helper so the assembly rule
+      // (assistant turns ship content_blocks; user turns ship text + optional
+      // document blocks; PDFs ride along on every replay; legacy entries
+      // fall back to text content) is unit-testable and stays in lockstep
+      // with the persisted ChatMessage shape.
+      const outgoingMessages = buildOutgoingMessages(processedMessages, {
+        attachedFileIds,
+        lastIndex,
+      });
 
-      // Create request body for edge function
+      // max_tokens sourced from shared/pricing.ts so it stays in sync with
+      // the models-overview docs.
+      const maxOutputTokens =
+        MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES]?.max_output_tokens ?? 64_000;
       requestBody = {
         model,
-        max_tokens: 64000,
-        system: [{
-          type: "text",
-          text: systemPrompt,
-          cache_control: { type: "ephemeral" }
-        }],
-        messages: processedMessages.map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content
-        })),
-        stream: true
+        max_tokens: maxOutputTokens,
+        system: [
+          {
+            type: 'text',
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+        messages: outgoingMessages,
+        stream: true,
       };
+
+      // Top-level cache_control set unconditionally. Generate seeds a
+      // chat-mode continuation (ChatInterface.tsx:2331-2333 flips mode
+      // to 'chat' with the generation as turn 1), so its payload becomes
+      // the cache prefix for the first chat follow-up. Net win: generate
+      // writes once at 1.25×, the next chat turn reads at 0.1×, instead
+      // of paying 1× then 1.25× without the prefix. Loses only if the
+      // user idles >5min between generate and first chat turn (cache TTL).
+      requestBody.cache_control = { type: 'ephemeral' };
+
+      // Some models accept an output_config.effort; others reject the field.
+      // Capability flag lives in shared/pricing.ts so it stays in sync with
+      // the models-overview docs. The caller picks the level (UI dropdown);
+      // we additionally guard the per-model accept-list so an `xhigh` choice
+      // surviving a model swap to e.g. Sonnet 4.6 doesn't 400 upstream.
+      // The `as readonly EffortLevel[]` widens the per-model tuple (narrowed
+      // via `as const`) so `includes()` accepts the broader union.
+      const caps = MODEL_CAPABILITIES[model as keyof typeof MODEL_CAPABILITIES];
+      if (
+        caps?.supports_output_config_effort &&
+        effort &&
+        (caps.effort_levels as readonly EffortLevel[]).includes(effort)
+      ) {
+        requestBody.output_config = { effort };
+      }
 
       // Add web search with dynamic filtering (auto-injects code_execution)
       if (webSearchEnabled) {
-        requestBody.tools = [{
-          type: "web_search_20260209",
-          name: "web_search"
-        }];
+        requestBody.tools = [
+          {
+            type: 'web_search_20260209',
+            name: 'web_search',
+          },
+        ];
       }
 
-      // Add adaptive thinking if enabled (Claude decides how much to think)
+      // Add adaptive thinking if enabled (Claude decides how much to think).
+      // display: 'summarized' requests summarized thinking blocks so the UI
+      // can render a compact progress indicator rather than raw reasoning.
       if (extendedThinkingEnabled) {
         requestBody.thinking = {
-          type: "adaptive"
+          type: 'adaptive',
+          display: 'summarized',
         };
       }
 
       serializedBody = JSON.stringify(requestBody);
-      ctx = new StreamingContext(serializedBody.length, this.EDGE_FUNCTION_URL);
+      ctx = new StreamingContext(serializedBody.length, this.STREAM_API_URL);
 
-      await this.streamFromEdgeFunction(this.EDGE_FUNCTION_URL, requestBody, callbacks, signal, ctx);
-    } catch (caughtError) {
-      let error = caughtError;
+      // Idempotency-Key guards against browser-level double-sends (reload,
+      // accidental double-click) within the worker's 60s dedup window. The
+      // caller can supply a stable key (e.g. message UUID) for guaranteed
+      // replay-safety; otherwise we mint a fresh one per attempt.
+      //
+      // Turnstile is NOT threaded per-request: after the first successful
+      // /api/verify-turnstile call the Worker sets an httpOnly `tocb_anon`
+      // cookie, which the browser auto-sends on every subsequent request.
+      // This streamMessage call passes `credentials: 'include'` (via
+      // streamFromApi) to ensure same-origin cookies ride along (Safari is
+      // picky — being explicit avoids surprises).
+      const extraHeaders: Record<string, string> = {
+        'X-Idempotency-Key': idempotencyKey ?? newIdempotencyKey(),
+      };
+      if (userAnthropicKey) extraHeaders['X-User-Anthropic-Key'] = userAnthropicKey;
+      if (chartId) extraHeaders['X-Chart-Id'] = chartId;
+      // X-Edit-Token authorizes anon-chart file_id references in the worker's
+      // file-ownership gate (see validateFileOwnership in anthropic-stream.ts).
+      // Owned charts authorize via the JWT; sending this header alongside is
+      // harmless — the worker only consults it when `chart_owner_id IS NULL`.
+      if (editToken) extraHeaders['X-Edit-Token'] = editToken;
+      if (loggingMessageId) extraHeaders['X-Logging-Message-Id'] = loggingMessageId;
+      capturedExtraHeaders = extraHeaders;
+
+      await this.streamFromApi(
+        this.STREAM_API_URL,
+        requestBody,
+        callbacks,
+        signal,
+        ctx,
+        extraHeaders,
+        model,
+        mode,
+        messages,
+        webSearchEnabled,
+        extendedThinkingEnabled,
+      );
+    } catch (caughtError: unknown) {
+      // Narrow caughtError once. Non-Error throws (strings, plain objects) are
+      // wrapped so downstream code can rely on .name/.message/.stack. The
+      // original value is preserved when it's already an Error.
+      let err: Error = caughtError instanceof Error ? caughtError : new Error(String(caughtError));
+      const wasNonError = !(caughtError instanceof Error);
+
       ctx?.markError();
       let streamingMeta: Record<string, unknown> = {};
       try {
@@ -422,31 +1489,47 @@ class ChatService {
         console.warn('[ChatService] Failed to collect streaming metadata:', metaErr);
       }
 
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') return;
+      if (!wasNonError) {
+        if (err.name === 'AbortError') return;
 
-        let httpStatus = (error as any).httpStatus as number | undefined;
-        let isSSEProcessingError = (error as any).isSSEProcessingError === true;
+        // Cost/policy errors were already surfaced via onCostError inside
+        // streamFromApi. Do NOT retry and do NOT invoke the generic onError —
+        // the caller (ChatInterface) renders a dedicated prompt per type.
+        if (isCostError(err)) return;
 
-        let isNetworkErr = ChatService.isNetworkError(error);
+        let httpStatus = (err as { httpStatus?: number }).httpStatus;
+        let isSSEProcessingError =
+          (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
 
-        // Retry with ?force-h2=1: the edge function responds with Alt-Svc: clear,
+        let isNetworkErr = ChatService.isNetworkError(err);
+
+        // Retry with ?force-h2=1: the server responds with Alt-Svc: clear,
         // telling the browser to stop using H3 for this origin. This retry itself
         // may still use H3 (browser caches connections), but subsequent requests
         // will fall back to H2. The retry also helps with transient QUIC failures
         // that succeed on a fresh connection attempt.
-        if (isNetworkErr && !retriedWithH2 && !signal?.aborted && serializedBody !== undefined) {
-          retriedWithH2 = true;
-
+        //
+        // Idempotency trade-off: we mint a FRESH X-Idempotency-Key for the retry.
+        // Reusing the original key would collide with the worker's 60s dedup
+        // window and return 409 idempotent_replay. The downside is that if both
+        // the original request AND the retry actually reached Anthropic (rare:
+        // would require the failure to occur between Anthropic acknowledging the
+        // request and us seeing the SSE stream), both would bill. The 60s window
+        // primarily protects against browser-level double-sends; H3->H2 retry
+        // is rare enough that occasional double-billing is acceptable.
+        if (isNetworkErr && !signal?.aborted && serializedBody !== '') {
           // Log the first failure for observability
           loggingService.reportError({
             error_name: 'NetworkErrorRetrying',
-            error_message: error.message,
+            error_message: err.message,
             http_status: httpStatus,
-            stack_trace: error.stack,
+            stack_trace: err.stack,
             request_metadata: {
-              model, mode, messageCount: messages.length,
-              webSearchEnabled, extendedThinkingEnabled,
+              model,
+              mode,
+              messageCount: messages.length,
+              webSearchEnabled,
+              extendedThinkingEnabled,
               ...streamingMeta,
             },
           });
@@ -456,66 +1539,91 @@ class ChatService {
           // Retry with HTTP/2 fallback
           const retryCtx = new StreamingContext(
             serializedBody.length,
-            this.EDGE_FUNCTION_URL + '?force-h2=1'
+            this.STREAM_API_URL + '?force-h2=1',
           );
           retryCtx.retryAttempt = 1;
 
+          // Fresh idempotency key for retry (see comment above).
+          const retryHeaders: Record<string, string> = {
+            ...(capturedExtraHeaders ?? {}),
+            'X-Idempotency-Key': newIdempotencyKey(),
+          };
+
           try {
-            await this.streamFromEdgeFunction(
-              this.EDGE_FUNCTION_URL + '?force-h2=1',
+            await this.streamFromApi(
+              this.STREAM_API_URL + '?force-h2=1',
               requestBody,
               callbacks,
               signal,
-              retryCtx
+              retryCtx,
+              retryHeaders,
+              model,
+              mode,
+              messages,
+              webSearchEnabled,
+              extendedThinkingEnabled,
             );
             return; // Retry succeeded, callbacks already fired
-          } catch (retryError) {
+          } catch (retryError: unknown) {
             // If user aborted during retry, exit cleanly
             if (retryError instanceof DOMException && retryError.name === 'AbortError') return;
             if (signal?.aborted) return;
+            // Cost errors surfaced during retry are also terminal.
+            if (isCostError(retryError)) return;
 
             // Retry also failed — update context for error reporting below
             retryCtx.markError();
-            try { streamingMeta = retryCtx.toMetadata(); } catch { /* ignore */ }
-            // Re-assign error for the reporting below
-            error = retryError instanceof Error ? retryError : new Error(String(retryError));
+            try {
+              streamingMeta = retryCtx.toMetadata();
+            } catch {
+              /* ignore */
+            }
+            // Re-assign err for the reporting below (narrow unknown → Error).
+            err = retryError instanceof Error ? retryError : new Error(String(retryError));
             // Recompute flags for the retry error
-            httpStatus = (error as any).httpStatus as number | undefined;
-            isSSEProcessingError = (error as any).isSSEProcessingError === true;
-            isNetworkErr = ChatService.isNetworkError(error);
+            httpStatus = (err as { httpStatus?: number }).httpStatus;
+            isSSEProcessingError =
+              (err as { isSSEProcessingError?: boolean }).isSSEProcessingError === true;
+            isNetworkErr = ChatService.isNetworkError(err);
             // Fall through to normal error handling
           }
         }
 
-        const errorMessage = error.message.includes('rate_limit') ? "Rate limit exceeded. Please wait and try again." :
-                           error.message.includes('invalid_api_key') ? "Invalid API key. Please check your settings." :
-                           error.message.includes('insufficient_quota') ? "Insufficient API quota." :
-                           isSSEProcessingError ? "Failed to process the AI response. Please try again." :
-                           isNetworkErr ? "Network error. Please check your connection." :
-                           "An error occurred. Please try again.";
+        const errorMessage = err.message.includes('rate_limit')
+          ? 'Rate limit exceeded. Please wait and try again.'
+          : err.message.includes('invalid_api_key')
+            ? 'Invalid API key. Please check your settings.'
+            : err.message.includes('insufficient_quota')
+              ? 'Insufficient API quota.'
+              : isSSEProcessingError
+                ? 'Failed to process the AI response. Please try again.'
+                : isNetworkErr
+                  ? 'Network error. Please check your connection.'
+                  : 'An error occurred. Please try again.';
 
         // One-liner for quick scanning in text logs; structured object below for DevTools drill-down
+        const streamMeta = (streamingMeta as { streaming?: Record<string, unknown> }).streaming;
         console.error(
-          `[ChatService] Request failed: ${error.name}: ${error.message}` +
-          ` | phase=${(streamingMeta as any)?.streaming?.phase ?? 'unknown'}` +
-          ` protocol=${(streamingMeta as any)?.streaming?.protocol ?? 'unknown'}` +
-          ` duration=${(streamingMeta as any)?.streaming?.durationMs ?? '?'}ms` +
-          ` chunks=${(streamingMeta as any)?.streaming?.chunkCount ?? '?'}` +
-          ` http=${httpStatus ?? 'none'}`
+          `[ChatService] Request failed: ${err.name}: ${err.message}` +
+            ` | phase=${streamMeta?.phase ?? 'unknown'}` +
+            ` protocol=${streamMeta?.protocol ?? 'unknown'}` +
+            ` duration=${streamMeta?.durationMs ?? '?'}ms` +
+            ` chunks=${streamMeta?.chunkCount ?? '?'}` +
+            ` http=${httpStatus ?? 'none'}`,
         );
         console.error('[ChatService] Request details:', {
-          errorName: error.name,
-          originalMessage: error.message,
-          httpStatus: (error as any).httpStatus ?? httpStatus,
+          errorName: err.name,
+          originalMessage: err.message,
+          httpStatus: (err as { httpStatus?: number }).httpStatus ?? httpStatus,
           userFacingMessage: errorMessage,
-          stack: error.stack,
+          stack: err.stack,
         });
 
         loggingService.reportError({
-          error_name: error.name,
-          error_message: error.message,
-          http_status: (error as any).httpStatus ?? httpStatus,
-          stack_trace: error.stack,
+          error_name: err.name,
+          error_message: err.message,
+          http_status: (err as { httpStatus?: number }).httpStatus ?? httpStatus,
+          stack_trace: err.stack,
           request_metadata: {
             model,
             mode,
@@ -528,10 +1636,12 @@ class ChatService {
 
         callbacks.onError?.(errorMessage);
       } else {
-        console.error('[ChatService] Non-Error thrown:', error);
+        // Non-Error was thrown (string, plain object, etc.). We wrapped it
+        // above for type safety, but report the raw form for observability.
+        console.error('[ChatService] Non-Error thrown:', caughtError);
         loggingService.reportError({
           error_name: 'NonErrorThrown',
-          error_message: String(error),
+          error_message: String(caughtError),
           request_metadata: {
             model,
             mode,
@@ -541,15 +1651,15 @@ class ChatService {
             ...streamingMeta,
           },
         });
-        callbacks.onError?.("An error occurred. Please try again.");
+        callbacks.onError?.('An error occurred. Please try again.');
       }
     }
   }
 
-  async checkApiKey(apiKey: string = ''): Promise<boolean> {
-    // API key is now managed on the backend via edge function
-    // This method is kept for backward compatibility but always returns true
-    // The actual API key validation will happen on the server side
+  async checkApiKey(): Promise<boolean> {
+    // API key is managed server-side. This method is kept for backward
+    // compatibility but always returns true; the actual key validation
+    // happens in the Worker on each /api/anthropic-stream request.
     return true;
   }
 }
