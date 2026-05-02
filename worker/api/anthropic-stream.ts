@@ -1117,7 +1117,72 @@ type SseTeeContext = {
    * cheaper backup.
    */
   lastPollOutputTokens: number;
+  /**
+   * Wall-clock timestamp of the last upstream SSE chunk we received. The
+   * reconcile waitUntil uses this for a stall-based wait: as long as upstream
+   * keeps producing bytes, the agentic loop is making progress and we should
+   * keep waiting for `message_delta`. If no chunk arrives for STALL_MS the
+   * upstream is genuinely stuck (typical after a client disconnect that didn't
+   * propagate cleanly to the upstream fetch) and we bail with partial state.
+   * Initialized to stream-start time so the very first wait window is honored.
+   */
+  lastUpstreamChunkAtMs: number;
+  /**
+   * Stream-lifecycle observability accumulator. Active investigation: we don't
+   * know empirically whether the response body keeps flowing to the client
+   * after the JS isolate is killed at the 30s ctx.waitUntil ceiling. The user
+   * confirmed Anthropic-side streams can run multi-minute; the question is
+   * whether our worker's setup actually forwards bytes that long, or whether
+   * something silently truncates. Captures per-event/chunk timestamps so an
+   * end-of-stream diagnostic can paint the full timeline. Console.logs on
+   * key boundaries supplement for the case where the diagnostic write itself
+   * doesn't make it (worker died first).
+   */
+  lifecycle: StreamLifecycle;
 };
+
+type StreamLifecycle = {
+  handlerStartedAtMs: number;
+  /** Set on each transform() callback firing. */
+  chunkCount: number;
+  totalBytes: number;
+  firstChunkAtMs: number | null;
+  /** Set when message_start event is parsed. */
+  messageStartAtMs: number | null;
+  /** Set when message_delta event is parsed. */
+  messageDeltaAtMs: number | null;
+  /** Last time message_stop event was parsed. */
+  messageStopAtMs: number | null;
+  /** Set in tee.transform's flush() — natural end-of-upstream. */
+  teeFlushAtMs: number | null;
+  /** Set in tee.transform's cancel() — downstream cancelled the pipe. */
+  teeCancelAtMs: number | null;
+  /** Set on first abort propagation. */
+  abortFiredAtMs: number | null;
+  /** Heartbeat fires from a setInterval; latest value tells us when JS was last alive. */
+  heartbeatCount: number;
+  lastHeartbeatAtMs: number | null;
+  /** Per-SSE-event-type counts, e.g. {content_block_start: 42, content_block_delta: 1300, ping: 3}. */
+  eventTypeCounts: Record<string, number>;
+};
+
+function newStreamLifecycle(): StreamLifecycle {
+  return {
+    handlerStartedAtMs: Date.now(),
+    chunkCount: 0,
+    totalBytes: 0,
+    firstChunkAtMs: null,
+    messageStartAtMs: null,
+    messageDeltaAtMs: null,
+    messageStopAtMs: null,
+    teeFlushAtMs: null,
+    teeCancelAtMs: null,
+    abortFiredAtMs: null,
+    heartbeatCount: 0,
+    lastHeartbeatAtMs: null,
+    eventTypeCounts: {},
+  };
+}
 
 /**
  * Interval between count_tokens polls during streaming. 5s × ~200 tok/s peak
@@ -1316,6 +1381,69 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
   } catch {
     return null;
   }
+}
+
+/**
+ * Best-effort estimate of cache_creation_input_tokens / cache_read_input_tokens
+ * accrued across an agentic-loop's sub-iterations when `message_delta` never
+ * arrived to give us the authoritative cumulative usage. See `mergeUsage`'s
+ * doc for why this gap exists: Anthropic emits one `message_start` per
+ * outermost SSE stream — not one per inner sub-inference — so the accumulator
+ * only ever sees iteration-1's cache numbers. For non-agentic streams (no
+ * tool_use blocks) this is a non-issue; for `code_execution` / `web_search`
+ * loops it's the dominant under-billing.
+ *
+ * Returns zeros when no estimation is possible (no tool_use blocks present,
+ * polling never armed, or initial input baseline missing). Callers should add
+ * the returned values to the accumulator's existing cache fields before
+ * computing cost — the accumulator already holds iteration-1's values.
+ *
+ * Heuristics:
+ *   - cache_w: tool_result blocks are server-generated content that gets
+ *     written to cache as part of the next sub-iteration's input. count_tokens
+ *     refuses these blocks on the assistant turn (Anthropic's validator), so
+ *     we fall back to a chars/4 estimate against the JSON-stringified content.
+ *     Model-generated output (text + thinking + tool_use input) is already
+ *     captured by reconciledOutput and gets billed at output rates, NOT
+ *     cache_w — so we don't include it here to avoid double-counting.
+ *   - cache_r: each sub-iteration after the first reads the cumulative prefix.
+ *     A precise estimate would integrate over the growing prefix; we
+ *     under-estimate by using the initial input size flat across N reads
+ *     (sub-inference 1 has no cache_r since it IS the first inference; each
+ *     of the N tool_use blocks triggers one additional sub-inference that
+ *     does). The actual prefix grows, so this is a floor — better an
+ *     under-estimate that closes ~70% of the gap than an over-estimate that
+ *     could over-charge the user.
+ *   - N: count of `server_tool_use` blocks. Each such block represents a
+ *     point where the model handed control to the server tool and waited for
+ *     a result, which triggered another inference — so N tool_uses ≈ N+1
+ *     sub-inferences, with N additional cache_r reads beyond the first.
+ */
+function estimateAgenticLoopCacheUsage(teeCtx: SseTeeContext): {
+  additionalCacheW: number;
+  additionalCacheR: number;
+  toolUseCount: number;
+} {
+  let toolUseCount = 0;
+  let toolResultChars = 0;
+  for (const block of teeCtx.streamingContent.blocks.values()) {
+    if (block.type === 'server_tool_use') {
+      toolUseCount++;
+    } else if (
+      block.type === 'web_search_tool_result' ||
+      block.type === 'code_execution_tool_result'
+    ) {
+      // block.content originated from JSON.parse of an SSE frame, so circular
+      // refs are impossible by construction — JSON.stringify cannot throw here.
+      toolResultChars += JSON.stringify(block.content).length;
+    }
+  }
+  if (toolUseCount === 0 || !teeCtx.polling.armed) {
+    return { additionalCacheW: 0, additionalCacheR: 0, toolUseCount };
+  }
+  const additionalCacheW = Math.ceil(toolResultChars / 4);
+  const additionalCacheR = toolUseCount * teeCtx.polling.initialInputTokens;
+  return { additionalCacheW, additionalCacheR, toolUseCount };
 }
 
 async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
@@ -1718,6 +1846,30 @@ function createCostTrackingStream(
     if (await maybeInterceptNotFound(parsed, controller)) return true;
 
     const eventType = typeof parsed.type === 'string' ? parsed.type : '';
+
+    // Lifecycle: count every event type we see, log first-occurrence boundaries
+    // (message_start, message_delta, message_stop) with elapsed-from-handler-
+    // start so a wrangler-tail trace shows when each milestone arrived. This
+    // is the empirical proof of whether the JS isolate is alive long enough
+    // to process message_delta on multi-minute streams.
+    const eventCounts = teeCtx.lifecycle.eventTypeCounts;
+    eventCounts[eventType] = (eventCounts[eventType] ?? 0) + 1;
+    if (eventType === 'message_start' && teeCtx.lifecycle.messageStartAtMs === null) {
+      teeCtx.lifecycle.messageStartAtMs = Date.now();
+      console.log(
+        `[lifecycle] message_start t=${teeCtx.lifecycle.messageStartAtMs - teeCtx.lifecycle.handlerStartedAtMs}ms`,
+      );
+    } else if (eventType === 'message_delta' && teeCtx.lifecycle.messageDeltaAtMs === null) {
+      teeCtx.lifecycle.messageDeltaAtMs = Date.now();
+      console.log(
+        `[lifecycle] message_delta t=${teeCtx.lifecycle.messageDeltaAtMs - teeCtx.lifecycle.handlerStartedAtMs}ms`,
+      );
+    } else if (eventType === 'message_stop' && teeCtx.lifecycle.messageStopAtMs === null) {
+      teeCtx.lifecycle.messageStopAtMs = Date.now();
+      console.log(
+        `[lifecycle] message_stop t=${teeCtx.lifecycle.messageStopAtMs - teeCtx.lifecycle.handlerStartedAtMs}ms`,
+      );
+    }
 
     // Content-block tracking for the polling kill-switch: text/thinking
     // accumulated per block index so we can rebuild the assistant turn for
@@ -2148,6 +2300,19 @@ function createCostTrackingStream(
 
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     async transform(chunk, controller) {
+      // Mark progress for the reconcile-side stall detector. Update on every
+      // chunk regardless of whether we ultimately forward, kill, or intercept
+      // — any byte from upstream proves the agentic loop hasn't stalled.
+      const nowMs = Date.now();
+      teeCtx.lastUpstreamChunkAtMs = nowMs;
+      teeCtx.lifecycle.chunkCount++;
+      teeCtx.lifecycle.totalBytes += chunk.byteLength;
+      if (teeCtx.lifecycle.firstChunkAtMs === null) {
+        teeCtx.lifecycle.firstChunkAtMs = nowMs;
+        const elapsed = nowMs - teeCtx.lifecycle.handlerStartedAtMs;
+        console.log(`[lifecycle] first_upstream_chunk t=${elapsed}ms bytes=${chunk.byteLength}`);
+      }
+
       if (teeCtx.killed.v) {
         flushPendingPollerFrames(controller);
         try {
@@ -2201,6 +2366,11 @@ function createCostTrackingStream(
       // Either end-of-stream or the poller-triggered kill reached flush
       // without a further chunk. Emit the synthesized kill frame (if pending)
       // before the trailing buffer so the client sees it as the last event.
+      teeCtx.lifecycle.teeFlushAtMs = Date.now();
+      console.log(
+        `[lifecycle] tee_flush t=${teeCtx.lifecycle.teeFlushAtMs - teeCtx.lifecycle.handlerStartedAtMs}ms` +
+          ` chunks=${teeCtx.lifecycle.chunkCount} bytes=${teeCtx.lifecycle.totalBytes}`,
+      );
       flushPendingPollerFrames(controller);
       if (sseBuffer.length > 0) {
         try {
@@ -2215,6 +2385,11 @@ function createCostTrackingStream(
     cancel() {
       // Downstream cancelled (client disconnect) — resolve so reconcile can
       // proceed with the partial accumulator we have.
+      teeCtx.lifecycle.teeCancelAtMs = Date.now();
+      console.log(
+        `[lifecycle] tee_cancel t=${teeCtx.lifecycle.teeCancelAtMs - teeCtx.lifecycle.handlerStartedAtMs}ms` +
+          ` chunks=${teeCtx.lifecycle.chunkCount} bytes=${teeCtx.lifecycle.totalBytes}`,
+      );
       clearPollTimer('downstream_cancel');
       resolveDone();
     },
@@ -2735,10 +2910,53 @@ export async function handler(
     pollDisableDiagnostic: null,
     messageDeltaSeen: false,
     lastPollOutputTokens: 0,
+    lastUpstreamChunkAtMs: Date.now(),
+    lifecycle: newStreamLifecycle(),
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
   const keepaliveStream = createKeepaliveStream(tracked.stream, request.signal);
+
+  // Lifecycle heartbeat: every 5s while the JS isolate is alive, log a
+  // wall-clock checkpoint. Goal: empirically measure how long the isolate
+  // stays alive after the handler returns. If body-streaming truly pins the
+  // IoContext (the current working theory), heartbeats fire for the whole
+  // stream duration. If Cloudflare actually kills us at ~30s after handler
+  // return regardless, heartbeats stop dead at that mark — making the
+  // "isolate dies but network keeps flowing" hypothesis falsifiable from
+  // the wrangler-tail logs alone.
+  //
+  // Console.log only: no DB write per tick (would create N rows per stream
+  // and make the diagnostic table noisy). The end-of-stream lifecycle row
+  // captures heartbeat_count + last_heartbeat_at_ms for queryable summary.
+  // setInterval is the right primitive here — Cloudflare counts active
+  // timers as "I/O", which is what we want for the alive-detector to
+  // reflect actual isolate liveness.
+  const heartbeatId = setInterval(() => {
+    teeCtx.lifecycle.heartbeatCount++;
+    teeCtx.lifecycle.lastHeartbeatAtMs = Date.now();
+    const elapsed = teeCtx.lifecycle.lastHeartbeatAtMs - teeCtx.lifecycle.handlerStartedAtMs;
+    console.log(
+      `[lifecycle] heartbeat #${teeCtx.lifecycle.heartbeatCount} t=${elapsed}ms` +
+        ` chunks=${teeCtx.lifecycle.chunkCount} streamDone=${teeCtx.streamDone.v}` +
+        ` mDelta=${teeCtx.messageDeltaSeen}`,
+    );
+  }, 5_000);
+  // Stop the heartbeat when streaming is done (either flush or cancel
+  // resolved tracked.done). Otherwise the interval keeps ticking and pins
+  // the isolate past the work-done point, costing real money.
+  void tracked.done.then(() => clearInterval(heartbeatId));
+
+  // Lifecycle: capture when our abort fires (separate from the existing
+  // client_disconnect log to disambiguate "client dropped" vs "we aborted
+  // for another reason like kill switch").
+  abortController.signal.addEventListener('abort', () => {
+    if (teeCtx.lifecycle.abortFiredAtMs === null) {
+      teeCtx.lifecycle.abortFiredAtMs = Date.now();
+      const elapsed = teeCtx.lifecycle.abortFiredAtMs - teeCtx.lifecycle.handlerStartedAtMs;
+      console.log(`[lifecycle] abort_fired t=${elapsed}ms`);
+    }
+  });
 
   // Step 10: post-stream reconcile. ctx.waitUntil extends the Worker lifetime
   // past the Response being fully flushed so we still get the DB write. Skip
@@ -2774,26 +2992,65 @@ export async function handler(
       // client-cancel). Once `tracked.done` resolves, the accumulator is
       // stable — no further transform() callbacks will mutate it.
       //
-      // Cap the wait so a stuck upstream (typical when the client disconnects
-      // mid-stream and the abort doesn't propagate cleanly into the tee) can't
-      // eat the entire ctx.waitUntil time budget. Without this, every Entered
-      // gets stuck here and never reaches CostComputed, which is a dominant
-      // failure mode for reconciles bailing at this await.
-      const TRACKED_DONE_TIMEOUT_MS = 12_000;
-      let trackedDoneTimedOut = false;
-      await Promise.race([
-        tracked.done,
-        new Promise<void>((resolve) => {
-          setTimeout(() => {
-            trackedDoneTimedOut = true;
-            resolve();
-          }, TRACKED_DONE_TIMEOUT_MS);
-        }),
-      ]);
-      if (trackedDoneTimedOut && loggingMessageId) {
+      // Bail only when the upstream is genuinely stuck (no bytes for STALL_MS).
+      // No wall-clock ceiling: this reconcile coroutine and the SSE response
+      // body share the same Worker isolate, so as long as the stream is still
+      // producing chunks, the isolate stays alive and we can keep waiting for
+      // `message_delta` (which is the only event carrying authoritative
+      // cumulative usage on agentic loops). A blanket time cap here would
+      // re-introduce the original bug — premature reconcile bail while the
+      // stream is still happily flowing — for any agentic loop that exceeds
+      // the cap, which on this worker can run multi-minute legitimately.
+      //
+      // Stuck-upstream detection (the original 12s cap's actual purpose, per
+      // its comment about "client disconnects mid-stream and the abort doesn't
+      // propagate cleanly into the tee") is now done structurally: when bytes
+      // stop, the stall watcher trips. An infinite-stream pathological case
+      // would be capped by Cloudflare's own isolate limits, not our hand-rolled
+      // ceiling.
+      //
+      // Threshold: createKeepaliveStream's docstring (line ~800 in this file)
+      // notes Claude may emit no upstream data for "tens of seconds" during
+      // extended-thinking pauses; the keepalive interval is 25s on the
+      // assumption that's the upper bound. Those keepalive bytes go DOWNSTREAM
+      // of the tee — they don't reset our `lastUpstreamChunkAtMs`, so a thinking
+      // pause looks like a stall. 60s gives margin over the documented gap and
+      // any thinking-then-tool-execution silence, while still detecting truly
+      // stuck streams within the platform's hard isolate budget. Tighten if
+      // production tracing (DiagnosticStreamLifecycle event_type_counts) shows
+      // we're sitting on idle for shorter; loosen if we false-positive on
+      // legit thinking streams.
+      const STALL_MS = 60_000;
+      const POLL_INTERVAL_MS = 1_000;
+      const waitStartedAtMs = Date.now();
+      let bailReason: 'stall' | null = null;
+      const stallWatcher = (async () => {
+        // Loop until either `tracked.done` resolves (stream ended naturally,
+        // wins the race below) or upstream stalls. Polling at 1s resolution
+        // is plenty — we're racing against multi-second SSE chunk gaps, not
+        // sub-second latency. Race the sleep against tracked.done so a
+        // stream that finishes mid-poll doesn't keep this watcher pinned for
+        // the rest of its 1s wait — the outer Promise.race wins instantly,
+        // but a still-sleeping watcher would otherwise keep ticking
+        // setIntervals that pin the isolate (and waste reconcile budget on
+        // long chains of streams).
+        while (!teeCtx.streamDone.v) {
+          const stalledForMs = Date.now() - teeCtx.lastUpstreamChunkAtMs;
+          if (stalledForMs >= STALL_MS) {
+            bailReason = 'stall';
+            return;
+          }
+          await Promise.race([
+            tracked.done,
+            new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS)),
+          ]);
+        }
+      })();
+      await Promise.race([tracked.done, stallWatcher]);
+      if (bailReason !== null && loggingMessageId) {
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcileTrackedDoneTimeout',
-          error_message: `tracked.done did not resolve within ${TRACKED_DONE_TIMEOUT_MS}ms; proceeding with partial state`,
+          error_message: `tracked.done did not resolve before ${STALL_MS}ms upstream stall; proceeding with partial state`,
           user_id: actorId,
           chart_id: chartId ?? null,
           request_metadata: {
@@ -2805,7 +3062,10 @@ export async function handler(
             accumulator,
             live_web_search_count: teeCtx.streamingContent.webSearchCount,
             last_poll_output_tokens: teeCtx.lastPollOutputTokens,
-            timeout_ms: TRACKED_DONE_TIMEOUT_MS,
+            bail_reason: bailReason,
+            stall_threshold_ms: STALL_MS,
+            wait_elapsed_ms: Date.now() - waitStartedAtMs,
+            stalled_for_ms: Date.now() - teeCtx.lastUpstreamChunkAtMs,
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
@@ -2852,10 +3112,29 @@ export async function handler(
         }
       }
 
+      // Agentic-loop cache estimation: only applies when we missed
+      // message_delta AND the stream actually ran tool calls (the only case
+      // where Anthropic's hidden sub-inferences inflate cache_w/cache_r
+      // beyond what message_start reported). Pure text streams without
+      // tool_use blocks don't need this; their accumulator is already
+      // correct from message_start. See estimateAgenticLoopCacheUsage doc.
+      let cacheEstimate: ReturnType<typeof estimateAgenticLoopCacheUsage> = {
+        additionalCacheW: 0,
+        additionalCacheR: 0,
+        toolUseCount: 0,
+      };
+      if (!teeCtx.messageDeltaSeen) {
+        cacheEstimate = estimateAgenticLoopCacheUsage(teeCtx);
+      }
+
       const reconciledAccumulator: UsageAccumulator = {
         ...accumulator,
         output_tokens: reconciledOutput,
         web_search_requests: reconciledWebSearch,
+        cache_creation_input_tokens:
+          accumulator.cache_creation_input_tokens + cacheEstimate.additionalCacheW,
+        cache_read_input_tokens:
+          accumulator.cache_read_input_tokens + cacheEstimate.additionalCacheR,
       };
 
       let actualMicro: bigint = 0n;
@@ -2936,6 +3215,13 @@ export async function handler(
           cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
           web_search_requests: reconciledAccumulator.web_search_requests,
           output_source: reconcileOutputSource,
+          // Agentic-loop cache estimation: tracks how much cache_w/cache_r
+          // we PADDED onto the message_start floor at reconcile time, and
+          // why (tool_use count is the heuristic for sub-iter count). Zeros
+          // when message_delta arrived OR when no tool_use blocks ran.
+          cache_estimate_tool_use_count: cacheEstimate.toolUseCount,
+          cache_estimate_additional_cache_w: cacheEstimate.additionalCacheW,
+          cache_estimate_additional_cache_r: cacheEstimate.additionalCacheR,
         },
         deployment_host: requestUrl.hostname,
         fired_at_ms: Date.now(),
@@ -3308,6 +3594,57 @@ export async function handler(
       // / DiagnosticReconcileCostComputeFailed), it means the IIFE was terminated
       // by Cloudflare's waitUntil time budget rather than by an exception we caught.
       if (loggingMessageId) {
+        // Comprehensive lifecycle snapshot: one row per stream that captures
+        // the full timeline (handler-start → first-chunk → message_start →
+        // message_delta → flush → reconcile-complete) plus per-event-type
+        // counts and heartbeat stats. Designed to answer "did the JS isolate
+        // stay alive long enough to see message_delta on multi-minute
+        // streams?" from a single SQL query, instead of cross-referencing
+        // four separate diagnostic rows. Survives outside of the per-event
+        // console.logs because PR-preview deploys lose `wrangler tail`.
+        const lc = teeCtx.lifecycle;
+        const reconcileEndAtMs = Date.now();
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticStreamLifecycle',
+          error_message: `lifecycle: chunks=${lc.chunkCount} bytes=${lc.totalBytes} heartbeats=${lc.heartbeatCount} mDelta=${teeCtx.messageDeltaSeen}`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            // All elapsed-from-handler-start in ms. null = milestone never
+            // happened. Concise: ms-resolution wall-clock is sufficient
+            // for the kind of "did this take 13s vs 113s" questions we
+            // need to answer.
+            handler_started_at_ms: lc.handlerStartedAtMs,
+            first_chunk_elapsed_ms:
+              lc.firstChunkAtMs !== null ? lc.firstChunkAtMs - lc.handlerStartedAtMs : null,
+            message_start_elapsed_ms:
+              lc.messageStartAtMs !== null ? lc.messageStartAtMs - lc.handlerStartedAtMs : null,
+            message_delta_elapsed_ms:
+              lc.messageDeltaAtMs !== null ? lc.messageDeltaAtMs - lc.handlerStartedAtMs : null,
+            message_stop_elapsed_ms:
+              lc.messageStopAtMs !== null ? lc.messageStopAtMs - lc.handlerStartedAtMs : null,
+            tee_flush_elapsed_ms:
+              lc.teeFlushAtMs !== null ? lc.teeFlushAtMs - lc.handlerStartedAtMs : null,
+            tee_cancel_elapsed_ms:
+              lc.teeCancelAtMs !== null ? lc.teeCancelAtMs - lc.handlerStartedAtMs : null,
+            abort_fired_elapsed_ms:
+              lc.abortFiredAtMs !== null ? lc.abortFiredAtMs - lc.handlerStartedAtMs : null,
+            last_heartbeat_elapsed_ms:
+              lc.lastHeartbeatAtMs !== null ? lc.lastHeartbeatAtMs - lc.handlerStartedAtMs : null,
+            reconcile_completed_elapsed_ms: reconcileEndAtMs - lc.handlerStartedAtMs,
+            chunk_count: lc.chunkCount,
+            total_bytes: lc.totalBytes,
+            heartbeat_count: lc.heartbeatCount,
+            event_type_counts: lc.eventTypeCounts,
+            killed: teeCtx.killed.v,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: reconcileEndAtMs,
+        });
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcileCompleted',
           error_message: 'Reconcile IIFE reached end',
