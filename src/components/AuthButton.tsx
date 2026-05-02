@@ -357,16 +357,19 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
           className="w-9 h-9 rounded-full overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
           title={user.name || 'Account'}
         >
-          <div className="relative w-full h-full bg-blue-600 flex items-center justify-center text-white font-medium">
-            <span aria-hidden>{user.name?.charAt(0).toUpperCase() || 'U'}</span>
-            {user.picture && (
+          {user.picture ? (
+            <div className="relative w-full h-full bg-gray-200 animate-pulse overflow-hidden">
               <img
                 src={user.picture}
                 alt={user.name || 'User'}
                 className="absolute inset-0 w-full h-full object-cover"
               />
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="w-full h-full bg-blue-600 flex items-center justify-center text-white font-medium">
+              {user.name?.charAt(0).toUpperCase() || 'U'}
+            </div>
+          )}
         </button>
 
         {showDropdown && (
@@ -374,16 +377,19 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
             {/* User info header */}
             <div className="p-4 bg-gray-50 border-b border-gray-200">
               <div className="flex items-center gap-3">
-                <div className="relative w-12 h-12 rounded-full overflow-hidden bg-blue-600 flex items-center justify-center text-white text-lg font-medium">
-                  <span aria-hidden>{user.name?.charAt(0).toUpperCase() || 'U'}</span>
-                  {user.picture && (
+                {user.picture ? (
+                  <div className="relative w-12 h-12 rounded-full overflow-hidden bg-gray-200 animate-pulse">
                     <img
                       src={user.picture}
                       alt={user.name || 'User'}
                       className="absolute inset-0 w-full h-full object-cover"
                     />
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white text-lg font-medium">
+                    {user.name?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-gray-900 truncate">{user.name}</div>
                   <div className="text-sm text-gray-500 truncate">{user.email}</div>
