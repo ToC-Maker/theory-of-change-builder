@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
-import { EditToolbarRemnant } from './EditToolbarRemnant';
+import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
 import { Legend } from './Legend';
 import { NodeEditor } from './node-editor/NodeEditor';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
@@ -1498,10 +1498,9 @@ export function ToC({
           overlay. The per-selection toolbar's width/color/delete
           controls moved into the anchored `<NodeEditor>` (mounted
           below alongside the selected node). The ShareDialog moved up
-          to App.tsx in PR 2. The file gets renamed to
-          `AlignmentSuggestionBanner.tsx` at the end of PR 3. */}
+          to App.tsx in PR 2. */}
         {createPortal(
-          <EditToolbarRemnant
+          <AlignmentSuggestionBanner
             editMode={editMode}
             showEditButton={showEditButton}
             data={data}
