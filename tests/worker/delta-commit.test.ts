@@ -97,9 +97,11 @@ describe('applyDeltaCommit', () => {
       // `AND user_id = $3` in both the SELECT FOR UPDATE and the UPDATE
       // means a caller posting against another user's logging_message_id
       // gets a CTE-empty result; the helper reports the same shape as
-      // "row missing". The endpoint-level reconcile (`computeReconcileOutcome`)
-      // distinguishes these cases for the response status; the helper does
-      // not — both produce a no-op cost write.
+      // "row missing". Both the streaming worker and the
+      // `/api/reconcile-cost` endpoint funnel through this helper and
+      // treat `applied: false` as benign — the endpoint returns 200
+      // idempotent no-op without distinguishing the three CTE-empty
+      // cases (missing / IDOR / reconciled).
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
       const result = await applyDeltaCommit(sql, 'msg_bob_owned', 'auth0|alice', 100n, 500n);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
