@@ -1,36 +1,21 @@
 // EditToolbarRemnant — the floating overlays that survived the
-// EditToolbar deletion in PR 1.
+// EditToolbar deletion.
 //
-// The original EditToolbar was a 2,500-LoC mixed bag: a fixed top bar
-// (now replaced by `top-bar/TopBar`), a share dialog, a smart-alignment
-// suggestion banner, and a per-selection floating toolbar above the
-// active nodes. PR 1 carved off the TopBar. PR 2 deletes the share
-// dialog block (replaced by `share/ShareDialog`). What remains:
+// History:
+//   - The original 2,500-LoC EditToolbar held a fixed top bar, a share
+//     dialog, a smart-alignment suggestion banner, and a per-selection
+//     floating toolbar above active nodes. PR 1 carved off the top bar.
+//   - PR 2 deleted the share dialog block.
+//   - PR 3 deleted the per-selection toolbar (its width/color/delete
+//     controls moved into the anchored `<NodeEditor>`). Only the
+//     alignment banner remains. The file is renamed to
+//     `AlignmentSuggestionBanner.tsx` at the end of PR 3.
 //
-//   - `<PerSelectionToolbar>` →  PR 3 folds it into the anchored
-//                                 NodeEditor.
-//   - `<AlignmentBanner>`  →  PR 3 renames the file to
-//                              AlignmentSuggestionBanner.tsx once the
-//                              other two are gone.
-//
-// =====================================================================
-// State / ref map (per plan §1.6 acceptance — "explicit state map")
-// =====================================================================
-//
-// Each sub-component owns its own state copy. The remnant lifts NOTHING.
-//
-// PerSelectionToolbar:
-//   useState  toolbarPosition (x, y)
-//
-// AlignmentBanner:
-//   useState  show
-//   (plus a `useCallback` named `detect` for the misalignment heuristic,
-//    kept inside the component so its deps stay local)
-//
-// EditToolbarRemnant itself: no state. It just wires the two children.
+// State ownership (state map per plan §1.6 acceptance): the remnant
+// component itself is now stateless; the only sub-component
+// (AlignmentBanner) owns its own state.
 
 import { useCallback, useEffect, useState } from 'react';
-import { TrashIcon } from '@heroicons/react/24/outline';
 import type { Node as GraphNode, ToCData } from '../types';
 
 // =====================================================================
@@ -158,219 +143,23 @@ function AlignmentBanner({ editMode, data, straightenEdges }: AlignmentBannerPro
 }
 
 // =====================================================================
-// PerSelectionToolbar — Miro-style horizontal bar above active nodes
-// =====================================================================
-
-interface PerSelectionToolbarProps {
-  editMode: boolean;
-  highlightedNodes: Set<string>;
-  setHighlightedNodes: React.Dispatch<React.SetStateAction<Set<string>>>;
-  nodeWidth: number;
-  setNodeWidth: React.Dispatch<React.SetStateAction<number>>;
-  nodeColor: string;
-  setNodeColor: React.Dispatch<React.SetStateAction<string>>;
-  setData: React.Dispatch<React.SetStateAction<ToCData>>;
-  mutateDebounced?: (updater: React.SetStateAction<ToCData>, key: string) => void;
-  commitMutation?: (key?: string) => void;
-  onDeleteNode?: (nodeId: string) => void;
-  nodePopup?: unknown;
-  edgePopup?: unknown;
-  camera?: { x: number; y: number; z: number };
-}
-
-function PerSelectionToolbar({
-  editMode,
-  highlightedNodes,
-  setHighlightedNodes,
-  nodeWidth,
-  setNodeWidth,
-  nodeColor,
-  setNodeColor,
-  setData,
-  mutateDebounced,
-  commitMutation,
-  onDeleteNode,
-  nodePopup,
-  edgePopup,
-  camera,
-}: PerSelectionToolbarProps) {
-  const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 });
-
-  useEffect(() => {
-    if (highlightedNodes.size === 0) return;
-    const nodeElements = Array.from(highlightedNodes)
-      .map((nodeId) => document.getElementById(`node-${nodeId}`))
-      .filter((el): el is HTMLElement => el !== null);
-
-    if (nodeElements.length > 0) {
-      const rects = nodeElements.map((el) => el.getBoundingClientRect());
-      const avgX = rects.reduce((sum, rect) => sum + rect.left + rect.width / 2, 0) / rects.length;
-      const topY = Math.min(...rects.map((rect) => rect.top));
-      setToolbarPosition({ x: avgX, y: topY - 80 });
-    }
-  }, [highlightedNodes, camera?.x, camera?.y, camera?.z]);
-
-  if (!editMode || highlightedNodes.size === 0 || nodePopup || edgePopup) return null;
-
-  return (
-    <div
-      className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 px-2 sm:px-4 py-2 sm:py-3"
-      style={{
-        left: Math.min(Math.max(toolbarPosition.x, 150), window.innerWidth - 150),
-        top: Math.max(toolbarPosition.y, 60),
-        transform: 'translateX(-50%)',
-        minWidth: 'auto',
-        maxWidth: 'calc(100vw - 1rem)',
-      }}
-    >
-      <div className="flex items-center gap-2 sm:gap-6 flex-wrap">
-        <div className="flex items-center gap-2">
-          <span className="text-xs sm:text-sm font-medium text-gray-700">
-            {highlightedNodes.size === 1 ? '' : `${highlightedNodes.size} nodes`}
-          </span>
-        </div>
-
-        {highlightedNodes.size > 1 && <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>}
-
-        {/* Width slider — streaming input via mutateDebounced/commit */}
-        <div className="flex items-center gap-1 sm:gap-2">
-          <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">Width</span>
-          <input
-            type="range"
-            min="128"
-            max="320"
-            step="16"
-            value={nodeWidth}
-            onChange={(e) => {
-              const newWidth = parseInt(e.target.value);
-              setNodeWidth(newWidth);
-              if (highlightedNodes.size === 0) return;
-              const updater = (prevData: ToCData) => ({
-                ...prevData,
-                sections: prevData.sections.map((section) => ({
-                  ...section,
-                  columns: section.columns.map((column) => ({
-                    ...column,
-                    nodes: column.nodes.map((node) =>
-                      highlightedNodes.has(node.id) ? { ...node, width: newWidth } : node,
-                    ),
-                  })),
-                })),
-              });
-              if (mutateDebounced) {
-                mutateDebounced(updater, 'width-multi');
-              } else {
-                setData(updater);
-              }
-            }}
-            onPointerUp={() => commitMutation?.('width-multi')}
-            onBlur={() => commitMutation?.('width-multi')}
-            className="w-16 sm:w-20 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
-          />
-          <span className="text-xs text-gray-500 w-8 sm:w-10 text-right">{nodeWidth}</span>
-        </div>
-
-        <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
-
-        <div className="flex items-center gap-1 sm:gap-2">
-          <span className="text-xs sm:text-sm text-gray-600 hidden sm:inline">Color</span>
-          <input
-            type="color"
-            value={nodeColor}
-            onChange={(e) => {
-              const newColor = e.target.value;
-              setNodeColor(newColor);
-              if (highlightedNodes.size > 0) {
-                setData((prevData) => ({
-                  ...prevData,
-                  sections: prevData.sections.map((section) => ({
-                    ...section,
-                    columns: section.columns.map((column) => ({
-                      ...column,
-                      nodes: column.nodes.map((node) =>
-                        highlightedNodes.has(node.id) ? { ...node, color: newColor } : node,
-                      ),
-                    })),
-                  })),
-                }));
-              }
-            }}
-            className="w-6 h-6 sm:w-8 sm:h-8 rounded border border-gray-300 cursor-pointer"
-          />
-        </div>
-
-        {onDeleteNode && (
-          <>
-            <div className="h-4 w-px bg-gray-300 hidden sm:block"></div>
-            <button
-              onClick={() => {
-                highlightedNodes.forEach((nodeId) => onDeleteNode(nodeId));
-                setHighlightedNodes(new Set());
-              }}
-              className="p-1.5 sm:p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-all duration-200"
-              title={`Delete ${highlightedNodes.size === 1 ? 'node' : 'nodes'}`}
-            >
-              <TrashIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// =====================================================================
-// EditToolbarRemnant — composes the two remaining overlays
+// EditToolbarRemnant — only the alignment banner remains.
 // =====================================================================
 
 export interface EditToolbarRemnantProps {
-  // Shared.
   editMode: boolean;
   showEditButton: boolean;
   data: ToCData;
-  setData: React.Dispatch<React.SetStateAction<ToCData>>;
-  // Alignment banner.
   straightenEdges: () => void;
-  // Per-selection.
-  highlightedNodes: Set<string>;
-  setHighlightedNodes: React.Dispatch<React.SetStateAction<Set<string>>>;
-  nodeWidth: number;
-  setNodeWidth: React.Dispatch<React.SetStateAction<number>>;
-  nodeColor: string;
-  setNodeColor: React.Dispatch<React.SetStateAction<string>>;
-  mutateDebounced?: (updater: React.SetStateAction<ToCData>, key: string) => void;
-  commitMutation?: (key?: string) => void;
-  onDeleteNode?: (nodeId: string) => void;
-  nodePopup?: unknown;
-  edgePopup?: unknown;
-  camera?: { x: number; y: number; z: number };
 }
 
 export function EditToolbarRemnant(props: EditToolbarRemnantProps) {
   if (!props.showEditButton) return null;
   return (
-    <>
-      <AlignmentBanner
-        editMode={props.editMode}
-        data={props.data}
-        straightenEdges={props.straightenEdges}
-      />
-      <PerSelectionToolbar
-        editMode={props.editMode}
-        highlightedNodes={props.highlightedNodes}
-        setHighlightedNodes={props.setHighlightedNodes}
-        nodeWidth={props.nodeWidth}
-        setNodeWidth={props.setNodeWidth}
-        nodeColor={props.nodeColor}
-        setNodeColor={props.setNodeColor}
-        setData={props.setData}
-        mutateDebounced={props.mutateDebounced}
-        commitMutation={props.commitMutation}
-        onDeleteNode={props.onDeleteNode}
-        nodePopup={props.nodePopup}
-        edgePopup={props.edgePopup}
-        camera={props.camera}
-      />
-    </>
+    <AlignmentBanner
+      editMode={props.editMode}
+      data={props.data}
+      straightenEdges={props.straightenEdges}
+    />
   );
 }
