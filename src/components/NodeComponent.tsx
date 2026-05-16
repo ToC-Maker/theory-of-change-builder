@@ -2,6 +2,8 @@ import clsx from 'clsx';
 import React, { useRef, useEffect, memo } from 'react';
 import { Node } from '../types';
 import { getContrastTextColor } from '../utils';
+import { ConnectionHandles } from './canvas/ConnectionHandles';
+import type { HandleSide } from '../hooks/useConnectionDrag';
 
 /**
  * DOM attribute the node root carries. Read by:
@@ -53,6 +55,16 @@ interface NodeComponentProps {
    * pages render without any drag binding.
    */
   onPointerDown?: (event: React.PointerEvent) => void;
+  /**
+   * PR 5 Task 5.2: bind handle dots to the drag-to-connect gesture.
+   * Returned by `useConnectionDrag().bindHandle`. Omitted when
+   * editMode=false or when the parent opts out of connection drag.
+   * Visibility of the dots is gated by `isHovered || isHighlighted`.
+   */
+  bindConnectionHandle?: (
+    nodeId: string,
+    side: HandleSide,
+  ) => { onPointerDown: (e: React.PointerEvent) => void };
   editMode: boolean;
   textSize: number;
   fontFamily: string;
@@ -79,6 +91,7 @@ function NodeComponentInner({
   setHoveredNode,
   hasHighlightedNodes,
   onPointerDown,
+  bindConnectionHandle,
   editMode,
   textSize,
   fontFamily,
@@ -154,6 +167,19 @@ function NodeComponentInner({
             {node.title}
           </div>
         </div>
+        {/* PR 5 Task 5.2: drag-to-connect handle dots on left + right
+          edges. Visible only when hovered or selected (no global
+          pointermove subscription — pure React-tracked state). The
+          dots overhang the node edge by 6px so they're grabbable
+          without covering content. Handles are absolute-positioned
+          relative to this node's flex container. */}
+        {editMode && bindConnectionHandle && (
+          <ConnectionHandles
+            nodeId={node.id}
+            visible={isHovered || isHighlighted}
+            bindHandle={bindConnectionHandle}
+          />
+        )}
       </div>
     </div>
   );
