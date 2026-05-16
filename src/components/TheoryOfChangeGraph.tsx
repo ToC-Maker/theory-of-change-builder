@@ -12,6 +12,8 @@ import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
 import { useGraphMutation } from '../hooks/useGraphMutation';
 import { usePointerDrag } from '../hooks/usePointerDrag';
 import type { DragOverLocation } from '../hooks/usePointerDrag';
+import { useConnectionDrag } from '../hooks/useConnectionDrag';
+import { buildConnectionPath } from './canvas/connectionPath';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 // PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
@@ -809,19 +811,75 @@ export function ToC({
     },
   });
 
+  // PR 5 Task 5.2: drag-to-connect gesture. `useConnectionDrag` shares
+  // the `isCanvasGestureActive` mutual-exclusion flag with
+  // `usePointerDrag` (so node-drag and connection-drag can't start
+  // concurrently). On successful drop the hook calls `onConnect` which
+  // commits a single `mutate()` undo entry.
+  const addConnection = useCallback(
+    (sourceId: string, targetId: string) => {
+      if (sourceId === targetId) return;
+      // No-op if already connected (idempotent commit avoids spurious
+      // undo entries on accidental re-drops).
+      if (areNodesConnected(sourceId, targetId)) return;
+      setDataAndNotify((prevData) => ({
+        ...prevData,
+        sections: prevData.sections.map((section) => ({
+          ...section,
+          columns: section.columns.map((column) => ({
+            ...column,
+            nodes: column.nodes.map((node) => {
+              if (node.id !== sourceId) return node;
+              if (node.connections) {
+                return {
+                  ...node,
+                  connections: [...node.connections, { targetId, confidence: 75 }],
+                };
+              }
+              // Old format → migrate to new on first write.
+              return {
+                ...node,
+                connectionIds: [...(node.connectionIds || []), targetId],
+                connections: [
+                  ...(node.connectionIds || []).map((id) => ({ targetId: id, confidence: 50 })),
+                  { targetId, confidence: 75 },
+                ],
+              };
+            }),
+          })),
+        })),
+      }));
+    },
+    [areNodesConnected, setDataAndNotify],
+  );
+
+  const {
+    dragState: connectionDragState,
+    bindHandle: bindConnectionHandle,
+    isActive: isConnectionDragActive,
+  } = useConnectionDrag({
+    data,
+    containerRef: graphContainerRef,
+    editMode,
+    onConnect: addConnection,
+  });
+
   // Notify parent (App) of drag-active transitions so the 30s sync
   // poll can pause while a gesture is in flight (red-team Important).
+  // We OR-combine the node-drag and connection-drag flags so either
+  // gesture pauses polling.
   //
   // Cleanup fires `false` if this component unmounts while a drag is
   // active — otherwise the parent's `isDragInFlightRef` stays `true`
   // for the rest of the App's lifetime (the polling effect would
   // silently skip every sync tick).
+  const isAnyDragActive = isDragActive || isConnectionDragActive;
   useEffect(() => {
-    onDragActiveChange?.(isDragActive);
+    onDragActiveChange?.(isAnyDragActive);
     return () => {
-      if (isDragActive) onDragActiveChange?.(false);
+      if (isAnyDragActive) onDragActiveChange?.(false);
     };
-  }, [isDragActive, onDragActiveChange]);
+  }, [isAnyDragActive, onDragActiveChange]);
 
   const connectedNodes = useMemo(() => {
     if (highlightedNodes.size === 0) {
@@ -1225,6 +1283,7 @@ export function ToC({
                                     setHoveredNode={setHoveredNode}
                                     hasHighlightedNodes={highlightedNodes.size > 0}
                                     onPointerDown={bindNodeDrag(node.id).onPointerDown}
+                                    bindConnectionHandle={bindConnectionHandle}
                                     editMode={editMode}
                                     textSize={textSize}
                                     fontFamily={fontFamily}
@@ -1599,6 +1658,93 @@ export function ToC({
             })()}
           </>
         ) : null}
+
+        {/* PR 5 Task 5.2: drag-to-connect in-flight ghost line. Renders
+            an SVG path from the source handle's node edge to the
+            cursor (or to the hovered target node's opposite edge).
+            Shares the cubic-bezier math with the select-2 ghost via
+            `buildConnectionPath`. The SVG covers the container so the
+            single path positions in container-local coords. */}
+        {connectionDragState && graphContainerRef.current
+          ? (() => {
+              const containerRect = graphContainerRef.current.getBoundingClientRect();
+              const sourceEl = nodeRefs[connectionDragState.sourceNodeId];
+              if (!sourceEl) return null;
+              const sourcePos = getLocalPosition(sourceEl, graphContainerRef.current);
+              // Start at the source node's left or right edge midpoint.
+              const startX =
+                connectionDragState.sourceSide === 'left'
+                  ? sourcePos.x
+                  : sourcePos.x + sourcePos.width;
+              const startY = sourcePos.y + sourcePos.height / 2;
+
+              // End at the target node's opposite edge (if hovered),
+              // else at the cursor. The cursor branch translates
+              // viewport coords to container-local via zoom.
+              let endX: number;
+              let endY: number;
+              const targetId = connectionDragState.targetNodeId;
+              const targetEl = targetId ? nodeRefs[targetId] : null;
+              if (targetEl && graphContainerRef.current) {
+                const tPos = getLocalPosition(targetEl, graphContainerRef.current);
+                // Snap to the side facing the source so the ghost
+                // doesn't cross the target node.
+                if (
+                  connectionDragState.sourceSide === 'right' &&
+                  tPos.x >= sourcePos.x + sourcePos.width
+                ) {
+                  endX = tPos.x - 6;
+                } else if (
+                  connectionDragState.sourceSide === 'left' &&
+                  tPos.x + tPos.width <= sourcePos.x
+                ) {
+                  endX = tPos.x + tPos.width + 6;
+                } else {
+                  // Mismatched side; just snap to the nearest edge.
+                  const sourceMid = startX;
+                  endX = tPos.x + tPos.width / 2 < sourceMid ? tPos.x + tPos.width + 6 : tPos.x - 6;
+                }
+                endY = tPos.y + tPos.height / 2;
+              } else {
+                endX = (connectionDragState.ghostPos.x - containerRect.left) / zoomScale;
+                endY = (connectionDragState.ghostPos.y - containerRect.top) / zoomScale;
+              }
+
+              // 'forward' if cursor is right of source, else 'backward'.
+              const direction = endX >= startX ? 'forward' : 'backward';
+              const ghostPathD = buildConnectionPath({
+                startX,
+                startY,
+                endX,
+                endY,
+                curvature,
+                direction,
+              });
+              // SVG canvas sized to the container; the path coords are
+              // in container-local space so they line up with nodes.
+              const w = graphContainerRef.current.offsetWidth || svgSize.width;
+              const h = graphContainerRef.current.offsetHeight || svgSize.height;
+              return (
+                <svg
+                  className="pointer-events-none absolute inset-0 z-[59]"
+                  width={w}
+                  height={h}
+                  aria-hidden
+                  data-testid="connection-drag-ghost"
+                >
+                  <path
+                    d={ghostPathD}
+                    className="fill-none stroke-indigo-500"
+                    style={{
+                      strokeWidth: '2px',
+                      strokeDasharray: '6 4',
+                      opacity: 0.7,
+                    }}
+                  />
+                </svg>
+              );
+            })()
+          : null}
       </div>
     </div>
   );

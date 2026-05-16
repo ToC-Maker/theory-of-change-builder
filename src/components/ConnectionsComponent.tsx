@@ -3,6 +3,7 @@ import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
 import { EdgeEditor } from './edge-editor/EdgeEditor';
+import { buildConnectionPath } from './canvas/connectionPath';
 
 // PR 3: `EdgePopupState` was the modal's full state copy (with x/y for
 // positioning, plus full confidence/evidence/assumptions). The new
@@ -640,15 +641,23 @@ export function ConnectionsComponent({
               endY = endPos.y + endPos.height / 2;
             }
 
-            // Calculate control points based on connection type
-            let controlPointOffset;
-            if (isGhostSameColumn) {
-              // Straight line for vertical ghost connections
-              controlPointOffset = 0;
-            } else {
-              const baseOffset = Math.abs(endX - startX) / 2;
-              controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
-            }
+            // PR 5 Task 5.2: path math factored into
+            // `./canvas/connectionPath.ts` so the drag-to-connect
+            // gesture's in-flight ghost (rendered by the parent) can
+            // share the exact same shape as this select-2 preview.
+            const direction = isGhostSameColumn
+              ? 'vertical'
+              : isGhostBackwardConnection
+                ? 'backward'
+                : 'forward';
+            const ghostPathD = buildConnectionPath({
+              startX,
+              startY,
+              endX,
+              endY,
+              curvature,
+              direction,
+            });
 
             // Get the style that a real connection would have (default confidence: 75)
             const ghostStrokeStyle = getConfidenceStrokeStyle(75);
@@ -657,13 +666,7 @@ export function ConnectionsComponent({
               <g>
                 {/* Ghost connection path - looks like real connection but more transparent */}
                 <path
-                  d={
-                    isGhostSameColumn
-                      ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : isGhostBackwardConnection
-                        ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                        : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                  }
+                  d={ghostPathD}
                   className="fill-none"
                   markerEnd="url(#arrowhead)"
                   style={{
