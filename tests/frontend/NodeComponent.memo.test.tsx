@@ -39,6 +39,8 @@ const baseNode: Node = {
 // PR 3: dropped `setNodePopup`, `isEditingTitle`, `setEditingNodeId`,
 // and `updateNodeTitle` from the prop shape — those concerns moved to
 // the anchored `<NodeEditor>`.
+// PR 4: dropped `onDragStart` and `onDragEnd` (HTML5 DnD retired);
+// added `onPointerDown` for `usePointerDrag` to bind to.
 const baseProps = (
   overrides: Partial<ComponentProps<typeof NodeComponent>> = {},
 ): ComponentProps<typeof NodeComponent> => ({
@@ -51,8 +53,7 @@ const baseProps = (
   toggleHighlight: vi.fn(),
   setHoveredNode: vi.fn(),
   hasHighlightedNodes: false,
-  onDragStart: vi.fn(),
-  onDragEnd: vi.fn(),
+  onPointerDown: vi.fn(),
   editMode: true,
   textSize: 1,
   fontFamily: "'Ubuntu', sans-serif",
