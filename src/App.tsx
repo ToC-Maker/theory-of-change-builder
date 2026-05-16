@@ -653,6 +653,9 @@ function ToCViewer() {
   // button can flip it directly (no CustomEvent bridge through the
   // EditToolbarRemnant — that block went away with this PR).
   const [shareOpen, setShareOpen] = useState(false);
+  // PR 2 §769: notification badge for the Share button. Polled at the
+  // App level so it stays visible even when the dialog is closed.
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
 
   // Calculate viewport offset based on sidebar state
   const viewportOffset = useMemo(
@@ -1193,6 +1196,40 @@ function ToCViewer() {
     currentEditTokenRef.current = currentEditToken;
   }, [currentEditToken]);
 
+  // PR 2: pending-request badge poll. Owner-gated; the chart_permissions
+  // endpoint 403s for non-owners so guarding by `isOwner` keeps the
+  // console clean. The 30s cadence matches the legacy ShareDialogShim
+  // poll cadence (the L1 doc in `usePermissionsRefresh.ts` calls 30s
+  // "the actual correctness guarantee"). Resets to 0 when the chart or
+  // owner-status changes so a flip from owner -> non-owner doesn't
+  // leave a stale badge.
+  useEffect(() => {
+    if (!currentChartId || !isAuthenticated || !isOwner) {
+      setPendingRequestCount(0);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchPending = async () => {
+      try {
+        const result = await ChartService.getChartPermissions(currentChartId);
+        if (cancelled) return;
+        const rows = Array.isArray(result)
+          ? (result as { status?: string }[])
+          : (result.permissions as { status?: string }[]);
+        setPendingRequestCount(rows.filter((p) => p.status === 'pending').length);
+      } catch (err) {
+        if (!cancelled) console.error('[App] pending-request poll failed:', err);
+      }
+    };
+    void fetchPending();
+    const interval = setInterval(() => void fetchPending(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [currentChartId, isAuthenticated, isOwner]);
+
   // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
     return () => {
@@ -1597,6 +1634,7 @@ function ToCViewer() {
         // Replaces the CustomEvent bridge to the legacy
         // EditToolbarRemnant.ShareDialogShim, which has been deleted.
         onShareClick={() => setShareOpen(true)}
+        pendingRequestCount={pendingRequestCount}
         profileSlot={<AuthButton onLoggingEnabled={handleLoggingEnabled} />}
       />
 
