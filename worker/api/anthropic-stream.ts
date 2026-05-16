@@ -1023,6 +1023,98 @@ export function isCostCapKill(killDiagnostic: KillDiagnostic | null): boolean {
   return killDiagnostic !== null;
 }
 
+/**
+ * The discriminator label on per-update commit diagnostics. Each emit site
+ * passes its own value; the runbook (Task 12) queries
+ * `request_metadata->>'source'` to bucket by site.
+ */
+export type PerUpdateCommitSource = 'poll' | 'message_start' | 'message_delta';
+
+/**
+ * Minimal slice of `SseTeeContext` that `firePerUpdateCommit` reads.
+ * Exported so unit tests can build a synthetic dep object without
+ * reaching into the private SseTeeContext shape (which carries many
+ * fields irrelevant to the per-update write).
+ */
+export interface PerUpdateCommitDeps {
+  sql: NeonQueryFunction<false, false>;
+  ctx: { waitUntil(p: Promise<unknown>): void };
+  loggingMessageId: string | null;
+  actorId: string;
+  projectedMicroUsd: bigint;
+  chartId: string | null;
+  deploymentHost: string;
+  lifecycle: { handlerStartedAtMs: number };
+}
+
+/**
+ * Fire a per-update `applyDeltaCommit` for the cost value `snap` and log
+ * a `DiagnosticPerUpdateCommit` row. The caller MUST snapshot the live
+ * cost (`finalMicro` / `estimatedMicro`) into a `const snap` synchronously
+ * before invoking this — `snap` is taken by value (bigint is a primitive)
+ * so any mutation of the outer binding after the call cannot leak into
+ * the closure. Bypassing the snapshot discipline is the C2 hazard from
+ * the plan's adversarial review: the IIFE may run many ms after the
+ * call site when the outer `let finalMicro` has been reassigned.
+ *
+ * Scheduled fire-and-forget via `ctx.waitUntil` so the stream isn't
+ * blocked on Postgres. Three idempotent no-op shapes are handled by the
+ * underlying `applyDeltaCommit`:
+ *   1. `loggingMessageId` null → bail before scheduling (no row to commit).
+ *   2. Row not yet inserted by `saveMessage` → returns `applied: false`.
+ *   3. `reconciled_at` non-null (post-stream reconcile stamped it) →
+ *      `applied: false`, late retries no-op without re-inflating the cap.
+ *
+ * Errors inside the IIFE are swallowed via try/catch + console.error so
+ * a Neon outage doesn't crash the runtime; the diagnostic insert may not
+ * land in that case but the per-update write is observability, not state.
+ */
+export function firePerUpdateCommit(
+  deps: PerUpdateCommitDeps,
+  snap: bigint,
+  source: PerUpdateCommitSource,
+): void {
+  // No row → no commit. Don't schedule a guaranteed-no-op IIFE that
+  // would still spam diagnostics. saveMessage's row INSERT lands within
+  // a few ms of stream start, so the only emits that hit this branch
+  // are extreme races on the very first poll tick.
+  if (!deps.loggingMessageId) return;
+  const messageId = deps.loggingMessageId;
+  deps.ctx.waitUntil(
+    (async () => {
+      try {
+        const out = await applyDeltaCommit(
+          deps.sql,
+          messageId,
+          deps.actorId,
+          deps.projectedMicroUsd,
+          snap,
+        );
+        await writeDiagnostic(deps.sql, {
+          error_name: 'DiagnosticPerUpdateCommit',
+          error_message: `${snap.toString()} µUSD committed (applied=${out.applied}, delta=${out.delta})`,
+          user_id: deps.actorId,
+          chart_id: deps.chartId ?? null,
+          request_metadata: {
+            logging_message_id: messageId,
+            cost_micro_usd: snap.toString(),
+            projected_micro_usd: deps.projectedMicroUsd.toString(),
+            new_settled_micro_usd: out.new_settled.toString(),
+            delta_micro_usd: out.delta.toString(),
+            applied: out.applied,
+            source,
+          },
+          deployment_host: deps.deploymentHost,
+          fired_at_ms: Date.now(),
+          start_at_ms: deps.lifecycle.handlerStartedAtMs,
+        });
+      } catch (e) {
+        console.error('[per-update-write] applyDeltaCommit failed:', e);
+      }
+    })(),
+  );
+}
+
 type SseTeeContext = {
   accumulator: UsageAccumulator;
   model: string;
@@ -1633,6 +1725,15 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
     })}\n\n`,
   );
 
+  // Per-update write: persist the running cost to logging_messages +
+  // user_api_usage so the DB tracks running cost continuously, surviving
+  // stream abort or isolate death (Task 7). Snapshot synchronously so a
+  // subsequent poll tick reassigning `estimatedMicro` can't leak into the
+  // closure. Idempotent under the helper's GREATEST + delta-clamp; safe
+  // to fire on every tick.
+  const snap = estimatedMicro;
+  firePerUpdateCommit(teeCtx, snap, 'poll');
+
   // Structured log so `wrangler tail` / Cloudflare logs can answer "why did
   // the 'so far' value stop updating?" without a code redeploy. Runs every
   // 5s per active stream (POLL_COUNT_TOKENS_INTERVAL_MS); volume is bounded
@@ -2092,6 +2193,20 @@ function createCostTrackingStream(
             enqueueErr,
           );
         }
+
+        // Per-update write: persist the running cost to logging_messages +
+        // user_api_usage so the DB tracks running cost continuously,
+        // surviving stream abort or isolate death (Task 7). Snapshot
+        // `finalMicro` synchronously so the closure can't capture a
+        // subsequently-reassigned binding (C2 hazard from the plan's
+        // adversarial review). Fires for both message_start and
+        // message_delta. The overlap with the message_start floor write
+        // below is intentional and safe — both call applyDeltaCommit, which
+        // is idempotent through GREATEST + delta-clamp-to-zero; floorMicro
+        // equals finalMicro at message_start so the second call is a perfect
+        // no-op on the cost row (and a near-no-op delta on user_api_usage).
+        const snap = finalMicro;
+        firePerUpdateCommit(teeCtx, snap, eventType);
 
         // Lock in a server-known cost floor on message_start. This is the
         // first time we see Anthropic's authoritative input_tokens +
