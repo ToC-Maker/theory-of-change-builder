@@ -1,0 +1,121 @@
+// Tests for FileMenu — File dropdown in the new TopBar.
+//
+// Two main concerns:
+//   1. The "Delete chart" item is owner-gated. For anonymous edits
+//      (no auth, but possessing the edit token) it is still shown
+//      because anyone with the edit token is the de-facto owner. For
+//      authenticated callers it shows only when `isOwner=true`.
+//   2. Static items are always present: New ToC, Open recent, Import,
+//      Export, all in that order. Import/Export sub-actions are
+//      placeholders in PR 1 (PR 6 wires the real implementations).
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, cleanup } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { FileMenu } from '../../src/components/top-bar/FileMenu';
+
+const baseProps = {
+  isAuthenticated: false,
+  isOwner: false,
+  currentEditToken: 'tok-abc' as string | null,
+  currentChartId: 'chart-xyz' as string | null,
+  onDeleteChart: vi.fn(),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+const renderMenu = (props: Partial<typeof baseProps> = {}) =>
+  render(
+    <MemoryRouter>
+      <FileMenu {...baseProps} {...props} />
+    </MemoryRouter>,
+  );
+
+describe('FileMenu', () => {
+  it('renders a File trigger button', () => {
+    renderMenu();
+    expect(screen.getByRole('button', { name: /file/i })).toBeInTheDocument();
+  });
+
+  it('opens the dropdown on click and lists the expected items', async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    await user.click(screen.getByRole('button', { name: /file/i }));
+
+    expect(screen.getByText(/new toc/i)).toBeInTheDocument();
+    expect(screen.getByText(/open recent/i)).toBeInTheDocument();
+    expect(screen.getByText(/^import$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^export$/i)).toBeInTheDocument();
+  });
+
+  it('hides Delete chart for anonymous viewers without an edit token', async () => {
+    const user = userEvent.setup();
+    renderMenu({ currentEditToken: null });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    expect(screen.queryByText(/delete chart/i)).toBeNull();
+  });
+
+  it('shows Delete chart for anonymous edits (edit token, not authenticated)', async () => {
+    const user = userEvent.setup();
+    renderMenu({ isAuthenticated: false, currentEditToken: 'tok-abc', isOwner: false });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    expect(screen.getByText(/delete chart/i)).toBeInTheDocument();
+  });
+
+  it('hides Delete chart for authenticated non-owners', async () => {
+    const user = userEvent.setup();
+    renderMenu({ isAuthenticated: true, isOwner: false, currentEditToken: 'tok-abc' });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    expect(screen.queryByText(/delete chart/i)).toBeNull();
+  });
+
+  it('shows Delete chart for authenticated owners', async () => {
+    const user = userEvent.setup();
+    renderMenu({ isAuthenticated: true, isOwner: true, currentEditToken: 'tok-abc' });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    expect(screen.getByText(/delete chart/i)).toBeInTheDocument();
+  });
+
+  it('calls onDeleteChart with the chart ID when Delete is confirmed', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    // Auto-confirm.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderMenu({
+      isAuthenticated: true,
+      isOwner: true,
+      currentEditToken: 'tok-abc',
+      onDeleteChart: onDelete,
+    });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/delete chart/i));
+
+    expect(onDelete).toHaveBeenCalledWith('chart-xyz');
+    confirmSpy.mockRestore();
+  });
+
+  it('does NOT call onDeleteChart when the user cancels the confirm', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderMenu({
+      isAuthenticated: true,
+      isOwner: true,
+      currentEditToken: 'tok-abc',
+      onDeleteChart: onDelete,
+    });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/delete chart/i));
+
+    expect(onDelete).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+});

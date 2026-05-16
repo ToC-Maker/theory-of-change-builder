@@ -19,10 +19,22 @@ import {
   DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import AuthButton from './components/AuthButton';
+import { TopBar } from './components/top-bar/TopBar';
+import type { SaveError } from './components/top-bar/SaveIndicator';
 import { getFreshIdToken } from './utils/auth';
 import { isInputFocused } from './utils/isInputFocused';
+import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
 import './App.css';
+
+// Helper: map a thrown error from a save attempt into the SaveIndicator
+// shape. Strips Anthropic/Fetch metadata that isn't useful in the pill.
+function asSaveError(err: unknown): SaveError {
+  if (err instanceof Error) {
+    return { message: err.message };
+  }
+  return { message: typeof err === 'string' ? err : 'Save failed' };
+}
 
 // Default empty template with 4 sections
 const emptyTemplate: ToCData = {
@@ -622,9 +634,17 @@ function ToCViewer() {
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null);
   const [currentChartId, setCurrentChartId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  // Last save failure surfaced via the TopBar's SaveIndicator. Cleared
+  // when a subsequent save succeeds. SaveIndicator debounces its
+  // `reportError` ping per state-fingerprint so re-renders don't spam.
+  const [saveError, setSaveError] = useState<SaveError | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
+  // Server-verified `isOwner` from the latest getChart response. Reset
+  // when the edit token changes. Wired through to FileMenu so the
+  // owner-gated Delete item only renders for the legitimate owner.
+  const [isOwner, setIsOwner] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [authTokenReady, setAuthTokenReady] = useState(false);
 
@@ -897,10 +917,12 @@ function ToCViewer() {
               .then(() => {
                 pendingChangesRef.current = null;
                 setIsSaving(false);
+                setSaveError(null);
               })
               .catch((err) => {
                 console.error('Failed to save uploaded JSON to database:', err);
                 setIsSaving(false);
+                setSaveError(asSaveError(err));
               });
           } else {
             setIsSaving(false);
@@ -973,6 +995,7 @@ function ToCViewer() {
               console.log('Database save successful');
               pendingChangesRef.current = null;
               setIsSaving(false);
+              setSaveError(null);
             })
             .catch((err) => {
               console.error('Failed to save to database:', err);
@@ -981,6 +1004,7 @@ function ToCViewer() {
                 saveToLocalStorage(pendingChangesRef.current);
               }
               setIsSaving(false);
+              setSaveError(asSaveError(err));
             });
         } else {
           setIsSaving(false);
@@ -1041,10 +1065,12 @@ function ToCViewer() {
               .then(() => {
                 pendingChangesRef.current = null;
                 setIsSaving(false);
+                setSaveError(null);
               })
               .catch((err) => {
                 console.error('Failed to save undo to database:', err);
                 setIsSaving(false);
+                setSaveError(asSaveError(err));
               });
           } else {
             setIsSaving(false);
@@ -1102,10 +1128,12 @@ function ToCViewer() {
               .then(() => {
                 pendingChangesRef.current = null;
                 setIsSaving(false);
+                setSaveError(null);
               })
               .catch((err) => {
                 console.error('Failed to save redo to database:', err);
                 setIsSaving(false);
+                setSaveError(asSaveError(err));
               });
           } else {
             setIsSaving(false);
@@ -1142,6 +1170,49 @@ function ToCViewer() {
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [handleUndo, handleRedo]); // Re-run when handlers change
+
+  // Delete chart handler. Identity-migrated from
+  // `EditToolbar.handleDeleteChart` — original lived inside the share
+  // dialog; it now lives at App-level so FileMenu (in TopBar) can call
+  // it without prop-drilling through TheoryOfChangeGraph.
+  //
+  // Owner gating is enforced by the FileMenu (it doesn't render the
+  // Delete item for non-owners); calling deleteChart without ownership
+  // would 403 on the server.
+  const handleDeleteChart = useCallback(
+    async (chartId: string) => {
+      try {
+        await ChartService.deleteChart(chartId, currentEditToken ?? undefined);
+        clearChartSpend(chartId);
+
+        if (!isAuthenticated) {
+          // Strip the deleted entry from the anon recent-charts list.
+          try {
+            const stored = localStorage.getItem('recentEditCharts');
+            if (stored) {
+              const charts = JSON.parse(stored) as { chartId?: string }[];
+              const filtered = charts.filter((c) => c.chartId !== chartId);
+              localStorage.setItem('recentEditCharts', JSON.stringify(filtered));
+            }
+          } catch (err) {
+            console.warn('[App] failed to clean anon recent-charts', err);
+          }
+        }
+
+        // If we deleted the current chart, send the user home.
+        if (currentChartId === chartId) {
+          window.location.href = '/';
+        }
+      } catch (err) {
+        // Surface the failure via the SaveIndicator so the user knows
+        // the delete didn't take.
+        setSaveError(asSaveError(err));
+        // Also pop an alert because the SaveIndicator is small.
+        alert(err instanceof Error ? err.message : 'Failed to delete chart');
+      }
+    },
+    [currentEditToken, currentChartId, isAuthenticated],
+  );
 
   const copyGraphJSON = useCallback(async () => {
     if (!data) return;
@@ -1291,6 +1362,7 @@ function ToCViewer() {
           setData(result.chartData);
           setCurrentEditToken(editToken);
           setCurrentChartId(result.chartId);
+          setIsOwner(Boolean(result.isOwner));
 
           // Initialize logging session after chart is loaded
           initializeLogging(result.chartId, result.chartData);
@@ -1609,6 +1681,51 @@ function ToCViewer() {
 
   return (
     <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0">
+      {/* New TopBar (mounted parallel to the existing EditToolbar during
+        PR 1's identity-copy phase). Once Task 1.7 moves the residual
+        share dialog into <EditToolbarRemnant>, the old EditToolbar
+        component goes away entirely and this TopBar is the sole
+        chrome on top. */}
+      <TopBar
+        editMode={true}
+        setEditMode={() => {}}
+        showEditButton={true}
+        undoHistory={undoHistory}
+        redoHistory={redoHistory}
+        handleUndo={handleUndo}
+        handleRedo={handleRedo}
+        isSaving={isSaving}
+        saveError={saveError}
+        currentEditToken={currentEditToken}
+        data={data}
+        containerSize={containerSize}
+        onChartCreated={handleChartCreated}
+        // Format-menu setters write through `handleDataChange` so the
+        // canonical state lives in `data.*` (TheoryOfChangeGraph's
+        // initialData effect picks them up). The old EditToolbar still
+        // owns the separate-state copy for now; once it's deleted in
+        // Task 1.7 the data-side state is the only one.
+        fontFamily={data.fontFamily ?? "'Ubuntu', sans-serif"}
+        setFontFamily={(next) => handleDataChange({ ...data, fontFamily: next })}
+        textSize={data.textSize ?? 1}
+        setTextSize={(next) => handleDataChange({ ...data, textSize: next })}
+        curvature={data.curvature ?? 0.5}
+        setCurvature={(next) => handleDataChange({ ...data, curvature: next })}
+        columnPadding={data.columnPadding ?? 24}
+        setColumnPadding={(next) => handleDataChange({ ...data, columnPadding: next })}
+        sectionPadding={data.sectionPadding ?? 32}
+        setSectionPadding={(next) => handleDataChange({ ...data, sectionPadding: next })}
+        isAuthenticated={isAuthenticated}
+        isOwner={isOwner}
+        currentChartId={currentChartId}
+        onDeleteChart={handleDeleteChart}
+        // Share button: relay to the legacy EditToolbar's share dropdown
+        // via a CustomEvent. This is a short-lived bridge that ends when
+        // Task 1.7 moves the dialog into <EditToolbarRemnant> and we
+        // pass a direct handler instead.
+        onShareClick={() => window.dispatchEvent(new CustomEvent('toc:open-share'))}
+      />
+
       {/* Left Sidebar - AI Assistant */}
       <ChatInterface
         isCollapsed={isLeftPanelCollapsed}
