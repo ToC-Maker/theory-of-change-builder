@@ -875,22 +875,36 @@ function accumulatorToUsage(acc: UsageAccumulator): AnthropicUsage {
 /**
  * Merge an Anthropic usage fragment into our accumulator. Anthropic's SSE
  * stream emits usage on `message_start` (input + initial output=1) and
- * `message_delta` (incremental output); we treat later values as authoritative
- * rather than adding. Cache-creation/read counts only appear on message_start.
+ * `message_delta` (incremental output). We use MAX-per-field rather than
+ * last-write-wins so a stale or out-of-order frame with a LOWER value
+ * cannot regress the accumulator (mirrors the client's `Math.max` per
+ * field in `chatService.ts:806-813`). Exported for unit tests.
  */
-function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void {
-  if (typeof usage.input_tokens === 'number') acc.input_tokens = usage.input_tokens;
-  if (typeof usage.output_tokens === 'number') acc.output_tokens = usage.output_tokens;
+export function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void {
+  if (typeof usage.input_tokens === 'number') {
+    acc.input_tokens = Math.max(acc.input_tokens, usage.input_tokens);
+  }
+  if (typeof usage.output_tokens === 'number') {
+    acc.output_tokens = Math.max(acc.output_tokens, usage.output_tokens);
+  }
   if (typeof usage.cache_creation_input_tokens === 'number') {
-    acc.cache_creation_input_tokens = usage.cache_creation_input_tokens;
+    acc.cache_creation_input_tokens = Math.max(
+      acc.cache_creation_input_tokens,
+      usage.cache_creation_input_tokens,
+    );
   }
   if (typeof usage.cache_read_input_tokens === 'number') {
-    acc.cache_read_input_tokens = usage.cache_read_input_tokens;
+    acc.cache_read_input_tokens = Math.max(
+      acc.cache_read_input_tokens,
+      usage.cache_read_input_tokens,
+    );
   }
   const stu = usage.server_tool_use;
   if (stu && typeof stu === 'object' && !Array.isArray(stu)) {
     const wsr = (stu as Record<string, unknown>).web_search_requests;
-    if (typeof wsr === 'number') acc.web_search_requests = wsr;
+    if (typeof wsr === 'number') {
+      acc.web_search_requests = Math.max(acc.web_search_requests, wsr);
+    }
   }
 }
 
