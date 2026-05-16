@@ -16,30 +16,29 @@ import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 // so the old prop drilling for those (`undoHistory`, `redoHistory`,
 // `handleUndo`, `handleRedo`, `isSaving`, `lastSyncTime`,
 // `isManualSyncing`, `handleManualSync`, `getTimeAgo`) is no longer
-// needed by `ToC`. The remaining props are the canvas-layer hooks
-// (camera, viewport, container-size callbacks) plus `currentEditToken`
-// which the EditToolbarRemnant still needs for the share dropdown.
+// needed by `ToC`.
+//
+// PR 2: the share-dialog block also moved up to App.tsx, so
+// `currentEditToken` and `onChartCreated` are no longer threaded
+// through. The remaining props are the canvas-layer hooks (camera,
+// viewport, container-size callbacks) + highlight notifier.
 export function ToC({
   data: initialData,
   onSizeChange,
   onDataChange,
   showEditButton = true,
-  currentEditToken = null,
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
-  onChartCreated,
   viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
 }: {
   data: ToCData;
   onSizeChange?: (size: { width: number; height: number }) => void;
   onDataChange?: (data: ToCData) => void;
   showEditButton?: boolean;
-  currentEditToken?: string | null;
   zoomScale?: number;
   camera?: { x: number; y: number; z: number };
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void;
-  onChartCreated?: (token: string, chartId: string) => void;
   viewportOffset?: { left: number; top: number; right: number; bottom: number };
 }) {
   // Graph mutation seam: see `src/hooks/useGraphMutation.ts` for the
@@ -1570,11 +1569,10 @@ export function ToC({
           zoomScale={zoomScale}
         />
 
-        {/* PR 1 task 1.7: EditToolbar.tsx is gone. The TopBar is now
-          mounted at App-level (parallel to ChatInterface); the three
-          surviving overlays (share dialog, per-selection bar,
-          alignment banner) live in EditToolbarRemnant. We portal the
-          remnant out to document.body so it remains screen-fixed and
+        {/* PR 2: the ShareDialog block moved up to App.tsx (next to the
+          TopBar). The two remaining overlays (per-selection bar +
+          alignment banner) live in EditToolbarRemnant; we portal them
+          out to document.body so they remain screen-fixed and
           unaffected by the canvas transform. */}
         {createPortal(
           <EditToolbarRemnant
@@ -1595,9 +1593,6 @@ export function ToC({
             nodePopup={nodePopup}
             edgePopup={edgePopup}
             camera={camera}
-            currentEditToken={currentEditToken}
-            onChartCreated={onChartCreated}
-            containerSize={svgSize}
           />,
           document.body,
         )}
