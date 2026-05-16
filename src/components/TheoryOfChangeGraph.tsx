@@ -104,11 +104,12 @@ export function ToC({
   // retired — `usePointerDrag` now owns drag state internally and
   // returns `dragState` (or null). The hook is wired below after
   // `useGraphLayout` (it needs the snapshot accessor).
-  // editMode/layoutMode setters dropped along with the inline
-  // EditToolbar mode toggle — the canvas still reads the state but no
-  // longer needs to flip it from inside.
+  // PR 5 Task 5.4: `layoutMode` deleted. The dual-mode toggle is
+  // gone; edit-mode now provides the always-on hover affordances
+  // (gutters, hover-× delete, connection handles) that used to be
+  // gated behind layoutMode. `editMode` remains as the view/edit
+  // distinction, set by the parent route (showEditButton).
   const [editMode] = useState(showEditButton);
-  const [layoutMode] = useState(false);
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5);
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1); // 0.5 to 2.0 scale
   const [fontFamily, setFontFamily] = useState(initialData.fontFamily ?? "'Ubuntu', sans-serif"); // Default font family
@@ -531,7 +532,6 @@ export function ToC({
     columnPadding,
     sectionPadding,
     editMode,
-    layoutMode,
   });
 
   const areNodesConnected = useCallback(
@@ -1458,7 +1458,6 @@ export function ToC({
           hoveredConnections={hoveredConnections}
           curvature={curvature}
           editMode={editMode}
-          layoutMode={layoutMode}
           sectionWidths={sectionWidths}
           columnPadding={columnPadding}
           sectionPadding={sectionPadding}
