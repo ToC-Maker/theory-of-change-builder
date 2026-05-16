@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { computeCostMicroUsd, RATES_MICRO_USD_PER_TOKEN } from '../../worker/_shared/cost';
+import { computeCostMicroUsd, RATES_MICRO_USD_PER_TOKEN } from '../../shared/cost';
+import { MODEL_PRICING } from '../../shared/pricing';
 
 describe('computeCostMicroUsd', () => {
   it('returns 0 for empty usage', () => {
@@ -51,5 +52,21 @@ describe('computeCostMicroUsd', () => {
     expect(Object.keys(RATES_MICRO_USD_PER_TOKEN)).toContain('claude-opus-4-7');
     expect(Object.keys(RATES_MICRO_USD_PER_TOKEN)).toContain('claude-sonnet-4-6');
     expect(Object.keys(RATES_MICRO_USD_PER_TOKEN)).toContain('claude-haiku-4-5');
+  });
+
+  // Symmetry: every entry in the single-source-of-truth pricing table must
+  // produce a non-NaN, non-negative BigInt µUSD for a minimal usage shape.
+  // Catches any new model added to MODEL_PRICING without a matching entry in
+  // RATES_MICRO_USD_PER_TOKEN, and any rate that would underflow or NaN.
+  describe('all-model symmetry', () => {
+    for (const model of Object.keys(MODEL_PRICING)) {
+      it(`${model}: minimal usage → non-negative BigInt`, () => {
+        const cost = computeCostMicroUsd(model, { input_tokens: 100, output_tokens: 50 });
+        expect(typeof cost).toBe('bigint');
+        expect(cost >= 0n).toBe(true);
+        // Both rates >0 in the pricing table → minimal usage must be strictly >0.
+        expect(cost > 0n).toBe(true);
+      });
+    }
   });
 });
