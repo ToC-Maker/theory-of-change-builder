@@ -3,8 +3,8 @@
 // Items (per plan §1.2):
 //   - New ToC (opens "/")
 //   - Open recent (anchors a recent-charts list; reuses ChartService)
-//   - Import → JSON (placeholder until PR 6)
-//   - Export → JSON / PNG / PDF (placeholders until PR 6)
+//   - Import → JSON (PR 6 Task 6.2: wired to a hidden file picker)
+//   - Export → JSON / PNG / PDF (PR 6 Task 6.2: wired to `exportChart.ts`)
 //   - Delete chart (owner-gated)
 //
 // Owner-gating rules for Delete (mirrors the rule used by the old
@@ -15,10 +15,24 @@
 //   - Authenticated user: shown only when `isOwner=true`.
 //   - No edit token / no chart ID: hidden (nothing to delete).
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDownIcon, TrashIcon, ClockIcon, PlusIcon } from '@heroicons/react/24/outline';
+import {
+  ChevronDownIcon,
+  TrashIcon,
+  ClockIcon,
+  PlusIcon,
+  ArrowDownTrayIcon,
+  ArrowUpTrayIcon,
+} from '@heroicons/react/24/outline';
 import { useAuth0 } from '@auth0/auth0-react';
 import { ChartService, type UserChart } from '../../services/chartService';
 import { ConfirmModal } from '../ConfirmModal';
+import type { ToCData } from '../../types';
+// `src/utils/exportChart.ts` is dynamic-imported inside handlers, not
+// statically imported here. The library it pulls in (html-to-image,
+// jspdf) is large; Vite chunks it into its own bundle so the user
+// only downloads it when they click Export. Doing the dynamic import
+// once at click time also keeps JSON / PNG / PDF on the same import
+// path so all three live in the same chunk.
 
 interface Props {
   isAuthenticated: boolean;
@@ -27,9 +41,62 @@ interface Props {
   currentEditToken: string | null;
   currentChartId: string | null;
   onDeleteChart: (chartId: string) => void;
+
+  // PR 6 (Task 6.2) — export + import wiring.
+  /**
+   * Current graph state. Used as the source for Export → JSON, and to
+   * (a) derive the export filename from `data.title` and (b) check
+   * whether Import should warn about overwriting existing nodes.
+   *
+   * Optional so existing call sites (some tests) don't break; when
+   * absent the export entries are disabled and the import shows a
+   * generic confirm. App.tsx and MobileMenu both pass the live `data`.
+   */
+  data?: ToCData;
+  /**
+   * Replace the current graph with imported JSON. Called after the
+   * file picker resolves, the file is JSON-parsed, and (if existing
+   * graph has nodes) the user has confirmed the overwrite.
+   */
+  onImportJson?: (next: ToCData) => void;
 }
 
 type Submenu = 'main' | 'import' | 'export' | 'recent';
+
+/**
+ * Lowercase, slugify, trim. Used to derive a sane filename from a
+ * (possibly empty or fancy-Unicode) chart title. Falls back to
+ * 'theory-of-change' when the slug is empty.
+ */
+function slugify(title: string | undefined): string {
+  if (!title) return 'theory-of-change';
+  const slug = title
+    .toLowerCase()
+    .normalize('NFKD')
+    // Strip combining diacritical marks (the canonical Unicode range
+    // for the NFKD-decomposed accents we just produced). ̀-ͯ
+    // is the "Combining Diacritical Marks" block.
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'theory-of-change';
+}
+
+/**
+ * Count nodes across all sections + columns. Used to decide whether
+ * Import should warn about overwriting. Anything > 0 triggers the
+ * confirm flow.
+ */
+function totalNodeCount(data: ToCData | undefined): number {
+  if (!data?.sections) return 0;
+  let n = 0;
+  for (const s of data.sections) {
+    for (const c of s.columns ?? []) {
+      n += c.nodes?.length ?? 0;
+    }
+  }
+  return n;
+}
 
 export function FileMenu({
   isAuthenticated,
@@ -37,6 +104,8 @@ export function FileMenu({
   currentEditToken,
   currentChartId,
   onDeleteChart,
+  data,
+  onImportJson,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [submenu, setSubmenu] = useState<Submenu>('main');
@@ -50,7 +119,18 @@ export function FileMenu({
   // Retry button). Avoids manual re-implementing the effect body.
   const [retryNonce, setRetryNonce] = useState(0);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Pending-import state: holds the parsed graph while the
+  // confirmation modal is open. `null` means no import pending.
+  const [pendingImport, setPendingImport] = useState<ToCData | null>(null);
+  // Generating-export indicator. The Export → PNG/PDF actions can take
+  // a few hundred ms because they dynamic-import their libraries and
+  // walk the layout tree. Disabling the button + showing a label
+  // gives the user feedback so they don't double-click and queue
+  // two captures.
+  const [busyFormat, setBusyFormat] = useState<'PNG' | 'PDF' | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth0();
 
   // Anyone holding an edit token can delete an anonymous chart. For
@@ -58,6 +138,12 @@ export function FileMenu({
   const canDelete = Boolean(
     currentEditToken && currentChartId && (isAuthenticated ? isOwner : true),
   );
+
+  // Export entries are only meaningful when there's a graph to export.
+  // FileMenu callers without `data` (tests, viewer mode) keep the
+  // entries inert.
+  const canExport = Boolean(data);
+  const canImport = Boolean(onImportJson);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -142,6 +228,111 @@ export function FileMenu({
     setConfirmDeleteOpen(false);
   };
 
+  // PR 6 (Task 6.2): export actions. Closes the dropdown immediately
+  // so the user sees the click was registered, then runs the export.
+  const closeAndReset = () => {
+    setOpen(false);
+    setSubmenu('main');
+  };
+
+  const handleExportJson = async () => {
+    if (!data) return;
+    const filename = slugify(data.title);
+    closeAndReset();
+    try {
+      const mod = await import('../../utils/exportChart');
+      mod.exportToJson(data, filename);
+    } catch (err) {
+      console.error('[FileMenu] JSON export failed', err);
+      setExportError('JSON export failed. See console for details.');
+    }
+  };
+
+  const handleExportImage = async (format: 'PNG' | 'PDF') => {
+    if (!data) return;
+    const root = document.querySelector<HTMLElement>('[data-export-root]');
+    if (!root) {
+      console.error('[FileMenu] no [data-export-root] element found in DOM');
+      setExportError('Could not find the canvas to export. Reload the page and try again.');
+      return;
+    }
+    const filename = slugify(data.title);
+    setBusyFormat(format);
+    setExportError(null);
+    closeAndReset();
+    try {
+      // Dynamic-import inside the handler keeps the library out of
+      // the main bundle until the user clicks (Vite chunk-split).
+      const mod = await import('../../utils/exportChart');
+      if (format === 'PNG') {
+        await mod.exportToPng(root, filename);
+      } else {
+        await mod.exportToPdf(root, filename);
+      }
+    } catch (err) {
+      console.error(`[FileMenu] ${format} export failed`, err);
+      setExportError(
+        `${format} export failed. The graph may be too large or the browser refused the download.`,
+      );
+    } finally {
+      setBusyFormat(null);
+    }
+  };
+
+  // PR 6 (Task 6.2): import.
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset the input so the same filename can be re-imported (browsers
+    // don't fire `change` again for an identical file otherwise).
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+      // Basic shape validation: must have a `sections` array. Deeper
+      // validation happens at the `setData` level (the parent already
+      // has the same check in `handleUploadJSON`).
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        !Array.isArray((parsed as { sections?: unknown }).sections)
+      ) {
+        setExportError(
+          'That file does not look like a Theory of Change chart (missing `sections` array).',
+        );
+        return;
+      }
+      const validData = parsed as ToCData;
+      closeAndReset();
+      if (totalNodeCount(data) > 0) {
+        // Existing graph is non-empty; require confirmation before
+        // overwriting.
+        setPendingImport(validData);
+      } else {
+        // Empty graph: apply immediately, no confirm.
+        onImportJson?.(validData);
+      }
+    } catch (err) {
+      console.error('[FileMenu] import failed', err);
+      setExportError(
+        err instanceof SyntaxError
+          ? 'Could not parse that file as JSON. Is it the right format?'
+          : 'Could not read the file. Please try again.',
+      );
+    }
+  };
+
+  const handleConfirmImport = () => {
+    if (pendingImport) {
+      onImportJson?.(pendingImport);
+    }
+    setPendingImport(null);
+  };
+
   return (
     <div className="relative" ref={ref}>
       <button
@@ -152,8 +343,25 @@ export function FileMenu({
         aria-expanded={open}
       >
         File
+        {busyFormat && (
+          <span className="ml-1 text-xs text-gray-500" aria-live="polite">
+            ({busyFormat}…)
+          </span>
+        )}
         <ChevronDownIcon className="w-3 h-3" />
       </button>
+
+      {/* Hidden file input used by Import → JSON. Lives outside the
+        dropdown subtree so clicking it doesn't fire the dropdown's
+        click-outside handler and unmount us mid-pick. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        onChange={handleFileChosen}
+        className="hidden"
+        data-testid="file-menu-import-input"
+      />
 
       {open && (
         <div
@@ -188,7 +396,10 @@ export function FileMenu({
                 className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 role="menuitem"
               >
-                Import
+                <span className="flex items-center gap-2">
+                  <ArrowUpTrayIcon className="w-4 h-4 text-gray-500" />
+                  Import
+                </span>
                 <ChevronDownIcon className="w-3 h-3 -rotate-90" />
               </button>
               <button
@@ -197,7 +408,10 @@ export function FileMenu({
                 className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 role="menuitem"
               >
-                Export
+                <span className="flex items-center gap-2">
+                  <ArrowDownTrayIcon className="w-4 h-4 text-gray-500" />
+                  Export
+                </span>
                 <ChevronDownIcon className="w-3 h-3 -rotate-90" />
               </button>
 
@@ -229,13 +443,15 @@ export function FileMenu({
               </button>
               <button
                 type="button"
-                disabled
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-400 cursor-not-allowed"
+                onClick={handleImportClick}
+                disabled={!canImport}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+                  canImport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+                }`}
                 role="menuitem"
-                title="Coming soon"
+                data-testid="file-menu-import-json"
               >
                 <span>JSON</span>
-                <span className="text-xs italic">Soon</span>
               </button>
             </>
           )}
@@ -249,19 +465,48 @@ export function FileMenu({
               >
                 ← Back
               </button>
-              {(['JSON', 'PNG', 'PDF'] as const).map((fmt) => (
-                <button
-                  key={fmt}
-                  type="button"
-                  disabled
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-400 cursor-not-allowed"
-                  role="menuitem"
-                  title="Coming soon"
-                >
-                  <span>{fmt}</span>
-                  <span className="text-xs italic">Soon</span>
-                </button>
-              ))}
+              <button
+                type="button"
+                onClick={() => void handleExportJson()}
+                disabled={!canExport}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+                  canExport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+                }`}
+                role="menuitem"
+                data-testid="file-menu-export-json"
+              >
+                <span>JSON</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExportImage('PNG')}
+                disabled={!canExport || busyFormat !== null}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+                  canExport && busyFormat === null
+                    ? 'text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-400 cursor-not-allowed'
+                }`}
+                role="menuitem"
+                data-testid="file-menu-export-png"
+              >
+                <span>PNG</span>
+                {busyFormat === 'PNG' && <span className="text-xs italic">Generating…</span>}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExportImage('PDF')}
+                disabled={!canExport || busyFormat !== null}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+                  canExport && busyFormat === null
+                    ? 'text-gray-700 hover:bg-gray-100'
+                    : 'text-gray-400 cursor-not-allowed'
+                }`}
+                role="menuitem"
+                data-testid="file-menu-export-pdf"
+              >
+                <span>PDF</span>
+                {busyFormat === 'PDF' && <span className="text-xs italic">Generating…</span>}
+              </button>
             </>
           )}
 
@@ -319,6 +564,26 @@ export function FileMenu({
         confirmVariant="danger"
         onConfirm={handleConfirmDelete}
         onCancel={() => setConfirmDeleteOpen(false)}
+      />
+      <ConfirmModal
+        open={pendingImport !== null}
+        title="Replace current chart?"
+        body={`Importing this file will replace the current chart (${totalNodeCount(data)} ${
+          totalNodeCount(data) === 1 ? 'node' : 'nodes'
+        }). This action can be undone.`}
+        confirmLabel="Replace"
+        confirmVariant="danger"
+        onConfirm={handleConfirmImport}
+        onCancel={() => setPendingImport(null)}
+      />
+      <ConfirmModal
+        open={exportError !== null}
+        title="Export failed"
+        body={exportError ?? ''}
+        confirmLabel="OK"
+        confirmVariant="primary"
+        onConfirm={() => setExportError(null)}
+        onCancel={() => setExportError(null)}
       />
     </div>
   );

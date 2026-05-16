@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { FileMenu } from '../../src/components/top-bar/FileMenu';
 import { ChartService } from '../../src/services/chartService';
+import type { ComponentProps } from 'react';
 
 // Auth0 normally returns `{user: undefined}` outside a provider; the
 // auth-path tests need a user.sub to hit the `getUserCharts` branch.
@@ -25,7 +26,9 @@ vi.mock('@auth0/auth0-react', () => ({
   }),
 }));
 
-const baseProps = {
+type FileMenuProps = ComponentProps<typeof FileMenu>;
+
+const baseProps: FileMenuProps = {
   isAuthenticated: false,
   isOwner: false,
   currentEditToken: 'tok-abc' as string | null,
@@ -41,7 +44,7 @@ afterEach(() => {
   cleanup();
 });
 
-const renderMenu = (props: Partial<typeof baseProps> = {}) =>
+const renderMenu = (props: Partial<FileMenuProps> = {}) =>
   render(
     <MemoryRouter>
       <FileMenu {...baseProps} {...props} />
@@ -181,5 +184,154 @@ describe('FileMenu', () => {
 
     getUserChartsSpy.mockRestore();
     consoleSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR 6 Task 6.2: Import + Export wiring
+// ---------------------------------------------------------------------------
+//
+// These tests pin the new behavior added by PR 6: clicking
+// Export → JSON serializes the live `data` and triggers a download;
+// Import → JSON opens a file picker and routes the parsed result
+// through `onImportJson` (with a confirm gate when the existing
+// graph has nodes).
+
+import type { ToCData } from '../../src/types';
+
+const sampleData: ToCData = {
+  title: 'Sample Theory',
+  sections: [
+    {
+      title: 'Inputs',
+      columns: [{ nodes: [{ id: 'n1', title: 'A', text: 'a', connectionIds: [] }] }],
+    },
+  ],
+};
+
+describe('FileMenu — Export (PR 6 Task 6.2)', () => {
+  it('Export → JSON serializes data and downloads it', async () => {
+    // Mock URL.createObjectURL + anchor.click so we can read what the
+    // FileMenu hands off without actually starting a download.
+    const objectUrls: string[] = [];
+    let counter = 0;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob: Blob) => {
+      const url = `blob:t-${++counter}-${blob.size}`;
+      objectUrls.push(url);
+      return url;
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    let clicked: { href: string; download: string } | null = null;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked = { href: this.href, download: this.download };
+    });
+
+    const user = userEvent.setup();
+    renderMenu({ data: sampleData });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^export$/i));
+    await user.click(screen.getByTestId('file-menu-export-json'));
+
+    // The handler dynamic-imports `exportChart.ts`, so we await the
+    // import + click to settle.
+    await waitFor(() => expect(clicked).not.toBeNull());
+    // Filename derived from `data.title` via slugify.
+    expect(clicked!.download).toMatch(/sample-theory\.json/);
+    expect(objectUrls).toHaveLength(1);
+  });
+
+  it('Export → JSON is disabled when `data` is not passed', async () => {
+    const user = userEvent.setup();
+    renderMenu(); // no `data`
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^export$/i));
+    const btn = screen.getByTestId('file-menu-export-json');
+    expect(btn).toBeDisabled();
+  });
+});
+
+describe('FileMenu — Import (PR 6 Task 6.2)', () => {
+  // Build a File object for the hidden <input type=file>. jsdom
+  // exposes the File constructor in the global scope.
+  const makeJsonFile = (obj: unknown, name = 'theory.json') =>
+    new File([JSON.stringify(obj)], name, { type: 'application/json' });
+
+  it('parses the file and calls onImportJson directly when the existing graph is empty', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({
+      data: { sections: [] }, // empty graph -> no confirm needed
+      onImportJson,
+    });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(fileInput, makeJsonFile(sampleData));
+
+    // Microtask boundary so the .text() promise + setState settle.
+    await Promise.resolve();
+    expect(onImportJson).toHaveBeenCalledWith(sampleData);
+  });
+
+  it('shows a confirm modal when the existing graph has nodes, and only commits on confirm', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({
+      data: sampleData, // 1 node — non-empty
+      onImportJson,
+    });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(
+      fileInput,
+      makeJsonFile({
+        sections: [
+          {
+            title: 'X',
+            columns: [{ nodes: [{ id: 'b1', title: 'B', text: 'b', connectionIds: [] }] }],
+          },
+        ],
+      }),
+    );
+
+    // Modal appears (rendered via the same ConfirmModal primitive).
+    const modal = await screen.findByTestId('confirm-modal');
+    expect(modal).toBeInTheDocument();
+    expect(onImportJson).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('confirm-modal-confirm'));
+    expect(onImportJson).toHaveBeenCalledTimes(1);
+    expect((onImportJson.mock.calls[0][0] as { sections: unknown[] }).sections).toHaveLength(1);
+  });
+
+  it('rejects files without a sections array', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({
+      data: { sections: [] },
+      onImportJson,
+    });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(fileInput, makeJsonFile({ wrongShape: true }));
+
+    await Promise.resolve();
+    // Bad file -> onImportJson is never called; an export-error modal
+    // appears via the third ConfirmModal instance.
+    expect(onImportJson).not.toHaveBeenCalled();
+    expect(await screen.findByText(/does not look like a theory of change/i)).toBeInTheDocument();
   });
 });
