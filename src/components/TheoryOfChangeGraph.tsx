@@ -3,10 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { NodeComponent } from './NodeComponent';
-import { ConnectionsComponent, EdgePopupState } from './ConnectionsComponent';
+import { ConnectionsComponent } from './ConnectionsComponent';
 import { EditToolbarRemnant } from './EditToolbarRemnant';
 import { Legend } from './Legend';
-import { NodePopup } from './NodePopup';
+import { NodeEditor } from './node-editor/NodeEditor';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
 import { useGraphMutation } from '../hooks/useGraphMutation';
@@ -30,7 +30,6 @@ export function ToC({
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
-  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
 }: {
   data: ToCData;
   onSizeChange?: (size: { width: number; height: number }) => void;
@@ -39,7 +38,9 @@ export function ToC({
   zoomScale?: number;
   camera?: { x: number; y: number; z: number };
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void;
-  viewportOffset?: { left: number; top: number; right: number; bottom: number };
+  // PR 3: `viewportOffset` was used by the NodePopup / EdgePopup modal
+  // sizing math; both modals retired, so the prop is gone. The
+  // anchored editors are positioned by `useAnchorPosition` directly.
 }) {
   // Graph mutation seam: see `src/hooks/useGraphMutation.ts` for the
   // queueMicrotask-deferral rationale (replaces the previous
@@ -106,13 +107,10 @@ export function ToC({
   const [sectionPadding, setSectionPadding] = useState(initialData.sectionPadding ?? 32); // Default section padding in pixels
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
-  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
-  const [nodePopup, setNodePopup] = useState<{
-    id: string;
-    title: string;
-    text: string;
-  } | null>(null);
-  const [edgePopup, setEdgePopup] = useState<EdgePopupState | null>(null);
+  // PR 3: `editingNodeId` / `nodePopup` / `edgePopup` state retired —
+  // node editing now lives in the anchored `<NodeEditor>` (mounted
+  // alongside the selected node) and edge editing in `<EdgeEditor>`
+  // (owned by `ConnectionsComponent`'s `selectedEdge` state).
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [legendPosition, setLegendPosition] = useState({ x: 340, y: 70 });
   const [isDraggingLegend, setIsDraggingLegend] = useState(false);
@@ -130,49 +128,12 @@ export function ToC({
     }
   }, []);
 
-  const updateNode = useCallback(
-    (nodeId: string, title: string, text: string) => {
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) =>
-              node.id === nodeId ? { ...node, title, text } : node,
-            ),
-          })),
-        })),
-      }));
-
-      // Trigger height recalculation for the updated node
-      // We need to wait for the DOM to update first
-      setTimeout(() => {
-        const nodeRef = nodeRefs[nodeId];
-        if (nodeRef) {
-          const height = nodeRef.offsetHeight;
-          setNodeHeights((prev) => ({ ...prev, [nodeId]: height }));
-        }
-      }, 0);
-    },
-    [setDataAndNotify, nodeRefs],
-  );
-
-  const updateNodeTitle = useCallback(
-    (nodeId: string, title: string) => {
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => (node.id === nodeId ? { ...node, title } : node)),
-          })),
-        })),
-      }));
-    },
-    [setDataAndNotify],
-  );
+  // PR 3: `updateNode` and `updateNodeTitle` retired — node title and
+  // markdown details are now mutated via the `useNodeProperties` hook
+  // inside `<NodeEditor>`, which writes through the same
+  // `useGraphMutation` primitive (`mutateDebounced` + `commit`) every
+  // other streaming input uses. Per-keystroke height recompute is
+  // handled by the ResizeObserver in `useAnchorPosition`.
 
   const recalculateAllNodeHeights = useCallback(() => {
     // Force recalculation of all node heights
@@ -309,11 +270,10 @@ export function ToC({
         ),
       }));
 
-      // Select the new node and enter edit mode
+      // PR 3: selecting the new node opens the anchored NodeEditor
+      // beside it (single-click semantics). No separate "enter edit
+      // mode" state is needed; the editor manages its own focus.
       setHighlightedNodes(new Set([newNode.id]));
-      setTimeout(() => {
-        setEditingNodeId(newNode.id);
-      }, 0);
     },
     [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId, data.sections],
   );
@@ -765,39 +725,10 @@ export function ToC({
     [editMode, setDataAndNotify],
   );
 
-  // Generic function to delete a specific node
-  const deleteNode = useCallback(
-    (nodeId: string) => {
-      if (!editMode) return;
-
-      // Combine node deletion and connection cleanup in a single atomic update
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes
-              .filter((node) => node.id !== nodeId) // Remove the deleted node
-              .map((node) => ({
-                ...node,
-                // Clean up any connections to the deleted node
-                connectionIds: node.connectionIds?.filter((id) => id !== nodeId) || [],
-                connections: node.connections?.filter((conn) => conn.targetId !== nodeId),
-              })),
-          })),
-        })),
-      }));
-
-      // Clear any selection of the deleted node
-      setHighlightedNodes((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(nodeId);
-        return newSet;
-      });
-    },
-    [editMode, setDataAndNotify],
-  );
+  // PR 3: `deleteNode(nodeId)` callback retired — node deletion is
+  // now driven by the NodeEditor's `useNodeProperties.deleteSelectedNodes`
+  // (multi-select aware) and by the keyboard-shortcut delete handler in
+  // `useKeyboardShortcuts.ts` (which does its own atomic batch).
 
   const disconnectSelectedNodes = useCallback(() => {
     if (!editMode) return;
@@ -1093,7 +1024,6 @@ export function ToC({
     nodeRefs,
     setNodeWidth,
     setNodeColor,
-    setNodePopup,
     moveNodeVertically,
     nodeHeights,
   });
@@ -1444,10 +1374,6 @@ export function ToC({
                                     editMode={editMode}
                                     textSize={textSize}
                                     fontFamily={fontFamily}
-                                    setNodePopup={setNodePopup}
-                                    isEditingTitle={editingNodeId === node.id}
-                                    setEditingNodeId={setEditingNodeId}
-                                    updateNodeTitle={updateNodeTitle}
                                   />
                                 </div>
                               );
@@ -1545,7 +1471,9 @@ export function ToC({
 
         <ConnectionsComponent
           data={data}
-          setData={setDataAndNotify}
+          mutate={setDataAndNotify}
+          mutateDebounced={mutateDebounced}
+          commit={commitMutation}
           nodeRefs={nodeRefs}
           nodeHeights={nodeHeights}
           highlightedNodes={highlightedNodes}
@@ -1561,38 +1489,23 @@ export function ToC({
             setSvgSize(size);
             onSizeChange?.(size);
           }}
-          onDeleteConnection={deleteConnection}
           containerRef={graphContainerRef}
-          onEdgePopupChange={setEdgePopup}
+          camera={camera}
           fontFamily={fontFamily}
-          viewportOffset={viewportOffset}
-          zoomScale={zoomScale}
         />
 
-        {/* PR 2: the ShareDialog block moved up to App.tsx (next to the
-          TopBar). The two remaining overlays (per-selection bar +
-          alignment banner) live in EditToolbarRemnant; we portal them
-          out to document.body so they remain screen-fixed and
-          unaffected by the canvas transform. */}
+        {/* PR 3: only the alignment-suggestion banner remains in this
+          overlay. The per-selection toolbar's width/color/delete
+          controls moved into the anchored `<NodeEditor>` (mounted
+          below alongside the selected node). The ShareDialog moved up
+          to App.tsx in PR 2. The file gets renamed to
+          `AlignmentSuggestionBanner.tsx` at the end of PR 3. */}
         {createPortal(
           <EditToolbarRemnant
             editMode={editMode}
             showEditButton={showEditButton}
             data={data}
-            setData={setDataAndNotify}
             straightenEdges={straightenEdges}
-            highlightedNodes={highlightedNodes}
-            setHighlightedNodes={setHighlightedNodes}
-            nodeWidth={nodeWidth}
-            setNodeWidth={setNodeWidth}
-            nodeColor={nodeColor}
-            setNodeColor={setNodeColor}
-            mutateDebounced={mutateDebounced}
-            commitMutation={commitMutation}
-            onDeleteNode={deleteNode}
-            nodePopup={nodePopup}
-            edgePopup={edgePopup}
-            camera={camera}
           />,
           document.body,
         )}
@@ -1743,23 +1656,80 @@ export function ToC({
           fontFamily={fontFamily}
         />
 
-        {nodePopup &&
-          createPortal(
-            <NodePopup
-              nodePopup={nodePopup}
-              setNodePopup={setNodePopup}
-              svgSize={svgSize}
-              editMode={editMode}
-              onUpdateNode={updateNode}
-              onDeleteNode={deleteNode}
-              fontFamily={fontFamily}
-              onClearSelection={() => setHighlightedNodes(new Set())}
-              viewportOffset={viewportOffset}
-              zoomScale={zoomScale}
-            />,
-            document.body,
-          )}
+        {/* Anchored NodeEditor — replaces NodePopup (modal) and the
+          per-selection toolbar. Single-click on a node opens it; it
+          stays anchored beside the first selected node across pan,
+          zoom, and DOM reflow via `useAnchorPosition`. */}
+        {editMode && highlightedNodes.size > 0 && (
+          <NodeEditorMount
+            highlightedNodes={highlightedNodes}
+            nodeRefs={nodeRefs}
+            data={data}
+            mutate={setDataAndNotify}
+            mutateDebounced={mutateDebounced}
+            commit={commitMutation}
+            camera={camera ?? { x: 0, y: 0, z: 1 }}
+            onRequestClose={() => setHighlightedNodes(new Set())}
+            fontFamily={fontFamily}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * `NodeEditorMount` — internal wrapper that picks the anchor element
+ * from `nodeRefs` based on the first selected node id. Lifting this
+ * out of the main render lets us keep the ref hand-off purely inside
+ * the editor render path and avoids re-deriving the anchor on every
+ * parent render.
+ */
+function NodeEditorMount({
+  highlightedNodes,
+  nodeRefs,
+  data,
+  mutate,
+  mutateDebounced,
+  commit,
+  camera,
+  onRequestClose,
+  fontFamily,
+}: {
+  highlightedNodes: Set<string>;
+  nodeRefs: { [key: string]: HTMLDivElement | null };
+  data: ToCData;
+  mutate: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  mutateDebounced: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  commit: (key?: string) => void;
+  camera: { x: number; y: number; z: number };
+  onRequestClose: () => void;
+  fontFamily?: string;
+}) {
+  const selectedIds = Array.from(highlightedNodes);
+  // Sort the array so the anchor is stable across additions to the
+  // selection (e.g. Cmd+click extending the set). Without sort the
+  // first-id flips depending on Set iteration order.
+  const sorted = [...selectedIds].sort();
+  const anchorId = sorted[0];
+  const anchorRef = useRef<HTMLElement | null>(null);
+  // Keep the ref pointed at the anchor's DOM node. This re-runs every
+  // render but is cheap (a single object property assignment).
+  anchorRef.current = anchorId ? (nodeRefs[anchorId] ?? null) : null;
+
+  if (!anchorRef.current) return null;
+
+  return (
+    <NodeEditor
+      selectedNodeIds={selectedIds}
+      data={data}
+      mutate={mutate}
+      mutateDebounced={mutateDebounced}
+      commit={commit}
+      anchorRef={anchorRef}
+      camera={camera}
+      onRequestClose={onRequestClose}
+      fontFamily={fontFamily}
+    />
   );
 }

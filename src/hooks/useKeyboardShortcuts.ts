@@ -11,9 +11,10 @@ interface UseKeyboardShortcutsProps {
   nodeRefs: { [key: string]: HTMLDivElement | null };
   setNodeWidth: (width: number) => void;
   setNodeColor: (color: string) => void;
-  setNodePopup: React.Dispatch<
-    React.SetStateAction<{ id: string; title: string; text: string } | null>
-  >;
+  // PR 3: `setNodePopup` was used by `clearSelections` to dismiss the
+  // pencil-icon NodePopup modal. The modal is gone; the anchored
+  // NodeEditor self-dismisses when selection clears, so the prop is no
+  // longer needed.
   moveNodeVertically: (nodeId: string, direction: 'up' | 'down') => void;
   nodeHeights: { [key: string]: number };
 }
@@ -27,7 +28,6 @@ export function useKeyboardShortcuts({
   nodeRefs,
   setNodeWidth,
   setNodeColor,
-  setNodePopup,
   moveNodeVertically,
   nodeHeights,
 }: UseKeyboardShortcutsProps) {
@@ -87,8 +87,9 @@ export function useKeyboardShortcuts({
     setHighlightedNodes(new Set());
     setNodeWidth(192);
     setNodeColor('#ffffff');
-    setNodePopup(null);
-  }, [setHighlightedNodes, setNodeWidth, setNodeColor, setNodePopup]);
+    // PR 3: the anchored NodeEditor watches `highlightedNodes`, so it
+    // dismisses automatically when we clear the set.
+  }, [setHighlightedNodes, setNodeWidth, setNodeColor]);
 
   // Navigate to next/previous node with Tab
   const navigateNodes = useCallback(

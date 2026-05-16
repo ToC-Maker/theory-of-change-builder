@@ -32,6 +32,13 @@ const baseNode: Node = {
   connections: [],
 };
 
+// Render-count spy: the mount-only `updateNodeRef` callback. We verify
+// the memo bail-out by re-rendering the parent with the same props
+// reference and checking `updateNodeRef` is called at most once.
+//
+// PR 3: dropped `setNodePopup`, `isEditingTitle`, `setEditingNodeId`,
+// and `updateNodeTitle` from the prop shape — those concerns moved to
+// the anchored `<NodeEditor>`.
 const baseProps = (
   overrides: Partial<ComponentProps<typeof NodeComponent>> = {},
 ): ComponentProps<typeof NodeComponent> => ({
@@ -49,10 +56,6 @@ const baseProps = (
   editMode: true,
   textSize: 1,
   fontFamily: "'Ubuntu', sans-serif",
-  setNodePopup: vi.fn(),
-  isEditingTitle: false,
-  setEditingNodeId: vi.fn(),
-  updateNodeTitle: vi.fn(),
   ...overrides,
 });
 

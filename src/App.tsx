@@ -1728,7 +1728,6 @@ function ToCViewer() {
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
-              viewportOffset={viewportOffset}
             />
           </div>
         </div>
