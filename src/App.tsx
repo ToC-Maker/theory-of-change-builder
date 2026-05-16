@@ -650,8 +650,8 @@ function ToCViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [authTokenReady, setAuthTokenReady] = useState(false);
   // PR 2 ShareDialog open-state lives at the App level so TopBar's Share
-  // button can flip it directly (no CustomEvent bridge through the
-  // EditToolbarRemnant — that block went away with this PR).
+  // button can flip it directly (no CustomEvent bridge through the old
+  // EditToolbar — its share-dialog block went away with PR 2).
   const [shareOpen, setShareOpen] = useState(false);
   // PR 2 §769: notification badge for the Share button. Polled at the
   // App level so it stays visible even when the dialog is closed.
@@ -1660,9 +1660,9 @@ function ToCViewer() {
         isOwner={isOwner}
         currentChartId={currentChartId}
         onDeleteChart={handleDeleteChart}
-        // Share button opens the new PR 2 ShareDialog mounted below.
-        // Replaces the CustomEvent bridge to the legacy
-        // EditToolbarRemnant.ShareDialogShim, which has been deleted.
+        // Share button opens the PR 2 ShareDialog mounted below.
+        // Replaces the CustomEvent bridge to the legacy share-dialog
+        // shim inside the old EditToolbar, deleted in PR 2.
         onShareClick={() => setShareOpen(true)}
         pendingRequestCount={pendingRequestCount}
         pendingRequestCountStale={pendingRequestCountStale}
