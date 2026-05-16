@@ -37,7 +37,6 @@ interface ConnectionsComponentProps {
   hoveredConnections: Set<string>;
   curvature: number;
   editMode: boolean;
-  layoutMode: boolean;
   sectionWidths: number[];
   columnPadding: number;
   sectionPadding: number;
@@ -72,7 +71,6 @@ export function ConnectionsComponent({
   hoveredConnections,
   curvature,
   editMode,
-  layoutMode,
   sectionWidths,
   columnPadding,
   sectionPadding,
@@ -196,7 +194,6 @@ export function ConnectionsComponent({
     data.sections,
     data.title,
     editMode,
-    layoutMode,
     nodeHeights,
     columnPadding,
     sectionPadding,
