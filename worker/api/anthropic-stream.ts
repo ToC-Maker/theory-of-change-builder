@@ -1115,6 +1115,86 @@ export function firePerUpdateCommit(
   );
 }
 
+/**
+ * Fire a final `applyDeltaCommit` on `request.signal.abort` (user clicked
+ * Stop, browser closed, network drop). Mirrors `firePerUpdateCommit`'s
+ * shape — same `PerUpdateCommitDeps` slice, same C2 closure-snapshot
+ * discipline, same idempotent no-op surface — with two differences:
+ *   - The diagnostic carries `error_name: 'DiagnosticAbortCommit'` so
+ *     observability can bucket abort-driven commits separately from
+ *     per-update poll/message_start/message_delta commits. The plan's
+ *     headline scenario ("Stop button mid-stream → user_api_usage still
+ *     reflects the running cost") is what `DiagnosticAbortCommit` rows
+ *     attest to in production logs.
+ *   - Caller MUST gate on `snap > 0n` BEFORE invoking; the helper
+ *     additionally guards on `loggingMessageId` (same as
+ *     `firePerUpdateCommit`). Both bail before scheduling so abort
+ *     events outside the meaningful window (pre-message_start abort,
+ *     anonymous-without-message-id) don't spam diagnostics with
+ *     guaranteed no-op IIFEs.
+ *
+ * Why this exists separately from `firePerUpdateCommit`: scheduling
+ * ordering matters. `firePerUpdateCommit` fires when the SSE stream
+ * itself emits a `running_cost` frame — bounded by the stream's
+ * cadence. `fireAbortCommit` fires at the moment of abort, which
+ * carries a different lifecycle assumption: the reconcile IIFE may not
+ * run for many ms after this point because it awaits `tracked.done`.
+ * The abort-commit IIFE skips the await and goes straight to
+ * `applyDeltaCommit`, capturing the running cost even if the reconcile
+ * IIFE later dies before its commit (Cloudflare's `ctx.waitUntil`
+ * budget kill is the canonical failure mode this guards against).
+ *
+ * Idempotency under overlap with the reconcile IIFE: the underlying
+ * `applyDeltaCommit` is idempotent through `GREATEST(cost_settled, snap)`
+ * + delta-clamp-to-zero. Whichever IIFE runs second sees baseline ≥ snap
+ * and contributes a delta of 0 — `user_api_usage` lands at the larger of
+ * the two snap values exactly once (verified in the test "idempotency
+ * with reconcile" in `abort-commit.test.ts`).
+ */
+export function fireAbortCommit(deps: PerUpdateCommitDeps, snap: bigint): void {
+  // Early bail: no row to commit against. Don't schedule a guaranteed-
+  // no-op IIFE that would still write a diagnostic.
+  if (!deps.loggingMessageId) return;
+  // Early bail: no usage observed yet. Abort fired before any
+  // message_start frame; nothing to commit. Without this guard the
+  // helper would still write a `DiagnosticAbortCommit` row with
+  // applied=false — pure noise on every aborted pre-stream request.
+  if (snap <= 0n) return;
+  const messageId = deps.loggingMessageId;
+  deps.ctx.waitUntil(
+    (async () => {
+      try {
+        const out = await applyDeltaCommit(
+          deps.sql,
+          messageId,
+          deps.actorId,
+          deps.projectedMicroUsd,
+          snap,
+        );
+        await writeDiagnostic(deps.sql, {
+          error_name: 'DiagnosticAbortCommit',
+          error_message: `abort commit: ${snap.toString()} µUSD (applied=${out.applied}, delta=${out.delta})`,
+          user_id: deps.actorId,
+          chart_id: deps.chartId ?? null,
+          request_metadata: {
+            logging_message_id: messageId,
+            cost_micro_usd: snap.toString(),
+            projected_micro_usd: deps.projectedMicroUsd.toString(),
+            new_settled_micro_usd: out.new_settled.toString(),
+            delta_micro_usd: out.delta.toString(),
+            applied: out.applied,
+          },
+          deployment_host: deps.deploymentHost,
+          fired_at_ms: Date.now(),
+          start_at_ms: deps.lifecycle.handlerStartedAtMs,
+        });
+      } catch (e) {
+        console.error('[abort-commit] applyDeltaCommit failed:', e);
+      }
+    })(),
+  );
+}
+
 type SseTeeContext = {
   accumulator: UsageAccumulator;
   model: string;
@@ -3110,13 +3190,45 @@ export async function handler(
 
   // Lifecycle: capture when our abort fires (separate from the existing
   // client_disconnect log to disambiguate "client dropped" vs "we aborted
-  // for another reason like kill switch").
+  // for another reason like kill switch"). Also fires the abort-commit
+  // (Task 9): snapshot the live accumulator BEFORE the controller closes;
+  // the IIFE may not run for many ms after this point and the accumulator
+  // is mutable. Pre-scheduling a commit here gives the running cost its
+  // own slot in the ctx.waitUntil queue, so it lands even if the
+  // post-stream reconcile IIFE later dies before its commit (Cloudflare's
+  // waitUntil budget kill is the canonical failure mode this guards
+  // against). Idempotent under overlap with the reconcile IIFE via
+  // applyDeltaCommit's GREATEST + delta-clamp semantics.
   abortController.signal.addEventListener('abort', () => {
-    if (teeCtx.lifecycle.abortFiredAtMs === null) {
-      teeCtx.lifecycle.abortFiredAtMs = Date.now();
-      const elapsed = teeCtx.lifecycle.abortFiredAtMs - teeCtx.lifecycle.handlerStartedAtMs;
-      console.log(`[lifecycle] abort_fired t=${elapsed}ms`);
+    // Once-only guard: AbortController.abort() is itself idempotent on
+    // re-call, but defensive — multiple simultaneous abort sources (kill
+    // switch + client disconnect + handler-internal abort) would
+    // otherwise schedule duplicate IIFEs. The commit path is idempotent
+    // (GREATEST), but the diagnostic noise is not.
+    if (teeCtx.lifecycle.abortFiredAtMs !== null) return;
+    teeCtx.lifecycle.abortFiredAtMs = Date.now();
+    const elapsed = teeCtx.lifecycle.abortFiredAtMs - teeCtx.lifecycle.handlerStartedAtMs;
+    console.log(`[lifecycle] abort_fired t=${elapsed}ms`);
+
+    // Snapshot the live accumulator BEFORE the controller closes; the
+    // IIFE may not run for many ms after this point and the accumulator
+    // is mutable. `{ ...teeCtx.accumulator }` shallow-copies the
+    // primitive fields (all numeric counters); subsequent parseFrame
+    // calls mutating teeCtx.accumulator cannot leak into the IIFE.
+    const snapshot = { ...teeCtx.accumulator };
+    let snap: bigint;
+    try {
+      snap = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(snapshot));
+    } catch (e) {
+      // Cost-table miss for the model (e.g. unknown variant). The Task 7
+      // poll path also bails on this — a model whose cost we can't compute
+      // can't have its delta-commit either. Surface to wrangler tail and
+      // skip the commit; reconcile will fail symmetrically and the
+      // outer revert path kicks in.
+      console.warn('[abort-commit] cost compute failed, skipping abort commit:', e);
+      return;
     }
+    fireAbortCommit(teeCtx, snap);
   });
 
   // Step 10: post-stream reconcile. ctx.waitUntil extends the Worker lifetime
