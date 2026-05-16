@@ -285,7 +285,7 @@ function ToCViewerOnly() {
   useEffect(() => {
     if (!chartId) return;
 
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setTimeout>;
     let isTabVisible = true;
     let lastActivity = Date.now();
     let syncInterval = 10000; // Start with 10 seconds
@@ -791,7 +791,7 @@ function ToCViewer() {
   );
 
   // Debounced undo history to group rapid successive operations
-  const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const saveToHistory = useCallback((currentData: ToCData) => {
     if (!currentData) return;
@@ -912,7 +912,7 @@ function ToCViewer() {
   };
 
   // Debounced save to database
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingChangesRef = useRef<ToCData | null>(null);
   const dataRef = useRef<ToCData | null>(data);
   useEffect(() => {
@@ -1384,7 +1384,7 @@ function ToCViewer() {
   useEffect(() => {
     if (!editToken || !authTokenReady) return;
 
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setTimeout>;
     let lastSyncedData: string | null = null;
     let isTabVisible = true;
     let lastActivity = Date.now();
