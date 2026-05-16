@@ -1506,6 +1506,45 @@ export function ToC({
             fontFamily={fontFamily}
           />
         )}
+
+        {/* PR 4: drop-preview ghost. Renders while a pointer-drag is in
+            flight; sits in the same transform stack as the canvas so it
+            translates with pan/zoom. The original node renders at half
+            opacity via NodeComponent's `isDragging` prop above (set
+            from `dragState?.nodeId === node.id`).
+
+            The ghost is intentionally generic — a translucent rounded
+            rectangle matching the dragged node's footprint, not a
+            full clone — so PR 5's connection-handle ghost and PR 7's
+            waypoint ghost can plug into the same render slot without
+            re-architecting node-specific markup. */}
+        {dragState && graphContainerRef.current
+          ? (() => {
+              // Translate ghostPos (viewport coords) to container-local
+              // so the absolute-positioned ghost lines up with the
+              // canvas geometry. The cursor offset within the node is
+              // preserved (drag handle stays under the finger / mouse).
+              const containerRect = graphContainerRef.current.getBoundingClientRect();
+              const localX = (dragState.ghostPos.x - containerRect.left) / zoomScale;
+              const localY = (dragState.ghostPos.y - containerRect.top) / zoomScale;
+              const offsetXLocal = dragState.pointerOffset.x / zoomScale;
+              const offsetYLocal = dragState.pointerOffset.y / zoomScale;
+              return (
+                <div
+                  className="pointer-events-none absolute z-[60]"
+                  style={{
+                    left: `${localX - offsetXLocal}px`,
+                    top: `${localY - offsetYLocal}px`,
+                    width: `${dragState.nodeSize.width}px`,
+                    height: `${dragState.nodeSize.height}px`,
+                  }}
+                  aria-hidden
+                >
+                  <div className="rounded-xl bg-indigo-100 ring-2 ring-indigo-400 opacity-70 w-full h-full shadow-lg" />
+                </div>
+              );
+            })()
+          : null}
       </div>
     </div>
   );
