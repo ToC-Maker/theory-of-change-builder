@@ -5,6 +5,7 @@ import { decryptByokKey } from '../_shared/byok-crypto';
 import { isUserOptedOut } from '../_shared/logging-optout';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
 import { writeDiagnostic } from '../_shared/diagnostics';
+import { applyDeltaCommit } from '../_shared/cost-commit';
 import { toBigInt } from '../_shared/bigint';
 import {
   resolveAnonActor,
@@ -1048,6 +1049,23 @@ type SseTeeContext = {
   /** Actor id (auth0 sub or anon-${uuid}). Used for diagnostic rows fired from inside parseFrame. */
   actorId: string;
   /**
+   * Pre-stream input-only cost reservation in µUSD, computed by `reserveCost`
+   * before the upstream fetch. Passed as the `baseline` parameter to every
+   * `applyDeltaCommit` call so the helper knows the lower bound below which
+   * a delta of zero credits to `user_api_usage` (the projected reservation
+   * has already been debited at request entry). Carrying it on the context
+   * lets parseFrame / pollCostEstimate emit per-update delta-commits without
+   * a separate plumbing path from the handler.
+   */
+  projectedMicroUsd: bigint;
+  /**
+   * Worker environment bindings. Plumbed through for downstream writers
+   * that need access to env vars / secrets (Task 7 per-update writes may
+   * read flags from here). The pre-stream branch holds it in handler-local
+   * scope; carrying it on the context unifies the access path.
+   */
+  env: Env;
+  /**
    * ExecutionContext, plumbed through so parseFrame can ctx.waitUntil()
    * its own DB writes (e.g. the message_start floor) without the outer
    * handler having to schedule them.
@@ -2078,11 +2096,23 @@ function createCostTrackingStream(
         // Lock in a server-known cost floor on message_start. This is the
         // first time we see Anthropic's authoritative input_tokens +
         // cache_read/cache_creation breakdown. Persisting it to
-        // logging_messages.cost_micro_usd here means a subsequent reconcile
-        // bail (waitUntil budget kill, tracked.done timeout, etc.) can't
-        // leave the per-chart pill at 0 — we already have the input cost
-        // recorded. UPDATE uses GREATEST so it's a no-op if the row was
-        // already written by an earlier pass.
+        // logging_messages here means a subsequent reconcile bail
+        // (waitUntil budget kill, tracked.done timeout, etc.) can't leave
+        // the per-chart pill at 0 — we already have the input cost recorded.
+        //
+        // Calls `applyDeltaCommit` instead of a bare UPDATE so the
+        // user_api_usage delta also lands: the message_start floor is
+        // Anthropic-authoritative input cost and exceeds the count_tokens
+        // projection on cache-creation paths (the projection priced
+        // everything as cache-read at 0.1×). The delta over the
+        // projected reservation needs to flow to the user cap counter to
+        // keep BYOK / lifetime accounting accurate. GREATEST + delta-
+        // clamped-to-zero preserves the prior monotone-increase semantics;
+        // late retries no-op via `WHERE reconciled_at IS NULL`.
+        //
+        // Overlaps intentionally with the Task 7 running_cost emit on
+        // message_start (both call `applyDeltaCommit`); the overlap is safe
+        // because both paths are idempotent.
         //
         // Fire-and-forget via teeCtx.ctx.waitUntil so the stream isn't
         // blocked on Postgres; the diagnostic insert doubles as observability
@@ -2105,13 +2135,15 @@ function createCostTrackingStream(
                 }),
               );
               try {
-                await teeCtx.sql`
-                  UPDATE logging_messages
-                  SET cost_micro_usd = GREATEST(cost_micro_usd, ${floorMicro.toString()}::bigint)
-                  WHERE message_id = ${teeCtx.loggingMessageId}
-                `;
+                await applyDeltaCommit(
+                  teeCtx.sql,
+                  teeCtx.loggingMessageId,
+                  teeCtx.actorId,
+                  teeCtx.projectedMicroUsd,
+                  floorMicro,
+                );
               } catch (uerr) {
-                console.error('message_start floor UPDATE failed:', uerr);
+                console.error('message_start floor applyDeltaCommit failed:', uerr);
               }
               await writeDiagnostic(teeCtx.sql, {
                 error_name: 'DiagnosticMessageStartFloor',
@@ -2911,6 +2943,8 @@ export async function handler(
     polling,
     loggingMessageId,
     actorId,
+    projectedMicroUsd: projected,
+    env,
     ctx,
     deploymentHost: requestUrl.hostname,
     streamingContent: newStreamingAssistantContent(),
