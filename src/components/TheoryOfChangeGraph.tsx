@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent, EdgePopupState } from './ConnectionsComponent';
-import { EditToolbar } from './EditToolbar';
+import { EditToolbarRemnant } from './EditToolbarRemnant';
 import { Legend } from './Legend';
 import { NodePopup } from './NodePopup';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
@@ -12,21 +12,19 @@ import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
 import { useGraphMutation } from '../hooks/useGraphMutation';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
+// PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
+// so the old prop drilling for those (`undoHistory`, `redoHistory`,
+// `handleUndo`, `handleRedo`, `isSaving`, `lastSyncTime`,
+// `isManualSyncing`, `handleManualSync`, `getTimeAgo`) is no longer
+// needed by `ToC`. The remaining props are the canvas-layer hooks
+// (camera, viewport, container-size callbacks) plus `currentEditToken`
+// which the EditToolbarRemnant still needs for the share dropdown.
 export function ToC({
   data: initialData,
   onSizeChange,
   onDataChange,
   showEditButton = true,
-  undoHistory = [],
-  redoHistory = [],
-  handleUndo = () => {},
-  handleRedo = () => {},
-  isSaving = false,
   currentEditToken = null,
-  lastSyncTime = null,
-  isManualSyncing = false,
-  handleManualSync = () => {},
-  getTimeAgo = () => '',
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
@@ -37,16 +35,7 @@ export function ToC({
   onSizeChange?: (size: { width: number; height: number }) => void;
   onDataChange?: (data: ToCData) => void;
   showEditButton?: boolean;
-  undoHistory?: ToCData[];
-  redoHistory?: ToCData[];
-  handleUndo?: () => void;
-  handleRedo?: () => void;
-  isSaving?: boolean;
   currentEditToken?: string | null;
-  lastSyncTime?: Date | null;
-  isManualSyncing?: boolean;
-  handleManualSync?: () => void;
-  getTimeAgo?: (date: Date) => string;
   zoomScale?: number;
   camera?: { x: number; y: number; z: number };
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void;
@@ -104,8 +93,11 @@ export function ToC({
     yPosition?: number;
     isNewColumn?: boolean;
   } | null>(null);
-  const [editMode, setEditMode] = useState(showEditButton);
-  const [layoutMode, setLayoutMode] = useState(false);
+  // editMode/layoutMode setters dropped along with the inline
+  // EditToolbar mode toggle — the canvas still reads the state but no
+  // longer needs to flip it from inside.
+  const [editMode] = useState(showEditButton);
+  const [layoutMode] = useState(false);
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5);
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1); // 0.5 to 2.0 scale
   const [fontFamily, setFontFamily] = useState(initialData.fontFamily ?? "'Ubuntu', sans-serif"); // Default font family
@@ -1578,81 +1570,32 @@ export function ToC({
           zoomScale={zoomScale}
         />
 
+        {/* PR 1 task 1.7: EditToolbar.tsx is gone. The TopBar is now
+          mounted at App-level (parallel to ChatInterface); the three
+          surviving overlays (share dialog, per-selection bar,
+          alignment banner) live in EditToolbarRemnant. We portal the
+          remnant out to document.body so it remains screen-fixed and
+          unaffected by the canvas transform. */}
         {createPortal(
-          <EditToolbar
+          <EditToolbarRemnant
             editMode={editMode}
-            setEditMode={setEditMode}
             showEditButton={showEditButton}
+            data={data}
+            setData={setDataAndNotify}
+            straightenEdges={straightenEdges}
             highlightedNodes={highlightedNodes}
             setHighlightedNodes={setHighlightedNodes}
-            layoutMode={layoutMode}
-            setLayoutMode={setLayoutMode}
-            curvature={curvature}
-            setCurvature={(value) => {
-              const next = typeof value === 'function' ? value(curvature) : value;
-              setCurvature(next);
-              // Slider input (60Hz writes per drag). Buffer under a
-              // per-setting key; the hook's 200ms idle timer flushes a
-              // single onDataChange per gesture (L3 fix). FontFamily is
-              // discrete but reusing the same path is fine — same key
-              // each call collapses to the latest value.
-              mutateDebounced((prev) => ({ ...prev, curvature: next }), 'setting-curvature');
-            }}
-            textSize={textSize}
-            setTextSize={(value) => {
-              const next = typeof value === 'function' ? value(textSize) : value;
-              setTextSize(next);
-              mutateDebounced((prev) => ({ ...prev, textSize: next }), 'setting-textSize');
-            }}
-            fontFamily={fontFamily}
-            setFontFamily={(value) => {
-              const next = typeof value === 'function' ? value(fontFamily) : value;
-              setFontFamily(next);
-              // Discrete picker; commit immediately so the parent isn't
-              // waiting 200ms for the change to reach localStorage.
-              setDataAndNotify((prev) => ({ ...prev, fontFamily: next }));
-            }}
             nodeWidth={nodeWidth}
             setNodeWidth={setNodeWidth}
             nodeColor={nodeColor}
             setNodeColor={setNodeColor}
-            columnPadding={columnPadding}
-            setColumnPadding={(value) => {
-              const next = typeof value === 'function' ? value(columnPadding) : value;
-              setColumnPadding(next);
-              mutateDebounced(
-                (prev) => ({ ...prev, columnPadding: next }),
-                'setting-columnPadding',
-              );
-            }}
-            sectionPadding={sectionPadding}
-            setSectionPadding={(value) => {
-              const next = typeof value === 'function' ? value(sectionPadding) : value;
-              setSectionPadding(next);
-              mutateDebounced(
-                (prev) => ({ ...prev, sectionPadding: next }),
-                'setting-sectionPadding',
-              );
-            }}
-            straightenEdges={straightenEdges}
-            setData={setDataAndNotify}
             mutateDebounced={mutateDebounced}
             commitMutation={commitMutation}
-            undoHistory={undoHistory}
-            redoHistory={redoHistory}
-            handleUndo={handleUndo}
-            handleRedo={handleRedo}
-            isSaving={isSaving}
-            currentEditToken={currentEditToken}
-            lastSyncTime={lastSyncTime}
-            isManualSyncing={isManualSyncing}
-            handleManualSync={handleManualSync}
-            getTimeAgo={getTimeAgo}
-            data={data}
             onDeleteNode={deleteNode}
             nodePopup={nodePopup}
             edgePopup={edgePopup}
             camera={camera}
+            currentEditToken={currentEditToken}
             onChartCreated={onChartCreated}
             containerSize={svgSize}
           />,
