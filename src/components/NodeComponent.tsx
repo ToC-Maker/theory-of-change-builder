@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, memo } from 'react';
 import { Node } from '../types';
 import { getContrastTextColor } from '../utils';
 
@@ -26,7 +26,17 @@ interface NodeComponentProps {
   updateNodeTitle: (nodeId: string, title: string) => void;
 }
 
-export function NodeComponent({
+// NodeComponentInner is the actual render. The default export is wrapped
+// in `React.memo` with DEFAULT shallow equality (Important fix in plan
+// §0.4 — no custom equality function, harder to silently regress).
+// Parent (TheoryOfChangeGraph) MUST pass stable function references for
+// all callback props (`toggleHighlight`, `onDragStart`, `onDragEnd`,
+// `updateNodeRef`, `setHoveredNode`, `setNodePopup`, `setEditingNodeId`,
+// `updateNodeTitle`) via `useCallback`, otherwise the memo bail-out fails
+// and every parent render re-renders every node. The
+// `NodeComponent.memo.test.tsx` regression test pins this for future
+// contributors.
+function NodeComponentInner({
   node,
   updateNodeRef,
   isHighlighted,
@@ -244,3 +254,6 @@ export function NodeComponent({
     </div>
   );
 }
+
+export const NodeComponent = memo(NodeComponentInner);
+NodeComponent.displayName = 'NodeComponent';

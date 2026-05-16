@@ -316,85 +316,115 @@ export function ToC({
     [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId, data.sections],
   );
 
-  const toggleHighlight = (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
-    setHighlightedNodes((prev) => {
-      if (selectionMode === 'multi') {
-        // Multi-select mode (Ctrl held): toggle individual nodes
-        const newSet = new Set(prev);
-        if (newSet.has(id)) {
-          newSet.delete(id);
-        } else {
-          newSet.add(id);
-        }
-
-        // When adding a node to selection, snap width slider and color to that node's properties
-        if (newSet.size === 1 && newSet.has(id)) {
-          // Only snap if this is the first/only selected node
-          const nodeLocation = findNodeLocation(id);
-          if (nodeLocation) {
-            const node = nodeLocation.node;
-            const currentWidth = node.width || 192;
-            const currentColor = node.color || '#ffffff';
-            setNodeWidth(currentWidth);
-            setNodeColor(currentColor);
+  // findNodeLocation is hoisted above toggleHighlight so the useCallback
+  // dep array can reference it.
+  const findNodeLocation = useCallback(
+    (nodeId: string) => {
+      for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
+        for (
+          let columnIndex = 0;
+          columnIndex < data.sections[sectionIndex].columns.length;
+          columnIndex++
+        ) {
+          const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
+            (n) => n.id === nodeId,
+          );
+          if (node) {
+            return { sectionIndex, columnIndex, node };
           }
         }
-        return newSet;
-      } else if (selectionMode === 'column') {
-        // Column select mode (Shift held): select all nodes in the same column
-        const nodeLocation = findNodeLocation(id);
-        if (nodeLocation) {
-          const { sectionIndex, columnIndex } = nodeLocation;
-          const columnNodes = data.sections[sectionIndex].columns[columnIndex].nodes;
-          const columnNodeIds = columnNodes.map((node) => node.id);
-
-          // Check if all column nodes are already selected
-          const allColumnNodesSelected = columnNodeIds.every((nodeId) => prev.has(nodeId));
-
-          if (allColumnNodesSelected) {
-            // If all column nodes are selected, deselect them
-            const newSet = new Set(prev);
-            columnNodeIds.forEach((nodeId) => newSet.delete(nodeId));
-            return newSet;
-          } else {
-            // Select all nodes in the column (add to existing selection)
-            const newSet = new Set(prev);
-            columnNodeIds.forEach((nodeId) => newSet.add(nodeId));
-
-            // Snap to the clicked node's properties
-            const node = nodeLocation.node;
-            const currentWidth = node.width || 192;
-            const currentColor = node.color || '#ffffff';
-            setNodeWidth(currentWidth);
-            setNodeColor(currentColor);
-
-            return newSet;
-          }
-        }
-        return prev;
-      } else {
-        // Single select mode (default): clear existing selection and select only this node
-        const newSet = new Set<string>();
-        if (!prev.has(id) || prev.size > 1) {
-          // Either this node wasn't selected, or multiple nodes were selected
-          // In both cases, select only this node
-          newSet.add(id);
-
-          // Snap width slider and color to the selected node's properties
-          const nodeLocation = findNodeLocation(id);
-          if (nodeLocation) {
-            const node = nodeLocation.node;
-            const currentWidth = node.width || 192;
-            const currentColor = node.color || '#ffffff';
-            setNodeWidth(currentWidth);
-            setNodeColor(currentColor);
-          }
-        }
-        // If this node was the only selected node, deselect it (newSet remains empty)
-        return newSet;
       }
-    });
-  };
+      return null;
+    },
+    [data.sections],
+  );
+
+  // useCallback so React.memo(NodeComponent) can bail out on referentially-
+  // identical callbacks. Without this, every re-render of TheoryOfChangeGraph
+  // creates a new toggleHighlight reference, defeating the memo. See
+  // `NodeComponent.memo.test.tsx`.
+  const toggleHighlight = useCallback(
+    (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
+      setHighlightedNodes((prev) => {
+        if (selectionMode === 'multi') {
+          // Multi-select mode (Ctrl held): toggle individual nodes
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+            newSet.delete(id);
+          } else {
+            newSet.add(id);
+          }
+
+          // When adding a node to selection, snap width slider and color to that node's properties
+          if (newSet.size === 1 && newSet.has(id)) {
+            // Only snap if this is the first/only selected node
+            const nodeLocation = findNodeLocation(id);
+            if (nodeLocation) {
+              const node = nodeLocation.node;
+              const currentWidth = node.width || 192;
+              const currentColor = node.color || '#ffffff';
+              setNodeWidth(currentWidth);
+              setNodeColor(currentColor);
+            }
+          }
+          return newSet;
+        } else if (selectionMode === 'column') {
+          // Column select mode (Shift held): select all nodes in the same column
+          const nodeLocation = findNodeLocation(id);
+          if (nodeLocation) {
+            const { sectionIndex, columnIndex } = nodeLocation;
+            const columnNodes = data.sections[sectionIndex].columns[columnIndex].nodes;
+            const columnNodeIds = columnNodes.map((node) => node.id);
+
+            // Check if all column nodes are already selected
+            const allColumnNodesSelected = columnNodeIds.every((nodeId) => prev.has(nodeId));
+
+            if (allColumnNodesSelected) {
+              // If all column nodes are selected, deselect them
+              const newSet = new Set(prev);
+              columnNodeIds.forEach((nodeId) => newSet.delete(nodeId));
+              return newSet;
+            } else {
+              // Select all nodes in the column (add to existing selection)
+              const newSet = new Set(prev);
+              columnNodeIds.forEach((nodeId) => newSet.add(nodeId));
+
+              // Snap to the clicked node's properties
+              const node = nodeLocation.node;
+              const currentWidth = node.width || 192;
+              const currentColor = node.color || '#ffffff';
+              setNodeWidth(currentWidth);
+              setNodeColor(currentColor);
+
+              return newSet;
+            }
+          }
+          return prev;
+        } else {
+          // Single select mode (default): clear existing selection and select only this node
+          const newSet = new Set<string>();
+          if (!prev.has(id) || prev.size > 1) {
+            // Either this node wasn't selected, or multiple nodes were selected
+            // In both cases, select only this node
+            newSet.add(id);
+
+            // Snap width slider and color to the selected node's properties
+            const nodeLocation = findNodeLocation(id);
+            if (nodeLocation) {
+              const node = nodeLocation.node;
+              const currentWidth = node.width || 192;
+              const currentColor = node.color || '#ffffff';
+              setNodeWidth(currentWidth);
+              setNodeColor(currentColor);
+            }
+          }
+          // If this node was the only selected node, deselect it (newSet remains empty)
+          return newSet;
+        }
+      });
+    },
+    [data.sections, findNodeLocation, setNodeWidth, setNodeColor],
+  );
 
   const moveNodeVertically = useCallback(
     (nodeId: string, direction: 'up' | 'down') => {
@@ -505,58 +535,64 @@ export function ToC({
     });
   }, [editMode, setDataAndNotify, nodeHeights]);
 
-  const handleDragStart = (node: Node, event: React.DragEvent) => {
-    if (!editMode) {
-      event.preventDefault();
-      return;
-    }
+  // useCallback so React.memo(NodeComponent) can bail out on drag handler
+  // identity. Both setters are stable (useState dispatch); deps are
+  // editMode + zoomScale + nodeRefs (mutates as nodes mount/unmount).
+  const handleDragStart = useCallback(
+    (node: Node, event: React.DragEvent) => {
+      if (!editMode) {
+        event.preventDefault();
+        return;
+      }
 
-    setDraggedNode(node);
+      setDraggedNode(node);
 
-    // Calculate the offset from where the user clicked to the top of the node
-    const nodeElement = nodeRefs[node.id];
-    if (nodeElement) {
-      const rect = nodeElement.getBoundingClientRect();
-      const offsetX = event.clientX - rect.left;
-      const offsetY = event.clientY - rect.top;
-      setDragOffset({ x: offsetX, y: offsetY });
+      // Calculate the offset from where the user clicked to the top of the node
+      const nodeElement = nodeRefs[node.id];
+      if (nodeElement) {
+        const rect = nodeElement.getBoundingClientRect();
+        const offsetX = event.clientX - rect.left;
+        const offsetY = event.clientY - rect.top;
+        setDragOffset({ x: offsetX, y: offsetY });
 
-      // Create a wrapper div to apply scale without affecting the drag image capture
-      const wrapper = document.createElement('div');
-      wrapper.style.position = 'fixed';
-      wrapper.style.top = '-9999px';
-      wrapper.style.left = '-9999px';
-      wrapper.style.width = `${nodeElement.offsetWidth * zoomScale}px`;
-      wrapper.style.height = `${nodeElement.offsetHeight * zoomScale}px`;
-      wrapper.style.pointerEvents = 'none';
+        // Create a wrapper div to apply scale without affecting the drag image capture
+        const wrapper = document.createElement('div');
+        wrapper.style.position = 'fixed';
+        wrapper.style.top = '-9999px';
+        wrapper.style.left = '-9999px';
+        wrapper.style.width = `${nodeElement.offsetWidth * zoomScale}px`;
+        wrapper.style.height = `${nodeElement.offsetHeight * zoomScale}px`;
+        wrapper.style.pointerEvents = 'none';
 
-      const dragImage = nodeElement.cloneNode(true) as HTMLElement;
-      dragImage.style.width = `${nodeElement.offsetWidth}px`;
-      dragImage.style.height = `${nodeElement.offsetHeight}px`;
-      dragImage.style.transform = `scale(${zoomScale})`;
-      dragImage.style.transformOrigin = '0 0';
-      dragImage.style.opacity = '0.8';
+        const dragImage = nodeElement.cloneNode(true) as HTMLElement;
+        dragImage.style.width = `${nodeElement.offsetWidth}px`;
+        dragImage.style.height = `${nodeElement.offsetHeight}px`;
+        dragImage.style.transform = `scale(${zoomScale})`;
+        dragImage.style.transformOrigin = '0 0';
+        dragImage.style.opacity = '0.8';
 
-      wrapper.appendChild(dragImage);
-      document.body.appendChild(wrapper);
+        wrapper.appendChild(dragImage);
+        document.body.appendChild(wrapper);
 
-      // Set the drag image with scaled offset
-      event.dataTransfer.setDragImage(wrapper, offsetX, offsetY);
+        // Set the drag image with scaled offset
+        event.dataTransfer.setDragImage(wrapper, offsetX, offsetY);
 
-      // Clean up after drag starts
-      requestAnimationFrame(() => {
-        if (wrapper.parentNode) {
-          document.body.removeChild(wrapper);
-        }
-      });
-    }
-  };
+        // Clean up after drag starts
+        requestAnimationFrame(() => {
+          if (wrapper.parentNode) {
+            document.body.removeChild(wrapper);
+          }
+        });
+      }
+    },
+    [editMode, nodeRefs, zoomScale],
+  );
 
-  const handleDragEnd = () => {
+  const handleDragEnd = useCallback(() => {
     setDraggedNode(null);
     setDragOffset(null);
     setDragOverLocation(null);
-  };
+  }, []);
 
   const handleDragOver = (
     sectionIndex: number,
@@ -566,27 +602,6 @@ export function ToC({
   ) => {
     setDragOverLocation({ sectionIndex, columnIndex, isNewColumn, yPosition });
   };
-
-  const findNodeLocation = useCallback(
-    (nodeId: string) => {
-      for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
-        for (
-          let columnIndex = 0;
-          columnIndex < data.sections[sectionIndex].columns.length;
-          columnIndex++
-        ) {
-          const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
-            (n) => n.id === nodeId,
-          );
-          if (node) {
-            return { sectionIndex, columnIndex, node };
-          }
-        }
-      }
-      return null;
-    },
-    [data.sections],
-  );
 
   // Section widths + (future) column-rect snapshot come from useGraphLayout.
   // The hook extracts `sectionWidths` (formerly inlined at this position)

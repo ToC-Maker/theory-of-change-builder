@@ -15,7 +15,7 @@
 // React logs the error to console.error by default during the boundary
 // flow; tests suppress that to keep output readable.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import { ErrorBoundary } from '../../src/components/ErrorBoundary';
 import { loggingService } from '../../src/services/loggingService';
 
@@ -28,6 +28,7 @@ beforeEach(() => {
   consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 afterEach(() => {
+  cleanup();
   consoleErrorSpy.mockRestore();
   vi.restoreAllMocks();
 });
