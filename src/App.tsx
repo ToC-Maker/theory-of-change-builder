@@ -20,6 +20,7 @@ import {
 import AuthButton from './components/AuthButton';
 import { TopBar } from './components/top-bar/TopBar';
 import type { SaveError } from './components/top-bar/SaveIndicator';
+import { ShareDialog } from './components/share/ShareDialog';
 import { getFreshIdToken } from './utils/auth';
 import { isInputFocused } from './utils/isInputFocused';
 import { clearChartSpend } from './utils/byokSpend';
@@ -648,6 +649,10 @@ function ToCViewer() {
   const [isOwner, setIsOwner] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [authTokenReady, setAuthTokenReady] = useState(false);
+  // PR 2 ShareDialog open-state lives at the App level so TopBar's Share
+  // button can flip it directly (no CustomEvent bridge through the
+  // EditToolbarRemnant — that block went away with this PR).
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Calculate viewport offset based on sidebar state
   const viewportOffset = useMemo(
@@ -1558,6 +1563,9 @@ function ToCViewer() {
 
   return (
     <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0">
+      {/* TopBar carries the Share button (right cluster); PR 2's
+        ShareDialog mounts here at the App level and is opened via
+        TopBar's `onShareClick`. */}
       <TopBar
         editMode={true}
         showEditButton={true}
@@ -1585,11 +1593,20 @@ function ToCViewer() {
         isOwner={isOwner}
         currentChartId={currentChartId}
         onDeleteChart={handleDeleteChart}
-        // Share button: relays to <ShareDialogShim> inside
-        // <EditToolbarRemnant> via a CustomEvent. PR 2's redesigned
-        // ShareDialog will replace this bridge with a direct prop pair.
-        onShareClick={() => window.dispatchEvent(new CustomEvent('toc:open-share'))}
+        // Share button opens the new PR 2 ShareDialog mounted below.
+        // Replaces the CustomEvent bridge to the legacy
+        // EditToolbarRemnant.ShareDialogShim, which has been deleted.
+        onShareClick={() => setShareOpen(true)}
         profileSlot={<AuthButton onLoggingEnabled={handleLoggingEnabled} />}
+      />
+
+      <ShareDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        data={data}
+        currentEditToken={currentEditToken}
+        containerSize={containerSize}
+        onChartCreated={handleChartCreated}
       />
 
       {/* Left Sidebar - AI Assistant */}
@@ -1639,11 +1656,9 @@ function ToCViewer() {
               data={data}
               onSizeChange={setContainerSize}
               onDataChange={handleDataChange}
-              currentEditToken={currentEditToken}
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
-              onChartCreated={handleChartCreated}
               viewportOffset={viewportOffset}
             />
           </div>
