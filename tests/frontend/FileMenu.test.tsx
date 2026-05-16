@@ -93,11 +93,9 @@ describe('FileMenu', () => {
     expect(screen.getByText(/delete chart/i)).toBeInTheDocument();
   });
 
-  it('calls onDeleteChart with the chart ID when Delete is confirmed', async () => {
+  it('calls onDeleteChart with the chart ID when Delete is confirmed via ConfirmModal', async () => {
     const user = userEvent.setup();
     const onDelete = vi.fn();
-    // Auto-confirm.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderMenu({
       isAuthenticated: true,
       isOwner: true,
@@ -107,15 +105,18 @@ describe('FileMenu', () => {
 
     await user.click(screen.getByRole('button', { name: /file/i }));
     await user.click(screen.getByText(/delete chart/i));
+
+    // PR 5: confirm prompt is now a React modal, not window.confirm.
+    const modal = await screen.findByTestId('confirm-modal');
+    expect(modal).toBeInTheDocument();
+    await user.click(screen.getByTestId('confirm-modal-confirm'));
 
     expect(onDelete).toHaveBeenCalledWith('chart-xyz');
-    confirmSpy.mockRestore();
   });
 
-  it('does NOT call onDeleteChart when the user cancels the confirm', async () => {
+  it('does NOT call onDeleteChart when the user cancels the ConfirmModal', async () => {
     const user = userEvent.setup();
     const onDelete = vi.fn();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderMenu({
       isAuthenticated: true,
       isOwner: true,
@@ -126,8 +127,13 @@ describe('FileMenu', () => {
     await user.click(screen.getByRole('button', { name: /file/i }));
     await user.click(screen.getByText(/delete chart/i));
 
+    const modal = await screen.findByTestId('confirm-modal');
+    expect(modal).toBeInTheDocument();
+    await user.click(screen.getByTestId('confirm-modal-cancel'));
+
     expect(onDelete).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
+    // Modal closes after cancel.
+    expect(screen.queryByTestId('confirm-modal')).toBeNull();
   });
 
   it('shows a distinct error row when the anon Open recent localStorage read throws', async () => {
