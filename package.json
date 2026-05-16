@@ -33,6 +33,8 @@
     "@mdxeditor/editor": "^4.0.0",
     "@neondatabase/serverless": "^1.0.2",
     "clsx": "^2.1.1",
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.2.1",
     "prismjs": "^1.30.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
