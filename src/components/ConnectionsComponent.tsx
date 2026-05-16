@@ -104,11 +104,16 @@ export function ConnectionsComponent({
   const smoothUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateSize = useCallback(() => {
-    // Calculate width based on actual section widths + gaps only
+    // Calculate width based on actual section widths + gaps only.
+    //
+    // PR 5: edit mode always renders the column-gutter and section-
+    // padding affordances (`Task 5.1`). The width math accounts for
+    // those gutters whenever `editMode` is true (no `layoutMode`
+    // dependency). View mode still uses the bare section gaps.
     let totalWidth = 0;
 
-    // In add/remove mode, add section drop zone before first section
-    if (editMode && layoutMode) {
+    if (editMode) {
+      // Section drop zone before first section.
       totalWidth += sectionPadding;
     }
 
@@ -127,12 +132,13 @@ export function ConnectionsComponent({
       const effectiveSectionWidth = Math.max(sectionWidth, titleWidth);
       totalWidth += effectiveSectionWidth;
 
-      // Add extra width for add/remove mode drop zones
-      if (editMode && layoutMode) {
+      // Add extra width for the always-on column-gutter affordances in
+      // edit mode. (N+1) zones × columnPadding px each (before first
+      // + after each column).
+      if (editMode) {
         // Count ALL columns in this section (including empty ones)
         const columnCount = data.sections[sectionIndex].columns.length || 1;
 
-        // Drop zones: (N+1) zones × columnPadding px each (before first + after each column)
         const dropZonesWidth = (columnCount + 1) * columnPadding;
 
         // Only add drop zones width if it's not already accounted for in the effective section width
@@ -143,14 +149,16 @@ export function ConnectionsComponent({
         totalWidth += additionalWidth;
       }
 
-      // Add gap between sections (or section drop zone in add/remove mode)
+      // Section gap. In edit mode the section-padding gutter sits between
+      // sections (rendered by TheoryOfChangeGraph as the "before-section"
+      // affordance for sectionIndex+1); in view mode it's a bare gap.
       if (sectionIndex < sectionWidths.length - 1) {
         totalWidth += sectionPadding;
       }
     });
 
-    // In add/remove mode, add section drop zone after last section
-    if (editMode && layoutMode) {
+    if (editMode) {
+      // Section drop zone after last section.
       totalWidth += sectionPadding;
     }
 

@@ -960,7 +960,13 @@ export function ToC({
         ref={graphContainerRef}
         className="flex relative min-w-fit overflow-visible"
         style={{
-          gap: editMode && layoutMode ? '0px' : `${sectionPadding}px`,
+          // PR 5: add affordances (column-gutter "+ Column" and
+          // section-padding "+ Section") are always rendered in edit
+          // mode now (no `layoutMode` gate). They provide the
+          // inter-column / inter-section spacing themselves, so the
+          // parent flex `gap` collapses to 0 in edit mode. View mode
+          // keeps the explicit gap (no gutter divs render).
+          gap: editMode ? '0px' : `${sectionPadding}px`,
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
           height: svgSize.height > 0 ? `${svgSize.height - 55}px` : '100vh', // I don't understand why I need to subtract 55, but it works
         }}
@@ -989,10 +995,15 @@ export function ToC({
         {Array.isArray(data.sections) ? (
           data.sections.map((section, sectionIndex) => (
             <React.Fragment key={sectionIndex}>
-              {/* Gap before first section or between sections with click to add section */}
-              {editMode && layoutMode && (
+              {/* PR 5 Task 5.1: always-on add-section affordance. The
+                gutter is rendered in edit mode regardless of layout
+                state. Default: minimal visual treatment (no background
+                tint, label hidden). Hover: translucent green tint plus
+                "+ Section" label. Click adds a section before this
+                index. The 32px width comes from `sectionPadding`. */}
+              {editMode && (
                 <div
-                  className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
+                  className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-green-500/20"
                   style={{
                     width: `${sectionPadding}px`,
                     height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
@@ -1009,10 +1020,11 @@ export function ToC({
                     });
                   }}
                   title="Click to add section"
+                  data-testid="add-section-before"
                 >
-                  <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
+                  <span className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
                     + Section
-                  </div>
+                  </span>
                 </div>
               )}
               <div
@@ -1032,7 +1044,11 @@ export function ToC({
                       className="rounded py-3 mb-2 px-3"
                       style={{
                         backgroundColor: data.color || '#374151', // Default to gray-700
-                        minWidth: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
+                        // PR 5: section title width must account for the
+                        // always-on column gutters in edit mode (N+1
+                        // gutters around N columns, each `columnPadding`
+                        // wide). View mode renders no gutters.
+                        minWidth: `${sectionWidths[sectionIndex] + (editMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
                         width: 'max-content',
                       }}
                     >
@@ -1084,16 +1100,25 @@ export function ToC({
                     <div
                       className="flex"
                       style={{
-                        gap: editMode && layoutMode ? '0px' : `${columnPadding}px`,
+                        // PR 5: same `gap`-collapses-to-0 rationale as
+                        // the outer section flex above. Column gutters
+                        // provide spacing in edit mode; view mode falls
+                        // back to the explicit gap.
+                        gap: editMode ? '0px' : `${columnPadding}px`,
                         justifyContent: 'center',
                       }}
                     >
                       {section.columns.map((column, colIndex) => (
                         <React.Fragment key={`${sectionIndex}-${colIndex}`}>
-                          {/* Gap before first column with click to add column */}
-                          {editMode && layoutMode && colIndex === 0 && (
+                          {/* PR 5 Task 5.1: always-on add-column
+                            affordance (left gutter before first
+                            column). Same minimal-default / hover-
+                            translucent-blue treatment as the section
+                            gutter above; `+ Column` label fades in
+                            on hover. */}
+                          {editMode && colIndex === 0 && (
                             <div
-                              className="bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
+                              className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-blue-500/20"
                               style={{
                                 width: `${columnPadding}px`,
                                 height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
@@ -1108,79 +1133,56 @@ export function ToC({
                                 });
                               }}
                               title="Click to add column"
+                              data-testid={`add-column-before-${sectionIndex}-${colIndex}`}
                             >
-                              <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
+                              <span className="text-blue-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
                                 + Column
-                              </div>
+                              </span>
                             </div>
                           )}
 
-                          {/* Column with drag and keyboard positioning */}
+                          {/* PR 5 Task 5.1: column body. No more
+                            `layoutMode` red-state for empty columns
+                            (delete-column moves to Task 5.3's hover-×
+                            affordance). Empty columns simply render
+                            with a `cell` cursor so the user knows
+                            double-click adds a node at the cursor's
+                            Y position (the existing behavior). */}
                           <div
                             data-column={`${sectionIndex}-${colIndex}`}
                             className={clsx(
                               'relative',
+                              // CSS-hover affordance for empty-column
+                              // body: `cursor-cell` signals "click here
+                              // to drop a node". Pure CSS, no JS hover
+                              // tracking.
                               editMode &&
-                                layoutMode &&
                                 column.nodes.length === 0 &&
-                                'bg-red-50 hover:bg-red-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg',
+                                'cursor-cell hover:bg-gray-500/5 transition-colors rounded-lg',
                             )}
                             style={{
                               width: `${Math.max(...column.nodes.map((node) => node.width || 192), 128)}px`,
-                              height:
-                                editMode && layoutMode && column.nodes.length === 0
-                                  ? svgSize.height > 0
-                                    ? `${svgSize.height - 124}px`
-                                    : '740px'
-                                  : editMode
-                                    ? svgSize.height > 0
-                                      ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px`
-                                      : '740px'
-                                    : 'auto',
+                              height: editMode
+                                ? svgSize.height > 0
+                                  ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px`
+                                  : '740px'
+                                : 'auto',
                             }}
-                            title={
-                              editMode && layoutMode && column.nodes.length === 0
-                                ? 'Click to delete column'
-                                : undefined
-                            }
                             onClick={(e) => {
-                              // Only handle clicks on the column area itself
+                              // Deselect nodes when clicking the
+                              // column area (not a node inside it).
                               if (e.target === e.currentTarget) {
-                                if (editMode && layoutMode && column.nodes.length === 0) {
-                                  // Delete the empty column
-                                  setDataAndNotify((prevData) => {
-                                    const updatedSection = {
-                                      ...prevData.sections[sectionIndex],
-                                      columns: prevData.sections[sectionIndex].columns.filter(
-                                        (_, i) => i !== colIndex,
-                                      ),
-                                    };
-
-                                    // If this was the last column in the section, delete the section entirely
-                                    const newSections =
-                                      updatedSection.columns.length === 0
-                                        ? prevData.sections.filter((_, i) => i !== sectionIndex)
-                                        : prevData.sections.map((s, i) =>
-                                            i === sectionIndex ? updatedSection : s,
-                                          );
-
-                                    return {
-                                      ...prevData,
-                                      sections: newSections,
-                                    };
-                                  });
-                                } else {
-                                  // Deselect nodes when clicking column area
-                                  setHighlightedNodes(new Set());
-                                  setNodeWidth(192);
-                                  setNodeColor('#ffffff');
-                                }
+                                setHighlightedNodes(new Set());
+                                setNodeWidth(192);
+                                setNodeColor('#ffffff');
                               }
                             }}
                             onDoubleClick={
-                              editMode && !layoutMode
+                              editMode
                                 ? (e) => {
-                                    // Only create new node if double-clicking in blank column area (not in layout mode)
+                                    // Double-click in blank column
+                                    // area → add a node at the
+                                    // cursor's Y position.
                                     if (e.target === e.currentTarget) {
                                       const rect = e.currentTarget.getBoundingClientRect();
                                       const viewportY = e.clientY - rect.top;
@@ -1231,18 +1233,21 @@ export function ToC({
                               );
                             })}
 
-                            {/* Label for empty column in add/remove mode */}
-                            {editMode && layoutMode && column.nodes.length === 0 && (
-                              <div className="text-red-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
-                                - Delete
-                              </div>
-                            )}
+                            {/* PR 5 Task 5.3 (next commit) replaces the
+                              old red "- Delete" label with a hover-×
+                              control. Empty columns now show a `cell`
+                              cursor (see parent class above) so users
+                              still get a click-to-add-node affordance
+                              before the × is wired in. */}
                           </div>
 
-                          {/* Gap after column with click to add column */}
-                          {editMode && layoutMode && (
+                          {/* PR 5 Task 5.1: always-on add-column
+                            affordance (right gutter after every
+                            column). Same minimal-default / hover-
+                            translucent-blue treatment. */}
+                          {editMode && (
                             <div
-                              className="bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
+                              className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-blue-500/20"
                               style={{
                                 width: `${columnPadding}px`,
                                 height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
@@ -1258,10 +1263,11 @@ export function ToC({
                                 });
                               }}
                               title="Click to add column"
+                              data-testid={`add-column-after-${sectionIndex}-${colIndex}`}
                             >
-                              <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
+                              <span className="text-blue-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
                                 + Column
-                              </div>
+                              </span>
                             </div>
                           )}
                         </React.Fragment>
@@ -1270,10 +1276,13 @@ export function ToC({
                   </div>
                 </div>
               </div>
-              {/* Gap after last section with click to add section */}
-              {editMode && layoutMode && sectionIndex === data.sections.length - 1 && (
+              {/* PR 5 Task 5.1: always-on add-section affordance after
+                the last section. Same minimal-default / hover-
+                translucent-green treatment as the before-section
+                gutter above. */}
+              {editMode && sectionIndex === data.sections.length - 1 && (
                 <div
-                  className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
+                  className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-green-500/20"
                   style={{
                     width: `${sectionPadding}px`,
                     height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
@@ -1290,10 +1299,11 @@ export function ToC({
                     });
                   }}
                   title="Click to add section"
+                  data-testid="add-section-after-last"
                 >
-                  <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
+                  <span className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
                     + Section
-                  </div>
+                  </span>
                 </div>
               )}
             </React.Fragment>
