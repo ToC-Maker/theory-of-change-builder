@@ -44,6 +44,12 @@ interface EditToolbarProps {
   setSectionPadding: React.Dispatch<React.SetStateAction<number>>;
   straightenEdges: () => void;
   setData: React.Dispatch<React.SetStateAction<ToCData>>;
+  // Streaming-input handles (passed through to the per-selection
+  // width slider so a single drag = one undo entry). Wired in PR 0
+  // Task 0.3; this entire component is removed in PR 1, so the extra
+  // surface is short-lived.
+  mutateDebounced?: (updater: React.SetStateAction<ToCData>, key: string) => void;
+  commitMutation?: (key?: string) => void;
   // Header controls props
   undoHistory: ToCData[];
   redoHistory: ToCData[];
@@ -91,6 +97,8 @@ export function EditToolbar({
   setSectionPadding,
   straightenEdges,
   setData,
+  mutateDebounced,
+  commitMutation,
   undoHistory,
   redoHistory,
   handleUndo,
@@ -2482,27 +2490,39 @@ export function EditToolbar({
                 max="320"
                 step="16"
                 value={nodeWidth}
+                // L3 fix: streaming input. Buffer per-tick writes under
+                // 'width-multi'; commit on pointerup so a 60Hz drag
+                // produces one undo entry per gesture, not many. Falls
+                // back to `setData` if the parent didn't pass the
+                // streaming handles (defensive — current parent always
+                // provides them).
                 onChange={(e) => {
                   const newWidth = parseInt(e.target.value);
                   setNodeWidth(newWidth);
-                  if (highlightedNodes.size > 0) {
-                    setData((prevData) => ({
-                      ...prevData,
-                      sections: prevData.sections.map((section) => ({
-                        ...section,
-                        columns: section.columns.map((column) => ({
-                          ...column,
-                          nodes: column.nodes.map((node) => {
-                            if (highlightedNodes.has(node.id)) {
-                              return { ...node, width: newWidth };
-                            }
-                            return node;
-                          }),
-                        })),
+                  if (highlightedNodes.size === 0) return;
+                  const updater = (prevData: ToCData) => ({
+                    ...prevData,
+                    sections: prevData.sections.map((section) => ({
+                      ...section,
+                      columns: section.columns.map((column) => ({
+                        ...column,
+                        nodes: column.nodes.map((node) => {
+                          if (highlightedNodes.has(node.id)) {
+                            return { ...node, width: newWidth };
+                          }
+                          return node;
+                        }),
                       })),
-                    }));
+                    })),
+                  });
+                  if (mutateDebounced) {
+                    mutateDebounced(updater, 'width-multi');
+                  } else {
+                    setData(updater);
                   }
                 }}
+                onPointerUp={() => commitMutation?.('width-multi')}
+                onBlur={() => commitMutation?.('width-multi')}
                 className="w-16 sm:w-20 h-1 rounded-lg appearance-none cursor-pointer bg-gray-200"
               />
               <span className="text-xs text-gray-500 w-8 sm:w-10 text-right">{nodeWidth}</span>
