@@ -8,6 +8,7 @@ import { EditToolbar } from './EditToolbar';
 import { Legend } from './Legend';
 import { NodePopup } from './NodePopup';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useGraphLayout } from '../hooks/useGraphLayout';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 export function ToC({
@@ -587,43 +588,18 @@ export function ToC({
     [data.sections],
   );
 
-  // Calculate total width needed for each section (all columns + gaps).
-  // `data.sections` reference changes on every immutable update (including
-  // column-count changes), so it's sufficient as a dep — no need for a
-  // secondary fingerprint key that the original code tried to add.
-  const sectionWidths = useMemo(() => {
-    // Defensive programming: ensure sections is an array
-    if (!data.sections || !Array.isArray(data.sections)) {
-      console.error('Data corruption detected: sections is not an array', data.sections);
-      return [400]; // Return default width
-    }
-
-    const widths = data.sections.map((section) => {
-      // Always include all columns (even empty ones)
-      const columnsToCalculate = section.columns;
-
-      if (columnsToCalculate.length === 0) return 192; // Default width for empty sections
-
-      // Calculate width needed for each column (max node width in that column)
-      const columnWidths = columnsToCalculate.map((column) => {
-        if (column.nodes.length === 0) return 128; // Empty columns get default width
-        const nodeWidths = column.nodes.map((node) => node.width || 192);
-        return Math.max(...nodeWidths, 128); // At least 128px per column
-      });
-
-      // Total width = sum of all column widths
-      const totalColumnWidth = columnWidths.reduce((sum, width) => sum + width, 0);
-
-      // In add/remove mode, gaps become drop zones and are added in ConnectionsComponent
-      // So we don't add gaps here, but the drop zones are calculated as (N+1) * columnPadding
-      // which is already handled in ConnectionsComponent
-      const gaps =
-        editMode && layoutMode ? 0 : Math.max(0, columnWidths.length - 1) * columnPadding;
-
-      return totalColumnWidth + gaps;
-    });
-    return widths;
-  }, [data.sections, columnPadding, editMode, layoutMode]);
+  // Section widths + (future) column-rect snapshot come from useGraphLayout.
+  // The hook extracts `sectionWidths` (formerly inlined at this position)
+  // and pre-computes a layout snapshot for the drag machinery landing in
+  // PR 4 / PR 5. Only `sectionWidths` is consumed here for now.
+  const { sectionWidths } = useGraphLayout({
+    data,
+    containerRef: graphContainerRef,
+    columnPadding,
+    sectionPadding,
+    editMode,
+    layoutMode,
+  });
 
   // Global drag tracking to handle dragging outside container bounds
   useEffect(() => {
