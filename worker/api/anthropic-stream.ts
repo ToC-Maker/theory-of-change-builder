@@ -3392,56 +3392,30 @@ export async function handler(
         start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
       });
 
-      if (isCapped(tier)) {
-        const deltaMicro = actualMicro - projected;
-        try {
-          await sql`
-          UPDATE user_api_usage
-          SET cost_micro_usd        = cost_micro_usd + ${deltaMicro.toString()}::bigint,
-              input_tokens          = input_tokens + ${reconciledAccumulator.input_tokens},
-              output_tokens         = output_tokens + ${reconciledAccumulator.output_tokens},
-              cache_create_tokens   = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},
-              cache_read_tokens     = cache_read_tokens + ${reconciledAccumulator.cache_read_input_tokens},
-              web_search_uses       = web_search_uses + ${reconciledAccumulator.web_search_requests},
-              last_activity_at      = NOW()
-          WHERE user_id = ${actorId}
-        `;
-          await sql`
-          INSERT INTO global_monthly_usage (month_start, cost_micro_usd)
-          VALUES (DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date, ${actualMicro.toString()}::bigint)
-          ON CONFLICT (month_start) DO UPDATE
-          SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
-        `;
-        } catch (e) {
-          // Reconcile drift silently accumulates when we only console.error.
-          // Persist enough metadata for a manual replay: the projected figure
-          // we've already reserved, the delta we intended to apply, and the
-          // exception that blocked the write. Best-effort — if this INSERT
-          // also fails, the outer catch logs and we stop there.
-          console.error('Post-stream reconcile failed:', e);
-          await writeDiagnostic(sql, {
-            error_name: 'DiagnosticReconcileFailed',
-            error_message: `Reconcile failed: ${e instanceof Error ? e.message : String(e)}`,
-            user_id: actorId,
-            chart_id: chartId ?? null,
-            request_metadata: {
-              user_id: actorId,
-              projected_micro_usd: projected.toString(),
-              observed_delta_micro_usd: deltaMicro.toString(),
-              actual_micro_usd: actualMicro.toString(),
-              error_message: e instanceof Error ? e.message : String(e),
-              model,
-            },
-            deployment_host: requestUrl.hostname,
-            fired_at_ms: Date.now(),
-            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
-          });
-        }
-      }
-
-      // Per-message attribution: populate logging_messages.cost_micro_usd so
-      // per-chart cost queries can JOIN + SUM without a separate aggregate. Only
-      // runs if the client passed X-Logging-Message-Id. Fire-and-forget.
+      // Post-stream reconcile (Task 8): one atomic signed-delta CTE settles
+      // `logging_messages.cost_settled_micro_usd`, GREATEST-clamps
+      // `logging_messages.cost_micro_usd`, stamps `reconciled_at = NOW()`
+      // (so late retries from the 7-day client retry queue and any in-flight
+      // per-update writes no-op via the `WHERE reconciled_at IS NULL` guard),
+      // and applies the SIGNED delta `actual - max(projected, cost_settled)`
+      // to `user_api_usage.cost_micro_usd`. Signed-delta atomically:
+      //   - settles the remaining cost when mid-stream writers fell short of
+      //     the final actual (e.g. tracked.done timeout before the last poll);
+      //   - REFUNDS over-projection when actual < projected and no mid-stream
+      //     writers committed actual (the reservation flowed through
+      //     user_api_usage; we now subtract the overshoot);
+      //   - no-ops when mid-stream writers already committed exactly actual
+      //     (baseline = actual, delta = 0).
+      // `GREATEST(0::bigint, ...)` clamps the result so user_api_usage can
+      // never go negative even if some bookkeeping race left the prior value
+      // lower than the refund amount. `EXISTS(SELECT 1 FROM msg_upd)` guards
+      // the user_api_usage UPDATE so it skips if the row was already
+      // reconciled (concurrent reconcile path beat us to it) — idempotent.
+      //
+      // Token counters on user_api_usage are updated UNCONDITIONALLY (all
+      // tiers, including BYOK), matching the cost path: Task 7's per-update
+      // applyDeltaCommit already touches user_api_usage.cost_micro_usd for
+      // BYOK; this reconcile is the authoritative final write of the same row.
       //
       // NO `actualMicro > 0n` gate: a user-aborted stream can produce
       // actualMicro=0 if the abort raced parseFrame's accumulator update, but
@@ -3451,26 +3425,78 @@ export async function handler(
       // missed a usage event). Logged via DiagnosticReconcileEmptyAccumulator
       // when this happens to a row that DID stream content.
       if (loggingMessageId) {
-        // GREATEST so a tracked.done timeout with empty accumulator
-        // (`actualMicro=0n`) can't clobber the message_start floor or the
-        // client-side reconcile-cost POST that may have landed first.
         try {
+          const projStr = projected.toString();
+          const actualStr = actualMicro.toString();
           await sql`
-          UPDATE logging_messages
-          SET cost_micro_usd = GREATEST(cost_micro_usd, ${actualMicro.toString()}::bigint)
-          WHERE message_id = ${loggingMessageId}
-        `;
+            WITH locked AS (
+              SELECT cost_settled_micro_usd FROM logging_messages
+              WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
+              FOR UPDATE
+            ),
+            baseline AS (
+              SELECT GREATEST(${projStr}::bigint, cost_settled_micro_usd) AS bl FROM locked
+            ),
+            signed_delta AS (
+              SELECT ${actualStr}::bigint - (SELECT bl FROM baseline) AS d FROM locked
+            ),
+            msg_upd AS (
+              UPDATE logging_messages
+              SET cost_micro_usd = GREATEST(cost_micro_usd, ${actualStr}::bigint),
+                  cost_settled_micro_usd = ${actualStr}::bigint,
+                  reconciled_at = NOW()
+              WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
+              RETURNING cost_settled_micro_usd
+            )
+            UPDATE user_api_usage
+            SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + (SELECT d FROM signed_delta)),
+                input_tokens = input_tokens + ${reconciledAccumulator.input_tokens},
+                output_tokens = output_tokens + ${reconciledAccumulator.output_tokens},
+                cache_create_tokens = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},
+                cache_read_tokens = cache_read_tokens + ${reconciledAccumulator.cache_read_input_tokens},
+                web_search_uses = web_search_uses + ${reconciledAccumulator.web_search_requests},
+                last_activity_at = NOW()
+            WHERE user_id = ${actorId} AND EXISTS(SELECT 1 FROM msg_upd)
+            RETURNING cost_micro_usd, (SELECT d FROM signed_delta) AS applied_signed_delta
+          `;
+          // Global monthly usage is observability-only and excludes BYOK
+          // (BYOK is self-funded; the table tracks our spend, not customer
+          // spend). Runs AFTER the signed-delta SQL — if reconcile failed,
+          // the catch block diagnostics fire and this is skipped.
+          if (isCapped(tier)) {
+            await sql`
+              INSERT INTO global_monthly_usage (month_start, cost_micro_usd)
+              VALUES (DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date, ${actualStr}::bigint)
+              ON CONFLICT (month_start) DO UPDATE
+              SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
+            `;
+          }
         } catch (e) {
-          console.error('logging_messages cost update failed (non-fatal):', e);
+          // Reconcile drift silently accumulates when we only console.error.
+          // Persist enough metadata for a manual replay: the projected figure
+          // we've already reserved, the actual we computed, and the
+          // exception that blocked the write. Best-effort — if this INSERT
+          // also fails, the outer catch logs and we stop there.
+          //
+          // No revertReservation call here: the signed-delta SQL was supposed
+          // to consume the reservation directly via the additive arithmetic
+          // on user_api_usage.cost_micro_usd. On failure, the reservation
+          // stays in user_api_usage (over-bill, matches prior behavior). The
+          // diagnostic captures enough metadata for a manual replay.
+          console.error('Post-stream reconcile failed:', e);
           await writeDiagnostic(sql, {
-            error_name: 'DiagnosticReconcileCostUpdateFailed',
-            error_message: `logging_messages.cost_micro_usd update failed: ${e instanceof Error ? e.message : String(e)}`,
+            error_name: 'DiagnosticReconcileFailed',
+            error_message: `Reconcile failed: ${e instanceof Error ? e.message : String(e)}`,
             user_id: actorId,
             chart_id: chartId ?? null,
             request_metadata: {
+              user_id: actorId,
               logging_message_id: loggingMessageId,
+              projected_micro_usd: projected.toString(),
               actual_micro_usd: actualMicro.toString(),
               error_message: e instanceof Error ? e.message : String(e),
+              model,
+              tier,
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
