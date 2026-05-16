@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
+import { computePathWithWaypoints } from '../utils/connectionPath';
 import { EdgeEditor } from './edge-editor/EdgeEditor';
 import { buildConnectionPath } from './canvas/connectionPath';
 
@@ -329,6 +330,11 @@ export function ConnectionsComponent({
                   confidence: conn.confidence,
                   evidence: conn.evidence,
                   assumptions: conn.assumptions,
+                  // PR 7: forward optional waypoints. Empty/undefined =
+                  // falls back to auto-bezier (byte-identical to
+                  // pre-PR-7 rendering, see
+                  // `tests/frontend/connectionPath.waypoints.test.ts`).
+                  waypoints: conn.waypoints,
                 };
               });
             } else {
@@ -346,6 +352,7 @@ export function ConnectionsComponent({
                   confidence: 50, // default confidence (medium)
                   evidence: undefined,
                   assumptions: undefined,
+                  waypoints: undefined,
                 };
               });
             }
@@ -431,16 +438,25 @@ export function ConnectionsComponent({
             endY = endPos.y + endPos.height / 2;
           }
 
-          // Calculate control points based on connection type
-          let controlPointOffset;
-          if (isSameColumn) {
-            // Straight line for vertical connections
-            controlPointOffset = 0;
-          } else {
-            // For horizontal connections, use X distance for curvature
-            const baseOffset = Math.abs(endX - startX) / 2;
-            controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
-          }
+          // PR 7: factor path math into `computePathWithWaypoints`. With
+          // an empty waypoints array the output is BYTE-IDENTICAL to
+          // the previous inline auto-bezier string (validated by
+          // `tests/frontend/connectionPath.waypoints.test.ts`). When
+          // waypoints are present we get a single multi-segment cubic
+          // bezier (one `<path>` element) so dashed/dotted strokes stay
+          // continuous through corners.
+          const pathDirection: 'forward' | 'backward' | 'vertical' = isSameColumn
+            ? 'vertical'
+            : isBackwardConnection
+              ? 'backward'
+              : 'forward';
+          const pathD = computePathWithWaypoints({
+            source: { x: startX, y: startY },
+            target: { x: endX, y: endY },
+            waypoints: connection.waypoints ?? [],
+            curvature,
+            direction: pathDirection,
+          });
 
           const isHighlighted =
             highlightedNodes.has(connection.sourceId) || highlightedNodes.has(connection.targetId);
@@ -476,13 +492,7 @@ export function ConnectionsComponent({
             <g key={index}>
               {/* Invisible thicker path for easier clicking */}
               <path
-                d={
-                  isSameColumn
-                    ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                    : isBackwardConnection
-                      ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                }
+                d={pathD}
                 className="fill-none cursor-pointer"
                 style={{
                   stroke: 'transparent',
@@ -512,13 +522,7 @@ export function ConnectionsComponent({
               />
               {/* Glow shadow layer */}
               <path
-                d={
-                  isSameColumn
-                    ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                    : isBackwardConnection
-                      ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                }
+                d={pathD}
                 className="fill-none"
                 markerEnd="url(#arrowhead)"
                 style={{
@@ -536,13 +540,7 @@ export function ConnectionsComponent({
               />
               {/* Main visible path */}
               <path
-                d={
-                  isSameColumn
-                    ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                    : isBackwardConnection
-                      ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                }
+                d={pathD}
                 className="fill-none"
                 markerEnd="url(#arrowhead)"
                 style={{
