@@ -5,6 +5,8 @@ import { getLocalPosition } from '../hooks/useGraphLayout';
 import { computePathWithWaypoints } from '../utils/connectionPath';
 import { EdgeEditor } from './edge-editor/EdgeEditor';
 import { buildConnectionPath } from './canvas/connectionPath';
+import { useWaypointDrag } from '../hooks/useWaypointDrag';
+import { ConnectionWaypointHandles } from './canvas/ConnectionWaypointHandles';
 
 // PR 3: `EdgePopupState` was the modal's full state copy (with x/y for
 // positioning, plus full confidence/evidence/assumptions). The new
@@ -368,6 +370,35 @@ export function ConnectionsComponent({
   // confidence slider produces ONE undo entry per drag, like the
   // node-width slider).
 
+  // PR 7: waypoint drag — `bindWaypoint` / `bindMidpoint` are passed
+  // down to `<ConnectionWaypointHandles>` for each connection that's
+  // hovered or selected. Translation from viewport client coords to
+  // container-local coords uses the same `(client - containerRect) /
+  // zoomScale` formula as the drop-preview ghost; the `camera` prop's
+  // `z` is the zoom scale.
+  const clientToContainer = useCallback(
+    (clientX: number, clientY: number) => {
+      const container = containerRef.current;
+      if (!container) return { x: clientX, y: clientY };
+      const rect = container.getBoundingClientRect();
+      const zoomScale = camera?.z ?? 1;
+      return {
+        x: (clientX - rect.left) / zoomScale,
+        y: (clientY - rect.top) / zoomScale,
+      };
+    },
+    [containerRef, camera],
+  );
+
+  const waypointDrag = useWaypointDrag({
+    data,
+    editMode,
+    mutate: mutate ?? (() => {}),
+    mutateDebounced: mutateDebounced ?? (() => {}),
+    commit: commit ?? (() => {}),
+    clientToContainer,
+  });
+
   const strokeWidth = 3;
   return (
     <>
@@ -487,6 +518,25 @@ export function ConnectionsComponent({
           const strokeStyle = getStrokeStyle();
           const edgeKey = `${connection.sourceId}-${connection.targetId}`;
           const isEdgeHovered = hoveredEdge === edgeKey;
+          const isEdgeSelected =
+            selectedEdge?.sourceId === connection.sourceId &&
+            selectedEdge?.targetId === connection.targetId;
+          // PR 7: handles visible on hover OR select, edit-mode only.
+          // While the user is actively dragging a waypoint we keep
+          // handles visible regardless of hover (mouse may have left
+          // the path during the drag motion); the `useWaypointDrag`
+          // state tells us this.
+          const isThisConnectionBeingDragged =
+            waypointDrag.dragState?.sourceNodeId === connection.sourceId &&
+            waypointDrag.dragState?.targetNodeId === connection.targetId;
+          const handlesVisible =
+            editMode && (isEdgeHovered || isEdgeSelected || isThisConnectionBeingDragged);
+          const waypointAnchors = [
+            { x: startX, y: startY },
+            ...(connection.waypoints ?? []),
+            { x: endX, y: endY },
+          ];
+          const waypointCount = connection.waypoints?.length ?? 0;
 
           return (
             <g key={index}>
@@ -556,6 +606,19 @@ export function ConnectionsComponent({
                     ? 'none'
                     : 'd 0.15s ease-out, stroke 0.2s ease-out, opacity 0.2s ease-out, stroke-dasharray 0.2s ease-out',
                 }}
+              />
+              {/* PR 7: waypoint + midpoint handles for direct
+                  manipulation. Rendered above the visible path so the
+                  handles always sit on top; visibility = hovered OR
+                  selected OR currently being dragged. */}
+              <ConnectionWaypointHandles
+                sourceNodeId={connection.sourceId}
+                targetNodeId={connection.targetId}
+                anchors={waypointAnchors}
+                waypointCount={waypointCount}
+                visible={handlesVisible}
+                bindWaypoint={waypointDrag.bindWaypoint}
+                bindMidpoint={waypointDrag.bindMidpoint}
               />
             </g>
           );
