@@ -637,8 +637,10 @@ function ToCViewer() {
   // when a subsequent save succeeds. SaveIndicator debounces its
   // `reportError` ping per state-fingerprint so re-renders don't spam.
   const [saveError, setSaveError] = useState<SaveError | null>(null);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  // PR 1 task 1.7: sync button gone, "Last synced X ago" display gone.
+  // setLastSyncTime kept (auto-sync still writes it) for future
+  // observability hooks, but the helpers that read it are stripped.
+  const [, setLastSyncTime] = useState<Date | null>(null);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
   // Server-verified `isOwner` from the latest getChart response. Reset
   // when the edit token changes. Wired through to FileMenu so the
@@ -760,55 +762,10 @@ function ToCViewer() {
     setToken();
   }, [isAuthenticated, authLoading, getIdTokenClaims, getAccessTokenSilently]);
 
-  // Helper function to format relative time
-  const getTimeAgo = (date: Date) => {
-    const now = new Date();
-    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-    if (diffInSeconds < 10) {
-      return 'less than 10 seconds ago';
-    }
-
-    if (diffInSeconds < 60) {
-      return 'less than 1 minute ago';
-    }
-
-    const diffInMinutes = Math.floor(diffInSeconds / 60);
-    if (diffInMinutes < 60) {
-      return `${diffInMinutes} minute${diffInMinutes !== 1 ? 's' : ''} ago`;
-    }
-
-    const diffInHours = Math.floor(diffInMinutes / 60);
-    if (diffInHours < 24) {
-      return `${diffInHours} hour${diffInHours !== 1 ? 's' : ''} ago`;
-    }
-
-    const diffInDays = Math.floor(diffInHours / 24);
-    return `${diffInDays} day${diffInDays !== 1 ? 's' : ''} ago`;
-  };
-
-  // Manual sync function
-  const handleManualSync = async () => {
-    if (!currentEditToken || isManualSyncing) return;
-
-    setIsManualSyncing(true);
-    try {
-      console.log('Manual sync triggered');
-      const result = await ChartService.getChartByEditToken(currentEditToken);
-      const newDataStr = JSON.stringify(result.chartData);
-      const currentDataStr = JSON.stringify(data);
-
-      if (newDataStr !== currentDataStr) {
-        setData(result.chartData);
-        console.log('Chart data updated from manual sync');
-      }
-      setLastSyncTime(new Date());
-    } catch (err) {
-      console.error('Manual sync failed:', err);
-    } finally {
-      setIsManualSyncing(false);
-    }
-  };
+  // `getTimeAgo` + `handleManualSync` were both consumed only by the
+  // old EditToolbar's sync button (manual-sync action + "Last synced
+  // X ago" label). PR 1 task 1.7 dropped them. Periodic auto-sync
+  // still runs from `useEffect` below.
 
   // Logging session lifecycle (session init, activity tracking, cleanup)
   const { initializeLogging, handlePrivacyAccept, handleLoggingEnabled, logGraphChange } =
@@ -1474,18 +1431,8 @@ function ToCViewer() {
     };
   }, [editToken, isSaving, authTokenReady]);
 
-  // Update the "time ago" display every second
-  const [, forceUpdate] = useState({});
-  useEffect(() => {
-    if (!lastSyncTime) return;
-
-    const interval = setInterval(() => {
-      // Force re-render to update the "time ago" display
-      forceUpdate({});
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [lastSyncTime]);
+  // The "time ago" display + forceUpdate ticker were tied to the old
+  // EditToolbar sync button. PR 1 task 1.7 dropped both.
 
   if (loading) {
     return (
@@ -1720,16 +1667,7 @@ function ToCViewer() {
               data={data}
               onSizeChange={setContainerSize}
               onDataChange={handleDataChange}
-              undoHistory={undoHistory}
-              redoHistory={redoHistory}
-              handleUndo={handleUndo}
-              handleRedo={handleRedo}
-              isSaving={isSaving}
               currentEditToken={currentEditToken}
-              lastSyncTime={lastSyncTime}
-              isManualSyncing={isManualSyncing}
-              handleManualSync={handleManualSync}
-              getTimeAgo={getTimeAgo}
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
