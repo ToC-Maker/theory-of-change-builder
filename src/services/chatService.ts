@@ -8,26 +8,22 @@ import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { loggingService } from './loggingService';
-import {
-  MODEL_INPUT_RATES_USD_PER_MTOK,
-  MODEL_OUTPUT_RATES_USD_PER_MTOK,
-  WEB_SEARCH_USD_PER_USE,
-} from '../utils/cost';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockAccumulator';
 import { buildOutgoingMessages } from './outgoingMessages';
+import { CostTracker } from './chatCostTracker';
+import type { AnthropicUsage } from '../../shared/cost';
 
-export interface AnthropicUsage {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
-  server_tool_use?: {
-    web_search_requests?: number;
-  };
-}
+/**
+ * Re-export the shared `AnthropicUsage` shape so existing callers
+ * (`ChatInterface.tsx` reads usage off the `onComplete` callback signature)
+ * keep their `chatService` import surface stable. The shared type is the
+ * single source of truth for the Anthropic SSE usage payload — it's also
+ * consumed by `computeCostMicroUsd` so the client and Worker stay in
+ * lockstep on shape (Task 10 in plans/byok-cost-stream-recovery.md).
+ */
+export type { AnthropicUsage };
 
 export interface WebSearchResult {
   url: string;
@@ -787,40 +783,43 @@ class ChatService {
     let tLast = t0;
     const blockStartAt = new Map<number, number>();
 
-    // Running cost accumulators for onCostUpdate. Anthropic's message_delta.usage
-    // is cumulative (each delta carries the latest totals, not an increment), so
-    // Math.max is safe belt-and-suspenders against any out-of-order delivery.
-    const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[model] ?? 5;
-    const outputRate = MODEL_OUTPUT_RATES_USD_PER_MTOK[model] ?? 25;
-    let runningInput = 0;
-    let runningOutput = 0;
-    let runningCacheCreate = 0;
-    let runningCacheRead = 0;
-    let runningWebSearch = 0;
-    const computeRunningCost = () =>
-      (runningInput / 1_000_000) * inputRate +
-      (runningCacheCreate / 1_000_000) * inputRate * 1.25 +
-      (runningCacheRead / 1_000_000) * inputRate * 0.1 +
-      (runningOutput / 1_000_000) * outputRate +
-      runningWebSearch * WEB_SEARCH_USD_PER_USE;
-    const updateUsage = (u: Partial<AnthropicUsage>) => {
-      runningInput = Math.max(runningInput, u.input_tokens ?? 0);
-      runningOutput = Math.max(runningOutput, u.output_tokens ?? 0);
-      runningCacheCreate = Math.max(runningCacheCreate, u.cache_creation_input_tokens ?? 0);
-      runningCacheRead = Math.max(runningCacheRead, u.cache_read_input_tokens ?? 0);
-      runningWebSearch = Math.max(runningWebSearch, u.server_tool_use?.web_search_requests ?? 0);
-      callbacks.onCostUpdate?.(computeRunningCost());
-    };
+    // Per-stream cost tracker. Owns the running-locals (MAX-merged per field
+    // — C7/C8 in plans/byok-cost-stream-recovery.md), the character-derived
+    // output estimate on every `content_block_delta`, and the debounced
+    // /api/reconcile-cost POST cadence ($0.01 or 5s thresholds). Fires
+    // onCostUpdate on every strict cost increase so the BYOK pill updates
+    // in real time (C3 fix). Output-only fallback applies when no
+    // `running_cost` SSE frame has arrived yet — `runningInput`,
+    // `runningCacheCreate`, `runningCacheRead`, `runningWebSearch` stay at
+    // 0 and only the char-derived output estimate is contributed.
+    const loggingMessageIdForReconcile = extraHeaders?.['X-Logging-Message-Id'];
+    const tracker = new CostTracker({
+      model,
+      onCostUpdate: callbacks.onCostUpdate,
+      loggingMessageId: loggingMessageIdForReconcile,
+      authToken: this.authToken,
+      onFetchFailure: enqueuePendingReconcile,
+    });
 
-    // Latest cost_micro_usd value seen on a running_cost SSE frame. The
-    // worker's streaming reconcile (ctx.waitUntil IIFE) is the primary
-    // path that writes this to logging_messages.cost_micro_usd, but it can
-    // be killed by Cloudflare's waitUntil time budget on streams whose
-    // tracked.done hangs (e.g. when the user's connection drops). When the
-    // stream ends here — for any reason — we POST this figure to
-    // /api/reconcile-cost as a fallback so the per-chart pill converges
-    // even if the streaming reconcile bailed.
-    let lastCostMicroUsd: bigint | null = null;
+    // Abort + page-hidden hooks for the unload-safe reconcile path. The
+    // `signal.abort` listener fires earliest (synchronously when the user
+    // hits Stop, before the in-flight `reader.read()` rejection has
+    // propagated to the catch block), and the `visibilitychange` listener
+    // covers tab-close / browser-quit / mobile-background scenarios where
+    // the catch/finally may never run. Both call the tracker with
+    // force=true and useBeacon=true so navigator.sendBeacon is preferred.
+    // Listeners are torn down in the finally block via cleanupTrackerListeners.
+    const onAbort = () => tracker.maybePostReconcile(true, true);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') tracker.maybePostReconcile(true, true);
+    };
+    const hasDocument = typeof document !== 'undefined';
+    signal?.addEventListener('abort', onAbort);
+    if (hasDocument) document.addEventListener('visibilitychange', onVisibilityChange);
+    const cleanupTrackerListeners = () => {
+      signal?.removeEventListener('abort', onAbort);
+      if (hasDocument) document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
 
     try {
       while (true) {
@@ -993,6 +992,10 @@ class ChatService {
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);
+                // Per-delta output-cost estimate (Task 10 / C3): each text
+                // chunk advances the BYOK pill in real time and may trigger
+                // a debounced /api/reconcile-cost POST.
+                tracker.recordOutputChars(chunk.length);
               } else if (
                 event.type === 'content_block_delta' &&
                 event.delta?.type === 'thinking_delta'
@@ -1001,24 +1004,37 @@ class ChatService {
                 if (chunk) {
                   fullThinking += chunk;
                   callbacks.onThinking?.(chunk, fullThinking);
+                  // Thinking deltas are billed as output tokens too.
+                  tracker.recordOutputChars(chunk.length);
                 }
               } else if (event.type === 'message_start' && event.message?.usage) {
                 usage = event.message.usage;
-                updateUsage(event.message.usage);
+                tracker.recordUsage(event.message.usage);
               } else if (event.type === 'message_delta' && event.usage) {
-                usage = { ...(usage ?? {}), ...event.usage } as AnthropicUsage;
-                updateUsage(event.usage);
+                // Build a new `usage` snapshot for the onComplete payload via
+                // MAX-merge against the running tracker locals so a partial
+                // message_delta (one that omits cache fields) doesn't drop
+                // the running figures (C8). Reading from the tracker keeps
+                // the audit-trail shape consistent with what the cost math
+                // saw.
+                tracker.recordUsage(event.usage);
+                usage = {
+                  ...(usage ?? {}),
+                  ...event.usage,
+                } as AnthropicUsage;
               } else if (event.type === 'running_cost' && typeof event.cost_usd === 'number') {
                 // Capture the µUSD figure for the post-stream reconcile POST.
                 // The string carries BigInt-precision (the cost is computed
                 // server-side as bigint and serialized as a string to avoid JS
                 // number precision loss); we keep it as bigint client-side so
                 // the round-trip to /api/reconcile-cost is byte-identical.
+                let handledByTracker = false;
                 if (typeof event.cost_micro_usd === 'string') {
                   try {
                     const parsed = BigInt(event.cost_micro_usd);
-                    if (parsed >= 0n && (lastCostMicroUsd === null || parsed >= lastCostMicroUsd)) {
-                      lastCostMicroUsd = parsed;
+                    if (parsed >= 0n) {
+                      tracker.recordServerCostMicroUsd(parsed);
+                      handledByTracker = true;
                     }
                   } catch {
                     // Bad string from server — ignore this frame; later frames
@@ -1049,7 +1065,14 @@ class ChatService {
                     ` cache_r=${num(event.cache_read_input_tokens)}` +
                     ` web_search=${num(event.web_search_requests)}`,
                 );
-                callbacks.onCostUpdate?.(event.cost_usd);
+                // Legacy fallback when no parseable cost_micro_usd accompanied
+                // the event (older worker, or wire-shape change): fire the
+                // direct float so the UI still moves. The tracker only fires
+                // onCostUpdate on a strict increase, so the two paths are
+                // mutually exclusive.
+                if (!handledByTracker) {
+                  callbacks.onCostUpdate?.(event.cost_usd);
+                }
               } else if (event.type === 'message_stop') {
                 ctx?.markComplete();
                 if (ctx) {
@@ -1124,130 +1147,49 @@ class ChatService {
         }
       }
     } catch (e) {
-      // Kill-time output cost estimate (closes the K2 gap: kills <5s after
-      // message_start, before the first count_tokens poll has fired and
-      // before any thinking-block signature has arrived, otherwise capture
-      // only the message_start placeholder of 8 output tokens).
-      //
-      // We have the streamed assistant content locally (fullContent +
-      // fullThinking). Tokens-from-chars is rough (≈4 chars/token in
-      // English; varies by tokenizer and content) but it's strictly better
-      // than the 8-token placeholder by orders of magnitude — a sub-5s
-      // kill that streamed 2,000 chars of thinking should credit ~500
-      // tokens of output, not 8.
-      //
-      // Bump runningOutput to max(current, char-estimate) and re-fire
-      // onCostUpdate so the BYOK pill catches up before the catch above
-      // tears down state. The delta-credit logic in the caller handles
-      // the addition idempotently. Skipped on non-abort errors — those
-      // paths show the user an error UI; cost capture isn't user-visible.
+      // Kill-time diagnostic log. The K2 gap (sub-5s kill after message_start,
+      // before the first count_tokens poll, leaving only the 8-token output
+      // placeholder) is now closed by `tracker.recordOutputChars` firing on
+      // every text/thinking delta — the running estimate is already current
+      // by the time we reach this catch. Keep the log for parity with the
+      // pre-Task-10 diagnostics so on-call can correlate kill-time char counts
+      // with the final reconcile value. Skipped on non-abort errors.
       const isAbort =
         (e instanceof DOMException && e.name === 'AbortError') || signal?.aborted === true;
       if (isAbort) {
-        try {
-          const totalChars = fullContent.length + fullThinking.length;
-          if (totalChars > 0) {
-            const estimatedOutputTokens = Math.ceil(totalChars / 4);
-            if (estimatedOutputTokens > runningOutput) {
-              runningOutput = estimatedOutputTokens;
-              const finalCost = computeRunningCost();
-              callbacks.onCostUpdate?.(finalCost);
-              console.log(
-                `[ChatService] kill-time output estimate: chars=${totalChars}` +
-                  ` estTokens=${estimatedOutputTokens} → finalCost=$${finalCost.toFixed(6)}`,
-              );
-            }
-          }
-        } catch (estErr) {
-          console.warn('[ChatService] kill-time cost estimate failed:', estErr);
+        const totalChars = fullContent.length + fullThinking.length;
+        if (totalChars > 0) {
+          console.log(
+            `[ChatService] kill-time output estimate: chars=${totalChars}` +
+              ` estTokens=${Math.ceil(totalChars / 4)}` +
+              ` lastCost=$${(Number(tracker.lastCostMicroUsd) / 1_000_000).toFixed(6)}`,
+          );
         }
       }
       throw e;
     } finally {
       reader.releaseLock();
 
-      // Client-side reconcile fallback. Fires for every stream end (success,
-      // user abort, connection drop, error) so that the per-chart pill
+      // Client-side reconcile fallback. Force-fires the tracker's reconcile
+      // POST (bypassing the $0.01 / 5s debounce) for every stream end
+      // (success, user abort, connection drop, error) so the per-chart pill
       // converges to the last-seen running_cost even if the worker's
-      // ctx.waitUntil IIFE bails on its time budget. Idempotent server-side
-      // (GREATEST(existing, value)), so a successful streaming reconcile
-      // followed by this POST is a no-op.
-      //
-      // Best-effort: failures here don't surface to the caller. We don't
-      // pass `signal` so a user-initiated abort of the stream doesn't also
-      // cancel this fallback.
-      const loggingMessageIdForReconcile = extraHeaders?.['X-Logging-Message-Id'];
-      if (loggingMessageIdForReconcile && lastCostMicroUsd !== null && lastCostMicroUsd > 0n) {
-        const reconcileHeaders: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-        if (this.authToken) {
-          reconcileHeaders['Authorization'] = `Bearer ${this.authToken}`;
-        }
-        const costMicroStr = lastCostMicroUsd.toString();
-        let directReconcileSucceeded = false;
-        try {
-          const resp = await fetch('/api/reconcile-cost', {
-            method: 'POST',
-            headers: reconcileHeaders,
-            body: JSON.stringify({
-              logging_message_id: loggingMessageIdForReconcile,
-              cost_micro_usd: costMicroStr,
-            }),
-            credentials: 'include',
-          });
-          let resultStr = 'no-body';
-          if (resp.ok) {
-            // Defer the success flag until after the JSON parse resolves.
-            // If the body comes back malformed we don't want the post-success
-            // drain to fire on what was a partially-broken response — better
-            // to leave the queue alone and let the next successful reconcile
-            // (or `online` event) drain it.
-            const result = await resp.json().catch(() => null);
-            resultStr = result ? JSON.stringify(result) : 'parse-error';
-            if (result !== null) {
-              directReconcileSucceeded = true;
-            }
-          } else {
-            resultStr = `error:${resp.status}`;
-            // 5xx → enqueue for retry. 4xx → drop (definitive reject).
-            if (resp.status >= 500) {
-              enqueuePendingReconcile({
-                logging_message_id: loggingMessageIdForReconcile,
-                cost_micro_usd: costMicroStr,
-              });
-            }
-          }
-          console.log(
-            `[ChatService] reconcile-cost: status=${resp.status}` +
-              ` sent=${costMicroStr}µUSD` +
-              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…` +
-              ` result=${resultStr}`,
-          );
-        } catch (reconcileErr) {
-          // Network error — the typical path for ERR_NETWORK_CHANGED /
-          // ERR_CONNECTION_RESET when the user's connection drops mid-stream.
-          // Stash for retry on the next `online` event or next successful
-          // reconcile.
-          enqueuePendingReconcile({
-            logging_message_id: loggingMessageIdForReconcile,
-            cost_micro_usd: costMicroStr,
-          });
-          console.warn(
-            `[ChatService] reconcile-cost POST failed, queued for retry (sent=${costMicroStr}µUSD,` +
-              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…):`,
-            reconcileErr,
-          );
-        }
+      // `ctx.waitUntil` IIFE bails on its time budget. `useBeacon=true`
+      // uses `navigator.sendBeacon` first, which survives an unloading
+      // page (tab close, browser quit); the tracker falls back to fetch
+      // when beacon is missing or refused. Idempotent server-side
+      // (GREATEST clamp + signed-delta + reconciled_at lock).
+      tracker.maybePostReconcile(true, true);
 
-        // Opportunistic drain after a successful direct reconcile. The
-        // network just proved it works, and the worker just woke up — replay
-        // anything queued from earlier failures. Best-effort: this fires
-        // even if the queue is empty (drainPendingReconciles bails fast).
-        if (directReconcileSucceeded) {
-          void drainPendingReconciles(this.authToken);
-        }
-      }
+      // Detach the abort + visibilitychange listeners registered at stream
+      // start. Drain the retry queue opportunistically — this used to fire
+      // only on a successful fetch reconcile, but with the beacon-first
+      // path we can't observe HTTP success synchronously. The `online`
+      // listener and `setAuthToken` drain remain primary; this is a cheap
+      // belt-and-suspenders ("we just finished a stream, network must be
+      // alive enough to have streamed bytes").
+      cleanupTrackerListeners();
+      void drainPendingReconciles(this.authToken);
     }
 
     // Stream ended without message_stop — treat as incomplete
