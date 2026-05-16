@@ -52,6 +52,7 @@ import {
   SparklesIcon,
   PencilSquareIcon,
   KeyIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -747,6 +748,21 @@ export function ChatInterface({
   // flickering on the narrow `web_search` sub-block only.
   const [streamPhase, setStreamPhase] = useState<StreamPhase | null>(null);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  // Composer ⚙ popover (PR 1 polish §1.4): houses the web-search toggle
+  // and the effort selector. Replaces the inline magnifying-glass
+  // button + side-by-side effort dropdown.
+  const [showComposerOptions, setShowComposerOptions] = useState(false);
+  const composerOptionsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showComposerOptions) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (composerOptionsRef.current && !composerOptionsRef.current.contains(e.target as Node)) {
+        setShowComposerOptions(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [showComposerOptions]);
   // Extended thinking is always enabled on Opus 4.7; the server defaults to
   // adaptive thinking when extendedThinkingEnabled is omitted/true.
 
@@ -3076,14 +3092,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       <div className="mb-2">
                         <ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto text-gray-400" />
                       </div>
-                      <p>Type anything to start creating your Theory of Change step-by-step.</p>
+                      <p className="font-medium text-gray-700">Build your ToC step-by-step.</p>
                       <p className="mt-2 text-xs">
-                        If you already have a Theory of Change, you can use the flowchart editing
-                        features.
+                        Ask questions and the assistant edits the flowchart with you as the
+                        conversation unfolds. Best when you want fine-grained control or are still
+                        thinking it through.
                       </p>
                       <p className="mt-2 text-xs">
-                        Or use the "Generate" tab to create a new Theory of Change from existing
-                        documents.
+                        Already have a Theory of Change? You can edit it directly on the canvas.
+                      </p>
+                      <p className="mt-2 text-xs">
+                        Want a complete draft from your existing documents in one shot? Switch to
+                        the <strong>Generate</strong> tab.
                       </p>
                     </div>
                   ) : null}
@@ -3118,7 +3138,19 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         <div className="mb-2">
                           <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
                         </div>
-                        <p>Upload documents to generate a Theory of Change conversation</p>
+                        <p className="font-medium text-gray-700">
+                          Generate a full draft in one pass.
+                        </p>
+                        <p className="mt-2 text-xs">
+                          Attach <strong>Documents</strong> describing your organisation — strategic
+                          plans, programme briefs, evaluations, anything that explains what you do
+                          and why. Generate distils them into a Theory of Change.
+                        </p>
+                        <p className="mt-2 text-xs">
+                          <strong>Additional instructions</strong> below can also stand on their own
+                          if you don't have documents handy — just describe the project and Generate
+                          will run from that prompt alone.
+                        </p>
                       </div>
 
                       {/* File Upload */}
@@ -3685,6 +3717,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </div>
                     )}
                     <div className="flex items-center justify-between">
+                      {/* PR 1 polish: bottom composer redesigned to
+                        [+ Attach] [Model ▾] [⚙] [Send]. Web search +
+                        effort moved into the ⚙ popover (plan §1.4 +
+                        traceability table #4). */}
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => chatFileInputRef.current?.click()}
@@ -3694,26 +3730,63 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         >
                           <PaperClipIcon className="w-5 h-5" />
                         </button>
-                        <button
-                          onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                          className={`p-2 rounded-lg transition-colors ${
-                            webSearchEnabled
-                              ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
-                              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                          }`}
-                          title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
-                        >
-                          <MagnifyingGlassIcon className="w-5 h-5" />
-                        </button>
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                        <div className="relative" ref={composerOptionsRef}>
+                          <button
+                            onClick={() => setShowComposerOptions((s) => !s)}
+                            className="p-2 rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                            title="Composer options"
+                            aria-label="Composer options"
+                            aria-haspopup="menu"
+                            aria-expanded={showComposerOptions}
+                          >
+                            <Cog6ToothIcon className="w-5 h-5" />
+                          </button>
+                          {showComposerOptions && (
+                            <div
+                              role="menu"
+                              className="absolute bottom-full mb-2 right-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-xs font-medium text-gray-700">
+                                    Web search
+                                  </div>
+                                  <div className="text-[10px] text-gray-500">
+                                    Let the assistant browse the web mid-conversation.
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setWebSearchEnabled((v) => !v)}
+                                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                    webSearchEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                                  }`}
+                                  aria-pressed={webSearchEnabled}
+                                  aria-label="Toggle web search"
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                                      webSearchEnabled ? 'translate-x-4' : 'translate-x-1'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                              <div>
+                                <div className="text-xs font-medium text-gray-700 mb-1">
+                                  Effort level
+                                </div>
+                                <EffortDropdown
+                                  model={selectedModel}
+                                  selected={selectedEffort}
+                                  onSelect={setSelectedEffort}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <EffortDropdown
-                          model={selectedModel}
-                          selected={selectedEffort}
-                          onSelect={setSelectedEffort}
-                        />
-                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
-
                         {isStreaming ? (
                           <button
                             onClick={handleStopStreaming}

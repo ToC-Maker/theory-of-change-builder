@@ -62,7 +62,10 @@ export function Legend({
 
   return (
     <div
-      className={`absolute z-40 bg-white rounded-lg shadow-lg border border-gray-200 p-3 select-none ${
+      // PR 1 polish: dropped `shadow-lg` per plan failure-mode #8
+      // (shadow makes the legend look clickable). Keep the border so it
+      // stays visually grouped against the canvas.
+      className={`absolute z-40 bg-white rounded-lg border border-gray-200 p-3 select-none ${
         editMode ? (isDraggingLegend ? 'cursor-grabbing' : 'cursor-grab') : ''
       }`}
       style={{
