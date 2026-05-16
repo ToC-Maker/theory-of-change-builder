@@ -20,6 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 import AuthButton from './components/AuthButton';
 import { getFreshIdToken } from './utils/auth';
+import { isInputFocused } from './utils/isInputFocused';
 import type { ToCData } from './types';
 import './App.css';
 
@@ -991,6 +992,14 @@ function ToCViewer() {
   );
 
   const handleUndo = useCallback(() => {
+    // L2 mitigation: if the user is typing in an INPUT/TEXTAREA/
+    // contentEditable, the in-progress edit owns Ctrl+Z. Bail out so the
+    // browser's native undo runs against the text field instead of our
+    // graph history. Toolbar undo buttons that fire handleUndo MUST pair
+    // this with `onMouseDown={(e) => e.preventDefault()}` so the click
+    // doesn't shift focus to the button before this check runs.
+    if (isInputFocused()) return;
+
     // Clear any pending saves first
     if (undoTimeoutRef.current) {
       clearTimeout(undoTimeoutRef.current);
@@ -1049,6 +1058,9 @@ function ToCViewer() {
   }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
 
   const handleRedo = useCallback(() => {
+    // L2 mitigation symmetric to handleUndo — see comment there.
+    if (isInputFocused()) return;
+
     // Clear any pending saves first
     if (undoTimeoutRef.current) {
       clearTimeout(undoTimeoutRef.current);
@@ -1109,18 +1121,9 @@ function ToCViewer() {
   // Keyboard shortcut handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if user is typing in an input field
-      const activeElement = document.activeElement;
-      const isTyping =
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          (activeElement as HTMLElement).contentEditable === 'true');
-
-      // Don't interfere with text editing
-      if (isTyping) {
-        return;
-      }
+      // Don't interfere with text editing: shared util keeps this in
+      // sync with handleUndo/handleRedo and useKeyboardShortcuts.
+      if (isInputFocused()) return;
 
       if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
         event.preventDefault();

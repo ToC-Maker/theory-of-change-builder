@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Node, ToCData } from '../types';
+import { isInputFocused } from '../utils/isInputFocused';
 
 interface UseKeyboardShortcutsProps {
   data: ToCData;
@@ -242,19 +243,11 @@ export function useKeyboardShortcuts({
   // Enhanced keyboard event handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if user is typing in an input field
-      const activeElement = document.activeElement;
-      const isTyping =
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          (activeElement as HTMLElement).contentEditable === 'true');
-
-      // Allow ALL shortcuts to pass through when typing in input fields
-      if (isTyping) {
-        // Don't interfere with any keyboard shortcuts while user is typing
-        return;
-      }
+      // Don't interfere with any keyboard shortcut while user is typing
+      // in an INPUT / TEXTAREA / contentEditable. Shared helper so the
+      // check stays in sync with App.handleUndo/handleRedo + toolbar
+      // L2 mitigation.
+      if (isInputFocused()) return;
 
       // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)
       if ((event.ctrlKey || event.metaKey) && event.key === 'a' && editMode) {

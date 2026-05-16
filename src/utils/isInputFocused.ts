@@ -17,6 +17,17 @@ export function isInputFocused(): boolean {
   if (!el) return false;
   const tag = el.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
-  if ((el as HTMLElement).isContentEditable === true) return true;
+  // Three complementary checks for contentEditable. Real browsers
+  // expose all three; jsdom is patchy (the IDL `contentEditable`
+  // property is writable but doesn't reflect to attribute, and
+  // `isContentEditable` is `undefined`). Match any:
+  //   - `isContentEditable` boolean (real browsers; respects inheritance)
+  //   - `contentEditable` IDL prop equal to "true" (jsdom path)
+  //   - `contenteditable` attribute present and not "false"
+  const html = el as HTMLElement;
+  if (html.isContentEditable === true) return true;
+  if (html.contentEditable === 'true') return true;
+  const ce = el.getAttribute?.('contenteditable');
+  if (ce !== null && ce !== undefined && ce !== 'false') return true;
   return false;
 }

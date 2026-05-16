@@ -907,6 +907,14 @@ export function EditToolbar({
                   ({undoHistory.length})
                 </span>
                 <button
+                  // L2 mitigation: prevent the mousedown from shifting
+                  // focus to this button before `handleUndo` reads
+                  // `document.activeElement`. Without this, clicking
+                  // Undo while typing in chat steals focus to the button
+                  // and `isInputFocused()` returns false, so the click
+                  // would undo the graph instead of letting the browser
+                  // undo the in-progress text edit.
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={handleUndo}
                   disabled={undoHistory.length === 0}
                   className="p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
@@ -927,6 +935,8 @@ export function EditToolbar({
                   </svg>
                 </button>
                 <button
+                  // L2 mitigation symmetric to Undo above.
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={handleRedo}
                   disabled={redoHistory.length === 0}
                   className="p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
