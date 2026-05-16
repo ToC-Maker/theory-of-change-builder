@@ -208,7 +208,6 @@ export function scheduleRectRefresh(state: RefreshState, refresh: () => void): v
 export interface SectionWidthsOptions {
   columnPadding: number;
   editMode: boolean;
-  layoutMode: boolean;
 }
 
 export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions): number[] {
@@ -225,8 +224,6 @@ export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions):
     // PR 5: edit mode renders the column-gutter affordances between
     // columns, so the flex `gap` between columns is 0 (gutters provide
     // their own spacing). View mode keeps the bare gaps.
-    // `layoutMode` is retained as an arg until Task 5.4 deletes it
-    // wholesale, but no longer changes the width math.
     const gaps = opts.editMode ? 0 : Math.max(0, columnWidths.length - 1) * opts.columnPadding;
     return totalColumnWidth + gaps;
   });
@@ -247,7 +244,6 @@ export interface UseGraphLayoutArgs {
   columnPadding: number;
   sectionPadding: number;
   editMode: boolean;
-  layoutMode: boolean;
 }
 
 export interface UseGraphLayoutResult {
@@ -266,11 +262,10 @@ export function useGraphLayout({
   columnPadding,
   sectionPadding,
   editMode,
-  layoutMode,
 }: UseGraphLayoutArgs): UseGraphLayoutResult {
   const sectionWidths = useMemo(
-    () => computeSectionWidths(data, { columnPadding, editMode, layoutMode }),
-    [data, columnPadding, editMode, layoutMode],
+    () => computeSectionWidths(data, { columnPadding, editMode }),
+    [data, columnPadding, editMode],
   );
 
   // Rect cache lives in a ref so consumers can poll without re-rendering.
