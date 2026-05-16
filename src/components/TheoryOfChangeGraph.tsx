@@ -10,6 +10,8 @@ import { NodeEditor } from './node-editor/NodeEditor';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
 import { useGraphMutation } from '../hooks/useGraphMutation';
+import { usePointerDrag } from '../hooks/usePointerDrag';
+import type { DragOverLocation } from '../hooks/usePointerDrag';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 // PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
@@ -30,6 +32,7 @@ export function ToC({
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
+  onDragActiveChange,
 }: {
   data: ToCData;
   onSizeChange?: (size: { width: number; height: number }) => void;
@@ -38,6 +41,15 @@ export function ToC({
   zoomScale?: number;
   camera?: { x: number; y: number; z: number };
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void;
+  /**
+   * PR 4: fired when a pointer-drag starts or ends. App.tsx uses this
+   * to pause its 30s sync poll so the in-flight gesture isn't fighting
+   * a stale server snapshot for control of the canvas state
+   * (red-team Important "PR 4 pointer-capture during cross-tab delete
+   * race"). Best-effort: a missed `false` after unmount is fine — the
+   * polling effect re-snapshots `data` next tick.
+   */
+  onDragActiveChange?: (isActive: boolean) => void;
   // PR 3: `viewportOffset` was used by the NodePopup / EdgePopup modal
   // sizing math; both modals retired, so the prop is gone. The
   // anchored editors are positioned by `useAnchorPosition` directly.
@@ -85,14 +97,10 @@ export function ToC({
     onHighlightedNodesChange?.(highlightedNodes);
   }, [highlightedNodes, onHighlightedNodesChange]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [draggedNode, setDraggedNode] = useState<Node | null>(null);
-  const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
-  const [dragOverLocation, setDragOverLocation] = useState<{
-    sectionIndex: number;
-    columnIndex: number;
-    yPosition?: number;
-    isNewColumn?: boolean;
-  } | null>(null);
+  // PR 4: legacy `draggedNode`, `dragOffset`, `dragOverLocation` state
+  // retired — `usePointerDrag` now owns drag state internally and
+  // returns `dragState` (or null). The hook is wired below after
+  // `useGraphLayout` (it needs the snapshot accessor).
   // editMode/layoutMode setters dropped along with the inline
   // EditToolbar mode toggle — the canvas still reads the state but no
   // longer needs to flip it from inside.
@@ -497,81 +505,24 @@ export function ToC({
     });
   }, [editMode, setDataAndNotify, nodeHeights]);
 
-  // useCallback so React.memo(NodeComponent) can bail out on drag handler
-  // identity. Reads `nodeRefsRef.current[node.id]` instead of the
-  // `nodeRefs` state so node mount/unmount doesn't churn this callback's
-  // identity (which would invalidate the React.memo bail-out on every
-  // remaining node — defeating Task 0.4's whole point).
-  const handleDragStart = useCallback(
-    (node: Node, event: React.DragEvent) => {
-      if (!editMode) {
-        event.preventDefault();
-        return;
-      }
+  // PR 4: HTML5 DnD retired. `handleDragStart` / `handleDragEnd` /
+  // `handleDragOver` and the global `dragover` / `drop` document
+  // listeners are gone. Pointer-events drag is owned by
+  // `usePointerDrag` (wired below, after `useGraphLayout` because the
+  // hook needs `getSnapshot`).
+  //
+  // The scaled-clone drag-image wrapper that this section used to
+  // build (for the HTML5 DnD `setDragImage` call at the original
+  // zoom) is no longer needed: our React-rendered drop-preview ghost
+  // (see render path below) follows the pointer in the same
+  // transform stack as the canvas, so the browser doesn't have to
+  // composite a separate drag-image layer.
 
-      setDraggedNode(node);
-
-      // Calculate the offset from where the user clicked to the top of the node
-      const nodeElement = nodeRefsRef.current[node.id];
-      if (nodeElement) {
-        const rect = nodeElement.getBoundingClientRect();
-        const offsetX = event.clientX - rect.left;
-        const offsetY = event.clientY - rect.top;
-        setDragOffset({ x: offsetX, y: offsetY });
-
-        // Create a wrapper div to apply scale without affecting the drag image capture
-        const wrapper = document.createElement('div');
-        wrapper.style.position = 'fixed';
-        wrapper.style.top = '-9999px';
-        wrapper.style.left = '-9999px';
-        wrapper.style.width = `${nodeElement.offsetWidth * zoomScale}px`;
-        wrapper.style.height = `${nodeElement.offsetHeight * zoomScale}px`;
-        wrapper.style.pointerEvents = 'none';
-
-        const dragImage = nodeElement.cloneNode(true) as HTMLElement;
-        dragImage.style.width = `${nodeElement.offsetWidth}px`;
-        dragImage.style.height = `${nodeElement.offsetHeight}px`;
-        dragImage.style.transform = `scale(${zoomScale})`;
-        dragImage.style.transformOrigin = '0 0';
-        dragImage.style.opacity = '0.8';
-
-        wrapper.appendChild(dragImage);
-        document.body.appendChild(wrapper);
-
-        // Set the drag image with scaled offset
-        event.dataTransfer.setDragImage(wrapper, offsetX, offsetY);
-
-        // Clean up after drag starts
-        requestAnimationFrame(() => {
-          if (wrapper.parentNode) {
-            document.body.removeChild(wrapper);
-          }
-        });
-      }
-    },
-    [editMode, zoomScale],
-  );
-
-  const handleDragEnd = useCallback(() => {
-    setDraggedNode(null);
-    setDragOffset(null);
-    setDragOverLocation(null);
-  }, []);
-
-  const handleDragOver = (
-    sectionIndex: number,
-    columnIndex: number,
-    isNewColumn: boolean = false,
-    yPosition?: number,
-  ) => {
-    setDragOverLocation({ sectionIndex, columnIndex, isNewColumn, yPosition });
-  };
-
-  // Section widths + (future) column-rect snapshot come from useGraphLayout.
-  // The hook extracts `sectionWidths` (formerly inlined at this position)
-  // and pre-computes a layout snapshot for the drag machinery landing in
-  // PR 4 / PR 5. Only `sectionWidths` is consumed here for now.
-  const { sectionWidths } = useGraphLayout({
+  // Section widths + column-rect snapshot from useGraphLayout.
+  // `getSnapshot` is consumed by `usePointerDrag` mid-drag to feed
+  // `classifyRegion` (the only path that reads rects during a gesture;
+  // PR 5 / PR 7 will share the same accessor).
+  const { sectionWidths, getSnapshot } = useGraphLayout({
     data,
     containerRef: graphContainerRef,
     columnPadding,
@@ -579,97 +530,6 @@ export function ToC({
     editMode,
     layoutMode,
   });
-
-  // Global drag tracking to handle dragging outside container bounds
-  useEffect(() => {
-    if (!draggedNode || !editMode) return;
-
-    const handleGlobalDragOver = (e: DragEvent) => {
-      e.preventDefault(); // Necessary to allow drop
-
-      const container = graphContainerRef.current;
-      if (!container) return;
-
-      // Instead of calculating positions, query all column elements and check which one the mouse is over
-      const allColumnElements = container.querySelectorAll('[data-column]');
-      let foundColumn = false;
-
-      // Check each column element to see if the mouse is over it
-      for (const element of allColumnElements) {
-        const columnElement = element as HTMLElement;
-        const columnRect = columnElement.getBoundingClientRect();
-
-        // Check if mouse X is within this column's bounds (allow vertical overflow)
-        if (e.clientX >= columnRect.left && e.clientX <= columnRect.right) {
-          // Extract section and column index from data-column attribute
-          const dataColumn = columnElement.getAttribute('data-column');
-          if (dataColumn) {
-            const [sectionIndex, columnIndex] = dataColumn.split('-').map(Number);
-
-            // Calculate Y position relative to this column
-            const yPositionRelativeToColumn = e.clientY - columnRect.top;
-
-            setDragOverLocation({
-              sectionIndex,
-              columnIndex,
-              isNewColumn: false,
-              yPosition: yPositionRelativeToColumn,
-            });
-            foundColumn = true;
-            break;
-          }
-        }
-      }
-
-      // If no column found under mouse, find the closest one by X position
-      if (!foundColumn && allColumnElements.length > 0) {
-        let closestElement: HTMLElement | null = null;
-        let closestDistance = Infinity;
-
-        for (const element of allColumnElements) {
-          const columnElement = element as HTMLElement;
-          const columnRect = columnElement.getBoundingClientRect();
-          const columnCenterX = columnRect.left + columnRect.width / 2;
-          const distance = Math.abs(e.clientX - columnCenterX);
-
-          if (distance < closestDistance) {
-            closestDistance = distance;
-            closestElement = columnElement;
-          }
-        }
-
-        if (closestElement) {
-          const dataColumn = closestElement.getAttribute('data-column');
-          if (dataColumn) {
-            const [sectionIndex, columnIndex] = dataColumn.split('-').map(Number);
-            const columnRect = closestElement.getBoundingClientRect();
-            const yPositionRelativeToColumn = e.clientY - columnRect.top;
-
-            setDragOverLocation({
-              sectionIndex,
-              columnIndex,
-              isNewColumn: false,
-              yPosition: yPositionRelativeToColumn,
-            });
-          }
-        }
-      }
-    };
-
-    document.addEventListener('dragover', handleGlobalDragOver);
-
-    return () => {
-      document.removeEventListener('dragover', handleGlobalDragOver);
-    };
-  }, [
-    draggedNode,
-    editMode,
-    layoutMode,
-    data.sections,
-    sectionWidths,
-    columnPadding,
-    sectionPadding,
-  ]);
 
   const areNodesConnected = useCallback(
     (sourceId: string, targetId: string) => {
@@ -800,46 +660,44 @@ export function ToC({
     setNodeColor('#ffffff');
   }, [editMode, highlightedNodes, setDataAndNotify, areNodesConnected, disconnectSelectedNodes]);
 
+  // PR 4: `handleDrop` signature refactored to take a `DragOverLocation`
+  // and the dragged node id directly (the hook supplies both via its
+  // `onDrop` callback). The previous (sectionIndex, columnIndex,
+  // isNewColumn, yPosition) shape is gone — all 6+ JSX callsites
+  // that used to wire it up via `onDragOver` / `onDrop` are deleted
+  // along with HTML5 DnD. The hook also closes the "drop outside
+  // container" gap that the old global `drop` listener used to cover:
+  // captured pointer events deliver `pointerup` everywhere.
+  //
+  // pointerOffsetY is the offset (in viewport px) from the cursor to
+  // the top of the dragged node at drag-start. It's the per-gesture
+  // analog of the old `dragOffset.y` ref.
   const handleDrop = useCallback(
-    (
-      targetSectionIndex: number,
-      targetColumnIndex: number,
-      isNewColumn: boolean = false,
-      yPosition?: number,
-    ) => {
-      if (!draggedNode || !dragOffset) {
-        console.log('No dragged node or drag offset');
-        return;
-      }
-
-      const sourceLocation = findNodeLocation(draggedNode.id);
+    (target: DragOverLocation, draggedNodeId: string, pointerOffsetY: number) => {
+      const sourceLocation = findNodeLocation(draggedNodeId);
       if (!sourceLocation) {
-        console.log('Source location not found for node:', draggedNode.id);
+        console.log('Source location not found for node:', draggedNodeId);
         return;
       }
+      const targetSectionIndex = target.sectionIndex;
+      const targetColumnIndex = target.columnIndex;
+      const isNewColumn = !!target.isNewColumn;
 
-      // Adjust yPosition by the drag offset so the node appears where the user grabbed it
+      // Adjust yPosition by the drag offset so the node appears where the user grabbed it.
+      // target.yPosition is the cursor's container-local Y (already
+      // zoom-translated by the hook). pointerOffsetY is viewport-space
+      // (no zoom applied at capture time); divide by zoomScale to put
+      // it in the same coord system.
       let adjustedYPosition = 20; // Default fallback
-      if (yPosition !== undefined) {
-        // yPosition comes from e.clientY - rect.top where rect is from getBoundingClientRect()
-        // getBoundingClientRect() returns viewport coordinates which are already scaled by the zoom transform
-        // So we need to convert back to local space by dividing by zoom
-        const mouseLocalY = yPosition / zoomScale;
-
-        // dragOffset.y was captured from the original drag event, also in viewport space
-        const dragOffsetLocalY = dragOffset.y / zoomScale;
-
-        // Calculate where the node's top would be in local space
+      if (target.yPosition !== undefined) {
+        const mouseLocalY = target.yPosition;
+        const dragOffsetLocalY = pointerOffsetY / zoomScale;
         const nodeTopLocal = mouseLocalY - dragOffsetLocalY;
-
-        // Get node height (stored in local space)
-        const actualHeight = nodeHeights[draggedNode.id] || 76;
-
-        // Calculate center in local space
+        const actualHeight = nodeHeights[draggedNodeId] || 76;
         adjustedYPosition = nodeTopLocal + actualHeight / 2;
       }
 
-      console.log('Moving node', draggedNode.id, 'from', sourceLocation, 'to', {
+      console.log('Moving node', draggedNodeId, 'from', sourceLocation, 'to', {
         targetSectionIndex,
         targetColumnIndex,
         isNewColumn,
@@ -847,13 +705,27 @@ export function ToC({
       });
 
       setDataAndNotify((prevData) => {
-        // If we're just updating position in the same column, do it more precisely
+        // Locate the source node fresh inside the updater so we don't
+        // leak `findNodeLocation`'s closed-over data snapshot.
+        let sourceNode: Node | null = null;
+        for (const section of prevData.sections) {
+          for (const column of section.columns) {
+            const found = column.nodes.find((n) => n.id === draggedNodeId);
+            if (found) {
+              sourceNode = found;
+              break;
+            }
+          }
+          if (sourceNode) break;
+        }
+        if (!sourceNode) return prevData;
+
+        // Same-column move: in-place yPosition update only.
         if (
           !isNewColumn &&
           sourceLocation.sectionIndex === targetSectionIndex &&
           sourceLocation.columnIndex === targetColumnIndex
         ) {
-          // Just update the yPosition of the specific node in place
           return {
             ...prevData,
             sections: prevData.sections.map((section, sIndex) =>
@@ -865,7 +737,7 @@ export function ToC({
                         ? {
                             ...column,
                             nodes: column.nodes.map((node) =>
-                              node.id === draggedNode.id
+                              node.id === draggedNodeId
                                 ? { ...node, yPosition: adjustedYPosition }
                                 : node,
                             ),
@@ -878,26 +750,22 @@ export function ToC({
           };
         }
 
-        // For moves between different columns/sections, do the full remove and add
+        // Cross-column / cross-section move: remove from source, add to target.
         const newData = { ...prevData };
-
-        // Remove node from source location
         newData.sections = prevData.sections.map((section) => ({
           ...section,
           columns: section.columns.map((column) => ({
             ...column,
-            nodes: column.nodes.filter((node) => node.id !== draggedNode.id),
+            nodes: column.nodes.filter((node) => node.id !== draggedNodeId),
           })),
         }));
 
         if (isNewColumn) {
-          // Insert new column at the target position
           const targetSection = newData.sections[targetSectionIndex];
-          const newColumn = { nodes: [{ ...draggedNode, yPosition: adjustedYPosition }] };
+          const newColumn = { nodes: [{ ...sourceNode, yPosition: adjustedYPosition }] };
           targetSection.columns.splice(targetColumnIndex, 0, newColumn);
         } else {
-          // Add node with custom yPosition to existing column
-          const nodeWithPosition = { ...draggedNode, yPosition: adjustedYPosition };
+          const nodeWithPosition = { ...sourceNode, yPosition: adjustedYPosition };
           newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(
             nodeWithPosition,
           );
@@ -905,38 +773,46 @@ export function ToC({
 
         return newData;
       });
-
-      setDraggedNode(null);
-      setDragOffset(null);
-      setDragOverLocation(null);
     },
-    [draggedNode, dragOffset, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
+    [findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
   );
 
-  // Global drop handler to complete drops even when mouse is outside column boundaries
+  // PR 4: `usePointerDrag` owns drag state. `onDrop` bridges to the
+  // refactored `handleDrop` above; `onDragStart` dispatches the
+  // NodeEditor-close callback registered via `nodeEditorDragStartRef`
+  // (set up below in `NodeEditorMount`).
+  const nodeEditorDragStartRef = useRef<(() => void) | null>(null);
+  const dragHookOnDropRef = useRef<typeof handleDrop>(handleDrop);
+  dragHookOnDropRef.current = handleDrop;
+
+  const {
+    dragState,
+    bindNode: bindNodeDrag,
+    isActive: isDragActive,
+  } = usePointerDrag({
+    data,
+    containerRef: graphContainerRef,
+    getSnapshot,
+    editMode,
+    zoomScale,
+    nodeHeights,
+    onDrop: (target, draggedNodeId) => {
+      // The hook holds the pointerOffset in dragState at the moment of
+      // pointerup; we read it via the ref-mirrored handler.
+      const pointerOffsetY = dragState?.pointerOffset.y ?? 0;
+      dragHookOnDropRef.current(target, draggedNodeId, pointerOffsetY);
+    },
+    onDragStart: () => {
+      // Notify the anchored NodeEditor to dismiss (if mounted).
+      nodeEditorDragStartRef.current?.();
+    },
+  });
+
+  // Notify parent (App) of drag-active transitions so the 30s sync
+  // poll can pause while a gesture is in flight (red-team Important).
   useEffect(() => {
-    if (!draggedNode || !editMode) return;
-
-    const handleGlobalDrop = (e: DragEvent) => {
-      e.preventDefault();
-
-      // Use the current drag over location if available
-      if (dragOverLocation) {
-        handleDrop(
-          dragOverLocation.sectionIndex,
-          dragOverLocation.columnIndex,
-          dragOverLocation.isNewColumn,
-          dragOverLocation.yPosition,
-        );
-      }
-    };
-
-    document.addEventListener('drop', handleGlobalDrop);
-
-    return () => {
-      document.removeEventListener('drop', handleGlobalDrop);
-    };
-  }, [draggedNode, editMode, dragOverLocation, handleDrop]);
+    onDragActiveChange?.(isDragActive);
+  }, [isDragActive, onDragActiveChange]);
 
   const connectedNodes = useMemo(() => {
     if (highlightedNodes.size === 0) {
@@ -1213,18 +1089,6 @@ export function ToC({
                                 width: `${columnPadding}px`,
                                 height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
                               }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDragOver(sectionIndex, 0, true, yPosition);
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDrop(sectionIndex, 0, true, yPosition);
-                              }}
                               onClick={() => {
                                 setDataAndNotify((prevData) => {
                                   const newData = { ...prevData };
@@ -1268,26 +1132,6 @@ export function ToC({
                             title={
                               editMode && layoutMode && column.nodes.length === 0
                                 ? 'Click to delete column'
-                                : undefined
-                            }
-                            onDragOver={
-                              editMode
-                                ? (e) => {
-                                    e.preventDefault();
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    const yPosition = e.clientY - rect.top;
-                                    handleDragOver(sectionIndex, colIndex, false, yPosition);
-                                  }
-                                : undefined
-                            }
-                            onDrop={
-                              editMode
-                                ? (e) => {
-                                    e.preventDefault();
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    const yPosition = e.clientY - rect.top;
-                                    handleDrop(sectionIndex, colIndex, false, yPosition);
-                                  }
                                 : undefined
                             }
                             onClick={(e) => {
@@ -1365,12 +1209,11 @@ export function ToC({
                                     isHighlighted={highlightedNodes.has(node.id)}
                                     isConnected={connectedNodes.has(node.id)}
                                     isHovered={hoveredNode === node.id}
-                                    isDragging={draggedNode?.id === node.id}
+                                    isDragging={dragState?.nodeId === node.id}
                                     toggleHighlight={toggleHighlight}
                                     setHoveredNode={setHoveredNode}
                                     hasHighlightedNodes={highlightedNodes.size > 0}
-                                    onDragStart={handleDragStart}
-                                    onDragEnd={handleDragEnd}
+                                    onPointerDown={bindNodeDrag(node.id).onPointerDown}
                                     editMode={editMode}
                                     textSize={textSize}
                                     fontFamily={fontFamily}
@@ -1394,18 +1237,6 @@ export function ToC({
                               style={{
                                 width: `${columnPadding}px`,
                                 height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                              }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDragOver(sectionIndex, colIndex + 1, true, yPosition);
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDrop(sectionIndex, colIndex + 1, true, yPosition);
                               }}
                               onClick={() => {
                                 // Add new column
@@ -1669,6 +1500,9 @@ export function ToC({
             commit={commitMutation}
             camera={camera ?? { x: 0, y: 0, z: 1 }}
             onRequestClose={() => setHighlightedNodes(new Set())}
+            registerOnDragStartedElsewhere={(cb) => {
+              nodeEditorDragStartRef.current = cb;
+            }}
             fontFamily={fontFamily}
           />
         )}
@@ -1693,6 +1527,7 @@ function NodeEditorMount({
   commit,
   camera,
   onRequestClose,
+  registerOnDragStartedElsewhere,
   fontFamily,
 }: {
   highlightedNodes: Set<string>;
@@ -1703,6 +1538,12 @@ function NodeEditorMount({
   commit: (key?: string) => void;
   camera: { x: number; y: number; z: number };
   onRequestClose: () => void;
+  /**
+   * PR 4 seam: NodeEditor calls this once on mount with its dismiss
+   * callback. The parent (TheoryOfChangeGraph) stores it in a ref the
+   * `usePointerDrag` hook reads on `onDragStart`.
+   */
+  registerOnDragStartedElsewhere?: (cb: () => void) => void;
   fontFamily?: string;
 }) {
   const selectedIds = Array.from(highlightedNodes);
@@ -1728,6 +1569,7 @@ function NodeEditorMount({
       anchorRef={anchorRef}
       camera={camera}
       onRequestClose={onRequestClose}
+      registerOnDragStartedElsewhere={registerOnDragStartedElsewhere}
       fontFamily={fontFamily}
     />
   );

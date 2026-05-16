@@ -383,71 +383,88 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
     };
   }, []);
 
-  const bindNode = useCallback(
-    (nodeId: string) => ({
-      onPointerDown: (e: ReactPointerEvent) => {
-        if (!editMode) return;
-        // Mutual exclusion: another canvas gesture is in flight
-        // (connection-drag from PR 5, waypoint-drag from PR 7).
-        if (isCanvasGestureActive()) return;
-        // Some pointer events should not start a drag: secondary mouse
-        // buttons (right-click), pointerType 'pen' eraser, etc. We
-        // only act on primary buttons.
-        if (e.button != null && e.button !== 0) return;
+  // Mirror render-time props/callbacks behind refs so the per-id
+  // pointerdown handler can stay referentially stable across renders.
+  // `React.memo(NodeComponent)` requires stable callback props; if
+  // `bindNode(id).onPointerDown` returned a fresh function every parent
+  // render, the memo would always invalidate. The per-id handler reads
+  // current values via these refs at call time instead of closing over
+  // them.
+  const editModeRef = useRef(editMode);
+  editModeRef.current = editMode;
+  const getSnapshotRef = useRef(getSnapshot);
+  getSnapshotRef.current = getSnapshot;
+  const onDragStartRef = useRef(onDragStart);
+  onDragStartRef.current = onDragStart;
 
-        const target = e.target as HTMLElement | null;
-        const container = containerRef.current;
-        if (!target || !container) return;
+  // Per-id handler cache so the returned object identity is stable
+  // for a given node id across re-renders. Cleared on unmount only
+  // (entries are small; the cache size is bounded by the live node set).
+  const bindCacheRef = useRef<Map<string, { onPointerDown: (e: ReactPointerEvent) => void }>>(
+    new Map(),
+  );
 
-        // The captured element is the receiver of the pointerdown
-        // (typically a child of the node root because the listener is
-        // on the root). setPointerCapture binds subsequent pointermove
-        // events to this element even if the cursor leaves it.
-        try {
-          if (typeof target.setPointerCapture === 'function') {
-            target.setPointerCapture(e.pointerId);
-            captureElRef.current = target;
-          }
-        } catch {
-          // jsdom or detached element — non-fatal.
+  const startDrag = useCallback(
+    (nodeId: string, e: ReactPointerEvent) => {
+      if (!editModeRef.current) return;
+      if (isCanvasGestureActive()) return;
+      if (e.button != null && e.button !== 0) return;
+
+      const target = e.target as HTMLElement | null;
+      const container = containerRef.current;
+      if (!target || !container) return;
+
+      try {
+        if (typeof target.setPointerCapture === 'function') {
+          target.setPointerCapture(e.pointerId);
+          captureElRef.current = target;
         }
+      } catch {
+        // jsdom or detached element — non-fatal.
+      }
 
-        activePointerIdRef.current = e.pointerId;
-        setCanvasGestureActive(true);
-        onDragStart?.(nodeId);
+      activePointerIdRef.current = e.pointerId;
+      setCanvasGestureActive(true);
+      onDragStartRef.current?.(nodeId);
 
-        // Capture node geometry at drag-start for ghost render math.
-        const nodeEl = e.currentTarget as HTMLElement;
-        const containerRect = container.getBoundingClientRect();
-        const nodeRect = nodeEl.getBoundingClientRect();
-        const pointerOffset = {
-          x: e.clientX - nodeRect.left,
-          y: e.clientY - nodeRect.top,
-        };
-        // Node width/height in container-local px (divide by zoom to
-        // undo any CSS scale on the canvas).
-        const nodeSize = {
-          width: nodeEl.offsetWidth,
-          height: nodeHeightsRef.current[nodeId] || nodeEl.offsetHeight,
-        };
+      const nodeEl = e.currentTarget as HTMLElement;
+      const containerRect = container.getBoundingClientRect();
+      const nodeRect = nodeEl.getBoundingClientRect();
+      const pointerOffset = {
+        x: e.clientX - nodeRect.left,
+        y: e.clientY - nodeRect.top,
+      };
+      const nodeSize = {
+        width: nodeEl.offsetWidth,
+        height: nodeHeightsRef.current[nodeId] || nodeEl.offsetHeight,
+      };
 
-        // Seed dragState with a synchronous classifyRegion call so the
-        // initial ghost paints at the right zone (without waiting for
-        // the first pointermove tick).
-        const localX = (e.clientX - containerRect.left) / zoomRef.current;
-        const localY = (e.clientY - containerRect.top) / zoomRef.current;
-        const initialRegion = classifyRegion(getSnapshot(), { x: localX, y: localY });
+      const localX = (e.clientX - containerRect.left) / zoomRef.current;
+      const localY = (e.clientY - containerRect.top) / zoomRef.current;
+      const initialRegion = classifyRegion(getSnapshotRef.current(), { x: localX, y: localY });
 
-        setDragState({
-          nodeId,
-          ghostPos: { x: e.clientX, y: e.clientY },
-          pointerOffset,
-          nodeSize,
-          dragOverLocation: regionToDragOverLocation(initialRegion),
-        });
-      },
-    }),
-    [editMode, containerRef, getSnapshot, onDragStart, setDragState],
+      setDragState({
+        nodeId,
+        ghostPos: { x: e.clientX, y: e.clientY },
+        pointerOffset,
+        nodeSize,
+        dragOverLocation: regionToDragOverLocation(initialRegion),
+      });
+    },
+    [containerRef, setDragState],
+  );
+
+  const bindNode = useCallback(
+    (nodeId: string) => {
+      const cached = bindCacheRef.current.get(nodeId);
+      if (cached) return cached;
+      const entry = {
+        onPointerDown: (e: ReactPointerEvent) => startDrag(nodeId, e),
+      };
+      bindCacheRef.current.set(nodeId, entry);
+      return entry;
+    },
+    [startDrag],
   );
 
   return useMemo(
