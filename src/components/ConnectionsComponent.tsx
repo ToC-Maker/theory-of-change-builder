@@ -1,25 +1,34 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
-import { EdgePopup } from './EdgePopup';
+import { EdgeEditor } from './edge-editor/EdgeEditor';
 
-export interface EdgePopupState {
+// PR 3: `EdgePopupState` was the modal's full state copy (with x/y for
+// positioning, plus full confidence/evidence/assumptions). The new
+// anchored EdgeEditor reads property values from `data` directly, so we
+// only need the source/target pair plus the midpoint for anchor
+// placement.
+interface SelectedEdge {
   sourceId: string;
   targetId: string;
-  x: number;
-  y: number;
-  confidence: number;
-  minConfidence?: number;
-  maxConfidence?: number;
-  evidence?: string;
-  assumptions?: string;
+  /** Connection midpoint in container-local coordinates (px). */
+  midX: number;
+  midY: number;
 }
 
 interface ConnectionsComponentProps {
   data: ToCData;
-  setData: React.Dispatch<React.SetStateAction<ToCData>>;
+  /**
+   * PR 3: `useGraphMutation` triad threaded down so the embedded
+   * EdgeEditor can write confidence (streaming) and evidence /
+   * assumptions (buffered) through the same primitive everything
+   * else uses. `setData` (the direct setter) was previously used for
+   * updateConfidence/updateConnection in this file — both retired.
+   */
+  mutate?: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  mutateDebounced?: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  commit?: (key?: string) => void;
   nodeRefs: { [key: string]: HTMLDivElement | null };
   nodeHeights: { [key: string]: number };
   highlightedNodes: Set<string>;
@@ -32,17 +41,29 @@ interface ConnectionsComponentProps {
   columnPadding: number;
   sectionPadding: number;
   onSizeChange: (size: { width: number; height: number }) => void;
-  onDeleteConnection?: (sourceId: string, targetId: string) => void;
+  /**
+   * PR 3: `onDeleteConnection` was used by the EdgePopup's delete
+   * button. The anchored EdgeEditor calls its own
+   * `useEdgeProperties.deleteConnection` (atomic write through the
+   * mutate triad), so the parent doesn't need to plumb a separate
+   * callback. The prop is intentionally removed; the
+   * `disconnectSelectedNodes` path in TheoryOfChangeGraph still owns
+   * the 2-node-selected disconnect button.
+   */
   containerRef: React.RefObject<HTMLDivElement | null>;
-  onEdgePopupChange?: (edgePopup: EdgePopupState | null) => void;
+  camera?: { x: number; y: number; z: number };
   fontFamily?: string;
-  viewportOffset?: { left: number; top: number; right: number; bottom: number };
-  zoomScale?: number;
+  // PR 3: `viewportOffset` / `zoomScale` were only consumed by EdgePopup
+  // (modal sizing math). The anchored EdgeEditor reads viewport
+  // positioning via `useAnchorPosition` directly, so these are no
+  // longer needed.
 }
 
 export function ConnectionsComponent({
   data,
-  setData,
+  mutate,
+  mutateDebounced,
+  commit,
   nodeRefs,
   nodeHeights,
   highlightedNodes,
@@ -55,16 +76,16 @@ export function ConnectionsComponent({
   columnPadding,
   sectionPadding,
   onSizeChange,
-  onDeleteConnection,
   containerRef,
-  onEdgePopupChange,
+  camera,
   fontFamily,
-  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
-  zoomScale = 1,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
-  const [edgePopup, setEdgePopupState] = useState<EdgePopupState | null>(null);
+  // PR 3: `edgePopup` (full EdgePopupState modal copy) collapsed to
+  // `selectedEdge` (source+target pair + midpoint anchor). The anchored
+  // EdgeEditor reads property values from `data` directly.
+  const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
 
   // Stash `onSizeChange` in a ref so `updateSize` doesn't need it as a dep —
   // the parent passes a fresh inline arrow every render, which would otherwise
@@ -73,14 +94,6 @@ export function ConnectionsComponent({
   useEffect(() => {
     onSizeChangeRef.current = onSizeChange;
   }, [onSizeChange]);
-
-  const setEdgePopup: React.Dispatch<React.SetStateAction<EdgePopupState | null>> = (value) => {
-    setEdgePopupState((prev) => {
-      const next = typeof value === 'function' ? value(prev) : value;
-      onEdgePopupChange?.(next);
-      return next;
-    });
-  };
   const [smoothUpdates, setSmoothUpdates] = useState(false);
   // `refreshCounter` is a re-render kick: nothing reads the value, but calling
   // `setRefreshCounter` forces this component to re-render so the `connections.map`
@@ -284,41 +297,10 @@ export function ConnectionsComponent({
     [data.sections],
   );
 
-  const findNodeTitle = (nodeId: string) => {
-    for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
-      for (
-        let columnIndex = 0;
-        columnIndex < data.sections[sectionIndex].columns.length;
-        columnIndex++
-      ) {
-        const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
-          (n) => n.id === nodeId,
-        );
-        if (node) {
-          return node.title;
-        }
-      }
-    }
-    return nodeId; // fallback to ID if not found
-  };
-
-  const findNodeColor = (nodeId: string) => {
-    for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
-      for (
-        let columnIndex = 0;
-        columnIndex < data.sections[sectionIndex].columns.length;
-        columnIndex++
-      ) {
-        const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
-          (n) => n.id === nodeId,
-        );
-        if (node) {
-          return node.color || '#6366f1'; // fallback to indigo-500 if no custom color
-        }
-      }
-    }
-    return '#6366f1'; // fallback to indigo-500 if not found
-  };
+  // PR 3: `findNodeTitle` / `findNodeColor` helpers retired — they fed
+  // the EdgePopup modal's "From: [title]" / "To: [title]" header. The
+  // anchored EdgeEditor doesn't render the endpoint titles; the user
+  // already sees the connected nodes visually on the canvas.
 
   const connections = useMemo(() => {
     return data.sections
@@ -367,84 +349,11 @@ export function ConnectionsComponent({
       .filter((connection) => connection.start && connection.end);
   }, [data.sections, nodeRefs, findNodeLocation]);
 
-  const updateConfidence = (sourceId: string, targetId: string, newConfidence: number) => {
-    setData(
-      (prevData: ToCData): ToCData => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id === sourceId) {
-                if (node.connections) {
-                  return {
-                    ...node,
-                    connections: node.connections.map((conn) =>
-                      conn.targetId === targetId ? { ...conn, confidence: newConfidence } : conn,
-                    ),
-                  };
-                } else {
-                  // Convert from old format to new format
-                  return {
-                    ...node,
-                    connections: node.connectionIds.map((connId) => ({
-                      targetId: connId,
-                      confidence: connId === targetId ? newConfidence : 50, // default medium confidence
-                    })),
-                  };
-                }
-              }
-              return node;
-            }),
-          })),
-        })),
-      }),
-    );
-  };
-
-  const updateConnection = (
-    sourceId: string,
-    targetId: string,
-    evidence: string,
-    assumptions: string,
-  ) => {
-    setData(
-      (prevData: ToCData): ToCData => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id === sourceId) {
-                if (node.connections) {
-                  return {
-                    ...node,
-                    connections: node.connections.map((conn) =>
-                      conn.targetId === targetId ? { ...conn, evidence, assumptions } : conn,
-                    ),
-                  };
-                } else {
-                  // Convert from old format to new format and add evidence/assumptions
-                  return {
-                    ...node,
-                    connections: node.connectionIds.map((connId) => ({
-                      targetId: connId,
-                      confidence: 50, // default medium confidence
-                      evidence: connId === targetId ? evidence : '',
-                      assumptions: connId === targetId ? assumptions : '',
-                    })),
-                  };
-                }
-              }
-              return node;
-            }),
-          })),
-        })),
-      }),
-    );
-  };
+  // PR 3: `updateConfidence` / `updateConnection` setters retired —
+  // those mutations now flow through `useEdgeProperties.patchConnection`
+  // inside the EdgeEditor (which streams via `mutateDebounced` so the
+  // confidence slider produces ONE undo entry per drag, like the
+  // node-width slider).
 
   const strokeWidth = 3;
   return (
@@ -587,14 +496,11 @@ export function ConnectionsComponent({
 
                   const midX = (startX + endX) / 2;
                   const midY = (startY + endY) / 2;
-                  setEdgePopup({
+                  setSelectedEdge({
                     sourceId: connection.sourceId,
                     targetId: connection.targetId,
-                    x: midX,
-                    y: midY,
-                    confidence: connection.confidence,
-                    evidence: connection.evidence,
-                    assumptions: connection.assumptions,
+                    midX,
+                    midY,
                   });
                 }}
               />
@@ -768,25 +674,89 @@ export function ConnectionsComponent({
           })()}
       </svg>
 
-      {/* Large center modal for edge information - rendered to body to avoid zoom transforms */}
-      {edgePopup &&
-        createPortal(
-          <EdgePopup
-            edgePopup={edgePopup}
-            setEdgePopup={setEdgePopup}
-            updateConfidence={updateConfidence}
-            findNodeTitle={findNodeTitle}
-            findNodeColor={findNodeColor}
-            svgSize={svgSize}
-            editMode={editMode}
-            onUpdateConnection={updateConnection}
-            onDeleteConnection={onDeleteConnection}
-            fontFamily={fontFamily}
-            viewportOffset={viewportOffset}
-            zoomScale={zoomScale}
-          />,
-          document.body,
-        )}
+      {/* PR 3: anchored EdgeEditor replaces the EdgePopup modal. The
+        anchor is a 1x1 invisible div positioned at the connection
+        midpoint (container-local coords), inside the same container
+        the connections SVG paints into so it inherits the same pan/
+        zoom transform. `useAnchorPosition` re-reads its rect on
+        camera change. */}
+      {selectedEdge && mutate && mutateDebounced && commit && (
+        <EdgeAnchorMount
+          selectedEdge={selectedEdge}
+          data={data}
+          mutate={mutate}
+          mutateDebounced={mutateDebounced}
+          commit={commit}
+          camera={camera ?? { x: 0, y: 0, z: 1 }}
+          containerRef={containerRef}
+          fontFamily={fontFamily}
+          onRequestClose={() => setSelectedEdge(null)}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Renders an invisible 1x1 anchor at the connection midpoint, then
+ * mounts the EdgeEditor against it. The anchor lives inside the
+ * connections container (sibling to the SVG), so it inherits the
+ * same CSS transforms. Pan/zoom updates the camera, which feeds
+ * `useAnchorPosition` and re-reads the rect.
+ */
+function EdgeAnchorMount({
+  selectedEdge,
+  data,
+  mutate,
+  mutateDebounced,
+  commit,
+  camera,
+  containerRef,
+  fontFamily,
+  onRequestClose,
+}: {
+  selectedEdge: SelectedEdge;
+  data: ToCData;
+  mutate: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  mutateDebounced: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  commit: (key?: string) => void;
+  camera: { x: number; y: number; z: number };
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  fontFamily?: string;
+  onRequestClose: () => void;
+}) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  // The container is the canvas; appending a child to it places the
+  // anchor in the same coordinate space as the nodes. Note we render
+  // the anchor inside `containerRef.current` indirectly: this component
+  // returns the anchor JSX, and React mounts it as a sibling to the
+  // SVG inside the connections container. The midpoint is in
+  // container-local coordinates so we set absolute position + left/top.
+  if (!containerRef.current) return null;
+  return (
+    <>
+      <div
+        ref={anchorRef}
+        className="absolute pointer-events-none"
+        style={{
+          left: selectedEdge.midX,
+          top: selectedEdge.midY,
+          width: 1,
+          height: 1,
+        }}
+      />
+      <EdgeEditor
+        sourceId={selectedEdge.sourceId}
+        targetId={selectedEdge.targetId}
+        data={data}
+        mutate={mutate}
+        mutateDebounced={mutateDebounced}
+        commit={commit}
+        anchorRef={anchorRef}
+        camera={camera}
+        onRequestClose={onRequestClose}
+        fontFamily={fontFamily}
+      />
     </>
   );
 }
