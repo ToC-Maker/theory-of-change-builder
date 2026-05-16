@@ -55,102 +55,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { applyDeltaCommit } from '../../worker/_shared/cost-commit';
+import { makeBackend } from '../_shared/in-memory-cost-backend';
 
-// ---------------------------------------------------------------------------
-// In-memory backend (mirrors delta-commit-concurrency.test.ts +
-// iife-death-recovery.test.ts).
-//
-// The backend exposes an SQL-tagged-template that matches the CTE in
-// `worker/_shared/cost-commit.ts`. Two rows: one `logging_messages` row and
-// one `user_api_usage` row. The mutex stands in for the row-level
-// `FOR UPDATE` lock; per-message critical sections serialise so the CTE
-// algebra runs against the already-updated state on a second call (the
-// idempotency property we pin below).
-// ---------------------------------------------------------------------------
-
-type LoggingMessageRow = {
-  message_id: string;
-  user_id: string;
-  cost_micro_usd: bigint;
-  cost_settled_micro_usd: bigint;
-  reconciled_at: Date | null;
-};
-
-type UserApiUsageRow = {
-  user_id: string;
-  cost_micro_usd: bigint;
-};
-
-function makeBackend(initial: { message: LoggingMessageRow; user_usage: UserApiUsageRow }): {
-  sql: NeonQueryFunction<false, false>;
-  state: { message: LoggingMessageRow; user_usage: UserApiUsageRow };
-  callCount: () => number;
-  capturedValues: () => unknown[][];
-} {
-  const state = {
-    message: { ...initial.message },
-    user_usage: { ...initial.user_usage },
-  };
-  const capturedValues: unknown[][] = [];
-
-  const mutexes = new Map<string, Promise<void>>();
-  function withRowLock<T>(messageId: string, critical: () => Promise<T>): Promise<T> {
-    const prev = mutexes.get(messageId) ?? Promise.resolve();
-    const next = prev.then(critical);
-    mutexes.set(
-      messageId,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return next;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sql: any = (_strings: TemplateStringsArray, ...values: unknown[]) => {
-    capturedValues.push(values);
-    const messageId = String(values[0]);
-    const userId = String(values[1]);
-    const projected = BigInt(String(values[2]));
-    const newCost = BigInt(String(values[3]));
-
-    return withRowLock(messageId, async () => {
-      await Promise.resolve();
-      const row = state.message;
-      const matches =
-        row.message_id === messageId && row.user_id === userId && row.reconciled_at === null;
-      if (!matches) {
-        return [{ new_settled: null, delta: null, applied: false }];
-      }
-      const baseline =
-        projected > row.cost_settled_micro_usd ? projected : row.cost_settled_micro_usd;
-      const computedDelta = newCost > baseline ? newCost - baseline : 0n;
-      const newSettled =
-        newCost > row.cost_settled_micro_usd ? newCost : row.cost_settled_micro_usd;
-      const newCostHwm = newCost > row.cost_micro_usd ? newCost : row.cost_micro_usd;
-      state.message = {
-        ...row,
-        cost_micro_usd: newCostHwm,
-        cost_settled_micro_usd: newSettled,
-      };
-      if (computedDelta > 0n) {
-        state.user_usage = {
-          ...state.user_usage,
-          cost_micro_usd: state.user_usage.cost_micro_usd + computedDelta,
-        };
-      }
-      return [{ new_settled: newSettled, delta: computedDelta, applied: true }];
-    });
-  };
-
-  return {
-    sql: sql as NeonQueryFunction<false, false>,
-    state,
-    callCount: () => capturedValues.length,
-    capturedValues: () => capturedValues,
-  };
-}
+// In-memory backend lives in `tests/_shared/in-memory-cost-backend.ts`.
+// This file pins the endpoint-specific contract on top of the shared
+// algebra — `callCount` and `capturedValues` from the backend let us
+// assert the exact leading-argument shape `/api/reconcile-cost` passes
+// to `applyDeltaCommit` (in particular: projected = 0n).
 
 // ---------------------------------------------------------------------------
 // The exact call the endpoint makes. Keeping this colocated with the test

@@ -42,19 +42,16 @@
 // the inline reconcile mirror at the top of the file is the load-bearing
 // contract pin.
 import { describe, expect, it } from 'vitest';
-import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { applyDeltaCommit } from '../../worker/_shared/cost-commit';
+import {
+  makeBackend as makeSharedBackend,
+  type LoggingMessageRow,
+} from '../_shared/in-memory-cost-backend';
 
-// In-memory row pair (logging_messages + user_api_usage). Matches the
-// shape used in delta-commit-concurrency.test.ts so the helper-under-test
-// imports here apply unchanged.
-type LoggingMessageRow = {
-  message_id: string;
-  user_id: string;
-  cost_micro_usd: bigint;
-  cost_settled_micro_usd: bigint;
-  reconciled_at: Date | null;
-};
+// Extended user_api_usage shape — the shared backend's required base is
+// `{user_id, cost_micro_usd}`, and we add the token-counter columns the
+// reconcile-CTE mirror needs to mutate. Passed through the generic on
+// `makeSharedBackend` so `state.user_usage` is typed with all 7 fields.
 type UserApiUsageRow = {
   user_id: string;
   cost_micro_usd: bigint;
@@ -73,97 +70,22 @@ type ReconcileAccumulator = {
   web_search_requests: number;
 };
 
-type Backend = {
-  sql: NeonQueryFunction<false, false>;
-  state: { message: LoggingMessageRow; user_usage: UserApiUsageRow };
-  /**
-   * Run the reconcile SQL's effect against the in-memory state. Mirrors
-   * the production CTE step-by-step. Returns the row pair after reconcile.
-   * The same `state` is shared with subsequent `applyDeltaCommit` calls so
-   * we can chain reconcile → late retry and observe the lock.
-   */
-  reconcile: (input: {
-    loggingMessageId: string;
-    actorId: string;
-    projected: bigint;
-    actualMicro: bigint;
-    accumulator: ReconcileAccumulator;
-  }) => {
-    settled: bigint;
-    appliedSignedDelta: bigint;
-    userCost: bigint;
-    reconciledAt: Date | null;
-  };
-};
-
-function makeBackend(initial: {
-  message: LoggingMessageRow;
-  user_usage: UserApiUsageRow;
-}): Backend {
-  const state = {
-    message: { ...initial.message },
-    user_usage: { ...initial.user_usage },
-  };
-
-  // Per-message mutex (same pattern as delta-commit-concurrency.test.ts).
-  // Reconcile and applyDeltaCommit can race against each other — the mutex
-  // serialises them, mirroring the real CTE's row-level lock.
-  const mutexes = new Map<string, Promise<void>>();
-  function withRowLock<T>(messageId: string, critical: () => Promise<T>): Promise<T> {
-    const prev = mutexes.get(messageId) ?? Promise.resolve();
-    const next = prev.then(critical);
-    mutexes.set(
-      messageId,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return next;
-  }
-
-  // SQL stub shared with applyDeltaCommit (matches the CTE in
-  // worker/_shared/cost-commit.ts). The reconcile path is run via the
-  // `reconcile` helper below — we don't try to dispatch SQL by string
-  // matching because the reconcile SQL is more complex than the
-  // applyDeltaCommit CTE and pattern matching would obscure intent.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sql: any = (_strings: TemplateStringsArray, ...values: unknown[]) => {
-    const messageId = String(values[0]);
-    const userId = String(values[1]);
-    const projected = BigInt(String(values[2]));
-    const newCost = BigInt(String(values[3]));
-
-    return withRowLock(messageId, async () => {
-      await Promise.resolve();
-      const row = state.message;
-      const matches =
-        row.message_id === messageId && row.user_id === userId && row.reconciled_at === null;
-      if (!matches) {
-        return [{ new_settled: null, delta: null, applied: false }];
-      }
-      const baseline =
-        projected > row.cost_settled_micro_usd ? projected : row.cost_settled_micro_usd;
-      const computedDelta = newCost > baseline ? newCost - baseline : 0n;
-      const newSettled =
-        newCost > row.cost_settled_micro_usd ? newCost : row.cost_settled_micro_usd;
-      const newCostHwm = newCost > row.cost_micro_usd ? newCost : row.cost_micro_usd;
-      state.message = {
-        ...row,
-        cost_micro_usd: newCostHwm,
-        cost_settled_micro_usd: newSettled,
-      };
-      if (computedDelta > 0n) {
-        state.user_usage = {
-          ...state.user_usage,
-          cost_micro_usd: state.user_usage.cost_micro_usd + computedDelta,
-        };
-      }
-      return [{ new_settled: newSettled, delta: computedDelta, applied: true }];
-    });
-  };
-
-  function reconcile(input: {
+// File-local reconcile-CTE mirror. Distinct from the applyDeltaCommit
+// algebra (lives in `tests/_shared/in-memory-cost-backend.ts`) — this
+// models the *signed-delta* reconcile SQL in
+// `worker/api/anthropic-stream.ts`, which:
+//   - computes a SIGNED delta (refunds when actual < projected);
+//   - stamps `reconciled_at`;
+//   - clamps `user_api_usage.cost_micro_usd` to ≥0 via GREATEST;
+//   - increments token-counter columns additively;
+//   - guards the user_api_usage UPDATE with EXISTS(SELECT 1 FROM msg_upd).
+// Keeping this local to the file (not in `_shared`) because:
+//   1. It's reconcile-specific, not applyDeltaCommit-specific.
+//   2. Only one test file exercises it.
+//   3. It depends on the extended UserApiUsageRow shape that only this
+//      file uses.
+function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiUsageRow }) {
+  return function reconcile(input: {
     loggingMessageId: string;
     actorId: string;
     projected: bigint;
@@ -216,9 +138,22 @@ function makeBackend(initial: {
       userCost: state.user_usage.cost_micro_usd,
       reconciledAt: newReconciledAt,
     };
-  }
+  };
+}
 
-  return { sql: sql as NeonQueryFunction<false, false>, state, reconcile };
+// Thin wrapper that combines the shared backend (applyDeltaCommit algebra
+// + diagnostics capture) with the file-local reconcile-CTE mirror.
+function makeBackend(initial: { message: LoggingMessageRow; user_usage: UserApiUsageRow }): {
+  sql: ReturnType<typeof makeSharedBackend<UserApiUsageRow>>['sql'];
+  state: { message: LoggingMessageRow; user_usage: UserApiUsageRow };
+  reconcile: ReturnType<typeof makeReconcile>;
+} {
+  const backend = makeSharedBackend<UserApiUsageRow>(initial);
+  // `state.message` is non-null on this overload (matched the non-null
+  // input). Re-tighten for the local `reconcile` helper.
+  const state = backend.state as { message: LoggingMessageRow; user_usage: UserApiUsageRow };
+  const reconcile = makeReconcile(state);
+  return { sql: backend.sql, state, reconcile };
 }
 
 const ZERO_ACC: ReconcileAccumulator = {
