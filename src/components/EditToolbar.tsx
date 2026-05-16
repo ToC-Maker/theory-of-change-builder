@@ -717,6 +717,16 @@ export function EditToolbar({
     }
   }, [showShareDropdown, shareData, shareLoading, currentEditToken]);
 
+  // Bridge: the new TopBar's Share button dispatches `toc:open-share`
+  // until Task 1.7 moves this dialog into <EditToolbarRemnant> with a
+  // direct handler. Listen here so the existing dropdown still
+  // responds during the identity-copy phase.
+  useEffect(() => {
+    const open = () => setShowShareDropdown(true);
+    window.addEventListener('toc:open-share', open);
+    return () => window.removeEventListener('toc:open-share', open);
+  }, []);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
