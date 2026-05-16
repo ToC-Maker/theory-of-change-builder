@@ -2129,6 +2129,7 @@ function createCostTrackingStream(
                 },
                 deployment_host: teeCtx.deploymentHost,
                 fired_at_ms: Date.now(),
+                start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
               });
             })(),
           );
@@ -2624,20 +2625,17 @@ export async function handler(
       baseTier,
       actorId,
     });
-    try {
-      await sql`
-        INSERT INTO logging_errors (error_id, error_name, error_message, user_id, request_metadata)
-        VALUES (
-          ${crypto.randomUUID()},
-          'ByokTierInvariantViolation',
-          ${`hasByok=true on baseTier=${baseTier}; refused to downgrade silently`},
-          ${actorId},
-          ${JSON.stringify({ baseTier, deployment_host: requestUrl.hostname, fired_at_ms: Date.now() })}
-        )
-      `;
-    } catch (e) {
-      console.error('[anthropic-stream] ByokTierInvariantViolation diagnostic insert failed:', e);
-    }
+    // Pre-lifecycle: teeCtx hasn't been built yet (this fires before
+    // step-7 stream setup), so no start_at_ms — diagnostic_elapsed_ms
+    // will be naturally absent on the row.
+    await writeDiagnostic(sql, {
+      error_name: 'ByokTierInvariantViolation',
+      error_message: `hasByok=true on baseTier=${baseTier}; refused to downgrade silently`,
+      user_id: actorId,
+      request_metadata: { baseTier },
+      deployment_host: requestUrl.hostname,
+      fired_at_ms: Date.now(),
+    });
     return jsonError(
       { error: 'byok_tier_mismatch', detail: 'BYOK rejected on non-eligible base tier' },
       500,
@@ -2999,6 +2997,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3083,6 +3082,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3175,6 +3175,7 @@ export async function handler(
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
           });
         }
         // Don't return — fall through with actualMicro=0n so downstream
@@ -3239,6 +3240,7 @@ export async function handler(
         },
         deployment_host: requestUrl.hostname,
         fired_at_ms: Date.now(),
+        start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
       });
 
       if (isCapped(tier)) {
@@ -3268,34 +3270,23 @@ export async function handler(
           // exception that blocked the write. Best-effort — if this INSERT
           // also fails, the outer catch logs and we stop there.
           console.error('Post-stream reconcile failed:', e);
-          try {
-            await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileFailed',
-              ${`Reconcile failed: ${e instanceof Error ? e.message : String(e)}`},
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                user_id: actorId,
-                projected_micro_usd: projected.toString(),
-                observed_delta_micro_usd: deltaMicro.toString(),
-                actual_micro_usd: actualMicro.toString(),
-                error_message: e instanceof Error ? e.message : String(e),
-                model,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-          } catch (innerErr) {
-            console.error('reconcile-failure diagnostic insert also failed:', innerErr);
-          }
+          await writeDiagnostic(sql, {
+            error_name: 'DiagnosticReconcileFailed',
+            error_message: `Reconcile failed: ${e instanceof Error ? e.message : String(e)}`,
+            user_id: actorId,
+            chart_id: chartId ?? null,
+            request_metadata: {
+              user_id: actorId,
+              projected_micro_usd: projected.toString(),
+              observed_delta_micro_usd: deltaMicro.toString(),
+              actual_micro_usd: actualMicro.toString(),
+              error_message: e instanceof Error ? e.message : String(e),
+              model,
+            },
+            deployment_host: requestUrl.hostname,
+            fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+          });
         }
       }
 
@@ -3334,6 +3325,7 @@ export async function handler(
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
           });
         }
 
@@ -3367,6 +3359,7 @@ export async function handler(
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
           });
         }
       }
@@ -3413,31 +3406,20 @@ export async function handler(
             `;
             } catch (e) {
               console.error('logging_messages was_killed update failed (non-fatal):', e);
-              try {
-                await sql`
-                INSERT INTO logging_errors (
-                  error_id, error_name, error_message, user_id, chart_id,
-                  request_metadata
-                )
-                VALUES (
-                  ${crypto.randomUUID()},
-                  'DiagnosticWasKilledUpdateFailed',
-                  ${`logging_messages.was_killed update failed: ${e instanceof Error ? e.message : String(e)}`},
-                  ${actorId},
-                  ${chartId ?? null},
-                  ${JSON.stringify({
-                    logging_message_id: loggingMessageId,
-                    was_killed: wasKilledByCostCap,
-                    error_message: e instanceof Error ? e.message : String(e),
-                    deployment_host: requestUrl.hostname,
-                    fired_at_ms: Date.now(),
-                  })}
-                )
-                ON CONFLICT (error_id) DO NOTHING
-              `;
-              } catch (innerErr) {
-                console.error('was_killed-failure diagnostic insert also failed:', innerErr);
-              }
+              await writeDiagnostic(sql, {
+                error_name: 'DiagnosticWasKilledUpdateFailed',
+                error_message: `logging_messages.was_killed update failed: ${e instanceof Error ? e.message : String(e)}`,
+                user_id: actorId,
+                chart_id: chartId ?? null,
+                request_metadata: {
+                  logging_message_id: loggingMessageId,
+                  was_killed: wasKilledByCostCap,
+                  error_message: e instanceof Error ? e.message : String(e),
+                },
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+                start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+              });
             }
 
           // Conditional: content_blocks only when we captured blocks.
@@ -3458,34 +3440,21 @@ export async function handler(
             } catch (e) {
               console.error('logging_messages content_blocks update failed (non-fatal):', e);
               // Mirror the reconcile-failure diagnostic pattern: persist a
-              // logging_errors row so silent analytics drift is visible. If
-              // this ALSO fails, fall through — outer console.error already
-              // captured the original.
-              try {
-                await sql`
-                  INSERT INTO logging_errors (
-                    error_id, error_name, error_message, user_id, chart_id,
-                    request_metadata
-                  )
-                  VALUES (
-                    ${crypto.randomUUID()},
-                    'DiagnosticContentBlocksUpdateFailed',
-                    ${`logging_messages.content_blocks update failed: ${e instanceof Error ? e.message : String(e)}`},
-                    ${actorId},
-                    ${chartId ?? null},
-                    ${JSON.stringify({
-                      logging_message_id: loggingMessageId,
-                      block_count: analyticsBlocks.length,
-                      error_message: e instanceof Error ? e.message : String(e),
-                      deployment_host: requestUrl.hostname,
-                      fired_at_ms: Date.now(),
-                    })}
-                  )
-                  ON CONFLICT (error_id) DO NOTHING
-                `;
-              } catch (innerErr) {
-                console.error('content_blocks-failure diagnostic insert also failed:', innerErr);
-              }
+              // logging_errors row so silent analytics drift is visible.
+              await writeDiagnostic(sql, {
+                error_name: 'DiagnosticContentBlocksUpdateFailed',
+                error_message: `logging_messages.content_blocks update failed: ${e instanceof Error ? e.message : String(e)}`,
+                user_id: actorId,
+                chart_id: chartId ?? null,
+                request_metadata: {
+                  logging_message_id: loggingMessageId,
+                  block_count: analyticsBlocks.length,
+                  error_message: e instanceof Error ? e.message : String(e),
+                },
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+                start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+              });
             }
           }
         }
@@ -3521,6 +3490,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3553,6 +3523,11 @@ export async function handler(
             model,
             deployment_host: requestUrl.hostname,
           },
+          // diagnostic_elapsed_ms here = handler-start → reconcile-write time
+          // (NOT handler-start → poll-disable event; that's
+          // p.fired_at_ms - lc.handlerStartedAtMs and is recoverable from the
+          // metadata fields above).
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3600,6 +3575,7 @@ export async function handler(
           user_id: actorId,
           chart_id: chartId ?? null,
           request_metadata: diagnosticMetadata,
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3658,6 +3634,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: reconcileEndAtMs,
+          start_at_ms: lc.handlerStartedAtMs,
         });
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcileCompleted',
@@ -3673,6 +3650,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
     })().catch(async (outerErr) => {
@@ -3697,6 +3675,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
     }),
@@ -3742,34 +3721,24 @@ function revertReservation(
         // A silent revert failure leaves an over-reservation permanently on
         // the user's row with no breadcrumb. Persist the metadata a human
         // needs to reconcile later: the user, the µUSD we failed to return,
-        // and the error that blocked the UPDATE.
+        // and the error that blocked the UPDATE. No start_at_ms: this
+        // helper is invoked on pre-stream failure paths where the stream
+        // lifecycle (and `teeCtx`) was never constructed.
         console.error('Reservation revert failed (leaves a small over-reservation):', e);
-        try {
-          await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, chart_id,
-            request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'DiagnosticRevertFailed',
-            ${`Reservation revert failed: ${e instanceof Error ? e.message : String(e)}`},
-            ${userId},
-            ${diagCtx?.chartId ?? null},
-            ${JSON.stringify({
-              user_id: userId,
-              projected_micro_usd: projected.toString(),
-              error_message: e instanceof Error ? e.message : String(e),
-              model: diagCtx?.model,
-              deployment_host: diagCtx?.deploymentHost,
-              fired_at_ms: Date.now(),
-            })}
-          )
-          ON CONFLICT (error_id) DO NOTHING
-        `;
-        } catch (innerErr) {
-          console.error('revert-failure diagnostic insert also failed:', innerErr);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticRevertFailed',
+          error_message: `Reservation revert failed: ${e instanceof Error ? e.message : String(e)}`,
+          user_id: userId,
+          chart_id: diagCtx?.chartId ?? null,
+          request_metadata: {
+            user_id: userId,
+            projected_micro_usd: projected.toString(),
+            error_message: e instanceof Error ? e.message : String(e),
+            model: diagCtx?.model,
+          },
+          deployment_host: diagCtx?.deploymentHost,
+          fired_at_ms: Date.now(),
+        });
       }
     })(),
   );

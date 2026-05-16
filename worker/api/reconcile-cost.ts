@@ -3,6 +3,7 @@ import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { resolveAnonActor } from '../_shared/anon-id';
 import { toBigInt } from '../_shared/bigint';
+import { writeDiagnostic } from '../_shared/diagnostics';
 
 /**
  * Client-side reconcile fallback. The streaming worker's post-stream IIFE
@@ -244,35 +245,26 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
   // Step 5: diagnostic row — one per call, including no-op calls. Lets us
   // count how often clients reach this endpoint and whether they push
-  // values that the streaming worker's reconcile already wrote.
-  try {
-    await sql`
-      INSERT INTO logging_errors (
-        error_id, error_name, error_message, user_id, chart_id,
-        request_metadata
-      )
-      VALUES (
-        ${crypto.randomUUID()},
-        'DiagnosticReconcileEndpointHit',
-        ${`prev=${previousCost.toString()} client=${clientCost.toString()} new=${newCost.toString()} µUSD applied=${applied}`},
-        ${actorId},
-        ${row.chart_id ?? null},
-        ${JSON.stringify({
-          logging_message_id: loggingMessageId,
-          authenticated,
-          previous_cost_micro_usd: previousCost.toString(),
-          client_cost_micro_usd: clientCost.toString(),
-          new_cost_micro_usd: newCost.toString(),
-          applied,
-          deployment_host: url.hostname,
-          fired_at_ms: Date.now(),
-        })}
-      )
-      ON CONFLICT (error_id) DO NOTHING
-    `;
-  } catch (e) {
-    console.error('[reconcile-cost] diagnostic insert failed:', e);
-  }
+  // values that the streaming worker's reconcile already wrote. No
+  // start_at_ms here: this endpoint runs in a fresh Worker invocation
+  // separate from the streaming lifecycle, so there's no
+  // handlerStartedAtMs to anchor an elapsed measurement to.
+  await writeDiagnostic(sql, {
+    error_name: 'DiagnosticReconcileEndpointHit',
+    error_message: `prev=${previousCost.toString()} client=${clientCost.toString()} new=${newCost.toString()} µUSD applied=${applied}`,
+    user_id: actorId,
+    chart_id: row.chart_id ?? null,
+    request_metadata: {
+      logging_message_id: loggingMessageId,
+      authenticated,
+      previous_cost_micro_usd: previousCost.toString(),
+      client_cost_micro_usd: clientCost.toString(),
+      new_cost_micro_usd: newCost.toString(),
+      applied,
+    },
+    deployment_host: url.hostname,
+    fired_at_ms: Date.now(),
+  });
 
   return Response.json({
     previous_cost_micro_usd: previousCost.toString(),
