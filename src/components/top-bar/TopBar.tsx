@@ -64,6 +64,13 @@ export interface TopBarProps {
   isOwner?: boolean;
   currentChartId?: string | null;
   onDeleteChart?: (chartId: string) => void;
+  // PR 6 Task 6.2: Export + Import wiring. `data` feeds the export
+  // entries (filename from data.title, payload from current state) and
+  // also lets Import warn before overwriting existing nodes. Both
+  // optional so the viewer route can omit them; FileMenu disables the
+  // affordances when absent.
+  data?: ToCData;
+  onImportJson?: (next: ToCData) => void;
 
   // Share button click handler. The dialog lives at App level
   // (PR 2's `ShareDialog`); TopBar just exposes the affordance.
@@ -133,6 +140,8 @@ export function TopBar(props: TopBarProps) {
                   currentEditToken={props.currentEditToken}
                   currentChartId={currentChartId}
                   onDeleteChart={onDeleteChart}
+                  data={props.data}
+                  onImportJson={props.onImportJson}
                 />
                 <FormatMenu
                   editMode={props.editMode}
@@ -271,6 +280,8 @@ export function TopBar(props: TopBarProps) {
                 currentEditToken={props.currentEditToken}
                 currentChartId={currentChartId}
                 onDeleteChart={onDeleteChart}
+                data={props.data}
+                onImportJson={props.onImportJson}
                 editMode={props.editMode}
                 fontFamily={props.fontFamily}
                 setFontFamily={props.setFontFamily}

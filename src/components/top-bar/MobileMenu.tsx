@@ -15,6 +15,7 @@ import { FileMenu } from './FileMenu';
 import { FormatMenu } from './FormatMenu';
 import { HelpPanel } from './HelpPanel';
 import { SaveIndicator, type SaveError } from './SaveIndicator';
+import type { ToCData } from '../../types';
 
 interface Props {
   // Save indicator.
@@ -27,6 +28,9 @@ interface Props {
   currentEditToken: string | null;
   currentChartId: string | null;
   onDeleteChart: (chartId: string) => void;
+  // PR 6 Task 6.2: live graph + import callback for FileMenu.
+  data?: ToCData;
+  onImportJson?: (next: ToCData) => void;
   // Format menu pass-through.
   editMode: boolean;
   fontFamily: string;
@@ -78,6 +82,8 @@ export function MobileMenu(props: Props) {
                 currentEditToken={props.currentEditToken}
                 currentChartId={props.currentChartId}
                 onDeleteChart={props.onDeleteChart}
+                data={props.data}
+                onImportJson={props.onImportJson}
               />
             </section>
 

@@ -1690,6 +1690,10 @@ function ToCViewer() {
         isOwner={isOwner}
         currentChartId={currentChartId}
         onDeleteChart={handleDeleteChart}
+        // PR 6 (Task 6.2): FileMenu Import → JSON drops through
+        // `handleUploadJSON`, which validates the shape, saves to
+        // history, and triggers a debounced DB save.
+        onImportJson={handleUploadJSON}
         // Share button opens the PR 2 ShareDialog mounted below.
         // Replaces the CustomEvent bridge to the legacy share-dialog
         // shim inside the old EditToolbar, deleted in PR 2.
