@@ -11,6 +11,17 @@ import { getContrastTextColor } from '../utils';
 // `src/components/node-editor/`). NodeComponent is back to being a
 // pure renderer + selection delegate.
 //
+// PR 4: HTML5 Drag and Drop (`draggable`, `onDragStart`, `onDragEnd`)
+// retired. Drag is now driven by `usePointerDrag` in the parent
+// (TheoryOfChangeGraph), which binds a single `onPointerDown` on this
+// component's root via the `onPointerDown` prop. The root also carries:
+//   - `data-tocb-node={id}` — the new attribute the App's
+//     `excludeFromPan` selector matches (replacing `draggable="true"`)
+//     and the locator pointer-event tests use.
+//   - `touch-none` (Tailwind: `touch-action: none`) — keeps mobile
+//     browser scroll gestures from swallowing pointermove events
+//     during a drag.
+//
 // `handleClick` modifier semantics (Cmd/Ctrl+click → 'multi',
 // Shift+click in editMode → 'column', else → 'single') are preserved
 // verbatim from before the refactor; the user-direction sticky in
@@ -25,8 +36,12 @@ interface NodeComponentProps {
   toggleHighlight: (id: string, selectionMode?: 'single' | 'multi' | 'column') => void;
   setHoveredNode: (id: string | null) => void;
   hasHighlightedNodes: boolean;
-  onDragStart: (node: Node, event: React.DragEvent) => void;
-  onDragEnd: () => void;
+  /**
+   * PR 4: single pointerdown handler that starts the drag in the parent's
+   * `usePointerDrag` hook. Omitted when `editMode=false` so view-only
+   * pages render without any drag binding.
+   */
+  onPointerDown?: (event: React.PointerEvent) => void;
   editMode: boolean;
   textSize: number;
   fontFamily: string;
@@ -51,8 +66,7 @@ function NodeComponentInner({
   toggleHighlight,
   setHoveredNode,
   hasHighlightedNodes,
-  onDragStart,
-  onDragEnd,
+  onPointerDown,
   editMode,
   textSize,
   fontFamily,
@@ -88,18 +102,11 @@ function NodeComponentInner({
       <div
         ref={nodeRef}
         id={`node-${node.id}`}
-        draggable={editMode}
-        onDragStart={
-          editMode
-            ? (e) => {
-                onDragStart(node, e);
-                e.dataTransfer.effectAllowed = 'move';
-              }
-            : undefined
-        }
-        onDragEnd={editMode ? onDragEnd : undefined}
+        data-tocb-node={node.id}
+        onPointerDown={editMode ? onPointerDown : undefined}
         className={clsx(
           'flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
+          'touch-none',
           // Only apply default gradients if no custom color is set
           !node.color && 'bg-gradient-to-br from-white to-gray-50',
           isHighlighted

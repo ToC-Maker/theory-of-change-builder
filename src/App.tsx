@@ -104,6 +104,10 @@ function ToCViewerOnly() {
   const [isCopying, setIsCopying] = useState(false);
   const [isInIframe, setIsInIframe] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // PR 4: viewer-only mode never enters edit, so the hook's drag path
+  // is dormant. The ref is referenced by the shared `syncData` guard
+  // and always stays `false` here.
+  const isDragInFlightRef = useRef(false);
 
   // Use shared zoom/pan hook
   const {
@@ -297,6 +301,14 @@ function ToCViewerOnly() {
       if (!isTabVisible || Date.now() - lastActivity > 300000) {
         // 5 min idle timeout
         console.log('Skipping sync - tab hidden or user idle');
+        return;
+      }
+      // PR 4: don't sync mid-drag. A server snapshot landing while
+      // a pointer-drag is in flight could yank the dragged node out
+      // from under the user (cross-tab delete race). The drop handler
+      // is itself stale-node-guarded; this prevents the race upstream.
+      if (isDragInFlightRef.current) {
+        console.log('Skipping sync - drag in flight');
         return;
       }
 
@@ -661,6 +673,12 @@ function ToCViewer() {
   // owner has a cue that the count may be lagging behind reality.
   const [pendingRequestCountStale, setPendingRequestCountStale] = useState(false);
 
+  // PR 4: 30s sync poll pauses while a pointer-drag is in flight.
+  // `ToC.onDragActiveChange` toggles this ref; `syncData` reads it and
+  // skips the network call until the gesture completes. Red-team
+  // Important: "PR 4 pointer-capture during cross-tab delete race".
+  const isDragInFlightRef = useRef(false);
+
   // Calculate viewport offset based on sidebar state
   const viewportOffset = useMemo(
     () => ({
@@ -672,9 +690,14 @@ function ToCViewer() {
     [isLeftPanelCollapsed],
   );
 
-  // Exclude interactive elements from panning in edit mode
+  // Exclude interactive elements from panning in edit mode.
+  // PR 4: node selector switched from `[draggable="true"]` to
+  // `[data-tocb-node]` since HTML5 DnD is no longer used. The
+  // `data-tocb-node` attribute is set by `NodeComponent` on every node
+  // root regardless of editMode (presence is the signal; value is the
+  // node id, used by drag callsites).
   const excludeFromPan = useCallback((target: HTMLElement) => {
-    const isNode = target.closest('[draggable="true"]');
+    const isNode = target.closest('[data-tocb-node]');
     const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing');
     const isChatPanel = target.closest('.fixed.left-0.z-40') !== null;
     const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null;
@@ -1395,6 +1418,14 @@ function ToCViewer() {
         console.log('Skipping sync - tab hidden or user idle');
         return;
       }
+      // PR 4: don't sync mid-drag. A server snapshot landing while
+      // a pointer-drag is in flight could yank the dragged node out
+      // from under the user (cross-tab delete race). The drop handler
+      // is itself stale-node-guarded; this prevents the race upstream.
+      if (isDragInFlightRef.current) {
+        console.log('Skipping sync - drag in flight');
+        return;
+      }
 
       // Don't sync if currently saving to prevent conflicts
       if (isSaving) {
@@ -1725,6 +1756,9 @@ function ToCViewer() {
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
+              onDragActiveChange={(active) => {
+                isDragInFlightRef.current = active;
+              }}
             />
           </div>
         </div>
