@@ -161,4 +161,23 @@ describe('TopBar responsive layout', () => {
     expect(screen.getByRole('button', { name: /open menu/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^file$/i })).toBeNull();
   });
+
+  it('hides the pending-request badge when count is 0', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" pendingRequestCount={0} />);
+    // The badge is identified by its aria-label.
+    expect(screen.queryByLabelText(/pending access request/i)).toBeNull();
+  });
+
+  it('renders a pending-request badge with the count when > 0', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" pendingRequestCount={3} />);
+    const badge = screen.getByLabelText(/3 pending access requests/i);
+    expect(badge).toBeInTheDocument();
+    expect(badge.textContent).toBe('3');
+  });
+
+  it('clamps the pending-request badge at 9+', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" pendingRequestCount={42} />);
+    const badge = screen.getByLabelText(/42 pending access requests/i);
+    expect(badge.textContent).toBe('9+');
+  });
 });

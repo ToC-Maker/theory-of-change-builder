@@ -65,10 +65,13 @@ export interface TopBarProps {
   currentChartId?: string | null;
   onDeleteChart?: (chartId: string) => void;
 
-  // Share button click handler. The actual share dialog lives in the
-  // EditToolbarRemnant (then moves to PR 2). TopBar just exposes the
-  // affordance.
+  // Share button click handler. The dialog lives at App level
+  // (PR 2's `ShareDialog`); TopBar just exposes the affordance.
   onShareClick?: () => void;
+
+  // PR 2 §769: notification badge for the Share button. Counts pending
+  // access requests the current user (owner) can approve. 0 = hidden.
+  pendingRequestCount?: number;
 
   // Profile slot rendered on the far right (typically <AuthButton />).
   profileSlot?: React.ReactNode;
@@ -219,10 +222,20 @@ export function TopBar(props: TopBarProps) {
                   <button
                     type="button"
                     onClick={onShareClick}
-                    className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors flex items-center gap-1 sm:gap-2"
+                    className="relative px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors flex items-center gap-1 sm:gap-2"
                   >
                     <ShareIcon className="w-4 h-4" />
                     Share
+                    {(props.pendingRequestCount ?? 0) > 0 && (
+                      <span
+                        aria-label={`${props.pendingRequestCount} pending access request${
+                          (props.pendingRequestCount ?? 0) === 1 ? '' : 's'
+                        }`}
+                        className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center"
+                      >
+                        {(props.pendingRequestCount ?? 0) > 9 ? '9+' : props.pendingRequestCount}
+                      </span>
+                    )}
                   </button>
                 )}
                 {props.profileSlot}
