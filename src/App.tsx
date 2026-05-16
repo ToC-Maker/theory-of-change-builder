@@ -4,7 +4,6 @@ import { Routes, Route, useParams, useLocation, Link, useNavigate } from 'react-
 import { useAuth0 } from '@auth0/auth0-react';
 import { ToC } from './components/TheoryOfChangeGraph';
 import { ChatInterface } from './components/ChatInterface';
-import { JsonDropdown } from './components/JsonDropdown';
 import { GraphTutorial } from './components/GraphTutorial';
 import { PrivacyPolicyPopup } from './components/PrivacyPolicyPopup';
 import { ApiKeyProvider } from './contexts/ApiKeyContext';
@@ -654,7 +653,10 @@ function ToCViewer() {
       left: isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25),
       top: 64, // Toolbar height
       right: 0,
-      bottom: 80, // JSON dropdown height
+      // PR 1 task 1.5: JsonDropdown deleted; bottom no longer reserves
+      // 80px for it. NodePopup/EdgePopup re-centre correctly under the
+      // updated offset.
+      bottom: 0,
     }),
     [isLeftPanelCollapsed],
   );
@@ -1214,66 +1216,11 @@ function ToCViewer() {
     [currentEditToken, currentChartId, isAuthenticated],
   );
 
-  const copyGraphJSON = useCallback(async () => {
-    if (!data) return;
-
-    try {
-      const graphData = {
-        ...data,
-        // Include additional UI state in metadata
-        _metadata: {
-          exportedAt: new Date().toISOString(),
-        },
-      };
-      await navigator.clipboard.writeText(JSON.stringify(graphData, null, 2));
-      // Could add a toast notification here if desired
-    } catch (err) {
-      console.error('Failed to copy JSON:', err);
-    }
-  }, [data]);
-
-  const resetToOriginal = useCallback(async () => {
-    if (
-      !confirm(
-        'This will reset your graph to the original version and delete all saved progress. Are you sure?',
-      )
-    ) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      // Clear localStorage for this file
-      const storageKey = `toc_graph_${filename || 'default'}`;
-      localStorage.removeItem(storageKey);
-      console.log('Cleared localStorage:', storageKey);
-
-      // Clear undo/redo history
-      setUndoHistory([]);
-      setRedoHistory([]);
-
-      // Load original data
-      if (filename) {
-        const response = await fetch(`/ToC-graphs/${filename}`);
-        if (!response.ok) {
-          throw new Error(`Failed to load ${filename}`);
-        }
-        const jsonData = await response.json();
-        setData(jsonData);
-      } else {
-        // Default to empty template
-        setData(emptyTemplate);
-      }
-
-      console.log('Reset to original data');
-    } catch (err) {
-      console.error('Error resetting to original:', err);
-      setError(err instanceof Error ? err.message : 'Failed to reset to original');
-    } finally {
-      setLoading(false);
-    }
-  }, [filename]);
+  // `copyGraphJSON` / `resetToOriginal` were the JsonDropdown's two
+  // affordances. The dropdown is gone (PR 1 task 1.5); FileMenu's
+  // Import → JSON and Export → JSON will land properly in PR 6 with
+  // dedicated download/upload flows, so the legacy clipboard-only
+  // helper is intentionally not preserved.
 
   // Add beforeunload warning for unsaved changes
   useEffect(() => {
@@ -1838,21 +1785,11 @@ function ToCViewer() {
         </div>
       </div>
 
-      {/* JSON Dropdown Footer - Fixed at bottom */}
-      <div
-        className={`fixed bottom-0 z-30 transition-all duration-300 ${
-          isLeftPanelCollapsed ? 'left-0 md:left-12' : 'left-0 md:left-[280px] lg:left-[25%]'
-        } right-0`}
-      >
-        <JsonDropdown
-          data={data}
-          title="Current Graph JSON"
-          copyGraphJSON={copyGraphJSON}
-          resetToOriginal={resetToOriginal}
-          onUploadJSON={handleUploadJSON}
-          loading={loading}
-        />
-      </div>
+      {/* JsonDropdown removed in PR 1 (plan §1.5 + failure-mode #9):
+        chrome at the bottom-left looked clickable but added no value
+        on top of the FileMenu Import/Export entries (wired in PR 6).
+        Helpers `copyGraphJSON` and `resetToOriginal` stay in App so
+        future FileMenu items can reach them without re-implementing. */}
 
       {/* Privacy Policy Popup */}
       <PrivacyPolicyPopup onAccept={handlePrivacyAccept} />
