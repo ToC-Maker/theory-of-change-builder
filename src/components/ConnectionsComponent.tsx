@@ -88,7 +88,7 @@ export function ConnectionsComponent({
   // by padding changes). The value itself is deliberately unused.
   const [, setRefreshCounter] = useState(0);
   const animationFrameRef = useRef<number | null>(null);
-  const smoothUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const smoothUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateSize = useCallback(() => {
     // Calculate width based on actual section widths + gaps only

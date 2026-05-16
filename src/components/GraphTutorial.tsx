@@ -248,7 +248,7 @@ export function GraphTutorial() {
       document.addEventListener('click', handleGlobalClick, true);
 
       // Add position tracking for step 1 (when tooltip is on the info button)
-      let positionUpdateInterval: NodeJS.Timeout | null = null;
+      let positionUpdateInterval: ReturnType<typeof setTimeout> | null = null;
       if (currentStep === 1) {
         positionUpdateInterval = setInterval(() => {
           updateTooltipPosition();
