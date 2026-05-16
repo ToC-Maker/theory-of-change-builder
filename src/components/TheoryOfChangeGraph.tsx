@@ -53,12 +53,19 @@ export function ToC({
 }) {
   const [data, setData] = useState<ToCData>(initialData);
 
-  // Create a wrapped setData that also notifies parent
+  // Create a wrapped setData that also notifies parent.
+  // The parent notify is deferred via `setTimeout(0)` to defuse React's
+  // "Cannot update a component while rendering a different component"
+  // warning, which would fire if `onDataChange` were invoked synchronously
+  // inside this updater (updater impurity, React docs §"Components must be
+  // pure"). PR 0 Task 0.3 migrates these call sites to `useGraphMutation`
+  // (which uses `queueMicrotask` instead — same ordering invariant,
+  // pre-paint timing, no 4 ms macrotask clamp); this comment is left as a
+  // hand-off to that refactor.
   const setDataAndNotify = useCallback(
     (newData: ToCData | ((prevData: ToCData) => ToCData)) => {
       setData((prevData) => {
         const updatedData = typeof newData === 'function' ? newData(prevData) : newData;
-        // Always notify parent of changes using setTimeout to avoid infinite loops
         setTimeout(() => onDataChange?.(updatedData), 0);
         return updatedData;
       });
