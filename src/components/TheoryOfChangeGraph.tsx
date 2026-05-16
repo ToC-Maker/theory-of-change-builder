@@ -9,6 +9,7 @@ import { Legend } from './Legend';
 import { NodePopup } from './NodePopup';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useGraphLayout } from '../hooks/useGraphLayout';
+import { useGraphMutation } from '../hooks/useGraphMutation';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 export function ToC({
@@ -52,27 +53,30 @@ export function ToC({
   onChartCreated?: (token: string, chartId: string) => void;
   viewportOffset?: { left: number; top: number; right: number; bottom: number };
 }) {
-  const [data, setData] = useState<ToCData>(initialData);
-
-  // Create a wrapped setData that also notifies parent.
-  // The parent notify is deferred via `setTimeout(0)` to defuse React's
-  // "Cannot update a component while rendering a different component"
-  // warning, which would fire if `onDataChange` were invoked synchronously
-  // inside this updater (updater impurity, React docs §"Components must be
-  // pure"). PR 0 Task 0.3 migrates these call sites to `useGraphMutation`
-  // (which uses `queueMicrotask` instead — same ordering invariant,
-  // pre-paint timing, no 4 ms macrotask clamp); this comment is left as a
-  // hand-off to that refactor.
-  const setDataAndNotify = useCallback(
-    (newData: ToCData | ((prevData: ToCData) => ToCData)) => {
-      setData((prevData) => {
-        const updatedData = typeof newData === 'function' ? newData(prevData) : newData;
-        setTimeout(() => onDataChange?.(updatedData), 0);
-        return updatedData;
-      });
-    },
-    [onDataChange],
-  );
+  // Graph mutation seam: see `src/hooks/useGraphMutation.ts` for the
+  // queueMicrotask-deferral rationale (replaces the previous
+  // `setTimeout(0)` hack with a precise documented primitive). Three
+  // entry points:
+  //
+  //   mutate(updater)              — discrete user actions
+  //                                   (drop, delete, add-node, add-column,
+  //                                   add-section, etc.)
+  //   mutateDebounced(updater,key) — streaming inputs
+  //                                   (slider drags, color, title typing).
+  //                                   No parent notify until commit().
+  //   commit(key?)                 — flush buffered key(s); produces ONE
+  //                                   undo entry per gesture.
+  //
+  // `setData` from the hook is exposed for direct AI-edit / external
+  // state-replace paths (the `useEffect` that resets `data` when
+  // `initialData` changes).
+  const {
+    data,
+    setData,
+    mutate: setDataAndNotify,
+    mutateDebounced,
+    commit: commitMutation,
+  } = useGraphMutation(initialData, onDataChange);
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null;
   }>({});
@@ -1103,12 +1107,20 @@ export function ToC({
             <input
               type="text"
               value={data.title || ''}
+              // Streaming input (typing). Buffer per-keystroke under
+              // 'graph-title'; commit once on blur / Enter so a single
+              // editing pass produces one undo entry, not one per char.
               onChange={(e) => {
-                setDataAndNotify((prev) => ({ ...prev, title: e.target.value }));
+                const value = e.target.value;
+                mutateDebounced((prev) => ({ ...prev, title: value }), 'graph-title');
               }}
-              onBlur={() => setEditingTitle(false)}
+              onBlur={() => {
+                commitMutation('graph-title');
+                setEditingTitle(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
+                  commitMutation('graph-title');
                   setEditingTitle(false);
                 }
               }}
@@ -1213,17 +1225,28 @@ export function ToC({
                         <input
                           type="text"
                           value={section.title}
+                          // Streaming input (typing). Buffer under
+                          // 'section-N-title'; commit on blur/Enter so a
+                          // single editing pass = one undo entry.
                           onChange={(e) => {
-                            setDataAndNotify((prev) => ({
-                              ...prev,
-                              sections: prev.sections.map((s, idx) =>
-                                idx === sectionIndex ? { ...s, title: e.target.value } : s,
-                              ),
-                            }));
+                            const value = e.target.value;
+                            mutateDebounced(
+                              (prev) => ({
+                                ...prev,
+                                sections: prev.sections.map((s, idx) =>
+                                  idx === sectionIndex ? { ...s, title: value } : s,
+                                ),
+                              }),
+                              `section-${sectionIndex}-title`,
+                            );
                           }}
-                          onBlur={() => setEditingSectionIndex(null)}
+                          onBlur={() => {
+                            commitMutation(`section-${sectionIndex}-title`);
+                            setEditingSectionIndex(null);
+                          }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
+                              commitMutation(`section-${sectionIndex}-title`);
                               setEditingSectionIndex(null);
                             }
                           }}
@@ -1559,21 +1582,25 @@ export function ToC({
             setCurvature={(value) => {
               const next = typeof value === 'function' ? value(curvature) : value;
               setCurvature(next);
-              // Update data with new curvature
-              setDataAndNotify((prev) => ({ ...prev, curvature: next }));
+              // Slider input (60Hz writes per drag). Buffer under a
+              // per-setting key; the hook's 200ms idle timer flushes a
+              // single onDataChange per gesture (L3 fix). FontFamily is
+              // discrete but reusing the same path is fine — same key
+              // each call collapses to the latest value.
+              mutateDebounced((prev) => ({ ...prev, curvature: next }), 'setting-curvature');
             }}
             textSize={textSize}
             setTextSize={(value) => {
               const next = typeof value === 'function' ? value(textSize) : value;
               setTextSize(next);
-              // Update data with new text size
-              setDataAndNotify((prev) => ({ ...prev, textSize: next }));
+              mutateDebounced((prev) => ({ ...prev, textSize: next }), 'setting-textSize');
             }}
             fontFamily={fontFamily}
             setFontFamily={(value) => {
               const next = typeof value === 'function' ? value(fontFamily) : value;
               setFontFamily(next);
-              // Update data with new font family
+              // Discrete picker; commit immediately so the parent isn't
+              // waiting 200ms for the change to reach localStorage.
               setDataAndNotify((prev) => ({ ...prev, fontFamily: next }));
             }}
             nodeWidth={nodeWidth}
@@ -1584,18 +1611,24 @@ export function ToC({
             setColumnPadding={(value) => {
               const next = typeof value === 'function' ? value(columnPadding) : value;
               setColumnPadding(next);
-              // Update data with new padding
-              setDataAndNotify((prev) => ({ ...prev, columnPadding: next }));
+              mutateDebounced(
+                (prev) => ({ ...prev, columnPadding: next }),
+                'setting-columnPadding',
+              );
             }}
             sectionPadding={sectionPadding}
             setSectionPadding={(value) => {
               const next = typeof value === 'function' ? value(sectionPadding) : value;
               setSectionPadding(next);
-              // Update data with new padding
-              setDataAndNotify((prev) => ({ ...prev, sectionPadding: next }));
+              mutateDebounced(
+                (prev) => ({ ...prev, sectionPadding: next }),
+                'setting-sectionPadding',
+              );
             }}
             straightenEdges={straightenEdges}
             setData={setDataAndNotify}
+            mutateDebounced={mutateDebounced}
+            commitMutation={commitMutation}
             undoHistory={undoHistory}
             redoHistory={redoHistory}
             handleUndo={handleUndo}
