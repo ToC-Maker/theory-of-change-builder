@@ -1,19 +1,18 @@
-// EditToolbarRemnant — the floating overlays that survived the
-// EditToolbar deletion.
+// AlignmentSuggestionBanner — floating "Clean up alignment?" popup that
+// surfaces when nodes are nearly-but-not-quite aligned vertically.
 //
-// History:
+// History (renamed end of PR 3):
 //   - The original 2,500-LoC EditToolbar held a fixed top bar, a share
 //     dialog, a smart-alignment suggestion banner, and a per-selection
 //     floating toolbar above active nodes. PR 1 carved off the top bar.
-//   - PR 2 deleted the share dialog block.
+//   - PR 2 deleted the share-dialog block.
 //   - PR 3 deleted the per-selection toolbar (its width/color/delete
-//     controls moved into the anchored `<NodeEditor>`). Only the
-//     alignment banner remains. The file is renamed to
-//     `AlignmentSuggestionBanner.tsx` at the end of PR 3.
+//     controls moved into the anchored `<NodeEditor>`).
+//   - End of PR 3: file renamed from `EditToolbarRemnant.tsx` to its
+//     current single-responsibility name.
 //
-// State ownership (state map per plan §1.6 acceptance): the remnant
-// component itself is now stateless; the only sub-component
-// (AlignmentBanner) owns its own state.
+// State: the component is stateless aside from the local `show` flag
+// that toggles the banner's visibility after detection.
 
 import { useCallback, useEffect, useState } from 'react';
 import type { Node as GraphNode, ToCData } from '../types';
@@ -143,17 +142,19 @@ function AlignmentBanner({ editMode, data, straightenEdges }: AlignmentBannerPro
 }
 
 // =====================================================================
-// EditToolbarRemnant — only the alignment banner remains.
+// AlignmentSuggestionBanner — public wrapper that gates the banner on
+// `showEditButton` (i.e. we're in an editable view). Internal
+// AlignmentBanner does the detection + render.
 // =====================================================================
 
-export interface EditToolbarRemnantProps {
+export interface AlignmentSuggestionBannerProps {
   editMode: boolean;
   showEditButton: boolean;
   data: ToCData;
   straightenEdges: () => void;
 }
 
-export function EditToolbarRemnant(props: EditToolbarRemnantProps) {
+export function AlignmentSuggestionBanner(props: AlignmentSuggestionBannerProps) {
   if (!props.showEditButton) return null;
   return (
     <AlignmentBanner
