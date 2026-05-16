@@ -15,7 +15,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { ChartService, CreateChartResponse, UserChart } from '../services/chartService';
 import { shortcuts } from '../utils/keyboardShortcuts';
-import { Tooltip } from 'react-tooltip';
 import { useAuth0 } from '@auth0/auth0-react';
 import { useNavigate } from 'react-router-dom';
 import { clearChartSpend } from '../utils/byokSpend';
@@ -118,7 +117,6 @@ export function EditToolbar({
   containerSize,
 }: EditToolbarProps) {
   const [showWidthDropdown, setShowWidthDropdown] = useState(false);
-  const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [showShareDropdown, setShowShareDropdown] = useState(false);
   const [showRecentDropdown, setShowRecentDropdown] = useState(false);
   const [showAlignmentSuggestion, setShowAlignmentSuggestion] = useState(false);
@@ -130,9 +128,6 @@ export function EditToolbar({
   // Auth0 hook
   const { user, isAuthenticated, isLoading: authLoading } = useAuth0();
   const navigate = useNavigate();
-
-  // Tooltip state
-  const [showLayoutTooltip, setShowLayoutTooltip] = useState(true);
 
   // Mobile menu state
   const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -168,7 +163,6 @@ export function EditToolbar({
   const [showGeneralAccessDropdown, setShowGeneralAccessDropdown] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const modeDropdownRef = useRef<HTMLDivElement>(null);
   const shareDropdownRef = useRef<HTMLDivElement>(null);
   const recentDropdownRef = useRef<HTMLDivElement>(null);
   const generalAccessDropdownRef = useRef<HTMLDivElement>(null);
@@ -733,9 +727,6 @@ export function EditToolbar({
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowWidthDropdown(false);
       }
-      if (modeDropdownRef.current && !modeDropdownRef.current.contains(event.target as Node)) {
-        setShowModeDropdown(false);
-      }
       if (shareDropdownRef.current && !shareDropdownRef.current.contains(event.target as Node)) {
         setShowShareDropdown(false);
       }
@@ -755,7 +746,6 @@ export function EditToolbar({
 
     if (
       showWidthDropdown ||
-      showModeDropdown ||
       showShareDropdown ||
       showRecentDropdown ||
       showGeneralAccessDropdown ||
@@ -766,7 +756,6 @@ export function EditToolbar({
     }
   }, [
     showWidthDropdown,
-    showModeDropdown,
     showShareDropdown,
     showRecentDropdown,
     showGeneralAccessDropdown,
@@ -919,11 +908,8 @@ export function EditToolbar({
               {/* Separator - hidden on mobile */}
               <div className="h-6 w-px bg-gray-300 hidden sm:block"></div>
 
-              {/* Undo/Redo Group */}
+              {/* Undo/Redo Group (counters dropped — TopBar owns the affordance) */}
               <div className="flex items-center gap-1 sm:gap-2">
-                <span className="text-xs text-gray-500 hidden md:inline">
-                  ({undoHistory.length})
-                </span>
                 <button
                   // L2 mitigation: prevent the mousedown from shifting
                   // focus to this button before `handleUndo` reads
@@ -974,9 +960,6 @@ export function EditToolbar({
                     />
                   </svg>
                 </button>
-                <span className="text-xs text-gray-500 hidden md:inline">
-                  ({redoHistory.length})
-                </span>
               </div>
 
               {/* Separator - hidden on mobile */}
@@ -987,7 +970,6 @@ export function EditToolbar({
                 <button
                   onClick={() => editMode && setLayoutMode(!layoutMode)}
                   disabled={!editMode}
-                  data-tooltip-id="layout-mode-tooltip"
                   className={`p-2 rounded transition-all duration-200 ${
                     !editMode
                       ? 'text-gray-400 cursor-not-allowed'
@@ -1918,35 +1900,9 @@ export function EditToolbar({
                     <span className="hidden md:inline">Saved</span>
                   </div>
                 )}
-                {currentEditToken && (
-                  <div className="hidden lg:flex items-center gap-2">
-                    <button
-                      onClick={handleManualSync}
-                      disabled={isManualSyncing}
-                      className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
-                      title="Sync with server"
-                    >
-                      <svg
-                        className={`w-5 h-5 ${isManualSyncing ? 'animate-spin' : ''}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={1.5}
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                    </button>
-                    {lastSyncTime && (
-                      <span className="hidden xl:inline text-gray-600 text-sm">
-                        Last synced: {getTimeAgo(lastSyncTime)}
-                      </span>
-                    )}
-                  </div>
-                )}
+                {/* Manual sync button removed in PR 1: auto-sync runs in
+                  the background; SaveIndicator in TopBar surfaces failure
+                  state directly. */}
               </div>
 
               {/* Separator - hidden on mobile */}
@@ -1964,83 +1920,9 @@ export function EditToolbar({
               {/* Separator - hidden on mobile */}
               <div className="h-6 w-px bg-gray-300 mx-1 sm:mx-2 hidden sm:block"></div>
 
-              {/* Mode Switcher Dropdown (Google Docs style) - Compact on mobile */}
-              <div className="relative hidden sm:block" ref={modeDropdownRef}>
-                <button
-                  onClick={() => setShowModeDropdown(!showModeDropdown)}
-                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded transition-all duration-200"
-                >
-                  {editMode ? (
-                    <>
-                      <PencilIcon className="w-4 h-4" />
-                      <span className="hidden md:inline">Editing</span>
-                    </>
-                  ) : (
-                    <>
-                      <EyeIcon className="w-4 h-4" />
-                      <span className="hidden md:inline">Viewing</span>
-                    </>
-                  )}
-                  <ChevronDownIcon className="w-4 h-4 text-gray-500" />
-                </button>
-
-                {showModeDropdown && (
-                  <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 z-50">
-                    <button
-                      onClick={() => {
-                        setEditMode(true);
-                        setShowModeDropdown(false);
-                      }}
-                      className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
-                        editMode ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      <PencilIcon className="w-4 h-4" />
-                      <span>Editing</span>
-                      {editMode && (
-                        <svg
-                          className="w-4 h-4 ml-auto text-blue-700"
-                          fill="currentColor"
-                          viewBox="0 0 20 20"
-                        >
-                          <path
-                            fillRule="evenodd"
-                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      )}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEditMode(false);
-                        setHighlightedNodes(new Set());
-                        setLayoutMode(false);
-                        setShowModeDropdown(false);
-                      }}
-                      className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
-                        !editMode ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      <EyeIcon className="w-4 h-4" />
-                      <span>Viewing</span>
-                      {!editMode && (
-                        <svg
-                          className="w-4 h-4 ml-auto text-blue-700"
-                          fill="currentColor"
-                          viewBox="0 0 20 20"
-                        >
-                          <path
-                            fillRule="evenodd"
-                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
+              {/* Editing/Viewing toggle removed in PR 1: edit mode is the
+                default for the /edit/* route; the read-only badge in the
+                new TopBar covers viewer mode. */}
 
               {/* Mobile Menu Button - Shown when edit tools are hidden (below md breakpoint) */}
               <div className="relative md:hidden" ref={mobileMenuRef}>
@@ -2598,26 +2480,9 @@ export function EditToolbar({
         </div>
       )}
 
-      {/* Layout Mode Tooltip */}
-      {editMode && (
-        <Tooltip
-          id="layout-mode-tooltip"
-          place="bottom"
-          isOpen={showLayoutTooltip}
-          clickable
-          style={{ zIndex: 9999 }}
-        >
-          <div>
-            <div>Add/remove columns & sections</div>
-            <button
-              onClick={() => setShowLayoutTooltip(false)}
-              className="text-xs underline hover:no-underline mt-2"
-            >
-              Got it
-            </button>
-          </div>
-        </Tooltip>
-      )}
+      {/* Layout-mode auto-popover removed in PR 1: it steals attention
+        on first edit. Plan failure-mode #2; ghost-system replaces the
+        manual layout mode in PR 5. */}
     </>
   );
 }
