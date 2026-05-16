@@ -1746,6 +1746,14 @@ function ToCViewer() {
         >
           <div
             className="bg-white rounded-xl shadow-lg p-4"
+            // PR 6: the export utilities (`src/utils/exportChart.ts`)
+            // query for `[data-export-root]` to find the capture target.
+            // This is the inner white card; it contains the entire
+            // graph (sections + nodes + SVG connections) and is
+            // independent of the outer zoom/pan transform — which
+            // `exportChart` neutralizes during capture, but that
+            // transform is on the *parent* div, not this one.
+            data-export-root="true"
             style={{
               width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
               height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
