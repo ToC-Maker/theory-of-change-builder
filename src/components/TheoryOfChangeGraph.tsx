@@ -14,6 +14,7 @@ import { usePointerDrag } from '../hooks/usePointerDrag';
 import type { DragOverLocation } from '../hooks/usePointerDrag';
 import { useConnectionDrag } from '../hooks/useConnectionDrag';
 import { buildConnectionPath } from './canvas/connectionPath';
+import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 // PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
@@ -811,6 +812,43 @@ export function ToC({
     },
   });
 
+  // PR 5 Task 5.3: column / section delete callbacks shared by the
+  // hover-`×` affordance. Each writes through `setDataAndNotify` so the
+  // op is one undo entry. Deleting the last column in a section
+  // collapses the section too (consistent with the legacy
+  // layoutMode behavior).
+  const deleteColumn = useCallback(
+    (sectionIndex: number, columnIndex: number) => {
+      if (!editMode) return;
+      setDataAndNotify((prevData) => {
+        const updatedSection = {
+          ...prevData.sections[sectionIndex],
+          columns: prevData.sections[sectionIndex].columns.filter((_, i) => i !== columnIndex),
+        };
+        const newSections =
+          updatedSection.columns.length === 0
+            ? prevData.sections.filter((_, i) => i !== sectionIndex)
+            : prevData.sections.map((s, i) => (i === sectionIndex ? updatedSection : s));
+        return { ...prevData, sections: newSections };
+      });
+      // Clear selection if any deleted nodes were highlighted.
+      setHighlightedNodes(new Set());
+    },
+    [editMode, setDataAndNotify],
+  );
+
+  const deleteSection = useCallback(
+    (sectionIndex: number) => {
+      if (!editMode) return;
+      setDataAndNotify((prevData) => ({
+        ...prevData,
+        sections: prevData.sections.filter((_, i) => i !== sectionIndex),
+      }));
+      setHighlightedNodes(new Set());
+    },
+    [editMode, setDataAndNotify],
+  );
+
   // PR 5 Task 5.2: drag-to-connect gesture. `useConnectionDrag` shares
   // the `isCanvasGestureActive` mutual-exclusion flag with
   // `usePointerDrag` (so node-drag and connection-drag can't start
@@ -1097,7 +1135,28 @@ export function ToC({
               >
                 <div className="flex">
                   {/* Section title positioned to center over actual columns */}
-                  <div className="flex flex-col" data-section-index={sectionIndex}>
+                  <div
+                    className={clsx(
+                      'flex flex-col',
+                      // PR 5 Task 5.3: `group relative` enables the
+                      // child × delete button's hover-reveal anywhere
+                      // inside the section.
+                      editMode && 'group relative',
+                    )}
+                    data-section-index={sectionIndex}
+                  >
+                    {/* PR 5 Task 5.3: hover-× section delete.
+                      Visible only when the section is hovered (via
+                      the parent's `group` class). Click → React
+                      confirm modal. */}
+                    {editMode && (
+                      <ColumnDeleteAffordance
+                        nodeCount={section.columns.reduce((sum, col) => sum + col.nodes.length, 0)}
+                        scope="section"
+                        onDelete={() => deleteSection(sectionIndex)}
+                        testIdSuffix={`${sectionIndex}`}
+                      />
+                    )}
                     <div
                       className="rounded py-3 mb-2 px-3"
                       style={{
@@ -1210,6 +1269,9 @@ export function ToC({
                             data-column={`${sectionIndex}-${colIndex}`}
                             className={clsx(
                               'relative',
+                              // PR 5 Task 5.3: `group` enables the
+                              // child × delete button's hover-reveal.
+                              editMode && 'group',
                               // CSS-hover affordance for empty-column
                               // body: `cursor-cell` signals "click here
                               // to drop a node". Pure CSS, no JS hover
@@ -1292,12 +1354,18 @@ export function ToC({
                               );
                             })}
 
-                            {/* PR 5 Task 5.3 (next commit) replaces the
-                              old red "- Delete" label with a hover-×
-                              control. Empty columns now show a `cell`
-                              cursor (see parent class above) so users
-                              still get a click-to-add-node affordance
-                              before the × is wired in. */}
+                            {/* PR 5 Task 5.3: hover-× column delete.
+                              Visible only on column hover via the
+                              parent's `group` class. Click → React
+                              confirm modal (NOT window.confirm). */}
+                            {editMode && (
+                              <ColumnDeleteAffordance
+                                nodeCount={column.nodes.length}
+                                scope="column"
+                                onDelete={() => deleteColumn(sectionIndex, colIndex)}
+                                testIdSuffix={`${sectionIndex}-${colIndex}`}
+                              />
+                            )}
                           </div>
 
                           {/* PR 5 Task 5.1: always-on add-column

@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDownIcon, TrashIcon, ClockIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useAuth0 } from '@auth0/auth0-react';
 import { ChartService, type UserChart } from '../../services/chartService';
+import { ConfirmModal } from '../ConfirmModal';
 
 interface Props {
   isAuthenticated: boolean;
@@ -48,6 +49,7 @@ export function FileMenu({
   // Bumping this counter re-triggers the load effect (used by the
   // Retry button). Avoids manual re-implementing the effect body.
   const [retryNonce, setRetryNonce] = useState(0);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { user } = useAuth0();
 
@@ -122,13 +124,22 @@ export function FileMenu({
     void load();
   }, [submenu, isAuthenticated, user?.sub, retryNonce]);
 
-  const handleDelete = () => {
+  // PR 5: replace `window.confirm()` with the shared ConfirmModal
+  // primitive. The dropdown closes immediately so the modal anchors
+  // to the page instead of being clipped by the click-outside handler
+  // attached to this menu.
+  const handleDeleteClick = () => {
     if (!currentChartId) return;
-    const ok = window.confirm('Are you sure you want to delete this chart? This cannot be undone.');
-    if (!ok) return;
-    onDeleteChart(currentChartId);
+    setConfirmDeleteOpen(true);
     setOpen(false);
     setSubmenu('main');
+  };
+
+  const handleConfirmDelete = () => {
+    if (currentChartId) {
+      onDeleteChart(currentChartId);
+    }
+    setConfirmDeleteOpen(false);
   };
 
   return (
@@ -195,7 +206,7 @@ export function FileMenu({
                   <div className="my-1 h-px bg-gray-100" />
                   <button
                     type="button"
-                    onClick={handleDelete}
+                    onClick={handleDeleteClick}
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
                     role="menuitem"
                   >
@@ -300,6 +311,15 @@ export function FileMenu({
           )}
         </div>
       )}
+      <ConfirmModal
+        open={confirmDeleteOpen}
+        title="Delete chart?"
+        body="Are you sure you want to delete this chart? This cannot be undone."
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }
