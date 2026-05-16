@@ -3,6 +3,16 @@ export interface Connection {
   confidence: number; // 0-100 scale
   evidence?: string; // Evidence supporting this connection
   assumptions?: string; // Key assumptions underlying this connection
+  /**
+   * PR 7: optional bezier waypoints in container-local coordinates
+   * (same coordinate space as `node.yPosition`). When present, the
+   * connection path runs source -> waypoints[0] -> ... -> target as a
+   * single multi-segment cubic bezier (one `<path>` element, see
+   * `src/utils/connectionPath.ts`). When absent or empty, the renderer
+   * falls back to the existing auto-bezier shape (byte-identical for
+   * existing graphs — see `connectionPath.waypoints.test.ts`).
+   */
+  waypoints?: Array<{ x: number; y: number }>;
 }
 
 export interface Node {
