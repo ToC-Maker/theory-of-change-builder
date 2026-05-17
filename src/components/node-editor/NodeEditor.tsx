@@ -119,19 +119,22 @@ export function NodeEditor(props: NodeEditorProps) {
   // the canonical "close → commit" edge for the editor. Calling commit
   // with the current selection key is safe even if nothing's buffered
   // (the underlying useGraphMutation no-ops on an unknown key).
+  //
+  // We track the LATEST commit closures via refs: `commitTitle` /
+  // `commitDetails` are `useCallback`-wrapped with `[commit, selKey]`
+  // deps, so their identity changes on every selection switch. The
+  // older pattern (capturing locals once at the mount-effect's first
+  // render) flushed the FIRST render's key on unmount, missing the
+  // current selection's buffered typing.
+  const commitTitleRef = useRef(props_.commitTitle);
+  const commitDetailsRef = useRef(props_.commitDetails);
+  commitTitleRef.current = props_.commitTitle;
+  commitDetailsRef.current = props_.commitDetails;
   useEffect(() => {
-    // Capture the commit closures so the cleanup operates on the values
-    // observed at the LAST render before unmount (selection-key included).
-    const commitTitleLocal = props_.commitTitle;
-    const commitDetailsLocal = props_.commitDetails;
     return () => {
-      commitTitleLocal();
-      commitDetailsLocal();
+      commitTitleRef.current();
+      commitDetailsRef.current();
     };
-    // Intentionally do NOT depend on props_.commitTitle / commitDetails —
-    // we want this cleanup to fire ONLY on unmount, not on every render.
-    // The closure capture above gives us the latest values at unmount time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Register the PR-4 drag-start callback. The parent owns the actual
