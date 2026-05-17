@@ -480,6 +480,24 @@ describe('useConnectionDrag', () => {
     });
   });
 
+  describe('cleanup', () => {
+    it('clears isCanvasGestureActive when the hook unmounts mid-drag', () => {
+      const onConnect = vi.fn();
+      const { result, unmount } = setupHook({ data: sampleData(), onConnect });
+
+      const handle = makeMockHandle();
+      act(() => {
+        result.current
+          .bindHandle('source', 'right')
+          .onPointerDown(pointerDownEvent({ clientX: 50, clientY: 25, handleEl: handle }));
+      });
+
+      expect(isCanvasGestureActive()).toBe(true);
+      unmount();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+  });
+
   describe('isActive flag', () => {
     it('exposes isActive=true while drag is in flight, false otherwise', () => {
       const onConnect = vi.fn();
