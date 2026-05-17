@@ -52,7 +52,6 @@ export interface UseEdgePropertiesResult {
   commitEvidence: () => void;
   commitAssumptions: () => void;
   deleteConnection: () => void;
-  isDirty: boolean;
 }
 
 const DEFAULT_CONFIDENCE = 50;
@@ -107,11 +106,6 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
     }
   }, [edgeKey, sourceEvidence, sourceAssumptions]);
 
-  const [isDirty, setIsDirty] = useState(false);
-  useEffect(() => {
-    setIsDirty(false);
-  }, [edgeKey]);
-
   /**
    * Map an updater over the source node's connections array, patching the
    * record for `targetId`. Handles the legacy `connectionIds` → new-shape
@@ -151,7 +145,6 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
 
   const setConfidence = useCallback(
     (next: number) => {
-      setIsDirty(true);
       mutateDebounced(patchConnection({ confidence: next }), `confidence-${edgeKey}`);
     },
     [mutateDebounced, patchConnection, edgeKey],
@@ -160,7 +153,6 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   const setEvidence = useCallback(
     (next: string) => {
       setEvidenceBuffer(next);
-      setIsDirty(true);
       mutateDebounced(patchConnection({ evidence: next }), `evidence-${edgeKey}`);
     },
     [mutateDebounced, patchConnection, edgeKey],
@@ -169,7 +161,6 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   const setAssumptions = useCallback(
     (next: string) => {
       setAssumptionsBuffer(next);
-      setIsDirty(true);
       mutateDebounced(patchConnection({ assumptions: next }), `assumptions-${edgeKey}`);
     },
     [mutateDebounced, patchConnection, edgeKey],
@@ -179,17 +170,14 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
 
   const commitConfidence = useCallback(() => {
     commit(`confidence-${edgeKey}`);
-    setIsDirty(false);
   }, [commit, edgeKey]);
 
   const commitEvidence = useCallback(() => {
     commit(`evidence-${edgeKey}`);
-    setIsDirty(false);
   }, [commit, edgeKey]);
 
   const commitAssumptions = useCallback(() => {
     commit(`assumptions-${edgeKey}`);
-    setIsDirty(false);
   }, [commit, edgeKey]);
 
   // --- destructive
@@ -225,6 +213,5 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
     commitEvidence,
     commitAssumptions,
     deleteConnection,
-    isDirty,
   };
 }
