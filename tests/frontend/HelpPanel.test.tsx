@@ -49,4 +49,31 @@ describe('HelpPanel — Replay the view-mode walkthrough', () => {
     expect(localStorage.getItem('graph-tutorial-seen')).toBeNull();
     expect(reloadMock).toHaveBeenCalledTimes(1);
   });
+
+  it('surfaces inline error and skips reload when localStorage throws', async () => {
+    // Private-mode / disabled-storage scenario: removeItem throws.
+    // The previous behaviour swallowed the error and reloaded anyway,
+    // which left the tutorial flag in place silently (so the
+    // "Replay" affordance appeared to do nothing). Surface the
+    // failure instead, and skip the reload that would otherwise lie
+    // to the user about resetting the tutorial.
+    const user = userEvent.setup();
+    localStorage.setItem('graph-tutorial-seen', 'true');
+    const removeSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    const reloadMock = vi.fn();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, reload: reloadMock },
+    });
+
+    render(<HelpPanel />);
+    await user.click(screen.getByRole('button', { name: /help/i }));
+    await user.click(screen.getByRole('menuitem', { name: /replay/i }));
+
+    expect(removeSpy).toHaveBeenCalledWith('graph-tutorial-seen');
+    expect(reloadMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/storage may be disabled/i)).toBeInTheDocument();
+  });
 });
