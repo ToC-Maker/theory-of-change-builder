@@ -160,4 +160,50 @@ describe('useAnchorPosition', () => {
     );
     expect(result.current).toBeNull();
   });
+
+  it('re-attaches ResizeObserver to the NEW anchor when anchorRef.current is mutated', () => {
+    // Regression: the parent (NodeEditorMount) mutates `.current` on
+    // every render to point at the active anchor; before the fix, the
+    // ResizeObserver effect deps were `[anchorRef, ...]` (stable
+    // RefObject identity) so it captured the FIRST element at mount
+    // and silently kept observing it after selection changes — meaning
+    // a node-b resize never repositioned the editor when the user had
+    // switched from a to b.
+    const elementA = document.createElement('div');
+    setRect(elementA, { left: 0, top: 0, width: 50, height: 40 });
+    const elementB = document.createElement('div');
+    setRect(elementB, { left: 200, top: 100, width: 50, height: 40 });
+    const anchor = { current: elementA } as React.RefObject<HTMLElement>;
+
+    const { result, rerender } = renderHook(() =>
+      useAnchorPosition({
+        anchorRef: anchor,
+        camera: { x: 0, y: 0, z: 1 },
+        placement: 'right',
+        offset: 8,
+      }),
+    );
+
+    // Initial position derives from element A (50 + 8 = 58).
+    expect(result.current?.x).toBe(58);
+
+    // The parent re-points the anchor at element B (selection switch).
+    anchor.current = elementB;
+    rerender();
+
+    // The reposition effect on the new anchorEl reads element B's rect.
+    expect(result.current?.x).toBe(258); // 200 + 50 + 8
+
+    // Verify the ResizeObserver re-attached to B: only the LIVE
+    // observer's callback should reposition. We resize B and check
+    // that's reflected.
+    setRect(elementB, { left: 200, top: 100, width: 100, height: 40 });
+    act(() => {
+      // Fire the latest-attached callback (the test shim pushes them
+      // into `capturedResizeCallbacks` in order; the disconnect on
+      // re-subscribe filters out the old one).
+      capturedResizeCallbacks.forEach((cb) => cb([], {} as ResizeObserver));
+    });
+    expect(result.current?.x).toBe(308); // 200 + 100 + 8
+  });
 });
