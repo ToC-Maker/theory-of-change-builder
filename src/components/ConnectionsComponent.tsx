@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
+import { getLocalPosition } from '../hooks/useGraphLayout';
 import { EdgePopup } from './EdgePopup';
 
 export interface EdgePopupState {
@@ -469,26 +470,8 @@ export function ConnectionsComponent({
           const container = containerRef.current || startNode.closest('.flex.relative');
           if (!container) return null;
 
-          // Calculate local positions relative to container
-          const getLocalPosition = (element: HTMLElement) => {
-            let x = 0,
-              y = 0;
-            const width = element.offsetWidth,
-              height = element.offsetHeight;
-            let current: HTMLElement | null = element;
-
-            // Walk up the offset parent chain until we reach the container
-            while (current && current !== container) {
-              x += current.offsetLeft;
-              y += current.offsetTop;
-              current = current.offsetParent as HTMLElement | null;
-            }
-
-            return { x, y, width, height };
-          };
-
-          const startPos = getLocalPosition(startNode);
-          const endPos = getLocalPosition(endNode);
+          const startPos = getLocalPosition(startNode, container as HTMLElement);
+          const endPos = getLocalPosition(endNode, container as HTMLElement);
 
           // Check if nodes are in the same column for vertical connections
           const isSameColumn =
@@ -694,26 +677,8 @@ export function ConnectionsComponent({
 
             if (!container) return null;
 
-            // Use the same getLocalPosition function as normal edges
-            const getLocalPosition = (element: HTMLElement) => {
-              let x = 0,
-                y = 0;
-              const width = element.offsetWidth,
-                height = element.offsetHeight;
-              let current: HTMLElement | null = element;
-
-              // Walk up the offset parent chain until we reach the container
-              while (current && current !== container) {
-                x += current.offsetLeft;
-                y += current.offsetTop;
-                current = current.offsetParent as HTMLElement | null;
-              }
-
-              return { x, y, width, height };
-            };
-
-            const startPos = getLocalPosition(sourceRef);
-            const endPos = getLocalPosition(targetRef);
+            const startPos = getLocalPosition(sourceRef, container as HTMLElement);
+            const endPos = getLocalPosition(targetRef, container as HTMLElement);
 
             // Check if nodes are in the same column for ghost connection
             const sourceLocation = findNodeLocation(sourceId);
