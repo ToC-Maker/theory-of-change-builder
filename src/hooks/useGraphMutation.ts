@@ -249,7 +249,16 @@ export function useGraphMutation(
   // Cleanup: flip isMountedRef and clear pending timers. Pending
   // microtask still fires (microtasks aren't cancellable), but is gated
   // by `isMountedRef.current`.
+  //
+  // The effect body re-arms `isMountedRef.current = true` on every
+  // (re-)mount. Under React 19 `<StrictMode>` (active in dev via
+  // `src/main.tsx:25`), every effect runs mount -> cleanup -> mount;
+  // without the re-arm, the ref stays `false` after the first cycle and
+  // every subsequent parent notify is silently dropped. The
+  // `useGraphMutation.unmount.test.tsx` "still notifies after a
+  // StrictMode mount-cleanup-remount cycle" case pins this.
   useEffect(() => {
+    isMountedRef.current = true;
     // Capture refs into locals so the cleanup closure operates on the
     // same Map instances seen at mount time (react-hooks/exhaustive-deps).
     const idleTimers = idleTimersRef.current;
