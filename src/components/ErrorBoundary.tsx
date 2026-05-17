@@ -20,6 +20,20 @@ import { loggingService } from '../services/loggingService';
 
 interface Props {
   children: ReactNode;
+  /**
+   * Optional fallback. When omitted, the default reload UI is used. The
+   * fallback receives the captured error (narrowed to `Error`) and a
+   * `reset()` that resets the boundary's own state (state may still be
+   * corrupt elsewhere).
+   */
+  fallback?: (args: { error: Error; reset: () => void }) => ReactNode;
+  /**
+   * Optional caught-error callback. When supplied, REPLACES the default
+   * `loggingService.reportError` ship-to-server. Callers can use this to
+   * tag the report with a component identifier (e.g. 'DetailsEditor' vs
+   * the default 'ErrorBoundary'), or to suppress reporting entirely.
+   */
+  onCatch?: (error: Error, errorInfo: ErrorInfo) => void;
 }
 
 // React passes `unknown` to the boundary lifecycle (`throw 'string'` and
@@ -41,6 +55,14 @@ export class ErrorBoundary extends Component<Props, State> {
     // Fire-and-forget: never throws (loggingService.reportError swallows
     // network errors internally and falls back to sendBeacon).
     const e = error instanceof Error ? error : new Error(String(error));
+    // Caller-supplied callback overrides the default ship-to-server.
+    // We narrow `unknown` to `Error` before calling so the consumer
+    // contract stays `Error` (the React lifecycle accepts `unknown`
+    // because `throw 'string'` is legal, but callers want `Error`).
+    if (this.props.onCatch) {
+      this.props.onCatch(e, errorInfo);
+      return;
+    }
     loggingService.reportError({
       error_name: e.name || 'Error',
       error_message: e.message || String(error),
@@ -52,8 +74,18 @@ export class ErrorBoundary extends Component<Props, State> {
     });
   }
 
+  reset = (): void => {
+    this.setState({ error: null, hasError: false });
+  };
+
   render(): ReactNode {
     if (this.state.hasError) {
+      if (this.props.fallback) {
+        // Narrow `unknown` to `Error` for the consumer contract.
+        const raw = this.state.error;
+        const error = raw instanceof Error ? raw : new Error(String(raw));
+        return this.props.fallback({ error, reset: this.reset });
+      }
       return (
         <div className="min-h-screen flex items-center justify-center bg-gray-50 p-8">
           <div className="max-w-md w-full bg-white rounded-lg shadow p-8 text-center">
