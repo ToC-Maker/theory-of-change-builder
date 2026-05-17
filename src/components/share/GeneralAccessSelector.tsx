@@ -12,11 +12,11 @@
 // existing iframe embeds (which start returning 403 to anonymous
 // viewers). All other transitions commit immediately.
 //
-// The prompt uses `window.confirm` for now — the codebase has not yet
-// adopted a React modal primitive (FileMenu's delete also uses
-// `window.confirm`). Replacing with a portal-based modal is a small
-// follow-up that can land in PR 3 alongside the NodeEditor's similar
-// "destroy" confirmations.
+// The prompt uses the shared `ConfirmModal` primitive (PR 5 red-team
+// L4 closure). Same pattern as `FileMenu`'s delete-chart retrofit:
+// state-driven open flag, onConfirm proceeds with the transition,
+// onCancel reverts.
+import { useState } from 'react';
 import {
   ExclamationTriangleIcon,
   GlobeAltIcon,
@@ -24,6 +24,7 @@ import {
   PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import type { LinkSharingLevel } from '../../../shared/permissions';
+import { ConfirmModal } from '../ConfirmModal';
 
 export type { LinkSharingLevel } from '../../../shared/permissions';
 
@@ -69,16 +70,27 @@ export function GeneralAccessSelector({
   onChange,
   disabled = false,
 }: GeneralAccessSelectorProps) {
+  const [pendingRestrict, setPendingRestrict] = useState(false);
+
   const handleSelect = (next: LinkSharingLevel) => {
     if (next === value) return;
     // Embed-break confirmation gate only fires when *going* to restricted
     // from a non-restricted mode (the lossy direction).
     const movingToRestricted = next === 'restricted' && value !== 'restricted';
     if (movingToRestricted) {
-      const ok = window.confirm(RESTRICT_CONFIRM_MESSAGE);
-      if (!ok) return;
+      setPendingRestrict(true);
+      return;
     }
     onChange(next);
+  };
+
+  const confirmRestrict = () => {
+    setPendingRestrict(false);
+    onChange('restricted');
+  };
+
+  const cancelRestrict = () => {
+    setPendingRestrict(false);
   };
 
   return (
@@ -130,6 +142,15 @@ export function GeneralAccessSelector({
           </button>
         );
       })}
+      <ConfirmModal
+        open={pendingRestrict}
+        title="Change to Restricted?"
+        body={RESTRICT_CONFIRM_MESSAGE}
+        confirmLabel="Change to Restricted"
+        confirmVariant="danger"
+        onConfirm={confirmRestrict}
+        onCancel={cancelRestrict}
+      />
     </div>
   );
 }

@@ -8,12 +8,12 @@
 //        - "Anyone can view"   — "Public view link. Editors must be approved."
 //        - "Anyone can edit"   — "Public view and edit links. No approval needed."
 //   2. Switching FROM a non-restricted mode TO 'restricted' triggers a
-//      confirmation gate (plan §170 Critical: embed silently breaks).
+//      ConfirmModal gate (plan §170 Critical: embed silently breaks).
 //      The five other transitions (restricted -> viewer, restricted ->
 //      editor, viewer <-> editor) commit immediately.
 //
 // We don't snapshot pixel layout; preflight + manual smoke handle that.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GeneralAccessSelector } from '../../src/components/share/GeneralAccessSelector';
@@ -21,12 +21,6 @@ import { GeneralAccessSelector } from '../../src/components/share/GeneralAccessS
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-});
-
-beforeEach(() => {
-  // Block native window.confirm so a stray un-mocked transition surfaces
-  // as a test failure rather than silently swallowing.
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 describe('GeneralAccessSelector', () => {
@@ -63,8 +57,8 @@ describe('GeneralAccessSelector', () => {
 
     await user.click(screen.getByRole('radio', { name: /anyone can view/i }));
     expect(onChange).toHaveBeenCalledWith('viewer');
-    // window.confirm not consulted on this transition direction.
-    expect(window.confirm).not.toHaveBeenCalled();
+    // No ConfirmModal opened on this transition direction.
+    expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument();
   });
 
   it('commits viewer -> editor immediately (no confirmation)', async () => {
@@ -74,44 +68,53 @@ describe('GeneralAccessSelector', () => {
 
     await user.click(screen.getByRole('radio', { name: /anyone can edit/i }));
     expect(onChange).toHaveBeenCalledWith('editor');
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument();
   });
 
   it('asks for confirmation when changing viewer -> restricted (embed-break warning)', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<GeneralAccessSelector value="viewer" onChange={onChange} />);
 
     await user.click(screen.getByRole('radio', { name: /restricted/i }));
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/embed/i);
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/restricted/i);
+    // ConfirmModal opens; its body mentions embed and Restricted;
+    // onChange is NOT called until the user confirms.
+    const modal = screen.getByTestId('confirm-modal');
+    expect(modal).toBeInTheDocument();
+    expect(modal.textContent).toMatch(/embed/i);
+    expect(modal.textContent).toMatch(/restricted/i);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('confirm-modal-confirm'));
     expect(onChange).toHaveBeenCalledWith('restricted');
   });
 
   it('asks for confirmation when changing editor -> restricted (embed-break warning)', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<GeneralAccessSelector value="editor" onChange={onChange} />);
 
     await user.click(screen.getByRole('radio', { name: /restricted/i }));
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('confirm-modal')).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('confirm-modal-confirm'));
     expect(onChange).toHaveBeenCalledWith('restricted');
   });
 
   it('aborts the change when the user cancels the confirmation', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(<GeneralAccessSelector value="viewer" onChange={onChange} />);
 
     await user.click(screen.getByRole('radio', { name: /restricted/i }));
+    expect(screen.getByTestId('confirm-modal')).toBeInTheDocument();
 
+    await user.click(screen.getByTestId('confirm-modal-cancel'));
     expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument();
   });
 
   it('does not prompt when re-selecting the current mode', async () => {
@@ -120,7 +123,7 @@ describe('GeneralAccessSelector', () => {
     render(<GeneralAccessSelector value="restricted" onChange={onChange} />);
 
     await user.click(screen.getByRole('radio', { name: /restricted/i }));
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument();
     // No-op clicks do not redundantly call onChange (the contract is
     // "fires on actual mode change"); both behaviours are acceptable so
     // we accept either, just assert "no confirm popup".
