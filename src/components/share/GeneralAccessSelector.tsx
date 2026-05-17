@@ -23,8 +23,9 @@ import {
   LockClosedIcon,
   PencilSquareIcon,
 } from '@heroicons/react/24/outline';
+import type { LinkSharingLevel } from '../../../shared/permissions';
 
-export type LinkSharingLevel = 'restricted' | 'viewer' | 'editor';
+export type { LinkSharingLevel } from '../../../shared/permissions';
 
 interface ModeDescriptor {
   value: LinkSharingLevel;

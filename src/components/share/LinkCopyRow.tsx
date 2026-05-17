@@ -10,8 +10,9 @@
 // subtext) so it composes cleanly inside ShareDialog.
 import { useEffect, useRef, useState } from 'react';
 import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
+import type { LinkSharingLevel } from '../../../shared/permissions';
 
-export type LinkSharingLevel = 'restricted' | 'viewer' | 'editor';
+export type { LinkSharingLevel } from '../../../shared/permissions';
 
 export interface LinkCopyRowProps {
   variant: 'view' | 'edit';
