@@ -10,7 +10,7 @@
 // breakpoint switch and that the hamburger drawer renders the expected
 // content list.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { act, render, screen, cleanup, fireEvent, createEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { TopBar } from '../../src/components/top-bar/TopBar';
@@ -20,7 +20,6 @@ const noop = () => {};
 const defaultProps = {
   // Mode + selection.
   editMode: true,
-  setEditMode: noop,
   showEditButton: true,
   // Undo / redo.
   undoHistory: [] as never[],
@@ -31,10 +30,6 @@ const defaultProps = {
   isSaving: false,
   saveError: null,
   currentEditToken: 'tok-abc',
-  // Share / chart.
-  data: { sections: [], title: 'My ToC' } as never,
-  containerSize: { width: 1024, height: 768 },
-  onChartCreated: noop,
   // FormatMenu controls — passed through.
   curvature: 0.5,
   setCurvature: noop,
@@ -113,5 +108,57 @@ describe('TopBar responsive layout', () => {
   it('renders a read-only badge when showEditButton=false', () => {
     renderWithRouter(<TopBar {...defaultProps} breakpoint="md" showEditButton={false} />);
     expect(screen.getByText(/view.?only|read.?only/i)).toBeInTheDocument();
+  });
+
+  it('calls preventDefault on undo/redo mousedown so text-input focus survives', () => {
+    // L2 mitigation: clicking the toolbar undo/redo while a text input
+    // is focused must not steal focus before handleUndo / handleRedo
+    // read document.activeElement via isInputFocused(). Dropping the
+    // onMouseDown.preventDefault() handlers regresses this — and the
+    // user's typed text gets replaced by an unrelated graph undo.
+    renderWithRouter(
+      <TopBar
+        {...defaultProps}
+        breakpoint="md"
+        undoHistory={[{ sections: [], title: 'x' } as never]}
+        redoHistory={[{ sections: [], title: 'y' } as never]}
+      />,
+    );
+    const undoBtn = screen.getByRole('button', { name: /^undo$/i });
+    const redoBtn = screen.getByRole('button', { name: /^redo$/i });
+
+    const undoEvent = createEvent.mouseDown(undoBtn);
+    fireEvent(undoBtn, undoEvent);
+    expect(undoEvent.defaultPrevented).toBe(true);
+
+    const redoEvent = createEvent.mouseDown(redoBtn);
+    fireEvent(redoBtn, redoEvent);
+    expect(redoEvent.defaultPrevented).toBe(true);
+  });
+
+  it('switches to the hamburger when window resizes below md', () => {
+    // useBreakpoint listens to `resize` and flips between sm/md. The
+    // existing tests force the breakpoint via prop; this one exercises
+    // the production listener path so a regression in the deps array
+    // or initial-state computation surfaces here.
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1200,
+    });
+    renderWithRouter(<TopBar {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /file/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open menu/i })).toBeNull();
+
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', {
+        writable: true,
+        configurable: true,
+        value: 500,
+      });
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(screen.getByRole('button', { name: /open menu/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^file$/i })).toBeNull();
   });
 });
