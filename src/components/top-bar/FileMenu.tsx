@@ -41,6 +41,13 @@ export function FileMenu({
   const [submenu, setSubmenu] = useState<Submenu>('main');
   const [recent, setRecent] = useState<UserChart[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(false);
+  // errorRecent: distinguishes "load failed" from "empty list". Without
+  // this, network/5xx/auth/localStorage failures collapse to the same
+  // "No charts" copy and the user concludes their data was lost.
+  const [errorRecent, setErrorRecent] = useState<string | null>(null);
+  // Bumping this counter re-triggers the load effect (used by the
+  // Retry button). Avoids manual re-implementing the effect body.
+  const [retryNonce, setRetryNonce] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const { user } = useAuth0();
 
@@ -67,6 +74,7 @@ export function FileMenu({
   useEffect(() => {
     if (submenu !== 'recent') return;
     const load = async () => {
+      setErrorRecent(null);
       if (isAuthenticated && user?.sub) {
         setLoadingRecent(true);
         try {
@@ -74,6 +82,7 @@ export function FileMenu({
           setRecent(charts);
         } catch (err) {
           console.error('[FileMenu] failed to load user charts', err);
+          setErrorRecent(err instanceof Error ? err.message : 'Failed to load charts');
         } finally {
           setLoadingRecent(false);
         }
@@ -106,11 +115,12 @@ export function FileMenu({
           setRecent(mapped);
         } catch (err) {
           console.error('[FileMenu] failed to load anon recent charts', err);
+          setErrorRecent(err instanceof Error ? err.message : 'Failed to load charts');
         }
       }
     };
     void load();
-  }, [submenu, isAuthenticated, user?.sub]);
+  }, [submenu, isAuthenticated, user?.sub, retryNonce]);
 
   const handleDelete = () => {
     if (!currentChartId) return;
@@ -255,6 +265,17 @@ export function FileMenu({
               </button>
               {loadingRecent ? (
                 <div className="px-3 py-4 text-center text-xs text-gray-500">Loading…</div>
+              ) : errorRecent ? (
+                <div className="px-3 py-3 text-xs text-red-700">
+                  <div>Couldn’t load recent charts.</div>
+                  <button
+                    type="button"
+                    onClick={() => setRetryNonce((n) => n + 1)}
+                    className="mt-1 underline text-red-700 hover:text-red-800"
+                  >
+                    Retry
+                  </button>
+                </div>
               ) : recent.length === 0 ? (
                 <div className="px-3 py-3 text-xs text-gray-500">
                   {isAuthenticated ? 'No saved charts yet.' : 'No local charts found.'}

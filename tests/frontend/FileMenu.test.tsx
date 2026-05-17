@@ -9,10 +9,21 @@
 //      Export, all in that order. Import/Export sub-actions are
 //      placeholders in PR 1 (PR 6 wires the real implementations).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { FileMenu } from '../../src/components/top-bar/FileMenu';
+import { ChartService } from '../../src/services/chartService';
+
+// Auth0 normally returns `{user: undefined}` outside a provider; the
+// auth-path tests need a user.sub to hit the `getUserCharts` branch.
+vi.mock('@auth0/auth0-react', () => ({
+  useAuth0: () => ({
+    user: { sub: 'auth0|test-user' },
+    isAuthenticated: true,
+    isLoading: false,
+  }),
+}));
 
 const baseProps = {
   isAuthenticated: false,
@@ -117,5 +128,52 @@ describe('FileMenu', () => {
 
     expect(onDelete).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  it('shows a distinct error row when the anon Open recent localStorage read throws', async () => {
+    const user = userEvent.setup();
+    // Force localStorage.getItem to throw — same shape as Brave Shields
+    // / Safari ITP / corrupt-blob failures.
+    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError: localStorage disabled');
+    });
+    // Silence the console.error so the test output stays clean.
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    renderMenu({ isAuthenticated: false, currentEditToken: 'tok-abc' });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/open recent/i));
+
+    // The error row must be visible and distinct from the empty-state
+    // copy ("No local charts found.") — otherwise the user sees a
+    // misleading "empty" state and concludes data was lost.
+    await waitFor(() => {
+      expect(screen.getByText(/couldn.t load recent charts/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/no local charts found/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+
+    getItemSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it('shows a distinct error row when getUserCharts throws (auth path)', async () => {
+    const user = userEvent.setup();
+    const getUserChartsSpy = vi
+      .spyOn(ChartService, 'getUserCharts')
+      .mockRejectedValueOnce(new Error('HTTP 503: upstream timeout'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    renderMenu({ isAuthenticated: true, isOwner: false, currentEditToken: 'tok-abc' });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/open recent/i));
+
+    await waitFor(() => {
+      expect(screen.getByText(/couldn.t load recent charts/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/no saved charts yet/i)).toBeNull();
+
+    getUserChartsSpy.mockRestore();
+    consoleSpy.mockRestore();
   });
 });
