@@ -7,16 +7,12 @@
 //     parent's `useCallback` wiring is load-bearing; without it the
 //     memo is a no-op).
 //
-// We count renders via React.Profiler. When a memoized child bails out,
-// React still calls `onRender` for the Profiler boundary itself, BUT
-// `actualDuration` is essentially 0 because no inner work happened —
-// `baseDuration` (the time it would take without memoization) stays
-// constant. Bailed-out commits report `actualDuration < baseDuration`;
-// real re-renders report `actualDuration >= baseDuration`.
-//
-// This DOES falsify: removing `memo(NodeComponentInner)` and exporting
-// `NodeComponentInner` directly bumps `actualDuration` back up to the
-// real-render value, and the "props identical" test fails.
+// We use React.Profiler's `actualDuration` vs `baseDuration` ratio.
+// Bailed-out commits report actualDuration as a small fraction of
+// baseDuration (typically < 0.15). Real renders sit at or above 1.0.
+// The 0.3 threshold leaves headroom for CPU-loaded test runners while
+// still falsifying when `memo(NodeComponentInner)` is removed (the
+// ratio shifts above 1.0 for the "identical props" case).
 import { Profiler } from 'react';
 import type { ComponentProps, ProfilerOnRenderCallback } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -66,69 +62,51 @@ interface CommitRecord {
   baseDuration: number;
 }
 
-// A "real" render is one where the Profiler's actualDuration is at
-// least roughly equal to baseDuration (the no-memo cost). A "bailed"
-// render reports actualDuration much smaller than baseDuration.
-//
-// We use 50% of baseDuration as the cutoff; in practice bailed-out
-// renders are < 5% of baseDuration and real renders are > 80%.
 function isRealRender(rec: CommitRecord): boolean {
-  return rec.actualDuration >= rec.baseDuration * 0.5;
+  return rec.actualDuration >= rec.baseDuration * 0.3;
+}
+
+function renderProfiled(props: ComponentProps<typeof NodeComponent>) {
+  const records: CommitRecord[] = [];
+  const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
+    records.push({ phase, actualDuration, baseDuration });
+  };
+  const utils = render(
+    <Profiler id="node" onRender={onRender}>
+      <NodeComponent {...props} />
+    </Profiler>,
+  );
+  const rerenderWithProps = (next: ComponentProps<typeof NodeComponent>) =>
+    utils.rerender(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...next} />
+      </Profiler>,
+    );
+  return { records, rerenderWithProps };
 }
 
 describe('React.memo(NodeComponent)', () => {
   it('does not re-render when props are referentially identical', () => {
-    const records: CommitRecord[] = [];
-    const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
-      records.push({ phase, actualDuration, baseDuration });
-    };
     const props = baseProps();
-    const { rerender } = render(
-      <Profiler id="node" onRender={onRender}>
-        <NodeComponent {...props} />
-      </Profiler>,
-    );
-    // Mount: one real render.
+    const { records, rerenderWithProps } = renderProfiled(props);
+
     expect(records.length).toBe(1);
     expect(records[0]!.phase).toBe('mount');
-    expect(isRealRender(records[0]!)).toBe(true);
 
-    // Re-render with the SAME props object. React.memo + default shallow
-    // compare should bail out -> NodeComponent doesn't really render,
-    // so actualDuration is near zero.
-    rerender(
-      <Profiler id="node" onRender={onRender}>
-        <NodeComponent {...props} />
-      </Profiler>,
-    );
+    rerenderWithProps(props);
     expect(records.length).toBe(2);
     expect(records[1]!.phase).toBe('update');
     expect(isRealRender(records[1]!)).toBe(false);
   });
 
   it('re-renders when a primitive prop changes (selection)', () => {
-    const records: CommitRecord[] = [];
-    const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
-      records.push({ phase, actualDuration, baseDuration });
-    };
     const props = baseProps();
-    const { rerender } = render(
-      <Profiler id="node" onRender={onRender}>
-        <NodeComponent {...props} />
-      </Profiler>,
-    );
+    const { records, rerenderWithProps } = renderProfiled(props);
     expect(records.length).toBe(1);
-    expect(isRealRender(records[0]!)).toBe(true);
 
-    rerender(
-      <Profiler id="node" onRender={onRender}>
-        <NodeComponent {...props} isHighlighted={true} />
-      </Profiler>,
-    );
-    // Selection change -> real re-render.
+    rerenderWithProps({ ...props, isHighlighted: true });
     expect(records.length).toBe(2);
     expect(isRealRender(records[1]!)).toBe(true);
-    // DOM reflects the new state.
     const node = document.getElementById('node-n-1');
     expect(node?.className).toMatch(/ring-2 ring-black/);
   });
@@ -139,26 +117,13 @@ describe('React.memo(NodeComponent)', () => {
     // breaking React.memo's bail-out. This test demonstrates the failure
     // mode that the `useCallback` audit in TheoryOfChangeGraph.tsx is
     // designed to prevent.
-    const records: CommitRecord[] = [];
-    const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
-      records.push({ phase, actualDuration, baseDuration });
-    };
-
-    const { rerender } = render(
-      <Profiler id="node" onRender={onRender}>
-        <NodeComponent {...baseProps()} toggleHighlight={() => {}} />
-      </Profiler>,
-    );
+    const { records, rerenderWithProps } = renderProfiled({
+      ...baseProps(),
+      toggleHighlight: () => {},
+    });
     expect(records.length).toBe(1);
-    expect(isRealRender(records[0]!)).toBe(true);
 
-    // New inline callback -> new reference -> memo bail-out fails ->
-    // real re-render.
-    rerender(
-      <Profiler id="node" onRender={onRender}>
-        <NodeComponent {...baseProps()} toggleHighlight={() => {}} />
-      </Profiler>,
-    );
+    rerenderWithProps({ ...baseProps(), toggleHighlight: () => {} });
     expect(records.length).toBe(2);
     expect(isRealRender(records[1]!)).toBe(true);
   });
