@@ -897,7 +897,6 @@ export function ToC({
     isActive: isConnectionDragActive,
   } = useConnectionDrag({
     data,
-    containerRef: graphContainerRef,
     editMode,
     onConnect: addConnection,
   });

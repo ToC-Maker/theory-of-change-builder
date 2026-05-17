@@ -11,12 +11,11 @@
 // `bindHandle(nodeId, side)` accessor; the hook itself owns the
 // gesture lifecycle.
 //
-// The visual design is a small (10x10) translucent indigo circle with
-// a subtle border, positioned at the vertical midpoint of the node
-// and overhanging the node edge by ~6px so it's grabbable without
-// covering the title. `pointer-events` is enabled on the dot but
-// not on the wrapping span (so the gap between dots stays click-
-// through).
+// The visual design is a 12×12 opaque indigo circle with a 2px white
+// outline, positioned at the node's vertical midpoint and overhanging
+// the node edge by 6px so it's grabbable without covering the title.
+// The two dots are rendered as Fragment siblings (no wrapping element)
+// so they don't introduce a hit-test target between them.
 
 import React from 'react';
 import type { HandleSide } from '../../hooks/useConnectionDrag';
