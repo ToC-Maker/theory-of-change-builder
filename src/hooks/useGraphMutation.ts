@@ -29,10 +29,6 @@
 //     keys in insertion order. The flush dispatches `onDataChange` via
 //     `queueMicrotask` (same scheduling as `mutate`).
 //
-//   isInputFocused()
-//     Convenience wrapper around `src/utils/isInputFocused.ts` so callers
-//     have one place to import the hook surface.
-//
 // ---------------------------------------------------------------------------
 // Why queueMicrotask, not setTimeout(0)
 // ---------------------------------------------------------------------------
@@ -97,7 +93,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { ToCData } from '../types';
-import { isInputFocused as isInputFocusedUtil } from '../utils/isInputFocused';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
@@ -118,7 +113,6 @@ export interface UseGraphMutationResult {
   mutate: (updater: GraphUpdater) => void;
   mutateDebounced: (updater: GraphUpdater, key: string) => void;
   commit: (key?: string) => void;
-  isInputFocused: () => boolean;
 }
 
 const applyUpdater = (prev: ToCData, updater: GraphUpdater): ToCData =>
@@ -289,14 +283,11 @@ export function useGraphMutation(
     };
   }, []);
 
-  const isInputFocused = useCallback(() => isInputFocusedUtil(), []);
-
   return {
     data,
     setData: setDataExternal,
     mutate,
     mutateDebounced,
     commit,
-    isInputFocused,
   };
 }
