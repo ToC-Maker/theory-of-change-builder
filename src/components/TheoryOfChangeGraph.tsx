@@ -1558,7 +1558,7 @@ export function ToC({
                   }}
                   aria-hidden
                 >
-                  <div className="rounded-xl bg-indigo-50 ring-2 ring-indigo-300 ring-dashed opacity-60 w-full h-full" />
+                  <div className="rounded-xl bg-indigo-50 border-2 border-dashed border-indigo-300 opacity-60 w-full h-full" />
                 </div>
               );
             })()}
