@@ -31,17 +31,13 @@ import { createPortal } from 'react-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import {
-  ChartService,
-  type CreateChartResponse,
-  type Permission,
-} from '../../services/chartService';
+import { ChartService, type CreateChartResponse } from '../../services/chartService';
+import type { Permission, LinkSharingLevel } from '../../../shared/permissions';
 import type { ToCData } from '../../types';
 import { usePermissionsRefresh } from '../../hooks/usePermissionsRefresh';
 import { GeneralAccessSelector } from './GeneralAccessSelector';
-import type { LinkSharingLevel } from './GeneralAccessSelector';
 import { LinkCopyRow } from './LinkCopyRow';
-import { PermissionsList, type PermissionRow } from './PermissionsList';
+import { PermissionsList } from './PermissionsList';
 
 export interface ShareDialogProps {
   open: boolean;
@@ -70,12 +66,16 @@ export function ShareDialog({
   const [shareLoading, setShareLoading] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [isOwner, setIsOwner] = useState(false);
-  const [permissions, setPermissions] = useState<PermissionRow[]>([]);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [loadingPermissions, setLoadingPermissions] = useState(false);
   const [linkSharingLevel, setLinkSharingLevel] = useState<LinkSharingLevel>('restricted');
   const [showEmbed, setShowEmbed] = useState(false);
   const [copiedEmbed, setCopiedEmbed] = useState(false);
+  // Divergence-banner acknowledgement. Reset whenever the dialog opens
+  // or a fresh divergence is observed; cleared by the user clicking
+  // "Got it" (which also folds serverLevel into linkSharingLevel).
+  const [bannerAcked, setBannerAcked] = useState(false);
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -165,16 +165,19 @@ export function ShareDialog({
     }
   }, [open, shareData, shareLoading, currentEditToken, loadExistingShareData, createNewChart]);
 
+  // `loadPermissions` owns the initial-load + 30s polling fetch. It
+  // folds the server's `linkSharingLevel` into local state so the UI
+  // reflects the latest on initial load, and refreshes the permissions
+  // array. Called by the polling effect and from each write handler
+  // (approve / reject / updateLevel / remove).
   const loadPermissions = useCallback(async () => {
     if (!shareData?.chartId || !isAuthenticated || !isOwner) return;
     setLoadingPermissions(true);
     setPermissionError(null);
     try {
       const result = await ChartService.getChartPermissions(shareData.chartId);
-      // Server returns either an array or { permissions, linkSharingLevel }.
-      const permRows = Array.isArray(result) ? (result as Permission[]) : result.permissions;
-      setPermissions(permRows as PermissionRow[]);
-      if (!Array.isArray(result) && result.linkSharingLevel) {
+      setPermissions(result.permissions);
+      if (result.linkSharingLevel) {
         setLinkSharingLevel(result.linkSharingLevel);
       }
     } catch (err) {
@@ -185,35 +188,60 @@ export function ShareDialog({
   }, [shareData?.chartId, isAuthenticated, isOwner]);
 
   // L1 mitigation: refresh on dialog open + cross-tab storage event.
-  // The hook owns the actual fetch shape; we wire it via a thin
-  // adapter so it returns just the `linkSharingLevel`.
+  // The hook tracks `serverLevel` separately from `linkSharingLevel`
+  // so it can flag divergence (server changed under our feet, e.g.
+  // another tab flipped the mode). We ride along on the shared
+  // round-trip by also updating the `permissions` array here, so the
+  // 30s `loadPermissions` poll and the storage-event refresh don't
+  // each fetch independently. If this dual responsibility grows,
+  // factor both into a `useChartPermissions(chartId)` hook.
   const fetchPermissionsLevel = useCallback(async (chartId: string) => {
     const result = await ChartService.getChartPermissions(chartId);
-    // Side-effect: also refresh the permissions list since we have
-    // the response in hand. Don't duplicate the round-trip.
-    const permRows = Array.isArray(result) ? (result as Permission[]) : result.permissions;
-    setPermissions(permRows as PermissionRow[]);
-    const level =
-      Array.isArray(result) || !result.linkSharingLevel ? undefined : result.linkSharingLevel;
-    return { linkSharingLevel: level };
+    setPermissions(result.permissions);
+    return { linkSharingLevel: result.linkSharingLevel };
   }, []);
 
-  const { serverLevel, divergedFromLocal } = usePermissionsRefresh({
+  const { serverLevel, divergedFromLocal, fetchError } = usePermissionsRefresh({
     open,
     chartId: shareData?.chartId ?? null,
     localLevel: linkSharingLevel,
     fetcher: fetchPermissionsLevel,
   });
 
-  // When the L1 hook observes a server-side change, fold it into local
-  // state (so the dropdown reflects the latest). The banner is rendered
-  // off `divergedFromLocal` BEFORE this fold runs (the hook reports
-  // divergence based on the previous local value).
+  // Reset the banner-ack flag each time the dialog opens, so a fresh
+  // open always shows a fresh divergence banner if one is observed.
   useEffect(() => {
-    if (serverLevel && serverLevel !== linkSharingLevel) {
-      setLinkSharingLevel(serverLevel);
+    if (open) setBannerAcked(false);
+  }, [open]);
+
+  // Reset the ack flag whenever a *new* divergence is observed (i.e.
+  // serverLevel changed under our feet after a previous ack). Without
+  // this, a second cross-tab change after an ack would be invisible.
+  const prevServerLevelRef = useRef<LinkSharingLevel | null>(null);
+  useEffect(() => {
+    if (serverLevel && serverLevel !== prevServerLevelRef.current) {
+      prevServerLevelRef.current = serverLevel;
+      if (serverLevel !== linkSharingLevel) {
+        setBannerAcked(false);
+      }
     }
   }, [serverLevel, linkSharingLevel]);
+
+  // Show the banner only when (a) the hook reports divergence and
+  // (b) the user has not yet acked it. The fold from serverLevel into
+  // linkSharingLevel intentionally does NOT happen automatically — it
+  // happens when the user clicks "Got it", which both clears the banner
+  // and adopts the server's level. This guarantees the banner is
+  // visible for at least one user interaction (previously, an auto-fold
+  // raced the banner away in ~16ms).
+  const showDivergenceBanner = divergedFromLocal && !bannerAcked;
+
+  const handleAcknowledgeDivergence = () => {
+    if (serverLevel) {
+      setLinkSharingLevel(serverLevel);
+    }
+    setBannerAcked(true);
+  };
 
   // Permissions polling — owner-gated, kicks off on first owner-confirmed
   // load and refreshes every 30s (the actual correctness guarantee per
@@ -365,10 +393,38 @@ export function ShareDialog({
 
           {shareData && (
             <>
-              {/* L1 divergence banner — server changed under our feet. */}
-              {divergedFromLocal && (
-                <div className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded p-2">
-                  Permissions were changed by another tab — reloaded latest.
+              {/* L1 divergence banner — server changed under our feet.
+                  Persists until the user clicks "Got it", which folds
+                  the server's level into local state. Previously the
+                  banner self-erased within one render due to an
+                  auto-fold effect that raced its own render. */}
+              {showDivergenceBanner && (
+                <div
+                  role="status"
+                  className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded p-2 flex items-start justify-between gap-2"
+                >
+                  <span>Permissions were changed by another tab — reloaded latest.</span>
+                  <button
+                    type="button"
+                    onClick={handleAcknowledgeDivergence}
+                    className="text-blue-700 underline hover:no-underline font-medium flex-shrink-0"
+                  >
+                    Got it
+                  </button>
+                </div>
+              )}
+
+              {/* L1 fetch-error banner — the refresh hook couldn't verify
+                  the server's current sharing level (transient 401 during
+                  Auth0 silent refresh, 5xx blip, offline). Surfacing it
+                  prevents the divergence mitigation from silently
+                  no-op'ing on first failure. */}
+              {fetchError && (
+                <div
+                  role="status"
+                  className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2"
+                >
+                  Couldn't verify current sharing level — actions may use stale state.
                 </div>
               )}
 
