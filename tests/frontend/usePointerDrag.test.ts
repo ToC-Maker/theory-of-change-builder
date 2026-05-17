@@ -604,6 +604,82 @@ describe('usePointerDrag', () => {
     });
   });
 
+  describe('tap vs drag threshold (avoids ghost flicker on single tap)', () => {
+    it("hasMoved=false on pointerdown alone (single tap shouldn't engage ghost)", () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      expect(result.current.dragState).not.toBeNull();
+      expect(result.current.dragState?.hasMoved).toBe(false);
+    });
+
+    it('hasMoved=false after sub-threshold movement (3px)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      // 3px move — under the 4px threshold.
+      const move = pointerEvent('pointermove', { clientX: 103, clientY: 202 });
+      act(() => {
+        document.dispatchEvent(move);
+      });
+
+      expect(result.current.dragState?.hasMoved).toBe(false);
+    });
+
+    it('hasMoved=true after >threshold movement (8px)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      const move = pointerEvent('pointermove', { clientX: 108, clientY: 202 });
+      act(() => {
+        document.dispatchEvent(move);
+      });
+
+      expect(result.current.dragState?.hasMoved).toBe(true);
+    });
+
+    it('hasMoved stays true once flipped (slow drag past threshold)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      // Cross the threshold once...
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 108, clientY: 202 }));
+      });
+      expect(result.current.dragState?.hasMoved).toBe(true);
+
+      // ...then a 1px tiny move shouldn't re-set it to false.
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 109, clientY: 202 }));
+      });
+      expect(result.current.dragState?.hasMoved).toBe(true);
+    });
+  });
+
   describe('onDrop callback throws (C1: try/finally cleanup)', () => {
     it('still cleans up all state when onDrop throws', () => {
       // C1 from silent-failure-hunter: without try/finally around

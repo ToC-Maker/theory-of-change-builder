@@ -3,6 +3,7 @@ import { useZoomPan } from './hooks/useZoomPan';
 import { Routes, Route, useParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { ToC } from './components/TheoryOfChangeGraph';
+import { NODE_DOM_ATTR } from './components/NodeComponent';
 import { ChatInterface } from './components/ChatInterface';
 import { GraphTutorial } from './components/GraphTutorial';
 import { PrivacyPolicyPopup } from './components/PrivacyPolicyPopup';
@@ -692,12 +693,13 @@ function ToCViewer() {
 
   // Exclude interactive elements from panning in edit mode.
   // PR 4: node selector switched from `[draggable="true"]` to
-  // `[data-tocb-node]` since HTML5 DnD is no longer used. The
-  // `data-tocb-node` attribute is set by `NodeComponent` on every node
-  // root regardless of editMode (presence is the signal; value is the
-  // node id, used by drag callsites).
+  // `[data-tocb-node]` since HTML5 DnD is no longer used. The attribute
+  // is set by `NodeComponent` on every node root regardless of editMode
+  // (presence is the signal; value is the node id, used by drag
+  // callsites). Constant lives next to the writer so a rename can't
+  // silently drift.
   const excludeFromPan = useCallback((target: HTMLElement) => {
-    const isNode = target.closest('[data-tocb-node]');
+    const isNode = target.closest(`[${NODE_DOM_ATTR}]`);
     const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing');
     const isChatPanel = target.closest('.fixed.left-0.z-40') !== null;
     const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null;

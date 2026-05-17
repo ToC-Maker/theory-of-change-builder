@@ -3,6 +3,17 @@ import React, { useRef, useEffect, memo } from 'react';
 import { Node } from '../types';
 import { getContrastTextColor } from '../utils';
 
+/**
+ * DOM attribute the node root carries. Read by:
+ *   - `usePointerDrag` (in spirit: the bound `onPointerDown` lives on
+ *     the same root)
+ *   - App.tsx's `excludeFromPan` callback, via
+ *     `target.closest('[data-tocb-node]')`
+ * Hoisted to a constant so the attribute writer (this component) and
+ * the selector readers can't drift apart on rename.
+ */
+export const NODE_DOM_ATTR = 'data-tocb-node';
+
 // PR 3: this component was previously a three-way editor — inline
 // contentEditable for the title, a pencil-icon overlay that opened
 // `<NodePopup>`, and an extra `setNodePopup` prop that bridged the
@@ -51,11 +62,12 @@ interface NodeComponentProps {
 // in `React.memo` with DEFAULT shallow equality (Important fix in plan
 // §0.4 — no custom equality function, harder to silently regress).
 // Parent (TheoryOfChangeGraph) MUST pass stable function references for
-// all callback props (`toggleHighlight`, `onDragStart`, `onDragEnd`,
-// `updateNodeRef`, `setHoveredNode`) via `useCallback`, otherwise the
-// memo bail-out fails and every parent render re-renders every node.
-// The `NodeComponent.memo.test.tsx` regression test pins this for
-// future contributors.
+// the callback props (`toggleHighlight`, `updateNodeRef`,
+// `setHoveredNode`, and `onPointerDown` — supplied via the `bindNode`
+// cache inside `usePointerDrag`), otherwise the memo bail-out fails and
+// every parent render re-renders every node. The
+// `NodeComponent.memo.test.tsx` regression test pins this for future
+// contributors.
 function NodeComponentInner({
   node,
   updateNodeRef,
@@ -102,7 +114,7 @@ function NodeComponentInner({
       <div
         ref={nodeRef}
         id={`node-${node.id}`}
-        data-tocb-node={node.id}
+        {...{ [NODE_DOM_ATTR]: node.id }}
         onPointerDown={editMode ? onPointerDown : undefined}
         className={clsx(
           'flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
