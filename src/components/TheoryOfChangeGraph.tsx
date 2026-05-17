@@ -462,7 +462,7 @@ export function ToC({
         });
       });
 
-      // Group nodes by similar center Y positions (within 60px tolerance - increased for better grouping)
+      // Group nodes by similar center Y positions.
       const groups: (typeof allNodes)[] = [];
       const tolerance = 40;
 
@@ -1218,7 +1218,7 @@ export function ToC({
                                     isHighlighted={highlightedNodes.has(node.id)}
                                     isConnected={connectedNodes.has(node.id)}
                                     isHovered={hoveredNode === node.id}
-                                    isDragging={dragState?.nodeId === node.id}
+                                    isDragging={dragState?.nodeId === node.id && dragState.hasMoved}
                                     toggleHighlight={toggleHighlight}
                                     setHoveredNode={setHoveredNode}
                                     hasHighlightedNodes={highlightedNodes.size > 0}
@@ -1530,7 +1530,7 @@ export function ToC({
             `isDragging` prop above (`dragState?.nodeId === node.id`).
             Both ghosts sit in the same transform stack as the canvas,
             so they translate with pan/zoom. */}
-        {dragState && graphContainerRef.current ? (
+        {dragState && dragState.hasMoved && graphContainerRef.current ? (
           <>
             {(() => {
               const loc = dragState.dragOverLocation;

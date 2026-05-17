@@ -62,7 +62,25 @@ export interface DragState {
   nodeSize: { width: number; height: number };
   /** Where the drop would land if released right now. */
   dragOverLocation: DragOverLocation | null;
+  /**
+   * False until the cursor has moved beyond a small threshold from
+   * the pointerdown position. Consumers gate visual drag affordances
+   * (ghost overlays, half-opacity-on-source) on this so a single tap
+   * (pointerdown→pointerup with no intervening move) doesn't render a
+   * one-frame ghost flicker.
+   */
+  hasMoved: boolean;
 }
+
+/**
+ * Pixel threshold below which a gesture is treated as a tap rather
+ * than a drag for rendering purposes. The state machine itself still
+ * engages on pointerdown (we need to claim the mutex + pointer capture
+ * before knowing whether it's a tap or a drag); this threshold only
+ * controls when visual ghost affordances appear. 4px is a common UA
+ * dead-zone for "click vs drag" distinction.
+ */
+const MOVE_THRESHOLD_PX = 4;
 
 export interface UsePointerDragArgs {
   /** Current graph data; consulted on drop for stale-node guard. */
@@ -217,6 +235,11 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   const activePointerIdRef = useRef<number | null>(null);
   // The element we called setPointerCapture on (typically the node root).
   const captureElRef = useRef<HTMLElement | null>(null);
+  // The viewport coords of the cursor at drag-start. Compared against
+  // each pointermove to detect when the gesture has moved beyond the
+  // tap dead-zone (MOVE_THRESHOLD_PX). Distinct from `dragState.ghostPos`,
+  // which tracks the live cursor and gets overwritten on each move.
+  const startPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Cleanup: release pointer capture (if any), reset module-scope flag,
   // and clear local state. Safe to call multiple times.
@@ -236,6 +259,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
     }
     captureElRef.current = null;
     activePointerIdRef.current = null;
+    startPosRef.current = null;
     setCanvasGestureActive(false);
     setDragState(null);
   }, [setDragState]);
@@ -254,15 +278,25 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       const snap = getSnapshot();
       const region = classifyRegion(snap, { x: localX, y: localY });
       const dragOverLocation = regionToDragOverLocation(region);
-      setDragState((prev) =>
-        prev
-          ? {
-              ...prev,
-              ghostPos: { x: e.clientX, y: e.clientY },
-              dragOverLocation,
-            }
-          : prev,
-      );
+      setDragState((prev) => {
+        if (!prev) return prev;
+        // Flip hasMoved the first time the cursor crosses the tap
+        // dead-zone. Compared against the *initial* pointerdown
+        // position (in startPosRef), not the previous move — a slow
+        // drag accumulating 1px-per-frame still crosses the threshold.
+        let hasMoved = prev.hasMoved;
+        if (!hasMoved && startPosRef.current) {
+          const dx = e.clientX - startPosRef.current.x;
+          const dy = e.clientY - startPosRef.current.y;
+          hasMoved = Math.abs(dx) > MOVE_THRESHOLD_PX || Math.abs(dy) > MOVE_THRESHOLD_PX;
+        }
+        return {
+          ...prev,
+          ghostPos: { x: e.clientX, y: e.clientY },
+          dragOverLocation,
+          hasMoved,
+        };
+      });
     },
     [containerRef, getSnapshot, setDragState],
   );
@@ -425,6 +459,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       }
 
       activePointerIdRef.current = e.pointerId;
+      startPosRef.current = { x: e.clientX, y: e.clientY };
       setCanvasGestureActive(true);
       onDragStartRef.current?.(nodeId);
 
@@ -450,6 +485,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
         pointerOffset,
         nodeSize,
         dragOverLocation: regionToDragOverLocation(initialRegion),
+        hasMoved: false,
       });
     },
     [containerRef, setDragState],
