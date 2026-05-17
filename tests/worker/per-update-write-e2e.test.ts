@@ -55,55 +55,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { firePerUpdateCommit } from '../../worker/api/anthropic-stream';
 import { makeBackend } from '../_shared/in-memory-cost-backend';
-
-// ExecutionContext stub: tracks every promise passed to waitUntil so the
-// test can `await Promise.all(tracker)` before asserting. The real Worker
-// runtime runs them in the background after handler return; here we make
-// the scheduling observable.
-function makeCtxStub(): {
-  ctx: { waitUntil(p: Promise<unknown>): void };
-  scheduled: Promise<unknown>[];
-} {
-  const scheduled: Promise<unknown>[] = [];
-  return {
-    ctx: {
-      waitUntil(p: Promise<unknown>): void {
-        scheduled.push(p);
-      },
-    },
-    scheduled,
-  };
-}
-
-// Build the minimal deps object that `firePerUpdateCommit` accepts. The
-// production helper takes a `SseTeeContext`, but the parameter only reads
-// the subset we model here.
-function makeDeps(
-  sql: NeonQueryFunction<false, false>,
-  ctx: { waitUntil(p: Promise<unknown>): void },
-  overrides: Partial<{
-    loggingMessageId: string | null;
-    actorId: string;
-    projectedMicroUsd: bigint;
-    chartId: string | null;
-    deploymentHost: string;
-    handlerStartedAtMs: number;
-  }> = {},
-) {
-  // `in` discrimination preserves `null` (vs `??` which would clobber it).
-  // Some tests need `loggingMessageId: null` to exercise the early-bail
-  // branch; the default for unset is `'msg_x'`.
-  return {
-    sql,
-    ctx,
-    loggingMessageId: 'loggingMessageId' in overrides ? overrides.loggingMessageId! : 'msg_x',
-    actorId: overrides.actorId ?? 'auth0|alice',
-    projectedMicroUsd: overrides.projectedMicroUsd ?? 100_000n,
-    chartId: 'chartId' in overrides ? overrides.chartId! : 'chart_x',
-    deploymentHost: overrides.deploymentHost ?? 'preview.example.com',
-    lifecycle: { handlerStartedAtMs: overrides.handlerStartedAtMs ?? 1_000_000 },
-  };
-}
+import { makeCtxStub, makeDeps } from '../_shared/commit-helpers';
 
 describe('firePerUpdateCommit — per-update commit on running_cost emit', () => {
   it('headline: emits at simulated 5s/10s/15s converge cost_settled and user_api_usage to the last value', async () => {

@@ -208,8 +208,10 @@ function makeBackend(initial: { message: LoggingMessageRow; user_usage: UserApiU
   reconcile: ReturnType<typeof makeReconcile>;
 } {
   const backend = makeSharedBackend<UserApiUsageRow>(initial);
-  // `state.message` is non-null on this overload (matched the non-null
-  // input). Re-tighten for the local `reconcile` helper.
+  // `state.message` is typed nullable on the shared backend regardless of
+  // input; this wrapper takes a non-null `LoggingMessageRow` so the cast
+  // here is sound. Re-tightening lets the file-local `reconcile` helper
+  // (and the many post-condition assertions below) skip optional chaining.
   const state = backend.state as { message: LoggingMessageRow; user_usage: UserApiUsageRow };
   const reconcile = makeReconcile(state);
   return { sql: backend.sql, state, reconcile };

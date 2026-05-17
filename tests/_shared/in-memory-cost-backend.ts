@@ -9,6 +9,13 @@
 // path. See the longer scope note in
 // `tests/worker/delta-commit-concurrency.test.ts` for the gap analysis.
 //
+// WIRE-SHAPE MIRROR: the simulation's success branch returns `new_settled`
+// and `delta` as **strings**, mirroring Neon's actual driver contract
+// (numerics arrive as `bigint | number | string | null`). The production
+// helper coerces via `toBigInt()`; returning bare bigint here would let a
+// future refactor that drops `toBigInt` silently pass these tests while
+// breaking prod. Stringifying pins the coercion path in the algebra mirror.
+//
 // CONTRACT: this file is the single source of truth for the CTE algebra
 // mirror. When `worker/_shared/cost-commit.ts` evolves, this file must
 // be updated in lockstep. The following test files import the mirror
@@ -61,12 +68,9 @@ export type DiagnosticInsert = {
   metadata: Record<string, unknown>;
 };
 
-export type Backend<
-  TUserUsage extends UserApiUsageRow = UserApiUsageRow,
-  TMessage extends LoggingMessageRow | null = LoggingMessageRow,
-> = {
+export type Backend<TUserUsage extends UserApiUsageRow = UserApiUsageRow> = {
   sql: NeonQueryFunction<false, false>;
-  state: { message: TMessage; user_usage: TUserUsage };
+  state: { message: LoggingMessageRow | null; user_usage: TUserUsage };
   diagnosticInserts: DiagnosticInsert[];
   /** Number of sql-tag calls invoked against this backend (includes both
    *  applyDeltaCommit CTEs and diagnostic INSERTs). */
@@ -106,25 +110,17 @@ export type Backend<
  *
  * @param initial — initial state for the row pair. `message: null` is
  *   supported for tests that exercise the row-missing path
- *   (`per-update-write-e2e.test.ts`, `abort-commit.test.ts`); pass a
- *   non-null `LoggingMessageRow` and the returned `state.message` is
- *   typed non-null (so tests can dereference without optional chaining).
+ *   (`per-update-write-e2e.test.ts`, `abort-commit.test.ts`). The
+ *   returned `state.message` is always typed `LoggingMessageRow | null`;
+ *   callers that pass a non-null `LoggingMessageRow` and want to
+ *   dereference without optional chaining should narrow locally (see
+ *   `iife-death-recovery.test.ts` for the wrapper pattern) or use `?.`
+ *   per the convention in `delta-commit-concurrency.test.ts`.
  */
-// Overload: non-null message in → non-null message out.
-export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow>(initial: {
-  message: LoggingMessageRow;
-  user_usage: TUserUsage;
-}): Backend<TUserUsage, LoggingMessageRow>;
-// Overload: nullable message in → nullable message out.
 export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow>(initial: {
   message: LoggingMessageRow | null;
   user_usage: TUserUsage;
-}): Backend<TUserUsage, LoggingMessageRow | null>;
-// Implementation signature: widest type accepted.
-export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow>(initial: {
-  message: LoggingMessageRow | null;
-  user_usage: TUserUsage;
-}): Backend<TUserUsage, LoggingMessageRow | null> {
+}): Backend<TUserUsage> {
   const state: { message: LoggingMessageRow | null; user_usage: TUserUsage } = {
     message: initial.message ? { ...initial.message } : null,
     // Default byok_cost_micro_usd to 0n if the input omits it (it's
@@ -232,10 +228,17 @@ export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow
           byok_cost_micro_usd: isByok ? currentByok + computedDelta : currentByok,
         };
       }
+      // Stringify the bigint fields to mirror Neon's actual wire contract.
+      // The real Neon driver returns numerics as `bigint | number | string |
+      // null`, never raw bigint — `worker/_shared/cost-commit.ts` coerces via
+      // `toBigInt()` for that reason. Returning bare bigint here would let a
+      // future refactor that drops `toBigInt` silently pass tests while
+      // breaking prod (cost-commit would suddenly see a string and throw).
+      // Stringifying pins the coercion path in the tests' algebra mirror.
       return [
         {
-          new_settled: newSettled,
-          delta: computedDelta,
+          new_settled: newSettled.toString(),
+          delta: computedDelta.toString(),
           applied: true,
         },
       ];

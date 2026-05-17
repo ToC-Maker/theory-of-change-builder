@@ -86,7 +86,7 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
     expect(a.applied).toBe(true);
     expect(b.applied).toBe(true);
 
-    expect(state.message.cost_settled_micro_usd).toBe(500_000n);
+    expect(state.message?.cost_settled_micro_usd).toBe(500_000n);
     expect(state.user_usage.cost_micro_usd).toBe(300_000n);
     expect(a.delta + b.delta).toBe(300_000n);
   });
@@ -113,7 +113,7 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
 
     expect(a.applied).toBe(true);
     expect(b.applied).toBe(true);
-    expect(state.message.cost_settled_micro_usd).toBe(500_000n);
+    expect(state.message?.cost_settled_micro_usd).toBe(500_000n);
     expect(state.user_usage.cost_micro_usd).toBe(300_000n);
     expect(a.delta + b.delta).toBe(300_000n);
   });
@@ -140,7 +140,7 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
       applyDeltaCommit(sql, 'msg_x', 'auth0|alice', projected, 700_000n),
     ]);
 
-    expect(state.message.cost_settled_micro_usd).toBe(700_000n);
+    expect(state.message?.cost_settled_micro_usd).toBe(700_000n);
     // Total credited to user = 700k - max(projected, initial settled) = 700k - 100k = 600k.
     expect(state.user_usage.cost_micro_usd).toBe(600_000n);
     expect(results.reduce((acc, r) => acc + r.delta, 0n)).toBe(600_000n);
@@ -171,7 +171,7 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
       new_settled: 0n,
     });
     // State is untouched: cost_settled stays at 500k, user_api_usage at 500k.
-    expect(state.message.cost_settled_micro_usd).toBe(500_000n);
+    expect(state.message?.cost_settled_micro_usd).toBe(500_000n);
     expect(state.user_usage.cost_micro_usd).toBe(500_000n);
   });
 
@@ -207,7 +207,7 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
       delta: 0n,
       new_settled: 0n,
     });
-    expect(state.message.cost_settled_micro_usd).toBe(100_000n);
+    expect(state.message?.cost_settled_micro_usd).toBe(100_000n);
     expect(state.user_usage.cost_micro_usd).toBe(0n);
   });
 });

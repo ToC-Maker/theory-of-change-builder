@@ -56,49 +56,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { fireAbortCommit } from '../../worker/api/anthropic-stream';
 import { makeBackend } from '../_shared/in-memory-cost-backend';
-
-// ExecutionContext stub — see per-update-write-e2e.test.ts for rationale.
-function makeCtxStub(): {
-  ctx: { waitUntil(p: Promise<unknown>): void };
-  scheduled: Promise<unknown>[];
-} {
-  const scheduled: Promise<unknown>[] = [];
-  return {
-    ctx: {
-      waitUntil(p: Promise<unknown>): void {
-        scheduled.push(p);
-      },
-    },
-    scheduled,
-  };
-}
-
-// Minimal deps object accepted by `fireAbortCommit` — same shape as
-// `firePerUpdateCommit` so the production helper can reuse the
-// `PerUpdateCommitDeps` interface.
-function makeDeps(
-  sql: NeonQueryFunction<false, false>,
-  ctx: { waitUntil(p: Promise<unknown>): void },
-  overrides: Partial<{
-    loggingMessageId: string | null;
-    actorId: string;
-    projectedMicroUsd: bigint;
-    chartId: string | null;
-    deploymentHost: string;
-    handlerStartedAtMs: number;
-  }> = {},
-) {
-  return {
-    sql,
-    ctx,
-    loggingMessageId: 'loggingMessageId' in overrides ? overrides.loggingMessageId! : 'msg_x',
-    actorId: overrides.actorId ?? 'auth0|alice',
-    projectedMicroUsd: overrides.projectedMicroUsd ?? 100_000n,
-    chartId: 'chartId' in overrides ? overrides.chartId! : 'chart_x',
-    deploymentHost: overrides.deploymentHost ?? 'preview.example.com',
-    lifecycle: { handlerStartedAtMs: overrides.handlerStartedAtMs ?? 1_000_000 },
-  };
-}
+import { makeCtxStub, makeDeps } from '../_shared/commit-helpers';
 
 describe('fireAbortCommit — final commit on request.signal.abort', () => {
   it('headline: a snap > 0 with loggingMessageId set commits and writes a DiagnosticAbortCommit row', async () => {

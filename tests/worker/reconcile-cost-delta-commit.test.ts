@@ -173,8 +173,8 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       expect(out).toEqual({ applied: true, delta: 400n, new_settled: 500n });
       // Both columns moved (not just cost_micro_usd, as in the pre-Task-11
       // inline UPDATE).
-      expect(state.message.cost_micro_usd).toBe(500n);
-      expect(state.message.cost_settled_micro_usd).toBe(500n);
+      expect(state.message?.cost_micro_usd).toBe(500n);
+      expect(state.message?.cost_settled_micro_usd).toBe(500n);
     });
 
     it('credits user_api_usage by exactly the delta', async () => {
@@ -217,7 +217,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       // but delta=0n. The endpoint returns the same shape; the client
       // treats it as idempotent success.
       expect(out).toEqual({ applied: true, delta: 0n, new_settled: 1000n });
-      expect(state.message.cost_settled_micro_usd).toBe(1000n);
+      expect(state.message?.cost_settled_micro_usd).toBe(1000n);
       expect(state.user_usage.cost_micro_usd).toBe(800n);
     });
   });
@@ -247,7 +247,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       expect(second).toEqual({ applied: true, delta: 0n, new_settled: 500n });
       // user_api_usage stayed at 400 — no double-credit.
       expect(state.user_usage.cost_micro_usd).toBe(400n);
-      expect(state.message.cost_settled_micro_usd).toBe(500n);
+      expect(state.message?.cost_settled_micro_usd).toBe(500n);
     });
 
     it('three increasing pushes credit incrementally (monotone climb)', async () => {
@@ -293,7 +293,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       await endpointCall(sql, 'msg_x', 'auth0|alice', 1000n);
       await endpointCall(sql, 'msg_x', 'auth0|alice', 300n); // late, stale
       await endpointCall(sql, 'msg_x', 'auth0|alice', 1000n); // re-retry
-      expect(state.message.cost_settled_micro_usd).toBe(1000n);
+      expect(state.message?.cost_settled_micro_usd).toBe(1000n);
       expect(state.user_usage.cost_micro_usd).toBe(1000n);
     });
   });
@@ -324,7 +324,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
         new_settled: 0n,
       });
       // State unchanged: no mutation against a non-existent row.
-      expect(state.message.cost_settled_micro_usd).toBe(0n);
+      expect(state.message?.cost_settled_micro_usd).toBe(0n);
       expect(state.user_usage.cost_micro_usd).toBe(0n);
     });
 
@@ -353,7 +353,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
         new_settled: 0n,
       });
       // Bob's row is untouched — Alice cannot advance it.
-      expect(state.message.cost_settled_micro_usd).toBe(100n);
+      expect(state.message?.cost_settled_micro_usd).toBe(100n);
       expect(state.user_usage.cost_micro_usd).toBe(0n);
     });
 
@@ -386,9 +386,9 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       });
       // Row state unchanged: settled stays at 1000, reconciled_at stays
       // stamped, user_api_usage stays at the post-reconcile value.
-      expect(state.message.cost_settled_micro_usd).toBe(1000n);
-      expect(state.message.cost_micro_usd).toBe(1000n);
-      expect(state.message.reconciled_at).toEqual(new Date('2026-05-15T12:00:00Z'));
+      expect(state.message?.cost_settled_micro_usd).toBe(1000n);
+      expect(state.message?.cost_micro_usd).toBe(1000n);
+      expect(state.message?.reconciled_at).toEqual(new Date('2026-05-15T12:00:00Z'));
       expect(state.user_usage.cost_micro_usd).toBe(1000n);
     });
 
@@ -614,7 +614,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       expect(state.user_usage.byok_cost_micro_usd).toBe(2_000_000n);
       // logging_messages.cost_settled_micro_usd still records the truth
       // regardless of routing (it's the per-message attribution key).
-      expect(state.message.cost_settled_micro_usd).toBe(2_000_000n);
+      expect(state.message?.cost_settled_micro_usd).toBe(2_000_000n);
     });
 
     it('isByok=false: credits cost_micro_usd (default behavior, BYOK column untouched)', async () => {

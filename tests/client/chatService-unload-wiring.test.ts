@@ -3,7 +3,7 @@
 // against its trigger conditions in `chatService-reconcile-cadence.test.ts`,
 // but the wiring inside `streamFromApi` (registers an `abort` listener on the
 // caller's signal + a `visibilitychange` listener on document, both calling
-// `tracker.maybePostReconcile(true, true)`; tears both down in the finally
+// `tracker.maybePostReconcile('force-beacon')`; tears both down in the finally
 // block) had zero coverage. A refactor that broke registration discipline —
 // forgetting to register a listener, listening on the wrong target, or
 // skipping the cleanup — would silently reintroduce the exact bug PR #23
@@ -295,11 +295,11 @@ describe('chatService streamFromApi listener wiring (PR #23 u3-test)', () => {
     const [visHandler] = fakes.getVisibilityHandlers();
     expect(visHandler).toBeTypeOf('function');
 
-    // Trigger the wiring: visibility hidden → tracker.maybePostReconcile(true, true).
+    // Trigger the wiring: visibility hidden → tracker.maybePostReconcile('force-beacon').
     fakes.setVisibilityState('hidden');
     (visHandler as EventListener)(new Event('visibilitychange'));
 
-    // Tracker uses sendBeacon (preferred) when force=true && useBeacon=true.
+    // Tracker uses sendBeacon (preferred) when mode='force-beacon'.
     expect(fakes.beaconCalls.length).toBeGreaterThanOrEqual(1);
     expect(fakes.beaconCalls[0].url).toBe('/api/reconcile-cost');
 
@@ -326,7 +326,7 @@ describe('chatService streamFromApi listener wiring (PR #23 u3-test)', () => {
     const beaconsBefore = fakes.beaconCalls.length;
 
     // Abort: the synchronous `abort` listener registered on signal fires
-    // `tracker.maybePostReconcile(true, true)` BEFORE the reader.read()
+    // `tracker.maybePostReconcile('force-beacon')` BEFORE the reader.read()
     // rejection propagates. This is the Stop-button case from PR #23.
     ac.abort();
 

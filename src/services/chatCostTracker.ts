@@ -22,9 +22,13 @@
 //     when `cost_micro_usd` is a parseable bigint. The server-tracked
 //     value can dominate the client's reconstruction; only frames with a
 //     strictly-higher value than the current `lastCostMicroUsd` update it.
-//   - `maybePostReconcile(force?, useBeacon?)` — POST to /api/reconcile-cost.
-//     Debounced by $0.01 / 5s (when force=false). When useBeacon=true,
-//     tries `navigator.sendBeacon` first (survives unload), falls back to
+//   - `maybePostReconcile(mode?)` — POST to /api/reconcile-cost.
+//     Mode discriminator (`'periodic' | 'force-fetch' | 'force-beacon'`)
+//     selects between the three meaningful behaviors; the old `(force?,
+//     useBeacon?)` boolean pair had a 4th unreachable combination
+//     (force=false + useBeacon=true). Periodic mode is debounced by
+//     $0.01 / 5s; both force modes bypass debounce. force-beacon tries
+//     `navigator.sendBeacon` first (survives unload), falls back to
 //     `fetch` if beacon is missing or refuses.
 //
 // Output-only fallback: until a `running_cost` SSE frame arrives (or a
@@ -67,11 +71,23 @@ export interface CostTrackerOptions {
   onFetchFailure?: (req: { logging_message_id: string; cost_micro_usd: string }) => void;
 }
 
+/**
+ * Discriminator union for `maybePostReconcile()`. Replaces the prior
+ * `(force?: boolean, useBeacon?: boolean)` pair where (false, true) was
+ * unreachable. Boolean → mode mapping for git-blame readers:
+ *   - `(false, false)` → `'periodic'`
+ *   - `(true, false)`  → `'force-fetch'`
+ *   - `(true, true)`   → `'force-beacon'`
+ *   - `(false, true)`  → unreachable, no mapping (the unload-path beacon
+ *     transport only makes sense with force=true).
+ */
+export type ReconcilePostMode = 'periodic' | 'force-fetch' | 'force-beacon';
+
 export interface ReconcileRequest {
   logging_message_id: string;
   cost_micro_usd: string;
-  force: boolean;
-  useBeacon: boolean;
+  /** Selected reconcile-cadence mode; see {@link ReconcilePostMode}. */
+  mode: ReconcilePostMode;
   authToken: string | null;
 }
 
@@ -151,19 +167,23 @@ export class CostTracker {
   }
 
   /**
-   * Debounced POST to /api/reconcile-cost.
+   * Debounced POST to /api/reconcile-cost. Mode discriminator selects:
    *
-   * - force=false: only fires when cost delta ≥ $0.01 OR ≥ 5s since last POST.
-   * - useBeacon=true: tries navigator.sendBeacon first (survives unload),
-   *   falls back to fetch if it's missing or returns false.
+   * - `'periodic'`: fire only when cost delta ≥ $0.01 OR ≥ 5s since last POST.
+   * - `'force-fetch'`: skip debounce; POST via fetch.
+   * - `'force-beacon'`: skip debounce; try `navigator.sendBeacon` first
+   *   (survives unload), fall back to fetch if beacon is missing or refuses.
    *
    * No-op if loggingMessageId is unset or cost is 0.
    */
-  maybePostReconcile(force = false, useBeacon = false): void {
+  maybePostReconcile(mode: ReconcilePostMode = 'periodic'): void {
     const lmid = this.opts.loggingMessageId;
     if (!lmid) return;
     const cost = this._lastCostMicroUsd;
     if (cost <= 0n) return;
+
+    const force = mode !== 'periodic';
+    const useBeacon = mode === 'force-beacon';
 
     const now = Date.now();
     const deltaSinceLast = cost - this.lastPostedMicro;
@@ -182,8 +202,7 @@ export class CostTracker {
       this.opts.postReconcile({
         logging_message_id: lmid,
         cost_micro_usd: cost.toString(),
-        force,
-        useBeacon,
+        mode,
         authToken: this.opts.authToken,
       });
       return;

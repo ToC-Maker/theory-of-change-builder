@@ -1,10 +1,13 @@
 // Tests for maybePostReconcile cadence/debounce + transport selection.
 //
-// The CostTracker exposes a `maybePostReconcile(force?, useBeacon?)` method
-// that drives client-side /api/reconcile-cost POSTs:
-//   - Periodic mode (force=false): debounced by $0.01 / 5s thresholds.
-//   - Forced + useBeacon (abort, visibilitychange='hidden', unload): tries
+// The CostTracker exposes a `maybePostReconcile(mode?)` method that drives
+// client-side /api/reconcile-cost POSTs via a discriminator union:
+//   - `'periodic'`: debounced by $0.01 / 5s thresholds.
+//   - `'force-fetch'`: skip debounce; POST via fetch.
+//   - `'force-beacon'` (abort, visibilitychange='hidden', unload): tries
 //     navigator.sendBeacon first, falls back to fetch when it returns false.
+// The legacy `(force, useBeacon)` boolean pair is gone; (false, true) was
+// unreachable, and the rename eliminates that dead state at the call site.
 //
 // We swap globalThis.fetch / globalThis.navigator with vitest fakes so the
 // dispatch decisions can be observed without a real network or DOM.
@@ -196,7 +199,7 @@ describe('CostTracker.maybePostReconcile — periodic / debounced mode', () => {
       authToken: null,
     });
 
-    tracker.maybePostReconcile(true, false);
+    tracker.maybePostReconcile('force-fetch');
     expect(fakes.fetchCalls.length).toBe(0);
   });
 
@@ -229,7 +232,7 @@ describe('CostTracker.maybePostReconcile — forced + sendBeacon transport', () 
     vi.useRealTimers();
   });
 
-  it('uses navigator.sendBeacon when force=true && useBeacon=true && beacon is queued', () => {
+  it("uses navigator.sendBeacon when mode='force-beacon' && beacon is queued", () => {
     fakes = setupFakes({ beaconQueued: true });
 
     const tracker = new CostTracker({
@@ -244,7 +247,7 @@ describe('CostTracker.maybePostReconcile — forced + sendBeacon transport', () 
     expect(fakes.fetchCalls.length).toBe(1);
 
     // Force + beacon (abort/unload path).
-    tracker.maybePostReconcile(true, true);
+    tracker.maybePostReconcile('force-beacon');
 
     expect(fakes.beaconCalls.length).toBe(1);
     expect(fakes.beaconCalls[0].url).toBe('/api/reconcile-cost');
@@ -265,7 +268,7 @@ describe('CostTracker.maybePostReconcile — forced + sendBeacon transport', () 
     tracker.recordServerCostMicroUsd(1_000_000n); // one periodic fetch
     expect(fakes.fetchCalls.length).toBe(1);
 
-    tracker.maybePostReconcile(true, true);
+    tracker.maybePostReconcile('force-beacon');
     expect(fakes.beaconCalls.length).toBe(1);
     // Beacon refused — must fall through to fetch.
     expect(fakes.fetchCalls.length).toBe(2);
@@ -284,12 +287,12 @@ describe('CostTracker.maybePostReconcile — forced + sendBeacon transport', () 
     tracker.recordServerCostMicroUsd(1_000_000n); // one periodic fetch
     expect(fakes.fetchCalls.length).toBe(1);
 
-    tracker.maybePostReconcile(true, true);
+    tracker.maybePostReconcile('force-beacon');
     expect(fakes.beaconCalls.length).toBe(0);
     expect(fakes.fetchCalls.length).toBe(2);
   });
 
-  it('force=true bypasses the $0.01 / 5s debounce', () => {
+  it('force-* modes bypass the $0.01 / 5s debounce', () => {
     fakes = setupFakes({ beaconQueued: true });
 
     const tracker = new CostTracker({
@@ -304,7 +307,7 @@ describe('CostTracker.maybePostReconcile — forced + sendBeacon transport', () 
     expect(fakes.fetchCalls.length).toBe(0); // would be 0 by debounce.
 
     // Force + beacon still fires.
-    tracker.maybePostReconcile(true, true);
+    tracker.maybePostReconcile('force-beacon');
     expect(fakes.beaconCalls.length).toBe(1);
     const beaconBody = fakes.beaconCalls[0].body;
     // sendBeacon receives a Blob — read its text.
@@ -322,7 +325,7 @@ describe('CostTracker.maybePostReconcile — forced + sendBeacon transport', () 
     });
 
     tracker.recordServerCostMicroUsd(987_654n);
-    tracker.maybePostReconcile(true, true);
+    tracker.maybePostReconcile('force-beacon');
 
     expect(fakes.beaconCalls.length).toBe(1);
     const blob = fakes.beaconCalls[0].body as Blob;
@@ -383,15 +386,16 @@ describe('CostTracker.maybePostReconcile — unload path pre-enqueue ordering', 
     vi.useRealTimers();
   });
 
-  // Wave-2 finding B (MED conf 85): the unload path (useBeacon=true) used to
-  // sequence sendBeacon → fetch → onFetchFailure. If sendBeacon refused AND
-  // fetch died during document teardown, the .catch handler that calls
-  // onFetchFailure may never run (the JS context is dead), so the reconcile
-  // is silently lost. Fix: pre-enqueue to the retry queue BEFORE attempting
-  // any transport, so even if both transports die the entry survives in
-  // localStorage and the next session's drainPendingReconciles recovers.
-  // Server-side GREATEST clamp makes a re-drain after beacon-success idempotent.
-  it('pre-enqueues to the retry queue BEFORE attempting any transport when useBeacon=true', () => {
+  // Wave-2 finding B (MED conf 85): the unload path (mode='force-beacon')
+  // used to sequence sendBeacon → fetch → onFetchFailure. If sendBeacon
+  // refused AND fetch died during document teardown, the .catch handler
+  // that calls onFetchFailure may never run (the JS context is dead), so
+  // the reconcile is silently lost. Fix: pre-enqueue to the retry queue
+  // BEFORE attempting any transport, so even if both transports die the
+  // entry survives in localStorage and the next session's
+  // drainPendingReconciles recovers. Server-side GREATEST clamp makes a
+  // re-drain after beacon-success idempotent.
+  it("pre-enqueues to the retry queue BEFORE attempting any transport when mode='force-beacon'", () => {
     // Make sendBeacon refuse AND fetch throw — the worst-case "JS context is
     // about to die" scenario. The pre-enqueue must have happened first.
     fakes = setupFakes({ beaconQueued: false });
@@ -410,7 +414,7 @@ describe('CostTracker.maybePostReconcile — unload path pre-enqueue ordering', 
     });
 
     tracker.recordServerCostMicroUsd(75_000n);
-    // Force + useBeacon=true is the unload path. recordServerCostMicroUsd above
+    // mode='force-beacon' is the unload path. recordServerCostMicroUsd above
     // already fired one periodic fetch (which throws) — onFetchFailure is the
     // tracker's only retry-queue persistence hook, and it MUST be called
     // before any transport on the unload path so the entry is in the queue
@@ -419,7 +423,7 @@ describe('CostTracker.maybePostReconcile — unload path pre-enqueue ordering', 
 
     // Wrap in try/catch because the synchronous fetch throw can propagate.
     try {
-      tracker.maybePostReconcile(true, true);
+      tracker.maybePostReconcile('force-beacon');
     } catch {
       /* expected: synchronous fetch teardown error */
     }
@@ -477,7 +481,7 @@ describe('CostTracker.maybePostReconcile — unload path pre-enqueue ordering', 
     fakes.beaconCalls.length = 0;
     fakes.fetchCalls.length = 0;
 
-    tracker.maybePostReconcile(true, true);
+    tracker.maybePostReconcile('force-beacon');
 
     // Beacon was attempted and succeeded — no fallback fetch.
     expect(fakes.beaconCalls.length).toBe(1);

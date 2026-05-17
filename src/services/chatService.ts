@@ -823,9 +823,9 @@ class ChatService {
     // row and the authed user's cap counter desyncs. See
     // worker/_shared/anon-id.ts (tocb_auth_link encode/decode) and
     // worker/api/reconcile-cost.ts (resolver fallback).
-    const onAbort = () => tracker.maybePostReconcile(true, true);
+    const onAbort = () => tracker.maybePostReconcile('force-beacon');
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') tracker.maybePostReconcile(true, true);
+      if (document.visibilityState === 'hidden') tracker.maybePostReconcile('force-beacon');
     };
     const hasDocument = typeof document !== 'undefined';
     signal?.addEventListener('abort', onAbort);
@@ -1224,7 +1224,7 @@ class ChatService {
       // page (tab close, browser quit); the tracker falls back to fetch
       // when beacon is missing or refused. Idempotent server-side
       // (GREATEST clamp + signed-delta + reconciled_at lock).
-      tracker.maybePostReconcile(true, true);
+      tracker.maybePostReconcile('force-beacon');
 
       // Detach the abort + visibilitychange listeners registered at stream
       // start. Drain the retry queue opportunistically — this used to fire
