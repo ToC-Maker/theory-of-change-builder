@@ -667,9 +667,6 @@ function ToCViewer() {
       left: isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25),
       top: 64, // Toolbar height
       right: 0,
-      // PR 1 task 1.5: JsonDropdown deleted; bottom no longer reserves
-      // 80px for it. NodePopup/EdgePopup re-centre correctly under the
-      // updated offset.
       bottom: 0,
     }),
     [isLeftPanelCollapsed],
