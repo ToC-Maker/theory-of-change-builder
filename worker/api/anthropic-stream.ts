@@ -3254,6 +3254,36 @@ export async function handler(
     const elapsed = teeCtx.lifecycle.abortFiredAtMs - teeCtx.lifecycle.handlerStartedAtMs;
     console.log(`[lifecycle] abort_fired t=${elapsed}ms`);
 
+    // Diagnostic phase marker: confirms the abort listener actually fired.
+    // If `DiagnosticAbortHandlerEntered` is missing for a turn where the
+    // user clicked Stop, the listener never received the abort signal
+    // (request.signal didn't propagate). Fire-and-forget via ctx.waitUntil
+    // because this listener is synchronous — we can't await writeDiagnostic
+    // inline without blocking the rest of the abort path.
+    if (loggingMessageId) {
+      ctx.waitUntil(
+        writeDiagnostic(sql, {
+          error_name: 'DiagnosticAbortHandlerEntered',
+          error_message: `abort listener fired at t=${elapsed}ms after handler start`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            handler_elapsed_ms: elapsed,
+            accumulator_snapshot: { ...teeCtx.accumulator },
+            live_web_search_count: teeCtx.streamingContent.webSearchCount,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+            killed: teeCtx.killed.v,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+        }),
+      );
+    }
+
     // Snapshot the live accumulator BEFORE the controller closes; the
     // IIFE may not run for many ms after this point and the accumulator
     // is mutable. `{ ...teeCtx.accumulator }` shallow-copies the
@@ -3368,6 +3398,38 @@ export async function handler(
         }
       })();
       await Promise.race([tracked.done, stallWatcher]);
+
+      // Diagnostic phase 2: confirms tracked.done resolved (or stall fired).
+      // If `DiagnosticReconcileEntered` is present but `DiagnosticReconcilePhase2TrackedDone`
+      // is missing, the IIFE was killed by ctx.waitUntil budget exhaustion
+      // while still awaiting tracked.done — Anthropic kept slowly emitting bytes
+      // so the stall watcher never tripped, and the worker isolate was cut
+      // before the await resolved.
+      if (loggingMessageId) {
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcilePhase2TrackedDone',
+          error_message: `tracked.done resolved (bail_reason=${bailReason ?? 'natural'})`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            bail_reason: bailReason,
+            wait_elapsed_ms: Date.now() - waitStartedAtMs,
+            stream_done: teeCtx.streamDone.v,
+            killed: teeCtx.killed.v,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+            abort_fired_at_ms: teeCtx.lifecycle.abortFiredAtMs,
+            accumulator,
+            live_web_search_count: teeCtx.streamingContent.webSearchCount,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+        });
+      }
+
       if (bailReason !== null && loggingMessageId) {
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcileTrackedDoneTimeout',
@@ -3458,6 +3520,36 @@ export async function handler(
         cache_read_input_tokens:
           accumulator.cache_read_input_tokens + cacheEstimate.additionalCacheR,
       };
+
+      // Diagnostic phase 3: confirms we reached cost computation. If
+      // `DiagnosticReconcilePhase2TrackedDone` is present but
+      // `DiagnosticReconcilePhase3PreCostCompute` is missing, the IIFE was
+      // killed between `await tracked.done` and `computeCostMicroUsd` — likely
+      // during `countOutputTokensOnce` (the count_tokens HTTP call) or
+      // `estimateAgenticLoopCacheUsage` (synchronous, fast, less likely culprit).
+      if (loggingMessageId) {
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcilePhase3PreCostCompute',
+          error_message: `pre-computeCostMicroUsd; output_source=${reconcileOutputSource} tool_use_count=${cacheEstimate.toolUseCount}`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            output_source: reconcileOutputSource,
+            reconciled_output: reconciledOutput,
+            reconciled_web_search: reconciledWebSearch,
+            tool_use_count: cacheEstimate.toolUseCount,
+            additional_cache_w: cacheEstimate.additionalCacheW,
+            additional_cache_r: cacheEstimate.additionalCacheR,
+            reconciled_accumulator: reconciledAccumulator,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+        });
+      }
 
       let actualMicro: bigint = 0n;
       try {
