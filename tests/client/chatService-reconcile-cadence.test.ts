@@ -369,3 +369,121 @@ describe('CostTracker.maybePostReconcile — failure / retry queue contract', ()
     globalThis.fetch = originalFetch;
   });
 });
+
+describe('CostTracker.maybePostReconcile — unload path pre-enqueue ordering', () => {
+  let fakes: ReturnType<typeof setupFakes>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    fakes?.restore();
+    vi.useRealTimers();
+  });
+
+  // Wave-2 finding B (MED conf 85): the unload path (useBeacon=true) used to
+  // sequence sendBeacon → fetch → onFetchFailure. If sendBeacon refused AND
+  // fetch died during document teardown, the .catch handler that calls
+  // onFetchFailure may never run (the JS context is dead), so the reconcile
+  // is silently lost. Fix: pre-enqueue to the retry queue BEFORE attempting
+  // any transport, so even if both transports die the entry survives in
+  // localStorage and the next session's drainPendingReconciles recovers.
+  // Server-side GREATEST clamp makes a re-drain after beacon-success idempotent.
+  it('pre-enqueues to the retry queue BEFORE attempting any transport when useBeacon=true', () => {
+    // Make sendBeacon refuse AND fetch throw — the worst-case "JS context is
+    // about to die" scenario. The pre-enqueue must have happened first.
+    fakes = setupFakes({ beaconQueued: false });
+    // Replace fetch with one that throws synchronously (network died mid-call).
+    globalThis.fetch = vi.fn(() => {
+      throw new Error('document teardown');
+    }) as typeof fetch;
+
+    const onFetchFailure = vi.fn();
+    const tracker = new CostTracker({
+      model: MODEL,
+      onCostUpdate: vi.fn(),
+      loggingMessageId: 'msg-U',
+      authToken: null,
+      onFetchFailure,
+    });
+
+    tracker.recordServerCostMicroUsd(75_000n);
+    // Force + useBeacon=true is the unload path. recordServerCostMicroUsd above
+    // already fired one periodic fetch (which throws) — onFetchFailure is the
+    // tracker's only retry-queue persistence hook, and it MUST be called
+    // before any transport on the unload path so the entry is in the queue
+    // even if the JS context dies before the transport's catch handler runs.
+    onFetchFailure.mockClear();
+
+    // Wrap in try/catch because the synchronous fetch throw can propagate.
+    try {
+      tracker.maybePostReconcile(true, true);
+    } catch {
+      /* expected: synchronous fetch teardown error */
+    }
+
+    // The pre-enqueue happened — the queue persistence hook was called at
+    // least once, with the latest µUSD figure, BEFORE the transports tried.
+    expect(onFetchFailure).toHaveBeenCalled();
+    const preEnqueueCall = onFetchFailure.mock.calls[0][0];
+    expect(preEnqueueCall.logging_message_id).toBe('msg-U');
+    expect(preEnqueueCall.cost_micro_usd).toBe('75000');
+  });
+
+  it('does NOT pre-enqueue on the non-unload path (useBeacon=false)', () => {
+    // Normal periodic POSTs (useBeacon=false) should not enqueue eagerly —
+    // they only enqueue on observed fetch failure. Otherwise we'd flood the
+    // localStorage queue on every successful $0.01-threshold POST.
+    fakes = setupFakes({});
+
+    const onFetchFailure = vi.fn();
+    const tracker = new CostTracker({
+      model: MODEL,
+      onCostUpdate: vi.fn(),
+      loggingMessageId: 'msg-N',
+      authToken: null,
+      onFetchFailure,
+    });
+
+    tracker.recordServerCostMicroUsd(50_000n);
+    // fetch resolved 200 (default in setupFakes) — no failure observed, no
+    // pre-enqueue triggered (because useBeacon=false on this code path).
+    expect(onFetchFailure).not.toHaveBeenCalled();
+    expect(fakes.fetchCalls.length).toBe(1);
+  });
+
+  it('pre-enqueues even when sendBeacon succeeds (drain on next session is idempotent via server GREATEST)', () => {
+    // Even on the happy path (beacon queues OK), the pre-enqueue still
+    // happens. This is by design — the alternative (probe-then-enqueue) reopens
+    // the race where the JS context dies between probe and enqueue. The next
+    // session's drainPendingReconciles will POST the same value the beacon
+    // already delivered; the server's GREATEST clamp + reconciled_at lock
+    // make the re-POST a no-op.
+    fakes = setupFakes({ beaconQueued: true });
+
+    const onFetchFailure = vi.fn();
+    const tracker = new CostTracker({
+      model: MODEL,
+      onCostUpdate: vi.fn(),
+      loggingMessageId: 'msg-OK',
+      authToken: null,
+      onFetchFailure,
+    });
+
+    tracker.recordServerCostMicroUsd(99_000n);
+    onFetchFailure.mockClear(); // clear any prior periodic-fetch calls
+    fakes.beaconCalls.length = 0;
+    fakes.fetchCalls.length = 0;
+
+    tracker.maybePostReconcile(true, true);
+
+    // Beacon was attempted and succeeded — no fallback fetch.
+    expect(fakes.beaconCalls.length).toBe(1);
+    expect(fakes.fetchCalls.length).toBe(0);
+    // Pre-enqueue still happened (the entry will be drained-and-no-op'd next session).
+    expect(onFetchFailure).toHaveBeenCalledTimes(1);
+    expect(onFetchFailure.mock.calls[0][0].cost_micro_usd).toBe('99000');
+  });
+});

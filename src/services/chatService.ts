@@ -809,6 +809,19 @@ class ChatService {
     // the catch/finally may never run. Both call the tracker with
     // force=true and useBeacon=true so navigator.sendBeacon is preferred.
     // Listeners are torn down in the finally block via cleanupTrackerListeners.
+    //
+    // AUTH-LINK COOKIE INVARIANT (W2 finding C):
+    // The /api/reconcile-cost POST on unload has no Authorization header —
+    // navigator.sendBeacon strips custom request headers, so the server-
+    // side authed-sub resolver can't read a JWT off the request. Instead
+    // it falls back to cookie-based identity via tocb_auth_link, the
+    // HMAC-signed auth-link cookie set on login that maps a browser to
+    // an Auth0 sub even without a live JWT. If a future cookie change
+    // drops, unsigns, or stops setting tocb_auth_link on auth, this
+    // unload-path reconcile silently routes to the anon user_api_usage
+    // row and the authed user's cap counter desyncs. See
+    // worker/_shared/anon-id.ts (tocb_auth_link encode/decode) and
+    // worker/api/reconcile-cost.ts (resolver fallback).
     const onAbort = () => tracker.maybePostReconcile(true, true);
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') tracker.maybePostReconcile(true, true);

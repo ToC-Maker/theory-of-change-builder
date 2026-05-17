@@ -251,3 +251,73 @@ describe('CostTracker.recordOutputChars (per-content_block_delta estimation)', (
     expect(onCostUpdate).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('CostTracker — onCostUpdate callback isolation', () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  // Asymmetry-fix: chatService.ts wraps onComplete/onContentBlocks in try/catch
+  // so a React-side throw doesn't kill the stream. onCostUpdate was the
+  // exception — a throw from the BYOK pill setter would bubble up through
+  // recomputeAndPropagate -> recordOutputChars -> the SSE-event try/catch in
+  // chatService.ts, get tagged as `isSSEProcessingError`, and tear down the
+  // whole stream. The fix wraps each onCostUpdate invocation in try/catch
+  // and routes the error through console.error without rethrowing.
+  it('stream survives an onCostUpdate that throws on the per-delta path (recomputeAndPropagate)', () => {
+    const onCostUpdate = vi.fn<(usd: number) => void>().mockImplementation(() => {
+      throw new Error('react setState on unmounted component');
+    });
+    const tracker = new CostTracker({
+      model: MODEL,
+      onCostUpdate,
+      loggingMessageId: 'msg-1',
+      authToken: null,
+      postReconcile: vi.fn(),
+    });
+
+    // recordOutputChars must NOT throw even though the callback does.
+    expect(() => tracker.recordOutputChars(40)).not.toThrow();
+    // The cost was still updated (callback failure does not regress state).
+    expect(tracker.lastCostMicroUsd).toBeGreaterThan(0n);
+    // console.error was called with a recognizable tag so on-call can spot it.
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const calledMessage = String(consoleErrorSpy.mock.calls[0]?.[0] ?? '');
+    expect(calledMessage).toMatch(/cost-tracker.*onCostUpdate/i);
+
+    // A second delta still fires the callback (and survives the second throw).
+    expect(() => tracker.recordOutputChars(40)).not.toThrow();
+    expect(onCostUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it('stream survives an onCostUpdate that throws on the server-frame path (recordServerCostMicroUsd)', () => {
+    const onCostUpdate = vi.fn<(usd: number) => void>().mockImplementation(() => {
+      throw new Error('cost pill renderer exploded');
+    });
+    const tracker = new CostTracker({
+      model: MODEL,
+      onCostUpdate,
+      loggingMessageId: 'msg-1',
+      authToken: null,
+      postReconcile: vi.fn(),
+    });
+
+    // Server running_cost frame path: separate invocation site.
+    expect(() => tracker.recordServerCostMicroUsd(1_234_567n)).not.toThrow();
+    expect(tracker.lastCostMicroUsd).toBe(1_234_567n);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    // A second strictly-higher frame still routes through and still survives.
+    expect(() => tracker.recordServerCostMicroUsd(2_000_000n)).not.toThrow();
+    expect(tracker.lastCostMicroUsd).toBe(2_000_000n);
+    expect(onCostUpdate).toHaveBeenCalledTimes(2);
+  });
+});

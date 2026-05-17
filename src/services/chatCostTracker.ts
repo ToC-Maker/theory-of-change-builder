@@ -146,7 +146,7 @@ export class CostTracker {
     if (parsed < 0n) return;
     if (parsed <= this._lastCostMicroUsd) return;
     this._lastCostMicroUsd = parsed;
-    this.opts.onCostUpdate?.(Number(parsed) / 1_000_000);
+    this.fireOnCostUpdate(Number(parsed) / 1_000_000);
     this.maybePostReconcile();
   }
 
@@ -193,26 +193,78 @@ export class CostTracker {
       logging_message_id: lmid,
       cost_micro_usd: cost.toString(),
     });
+    const failurePayload = { logging_message_id: lmid, cost_micro_usd: cost.toString() };
+
+    // Unload path (useBeacon=true) — the strict ordering below is load-bearing.
+    // DO NOT "simplify" this back to a transport-first sequence: see W2 finding B.
+    //
+    //   1. Pre-enqueue to the localStorage retry queue FIRST. This is the
+    //      only step that's guaranteed to complete even if the JS context is
+    //      torn down a millisecond from now (visibilitychange='hidden' on
+    //      mobile, bfcache eviction, browser quit). If neither transport
+    //      below survives, the next session's drainPendingReconciles picks
+    //      this entry up and replays it.
+    //   2. Attempt navigator.sendBeacon. If queued, great — the OS will
+    //      deliver it whether or not this page survives. The pre-enqueued
+    //      retry entry is now redundant but harmless: server-side GREATEST
+    //      clamp + reconciled_at lock make a duplicate POST a no-op (and
+    //      drainPendingReconciles will dequeue it after a 2xx).
+    //   3. If sendBeacon refuses (quota / refused / missing API), fall
+    //      through to fetch as a best-effort cleanup. fetch failure no
+    //      longer matters because the entry's already in the queue from
+    //      step 1; even synchronous teardown errors are swallowed below.
+    if (useBeacon) {
+      try {
+        this.opts.onFetchFailure?.(failurePayload);
+      } catch (e) {
+        // The retry-queue persistence hook should never throw, but if a
+        // bug or full-localStorage quota does it, don't let it abort the
+        // transport attempts.
+        console.error('[cost-tracker] onFetchFailure pre-enqueue threw:', e);
+      }
+    }
 
     if (useBeacon && hasSendBeacon()) {
-      const queued = navigator.sendBeacon(
-        '/api/reconcile-cost',
-        new Blob([body], { type: 'application/json' }),
-      );
-      if (queued) return;
-      // Beacon refused — fall through to fetch.
+      try {
+        const queued = navigator.sendBeacon(
+          '/api/reconcile-cost',
+          new Blob([body], { type: 'application/json' }),
+        );
+        if (queued) return;
+        // Beacon refused — fall through to fetch.
+      } catch (e) {
+        // sendBeacon shouldn't throw, but some browsers historically have
+        // (e.g. quota errors as exceptions instead of `false`). Fall through.
+        console.error('[cost-tracker] sendBeacon threw:', e);
+      }
     }
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.opts.authToken) headers['Authorization'] = `Bearer ${this.opts.authToken}`;
 
-    const failurePayload = { logging_message_id: lmid, cost_micro_usd: cost.toString() };
-    void fetch('/api/reconcile-cost', { method: 'POST', credentials: 'include', headers, body })
-      .then((resp) => {
-        // 5xx → enqueue for retry. 4xx → drop (definitive reject). 2xx → success.
-        if (!resp.ok && resp.status >= 500) this.opts.onFetchFailure?.(failurePayload);
-      })
-      .catch(() => this.opts.onFetchFailure?.(failurePayload));
+    // Wrap the fetch call so a synchronous teardown error (some browsers
+    // throw mid-unload instead of returning a rejected promise) can't
+    // escape the unload path. On the periodic (useBeacon=false) path the
+    // .catch below still routes failures into the retry queue; on the
+    // unload path the pre-enqueue above is the durable record.
+    try {
+      void fetch('/api/reconcile-cost', { method: 'POST', credentials: 'include', headers, body })
+        .then((resp) => {
+          // 5xx → enqueue for retry. 4xx → drop (definitive reject). 2xx → success.
+          if (!resp.ok && resp.status >= 500) this.opts.onFetchFailure?.(failurePayload);
+        })
+        .catch(() => this.opts.onFetchFailure?.(failurePayload));
+    } catch (e) {
+      // fetch() threw synchronously — best-effort log + retry enqueue.
+      // On the unload path the retry entry already landed in step 1 above;
+      // on the periodic path this is the only retry signal.
+      console.error('[cost-tracker] fetch threw synchronously:', e);
+      try {
+        this.opts.onFetchFailure?.(failurePayload);
+      } catch {
+        /* swallow: nothing useful to do during a teardown */
+      }
+    }
   }
 
   /**
@@ -239,8 +291,29 @@ export class CostTracker {
     const clientMicro = computeCostMicroUsd(this.opts.model, usage);
     if (clientMicro > this._lastCostMicroUsd) {
       this._lastCostMicroUsd = clientMicro;
-      this.opts.onCostUpdate?.(Number(clientMicro) / 1_000_000);
+      this.fireOnCostUpdate(Number(clientMicro) / 1_000_000);
       this.maybePostReconcile();
+    }
+  }
+
+  /**
+   * Invoke the caller's onCostUpdate without letting a callback throw kill
+   * the stream. Symmetric with how chatService.ts wraps onComplete and
+   * onContentBlocks: a React-side throw (e.g. setState on an unmounted
+   * component, or a render-time exception inside the cost-pill component)
+   * would otherwise propagate up through recordOutputChars / recordUsage /
+   * recordServerCostMicroUsd into chatService's SSE-event try/catch, get
+   * tagged as `isSSEProcessingError`, and tear down the whole stream.
+   * Logged via console.error so on-call can spot the failure; not rethrown
+   * because the cost state has already been advanced and the next delta
+   * will fire the callback again with the higher figure.
+   */
+  private fireOnCostUpdate(usd: number): void {
+    if (!this.opts.onCostUpdate) return;
+    try {
+      this.opts.onCostUpdate(usd);
+    } catch (e) {
+      console.error('[cost-tracker] onCostUpdate callback threw:', e);
     }
   }
 }
