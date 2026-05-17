@@ -4,6 +4,7 @@ import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { resolveAnonActor } from '../_shared/anon-id';
 import { writeDiagnostic } from '../_shared/diagnostics';
 import { applyDeltaCommit } from '../_shared/cost-commit';
+import { parseLoggingMessageId, type ReconcileCostRequest } from '../../shared/wire-shapes';
 
 /**
  * Client-side reconcile fallback. The streaming worker's post-stream IIFE
@@ -77,11 +78,15 @@ export type ParseReconcileResult =
 /**
  * Validate the JSON body of a `POST /api/reconcile-cost` request.
  *
- * Acceptance rules (mirror the historical contract; tests pin these so a
- * silent loosening here would be visible):
- *  - `logging_message_id` must be a non-empty string.
- *  - `cost_micro_usd` may be a string (parsed via BigInt) or a finite
- *    number (truncated then BigInt-coerced). Anything else is rejected.
+ * Acceptance rules (see `shared/wire-shapes.ts` for the `ReconcileCostRequest`
+ * shape; tests pin these so a silent loosening here would be visible):
+ *  - `logging_message_id` must be a UUID-shaped string (8-4-4-4-12 hex).
+ *    Postgres column is UUID-typed; pre-Wave-2 the validator accepted any
+ *    non-empty string and bad shapes failed opaquely at the DB layer.
+ *  - `cost_micro_usd` must be a STRING (parsed via BigInt). The pre-Wave-2
+ *    `string | number` accept was "defensive forward-compat" but masked
+ *    client-side type drift — the production client always sends string
+ *    (chatCostTracker.ts::maybePostReconcile).
  *  - The resulting bigint must not be negative.
  *
  * Returning a discriminated union (rather than throwing) keeps the handler
@@ -92,30 +97,46 @@ export function parseReconcileBody(raw: unknown): ParseReconcileResult {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, status: 400, body: { error: 'logging_message_id_required' } };
   }
-  const body = raw as { logging_message_id?: unknown; cost_micro_usd?: unknown };
+  // Cast to a strict-Partial view of the wire shape; both fields still
+  // typed `unknown` because we haven't validated them yet. The cast is
+  // shape-narrowing (object), not value-trusting.
+  const body = raw as Partial<Record<keyof ReconcileCostRequest, unknown>>;
 
-  const loggingMessageId = body.logging_message_id;
-  if (typeof loggingMessageId !== 'string' || loggingMessageId.length === 0) {
+  // Step 1: logging_message_id presence + UUID shape. Surface presence
+  // error before shape error so a client that omitted the field entirely
+  // gets the more actionable code.
+  const loggingMessageIdRaw = body.logging_message_id;
+  if (typeof loggingMessageIdRaw !== 'string' || loggingMessageIdRaw.length === 0) {
     return { ok: false, status: 400, body: { error: 'logging_message_id_required' } };
   }
+  let loggingMessageId: string;
+  try {
+    loggingMessageId = parseLoggingMessageId(loggingMessageIdRaw);
+  } catch {
+    // parseLoggingMessageId throws on non-UUID; map to the wire error
+    // code clients can switch on (distinct from `_required` so retry-queue
+    // logic can drop bad-shape entries rather than retrying them).
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'logging_message_id_invalid_uuid' },
+    };
+  }
 
-  // cost_micro_usd is sent as string by the client (BigInt round-trip via
-  // SSE running_cost frames) but we accept number too in case a future
-  // client changes encoding.
+  // Step 2: cost_micro_usd MUST be a string (BigInt-precision wire format).
+  // The pre-Wave-2 `typeof cost === 'number'` branch was removed — see
+  // doc-comment above for rationale.
   let clientCost: bigint;
   const cost = body.cost_micro_usd;
+  if (typeof cost !== 'string') {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'cost_micro_usd_required', detail: 'must be a string' },
+    };
+  }
   try {
-    if (typeof cost === 'string') {
-      clientCost = BigInt(cost);
-    } else if (typeof cost === 'number' && Number.isFinite(cost)) {
-      clientCost = BigInt(Math.trunc(cost));
-    } else {
-      return {
-        ok: false,
-        status: 400,
-        body: { error: 'cost_micro_usd_required', detail: 'must be a string or number' },
-      };
-    }
+    clientCost = BigInt(cost);
   } catch {
     return { ok: false, status: 400, body: { error: 'cost_micro_usd_invalid_integer' } };
   }

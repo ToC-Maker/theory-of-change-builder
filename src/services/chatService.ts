@@ -14,6 +14,7 @@ import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockA
 import { buildOutgoingMessages } from './outgoingMessages';
 import { CostTracker } from './chatCostTracker';
 import type { AnthropicUsage } from '../../shared/cost';
+import type { StreamEvent } from '../../shared/wire-shapes';
 
 /**
  * Re-export the shared `AnthropicUsage` shape so existing callers
@@ -859,9 +860,24 @@ class ChatService {
               continue;
             }
 
-            let event;
+            // SSE event payloads are typed as the shared `StreamEvent`
+            // discriminated union (shared/wire-shapes.ts). The runtime
+            // shape comes off the wire via JSON.parse and is fundamentally
+            // unknown at the type level; the cast below promises
+            // "JSON.parse returned an object whose discriminator field
+            // `type` matches one of the union arms". Wire-shape pinning
+            // here means any field rename in `ServerRunningCostFrame` or
+            // any mid-stream error type fails type-check at every branch
+            // below that reads those fields — symmetric with the worker
+            // emit side (anthropic-stream.ts uses the same type).
+            //
+            // Pass-through Anthropic events (content_block_start, etc.)
+            // use permissive shapes in the union; the loose
+            // `event.content_block?.type` reads still compile via the
+            // `Record<string, unknown>` index signatures.
+            let event: StreamEvent;
             try {
-              event = JSON.parse(data);
+              event = JSON.parse(data) as StreamEvent;
             } catch {
               continue; // partial SSE data, wait for more
             }
@@ -905,9 +921,17 @@ class ChatService {
                 const sinceStart = Math.round(now - t0);
                 const sinceLast = Math.round(now - tLast);
                 tLast = now;
-                blockStartAt.set(event.index, now);
+                // `index` is `number | undefined` on the union arm. The wire
+                // contract says it's always present for content_block_*
+                // events, but the wire-shape pinning carries an optional
+                // marker for forward-compat with Anthropic adding events
+                // that omit it. Default to -1 (the prior runtime behavior
+                // when `event.index` was `any` and could be undefined) so
+                // the Map still keys consistently.
+                const idx = typeof event.index === 'number' ? event.index : -1;
+                blockStartAt.set(idx, now);
                 console.log(
-                  `[ChatService] block_start idx=${event.index} type=${cb.type}` +
+                  `[ChatService] block_start idx=${idx} type=${cb.type}` +
                     (cb.name ? ` name=${cb.name}` : '') +
                     ` t+${sinceStart}ms Δ${sinceLast}ms`,
                 );
@@ -946,14 +970,15 @@ class ChatService {
               // to render visibly.
               if (event.type === 'content_block_stop') {
                 const now = performance.now();
-                const startedAt = blockStartAt.get(event.index);
+                // Mirror the narrowing in content_block_start above so the
+                // start/stop pair keys identically into blockStartAt.
+                const idx = typeof event.index === 'number' ? event.index : -1;
+                const startedAt = blockStartAt.get(idx);
                 const dur = startedAt !== undefined ? Math.round(now - startedAt) : -1;
                 const sinceLast = Math.round(now - tLast);
                 tLast = now;
-                blockStartAt.delete(event.index);
-                console.log(
-                  `[ChatService] block_stop  idx=${event.index} dur=${dur}ms Δ${sinceLast}ms`,
-                );
+                blockStartAt.delete(idx);
+                console.log(`[ChatService] block_stop  idx=${idx} dur=${dur}ms Δ${sinceLast}ms`);
                 // Snapshot the current blocks so the caller can keep a ref in
                 // sync; user-abort then has a synchronously-readable view of
                 // what streamed before the abort. Skip silently if no
@@ -1001,7 +1026,14 @@ class ChatService {
                 event.type === 'content_block_delta' &&
                 event.delta?.type === 'text_delta'
               ) {
-                const chunk = event.delta.text;
+                // `delta.text` is `unknown` on the wire-shape union
+                // (Anthropic pass-through events use a Record<string,
+                // unknown> for delta to avoid mirroring their full subtype
+                // matrix here). Narrow at runtime so a malformed frame
+                // can't crash the dispatch — if it's not a string, treat
+                // it as empty (the prior `any` typing would have silently
+                // string-concatenated whatever was there).
+                const chunk = typeof event.delta.text === 'string' ? event.delta.text : '';
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);

@@ -34,6 +34,7 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import type { StreamingBlocksMap } from '../../shared/streaming-blocks';
 import { microToUsd } from '../../shared/pricing';
+import type { ServerRunningCostFrame } from '../../shared/wire-shapes';
 
 /**
  * HTTP streaming proxy for Anthropic's /v1/messages with server-side cost
@@ -1813,18 +1814,25 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // the JSON data payload (it doesn't read the SSE `event:` header), so the
   // type *must* be inside the JSON — otherwise the running_cost branch
   // never matches and the payload is silently discarded.
+  //
+  // Wire shape pinned by `ServerRunningCostFrame` (shared/wire-shapes.ts);
+  // the explicit `const frame:` makes any future field rename here a
+  // compile error on both the worker emit AND the client dispatch
+  // (chatService.ts) simultaneously, instead of producing a silent
+  // wire-shape drift that only surfaces in production telemetry.
+  const pollFrame: ServerRunningCostFrame = {
+    type: 'running_cost',
+    cost_usd: microToUsd(estimatedMicro),
+    output_tokens_est: outputTokensSoFar,
+    source: 'poll',
+    cost_micro_usd: estimatedMicro.toString(),
+    input_tokens: teeCtx.accumulator.input_tokens,
+    cache_creation_input_tokens: teeCtx.accumulator.cache_creation_input_tokens,
+    cache_read_input_tokens: teeCtx.accumulator.cache_read_input_tokens,
+    web_search_requests: teeCtx.streamingContent.webSearchCount,
+  };
   teeCtx.pendingRunningCostFrame = new TextEncoder().encode(
-    `event: running_cost\ndata: ${JSON.stringify({
-      type: 'running_cost',
-      cost_usd: microToUsd(estimatedMicro),
-      output_tokens_est: outputTokensSoFar,
-      source: 'poll',
-      cost_micro_usd: estimatedMicro.toString(),
-      input_tokens: teeCtx.accumulator.input_tokens,
-      cache_creation_input_tokens: teeCtx.accumulator.cache_creation_input_tokens,
-      cache_read_input_tokens: teeCtx.accumulator.cache_read_input_tokens,
-      web_search_requests: teeCtx.streamingContent.webSearchCount,
-    })}\n\n`,
+    `event: running_cost\ndata: ${JSON.stringify(pollFrame)}\n\n`,
   );
 
   // Per-update write: persist the running cost to logging_messages +
@@ -2270,18 +2278,22 @@ function createCostTrackingStream(
         // client can log it alongside its delta-credit math. This is the
         // only way to surface server-side compute on PR-preview deploys
         // where `wrangler tail` isn't available.
+        //
+        // Wire shape pinned by `ServerRunningCostFrame` (shared/wire-shapes.ts);
+        // see the analogous poll-site emit above for the rationale.
+        const usageFrame: ServerRunningCostFrame = {
+          type: 'running_cost',
+          cost_usd: microToUsd(finalMicro),
+          output_tokens_est: merged.output_tokens,
+          source: eventType,
+          cost_micro_usd: finalMicro.toString(),
+          input_tokens: merged.input_tokens,
+          cache_creation_input_tokens: merged.cache_creation_input_tokens,
+          cache_read_input_tokens: merged.cache_read_input_tokens,
+          web_search_requests: merged.web_search_requests,
+        };
         const frame = encoder.encode(
-          `event: running_cost\ndata: ${JSON.stringify({
-            type: 'running_cost',
-            cost_usd: microToUsd(finalMicro),
-            output_tokens_est: merged.output_tokens,
-            source: eventType,
-            cost_micro_usd: finalMicro.toString(),
-            input_tokens: merged.input_tokens,
-            cache_creation_input_tokens: merged.cache_creation_input_tokens,
-            cache_read_input_tokens: merged.cache_read_input_tokens,
-            web_search_requests: merged.web_search_requests,
-          })}\n\n`,
+          `event: running_cost\ndata: ${JSON.stringify(usageFrame)}\n\n`,
         );
         try {
           controller.enqueue(frame);
@@ -2786,7 +2798,17 @@ export async function handler(
 
   // Optional client context headers (safe to read before auth).
   const chartId = request.headers.get('x-chart-id');
-  const loggingMessageId = request.headers.get('x-logging-message-id');
+  // Symmetric with `x-idempotency-key` validation below: accept the
+  // canonical UUID shape (8-4-4-4-12 hex, case-insensitive), reject any
+  // other non-empty string by treating it as absent. Pre-Wave-2, an
+  // arbitrary string would flow through to the Postgres UUID column and
+  // fail at the DB layer with an opaque error; now bad shapes are
+  // silently dropped at the wire boundary (same policy as
+  // `x-idempotency-key` per `isUuidish`'s contract — "easier for clients
+  // to migrate without breaking").
+  const loggingMessageIdHeader = request.headers.get('x-logging-message-id');
+  const loggingMessageId =
+    loggingMessageIdHeader && isUuidish(loggingMessageIdHeader) ? loggingMessageIdHeader : null;
 
   const sql = getDb(env);
 
