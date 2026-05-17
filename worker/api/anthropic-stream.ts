@@ -5,7 +5,7 @@ import { decryptByokKey } from '../_shared/byok-crypto';
 import { isUserOptedOut } from '../_shared/logging-optout';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
 import { writeDiagnostic } from '../_shared/diagnostics';
-import { applyDeltaCommit } from '../_shared/cost-commit';
+import { applyDeltaCommit, type ApplyDeltaCommitResult } from '../_shared/cost-commit';
 import { toBigInt } from '../_shared/bigint';
 import {
   resolveAnonActor,
@@ -1058,18 +1058,21 @@ export interface PerUpdateCommitDeps {
 }
 
 /**
- * Fire a per-update `applyDeltaCommit` for the cost value `snap` and log
- * a `DiagnosticPerUpdateCommit` row. The caller MUST snapshot the live
- * cost (`finalMicro` / `estimatedMicro`) into a `const snap` synchronously
- * before invoking this — `snap` is taken by value (bigint is a primitive)
- * so any mutation of the outer binding after the call cannot leak into
- * the closure. Bypassing the snapshot discipline is the C2 hazard from
- * the plan's adversarial review: the IIFE may run many ms after the
- * call site when the outer `let finalMicro` has been reassigned.
+ * Schedule a fire-and-forget `applyDeltaCommit` + `writeDiagnostic` pair
+ * via `ctx.waitUntil`. Shared scaffolding behind `firePerUpdateCommit`,
+ * `fireAbortCommit`, and the inline message_start floor write — all
+ * three follow the same lifecycle: snapshot cost → schedule IIFE →
+ * commit → diagnose → swallow on failure.
  *
- * Scheduled fire-and-forget via `ctx.waitUntil` so the stream isn't
- * blocked on Postgres. Three idempotent no-op shapes are handled by the
- * underlying `applyDeltaCommit`:
+ * The caller MUST snapshot the live cost into a `const snap`
+ * synchronously before invoking this. `snap` is taken by value (bigint is
+ * a primitive) so any mutation of the outer binding after the call
+ * cannot leak into the closure. This is the C2 closure-snapshot rule
+ * from the plan's adversarial review; bypassing it lets a stale
+ * post-call `finalMicro` reassignment land in the DB.
+ *
+ * Three idempotent no-op shapes are handled by the underlying
+ * `applyDeltaCommit`:
  *   1. `loggingMessageId` null → bail before scheduling (no row to commit).
  *   2. Row not yet inserted by `saveMessage` → returns `applied: false`.
  *   3. `reconciled_at` non-null (post-stream reconcile stamped it) →
@@ -1077,22 +1080,35 @@ export interface PerUpdateCommitDeps {
  *
  * Errors inside the IIFE are swallowed via try/catch + console.error so
  * a Neon outage doesn't crash the runtime; the diagnostic insert may not
- * land in that case but the per-update write is observability, not state.
+ * land in that case but per-update / abort / floor writes are
+ * observability, not state.
  */
-export function firePerUpdateCommit(
+function scheduleCommitIife(
   deps: PerUpdateCommitDeps,
   snap: bigint,
-  source: PerUpdateCommitSource,
+  spec: {
+    /** error_name on the logging_errors row. */
+    diagnosticName: string;
+    /** Bracketed tag prefix for console.error on commit failure. */
+    errorLabel: string;
+    /** Builds the human-readable error_message column from the commit result. */
+    buildErrorMessage: (out: ApplyDeltaCommitResult) => string;
+    /** Builds the request_metadata payload from the commit result. */
+    buildMetadata: (out: ApplyDeltaCommitResult) => Record<string, unknown>;
+    /** Optional console.log invoked synchronously inside the IIFE before the commit attempt. */
+    preLog?: () => void;
+  },
 ): void {
   // No row → no commit. Don't schedule a guaranteed-no-op IIFE that
   // would still spam diagnostics. saveMessage's row INSERT lands within
   // a few ms of stream start, so the only emits that hit this branch
-  // are extreme races on the very first poll tick.
+  // are extreme races on the very first emit.
   if (!deps.loggingMessageId) return;
   const messageId = deps.loggingMessageId;
   deps.ctx.waitUntil(
     (async () => {
       try {
+        spec.preLog?.();
         const out = await applyDeltaCommit(
           deps.sql,
           messageId,
@@ -1102,28 +1118,57 @@ export function firePerUpdateCommit(
           deps.isByok,
         );
         await writeDiagnostic(deps.sql, {
-          error_name: 'DiagnosticPerUpdateCommit',
-          error_message: `${snap.toString()} µUSD committed (applied=${out.applied}, delta=${out.delta})`,
+          error_name: spec.diagnosticName,
+          error_message: spec.buildErrorMessage(out),
           user_id: deps.actorId,
           chart_id: deps.chartId ?? null,
-          request_metadata: {
-            logging_message_id: messageId,
-            cost_micro_usd: snap.toString(),
-            projected_micro_usd: deps.projectedMicroUsd.toString(),
-            new_settled_micro_usd: out.new_settled.toString(),
-            delta_micro_usd: out.delta.toString(),
-            applied: out.applied,
-            source,
-          },
+          request_metadata: spec.buildMetadata(out),
           deployment_host: deps.deploymentHost,
           fired_at_ms: Date.now(),
           start_at_ms: deps.lifecycle.handlerStartedAtMs,
         });
       } catch (e) {
-        console.error('[per-update-write] applyDeltaCommit failed:', e);
+        console.error(`${spec.errorLabel} applyDeltaCommit failed:`, e);
       }
     })(),
   );
+}
+
+/**
+ * Fire a per-update `applyDeltaCommit` for the cost value `snap` and log
+ * a `DiagnosticPerUpdateCommit` row. Thin wrapper around
+ * `scheduleCommitIife`; see that helper's doc for the snapshot
+ * discipline, idempotent no-op surface, and failure-swallow contract.
+ *
+ * The caller MUST snapshot the live cost (`finalMicro` / `estimatedMicro`)
+ * into a `const snap` synchronously before invoking this — the C2
+ * hazard from the plan's adversarial review. Exported as a named
+ * function (rather than inlined) so unit tests can drive it directly
+ * without spinning up the full SSE harness, and so the
+ * `'DiagnosticPerUpdateCommit'` label + `source` discriminator stay
+ * pinned at one call site.
+ */
+export function firePerUpdateCommit(
+  deps: PerUpdateCommitDeps,
+  snap: bigint,
+  source: PerUpdateCommitSource,
+): void {
+  const messageId = deps.loggingMessageId;
+  scheduleCommitIife(deps, snap, {
+    diagnosticName: 'DiagnosticPerUpdateCommit',
+    errorLabel: '[per-update-write]',
+    buildErrorMessage: (out) =>
+      `${snap.toString()} µUSD committed (applied=${out.applied}, delta=${out.delta})`,
+    buildMetadata: (out) => ({
+      logging_message_id: messageId,
+      cost_micro_usd: snap.toString(),
+      projected_micro_usd: deps.projectedMicroUsd.toString(),
+      new_settled_micro_usd: out.new_settled.toString(),
+      delta_micro_usd: out.delta.toString(),
+      applied: out.applied,
+      source,
+    }),
+  });
 }
 
 /**
@@ -1138,10 +1183,10 @@ export function firePerUpdateCommit(
  *     reflects the running cost") is what `DiagnosticAbortCommit` rows
  *     attest to in production logs.
  *   - Caller MUST gate on `snap > 0n` BEFORE invoking; the helper
- *     additionally guards on `loggingMessageId` (same as
- *     `firePerUpdateCommit`). Both bail before scheduling so abort
- *     events outside the meaningful window (pre-message_start abort,
- *     anonymous-without-message-id) don't spam diagnostics with
+ *     additionally guards on `loggingMessageId` via `scheduleCommitIife`
+ *     (same as `firePerUpdateCommit`). Both bail before scheduling so
+ *     abort events outside the meaningful window (pre-message_start
+ *     abort, anonymous-without-message-id) don't spam diagnostics with
  *     guaranteed no-op IIFEs.
  *
  * Why this exists separately from `firePerUpdateCommit`: scheduling
@@ -1163,48 +1208,27 @@ export function firePerUpdateCommit(
  * with reconcile" in `abort-commit.test.ts`).
  */
 export function fireAbortCommit(deps: PerUpdateCommitDeps, snap: bigint): void {
-  // Early bail: no row to commit against. Don't schedule a guaranteed-
-  // no-op IIFE that would still write a diagnostic.
-  if (!deps.loggingMessageId) return;
   // Early bail: no usage observed yet. Abort fired before any
   // message_start frame; nothing to commit. Without this guard the
   // helper would still write a `DiagnosticAbortCommit` row with
   // applied=false — pure noise on every aborted pre-stream request.
+  // (The `loggingMessageId == null` bail lives inside scheduleCommitIife.)
   if (snap <= 0n) return;
   const messageId = deps.loggingMessageId;
-  deps.ctx.waitUntil(
-    (async () => {
-      try {
-        const out = await applyDeltaCommit(
-          deps.sql,
-          messageId,
-          deps.actorId,
-          deps.projectedMicroUsd,
-          snap,
-          deps.isByok,
-        );
-        await writeDiagnostic(deps.sql, {
-          error_name: 'DiagnosticAbortCommit',
-          error_message: `abort commit: ${snap.toString()} µUSD (applied=${out.applied}, delta=${out.delta})`,
-          user_id: deps.actorId,
-          chart_id: deps.chartId ?? null,
-          request_metadata: {
-            logging_message_id: messageId,
-            cost_micro_usd: snap.toString(),
-            projected_micro_usd: deps.projectedMicroUsd.toString(),
-            new_settled_micro_usd: out.new_settled.toString(),
-            delta_micro_usd: out.delta.toString(),
-            applied: out.applied,
-          },
-          deployment_host: deps.deploymentHost,
-          fired_at_ms: Date.now(),
-          start_at_ms: deps.lifecycle.handlerStartedAtMs,
-        });
-      } catch (e) {
-        console.error('[abort-commit] applyDeltaCommit failed:', e);
-      }
-    })(),
-  );
+  scheduleCommitIife(deps, snap, {
+    diagnosticName: 'DiagnosticAbortCommit',
+    errorLabel: '[abort-commit]',
+    buildErrorMessage: (out) =>
+      `abort commit: ${snap.toString()} µUSD (applied=${out.applied}, delta=${out.delta})`,
+    buildMetadata: (out) => ({
+      logging_message_id: messageId,
+      cost_micro_usd: snap.toString(),
+      projected_micro_usd: deps.projectedMicroUsd.toString(),
+      new_settled_micro_usd: out.new_settled.toString(),
+      delta_micro_usd: out.delta.toString(),
+      applied: out.applied,
+    }),
+  });
 }
 
 type SseTeeContext = {
@@ -2349,52 +2373,26 @@ function createCostTrackingStream(
         if (eventType === 'message_start' && teeCtx.loggingMessageId) {
           const floorMicro = finalMicro;
           const floorMerged = { ...merged };
-          teeCtx.ctx.waitUntil(
-            (async () => {
+          const messageId = teeCtx.loggingMessageId;
+          const floorMetadata = {
+            logging_message_id: messageId,
+            floor_micro_usd: floorMicro.toString(),
+            floor_usd: microToUsd(floorMicro),
+            input_tokens: floorMerged.input_tokens,
+            cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
+            cache_read_input_tokens: floorMerged.cache_read_input_tokens,
+            model: teeCtx.model,
+          };
+          scheduleCommitIife(teeCtx, floorMicro, {
+            diagnosticName: 'DiagnosticMessageStartFloor',
+            errorLabel: '[message_start floor]',
+            buildErrorMessage: () => `floor=${floorMicro.toString()} µUSD locked at message_start`,
+            buildMetadata: () => floorMetadata,
+            preLog: () =>
               console.log(
-                JSON.stringify({
-                  event: 'message_start_floor_persist',
-                  logging_message_id: teeCtx.loggingMessageId,
-                  floor_micro_usd: floorMicro.toString(),
-                  floor_usd: microToUsd(floorMicro),
-                  input_tokens: floorMerged.input_tokens,
-                  cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
-                  cache_read_input_tokens: floorMerged.cache_read_input_tokens,
-                  model: teeCtx.model,
-                }),
-              );
-              try {
-                await applyDeltaCommit(
-                  teeCtx.sql,
-                  teeCtx.loggingMessageId,
-                  teeCtx.actorId,
-                  teeCtx.projectedMicroUsd,
-                  floorMicro,
-                  teeCtx.isByok,
-                );
-              } catch (uerr) {
-                console.error('message_start floor applyDeltaCommit failed:', uerr);
-              }
-              await writeDiagnostic(teeCtx.sql, {
-                error_name: 'DiagnosticMessageStartFloor',
-                error_message: `floor=${floorMicro.toString()} µUSD locked at message_start`,
-                user_id: teeCtx.actorId,
-                chart_id: teeCtx.chartId ?? null,
-                request_metadata: {
-                  logging_message_id: teeCtx.loggingMessageId,
-                  floor_micro_usd: floorMicro.toString(),
-                  floor_usd: microToUsd(floorMicro),
-                  input_tokens: floorMerged.input_tokens,
-                  cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
-                  cache_read_input_tokens: floorMerged.cache_read_input_tokens,
-                  model: teeCtx.model,
-                },
-                deployment_host: teeCtx.deploymentHost,
-                fired_at_ms: Date.now(),
-                start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
-              });
-            })(),
-          );
+                JSON.stringify({ event: 'message_start_floor_persist', ...floorMetadata }),
+              ),
+          });
         }
       } catch (e) {
         console.error(`running_cost emit failed at ${eventType}:`, e);
