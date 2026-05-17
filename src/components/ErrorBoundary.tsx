@@ -20,32 +20,31 @@ import { loggingService } from '../services/loggingService';
 
 interface Props {
   children: ReactNode;
-  /**
-   * Optional fallback. When omitted, the default reload UI is used. The
-   * fallback receives the captured error and a `reset()` that resets the
-   * boundary's own state (state may still be corrupt elsewhere).
-   */
-  fallback?: (args: { error: Error; reset: () => void }) => ReactNode;
 }
 
+// React passes `unknown` to the boundary lifecycle (`throw 'string'` and
+// `throw null` are both legal), so we narrow before reaching for
+// `.name` / `.message` / `.stack`.
 interface State {
-  error: Error | null;
+  error: unknown;
+  hasError: boolean;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, hasError: false };
 
-  static getDerivedStateFromError(error: Error): State {
-    return { error };
+  static getDerivedStateFromError(error: unknown): State {
+    return { error, hasError: true };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+  componentDidCatch(error: unknown, errorInfo: ErrorInfo): void {
     // Fire-and-forget: never throws (loggingService.reportError swallows
     // network errors internally and falls back to sendBeacon).
+    const e = error instanceof Error ? error : new Error(String(error));
     loggingService.reportError({
-      error_name: error.name || 'Error',
-      error_message: error.message || String(error),
-      stack_trace: error.stack,
+      error_name: e.name || 'Error',
+      error_message: e.message || String(error),
+      stack_trace: e.stack,
       request_metadata: {
         component: 'ErrorBoundary',
         componentStack: errorInfo.componentStack,
@@ -53,16 +52,8 @@ export class ErrorBoundary extends Component<Props, State> {
     });
   }
 
-  reset = (): void => {
-    this.setState({ error: null });
-  };
-
   render(): ReactNode {
-    const { error } = this.state;
-    if (error) {
-      if (this.props.fallback) {
-        return this.props.fallback({ error, reset: this.reset });
-      }
+    if (this.state.hasError) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-gray-50 p-8">
           <div className="max-w-md w-full bg-white rounded-lg shadow p-8 text-center">

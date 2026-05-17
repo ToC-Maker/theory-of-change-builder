@@ -23,6 +23,11 @@ const Boom = (): JSX.Element => {
   throw new Error('boom');
 };
 
+const BoomString = (): JSX.Element => {
+  // React allows any thrown value, not just Error instances.
+  throw 'plain-string-error';
+};
+
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -64,5 +69,25 @@ describe('ErrorBoundary', () => {
     expect(call?.request_metadata).toMatchObject({ component: 'ErrorBoundary' });
     // Stack present (sliced by loggingService — we only assert it's a string).
     expect(typeof call?.stack_trace).toBe('string');
+  });
+
+  it('survives a non-Error throw and still reports', () => {
+    // React's boundary lifecycle is typed `unknown`; `throw 'string'` and
+    // `throw null` are both legal. The boundary must NOT crash trying
+    // to read .name/.message off a non-object.
+    const reportSpy = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
+
+    render(
+      <ErrorBoundary>
+        <BoomString />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText(/an error occurred/i)).toBeInTheDocument();
+    expect(reportSpy).toHaveBeenCalledTimes(1);
+    const call = reportSpy.mock.calls[0]?.[0];
+    // The thrown string is wrapped in a synthetic Error.
+    expect(call?.error_message).toContain('plain-string-error');
+    expect(call?.request_metadata).toMatchObject({ component: 'ErrorBoundary' });
   });
 });
