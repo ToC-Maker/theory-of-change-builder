@@ -15,6 +15,7 @@ import type { DragOverLocation } from '../hooks/usePointerDrag';
 import { useConnectionDrag } from '../hooks/useConnectionDrag';
 import { buildConnectionPath } from './canvas/connectionPath';
 import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
+import { GutterAffordance } from './canvas/GutterAffordance';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 // PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
@@ -109,7 +110,10 @@ export function ToC({
   // (gutters, hover-× delete, connection handles) that used to be
   // gated behind layoutMode. `editMode` remains as the view/edit
   // distinction, set by the parent route (showEditButton).
-  const [editMode] = useState(showEditButton);
+  // Direct prop-mirror (no setter, no state slot): if the parent
+  // ever flips `showEditButton`, this component re-renders with the
+  // new value rather than freezing the mount-time value.
+  const editMode = showEditButton;
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5);
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1); // 0.5 to 2.0 scale
   const [fontFamily, setFontFamily] = useState(initialData.fontFamily ?? "'Ubuntu', sans-serif"); // Default font family
@@ -1097,13 +1101,11 @@ export function ToC({
                 "+ Section" label. Click adds a section before this
                 index. The 32px width comes from `sectionPadding`. */}
               {editMode && (
-                <div
-                  className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-green-500/20"
-                  style={{
-                    width: `${sectionPadding}px`,
-                    height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                    marginTop: '68px',
-                  }}
+                <GutterAffordance
+                  kind="section"
+                  width={sectionPadding}
+                  height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
+                  testId="add-section-before"
                   onClick={() => {
                     setDataAndNotify((prevData) => {
                       const newData = { ...prevData };
@@ -1114,13 +1116,7 @@ export function ToC({
                       return newData;
                     });
                   }}
-                  title="Click to add section"
-                  data-testid="add-section-before"
-                >
-                  <span className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                    + Section
-                  </span>
-                </div>
+                />
               )}
               <div
                 onClick={(e) => {
@@ -1233,12 +1229,11 @@ export function ToC({
                             gutter above; `+ Column` label fades in
                             on hover. */}
                           {editMode && colIndex === 0 && (
-                            <div
-                              className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-blue-500/20"
-                              style={{
-                                width: `${columnPadding}px`,
-                                height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                              }}
+                            <GutterAffordance
+                              kind="column"
+                              width={columnPadding}
+                              height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
+                              testId={`add-column-before-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 setDataAndNotify((prevData) => {
                                   const newData = { ...prevData };
@@ -1248,13 +1243,7 @@ export function ToC({
                                   return newData;
                                 });
                               }}
-                              title="Click to add column"
-                              data-testid={`add-column-before-${sectionIndex}-${colIndex}`}
-                            >
-                              <span className="text-blue-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                                + Column
-                              </span>
-                            </div>
+                            />
                           )}
 
                           {/* PR 5 Task 5.1: column body. No more
@@ -1372,12 +1361,11 @@ export function ToC({
                             column). Same minimal-default / hover-
                             translucent-blue treatment. */}
                           {editMode && (
-                            <div
-                              className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-blue-500/20"
-                              style={{
-                                width: `${columnPadding}px`,
-                                height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                              }}
+                            <GutterAffordance
+                              kind="column"
+                              width={columnPadding}
+                              height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
+                              testId={`add-column-after-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 // Add new column
                                 setDataAndNotify((prevData) => {
@@ -1388,13 +1376,7 @@ export function ToC({
                                   return newData;
                                 });
                               }}
-                              title="Click to add column"
-                              data-testid={`add-column-after-${sectionIndex}-${colIndex}`}
-                            >
-                              <span className="text-blue-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                                + Column
-                              </span>
-                            </div>
+                            />
                           )}
                         </React.Fragment>
                       ))}
@@ -1407,13 +1389,11 @@ export function ToC({
                 translucent-green treatment as the before-section
                 gutter above. */}
               {editMode && sectionIndex === data.sections.length - 1 && (
-                <div
-                  className="group flex items-center justify-center cursor-pointer rounded-lg transition-colors hover:bg-green-500/20"
-                  style={{
-                    width: `${sectionPadding}px`,
-                    height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                    marginTop: '68px',
-                  }}
+                <GutterAffordance
+                  kind="section"
+                  width={sectionPadding}
+                  height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
+                  testId="add-section-after-last"
                   onClick={() => {
                     setDataAndNotify((prevData) => {
                       const newData = { ...prevData };
@@ -1424,13 +1404,7 @@ export function ToC({
                       return newData;
                     });
                   }}
-                  title="Click to add section"
-                  data-testid="add-section-after-last"
-                >
-                  <span className="text-green-600 text-xs font-medium rotate-90 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                    + Section
-                  </span>
-                </div>
+                />
               )}
             </React.Fragment>
           ))
