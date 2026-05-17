@@ -76,14 +76,23 @@ export function EdgeEditor(props: EdgeEditorProps) {
 
   // Unmount: flush buffered evidence + assumptions. Confidence uses
   // streaming commit on pointerup, so it's already covered.
+  //
+  // We track the LATEST commit closures via refs (same pattern as
+  // NodeEditor): `commitEvidence` / `commitAssumptions` are
+  // `useCallback`-wrapped with `[commit, edgeKey]` deps, so their
+  // identity changes when (sourceId, targetId) changes. The older
+  // pattern (capturing locals at the first mount-effect render)
+  // flushed the FIRST render's key on unmount, missing the current
+  // edge's buffered typing.
+  const commitEvidenceRef = useRef(props_.commitEvidence);
+  const commitAssumptionsRef = useRef(props_.commitAssumptions);
+  commitEvidenceRef.current = props_.commitEvidence;
+  commitAssumptionsRef.current = props_.commitAssumptions;
   useEffect(() => {
-    const commitEvidenceLocal = props_.commitEvidence;
-    const commitAssumptionsLocal = props_.commitAssumptions;
     return () => {
-      commitEvidenceLocal();
-      commitAssumptionsLocal();
+      commitEvidenceRef.current();
+      commitAssumptionsRef.current();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Outside-click dismissal — same pattern as NodeEditor.
