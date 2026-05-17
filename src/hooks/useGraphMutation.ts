@@ -40,6 +40,10 @@
 // callback is invoked synchronously inside a child's `setState` updater
 // (updater impurity).
 //
+// Canonical console-search anchor (the message React actually prints, with
+// the parens placeholders):
+//   `Cannot update a component (X) while rendering a different component (Y).`
+//
 // `queueMicrotask` preserves the ordering invariant that previously came
 // from `setTimeout(0)` — "parent setter runs after child commit" — while
 // being strictly better: pre-paint timing, no 4 ms macrotask clamp at
@@ -172,14 +176,11 @@ export function useGraphMutation(
   //
   // Computes the next value from `dataRef.current` (the latest-known state)
   // BEFORE calling setData, so consecutive synchronous calls in the same
-  // task observe each other's writes. React's queued updater callback also
-  // runs (so React's batching semantics are preserved), but it just
-  // returns the already-computed `next` to avoid double-applying the
-  // updater when StrictMode replays.
+  // task observe each other's writes.
   const writeLocal = useCallback((updater: GraphUpdater): ToCData => {
     const next = applyUpdater(dataRef.current, updater);
     dataRef.current = next;
-    setData(() => next);
+    setData(next);
     return next;
   }, []);
 
@@ -195,7 +196,7 @@ export function useGraphMutation(
   const setDataExternal = useCallback<Dispatch<SetStateAction<ToCData>>>((value) => {
     const next = applyUpdater(dataRef.current, value);
     dataRef.current = next;
-    setData(() => next);
+    setData(next);
   }, []);
 
   const mutate = useCallback(
