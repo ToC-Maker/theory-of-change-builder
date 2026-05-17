@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
 import { computePathWithWaypoints } from '../utils/connectionPath';
 import { EdgeEditor } from './edge-editor/EdgeEditor';
 import { buildConnectionPath } from './canvas/connectionPath';
-import { useWaypointDrag } from '../hooks/useWaypointDrag';
+import type { WaypointDragState } from '../hooks/useWaypointDrag';
 import { ConnectionWaypointHandles } from './canvas/ConnectionWaypointHandles';
 
 // PR 3: `EdgePopupState` was the modal's full state copy (with x/y for
@@ -60,6 +61,22 @@ interface ConnectionsComponentProps {
   // (modal sizing math). The anchored EdgeEditor reads viewport
   // positioning via `useAnchorPosition` directly, so these are no
   // longer needed.
+  // PR 7: waypoint-drag binders + state come from the parent
+  // (`TheoryOfChangeGraph` owns the hook so its `isActive` can OR into
+  // `isAnyDragActive` for the polling-pause channel). `waypointDragState`
+  // is consumed locally for the "keep handles visible mid-drag"
+  // affordance — see `handlesVisible` below.
+  bindWaypoint?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+    waypointIndex: number,
+  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  bindMidpoint?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+    segmentIndex: number,
+  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  waypointDragState?: WaypointDragState | null;
 }
 
 export function ConnectionsComponent({
@@ -81,6 +98,9 @@ export function ConnectionsComponent({
   containerRef,
   camera,
   fontFamily,
+  bindWaypoint,
+  bindMidpoint,
+  waypointDragState,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
@@ -370,34 +390,9 @@ export function ConnectionsComponent({
   // confidence slider produces ONE undo entry per drag, like the
   // node-width slider).
 
-  // PR 7: waypoint drag — `bindWaypoint` / `bindMidpoint` are passed
-  // down to `<ConnectionWaypointHandles>` for each connection that's
-  // hovered or selected. Translation from viewport client coords to
-  // container-local coords uses the same `(client - containerRect) /
-  // zoomScale` formula as the drop-preview ghost; the `camera` prop's
-  // `z` is the zoom scale.
-  const clientToContainer = useCallback(
-    (clientX: number, clientY: number) => {
-      const container = containerRef.current;
-      if (!container) return { x: clientX, y: clientY };
-      const rect = container.getBoundingClientRect();
-      const zoomScale = camera?.z ?? 1;
-      return {
-        x: (clientX - rect.left) / zoomScale,
-        y: (clientY - rect.top) / zoomScale,
-      };
-    },
-    [containerRef, camera],
-  );
-
-  const waypointDrag = useWaypointDrag({
-    data,
-    editMode,
-    mutate: mutate ?? (() => {}),
-    mutateDebounced: mutateDebounced ?? (() => {}),
-    commit: commit ?? (() => {}),
-    clientToContainer,
-  });
+  // PR 7: waypoint-drag binders + drag-state come from the parent
+  // (`TheoryOfChangeGraph`). See `bindWaypoint`/`bindMidpoint`/
+  // `waypointDragState` props on this component for context.
 
   const strokeWidth = 3;
   return (
@@ -524,13 +519,16 @@ export function ConnectionsComponent({
           // PR 7: handles visible on hover OR select, edit-mode only.
           // While the user is actively dragging a waypoint we keep
           // handles visible regardless of hover (mouse may have left
-          // the path during the drag motion); the `useWaypointDrag`
-          // state tells us this.
+          // the path during the drag motion); the parent-owned
+          // `waypointDragState` tells us this.
           const isThisConnectionBeingDragged =
-            waypointDrag.dragState?.sourceNodeId === connection.sourceId &&
-            waypointDrag.dragState?.targetNodeId === connection.targetId;
+            waypointDragState?.sourceNodeId === connection.sourceId &&
+            waypointDragState?.targetNodeId === connection.targetId;
           const handlesVisible =
-            editMode && (isEdgeHovered || isEdgeSelected || isThisConnectionBeingDragged);
+            editMode &&
+            !!bindWaypoint &&
+            !!bindMidpoint &&
+            (isEdgeHovered || isEdgeSelected || isThisConnectionBeingDragged);
           const waypointAnchors = [
             { x: startX, y: startY },
             ...(connection.waypoints ?? []),
@@ -611,15 +609,17 @@ export function ConnectionsComponent({
                   manipulation. Rendered above the visible path so the
                   handles always sit on top; visibility = hovered OR
                   selected OR currently being dragged. */}
-              <ConnectionWaypointHandles
-                sourceNodeId={connection.sourceId}
-                targetNodeId={connection.targetId}
-                anchors={waypointAnchors}
-                waypointCount={waypointCount}
-                visible={handlesVisible}
-                bindWaypoint={waypointDrag.bindWaypoint}
-                bindMidpoint={waypointDrag.bindMidpoint}
-              />
+              {bindWaypoint && bindMidpoint && (
+                <ConnectionWaypointHandles
+                  sourceNodeId={connection.sourceId}
+                  targetNodeId={connection.targetId}
+                  anchors={waypointAnchors}
+                  waypointCount={waypointCount}
+                  visible={handlesVisible}
+                  bindWaypoint={bindWaypoint}
+                  bindMidpoint={bindMidpoint}
+                />
+              )}
             </g>
           );
         })}
