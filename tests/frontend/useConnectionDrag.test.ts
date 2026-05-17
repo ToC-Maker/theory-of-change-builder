@@ -16,7 +16,6 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
-import { useRef } from 'react';
 import { useConnectionDrag } from '../../src/hooks/useConnectionDrag';
 import {
   isCanvasGestureActive,
@@ -136,18 +135,13 @@ interface HookArgs {
 }
 
 function setupHook(args: HookArgs) {
-  return renderHook(() => {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const c = document.createElement('div');
-    document.body.appendChild(c);
-    containerRef.current = c;
-    return useConnectionDrag({
+  return renderHook(() =>
+    useConnectionDrag({
       data: args.data,
-      containerRef,
       editMode: args.editMode ?? true,
       onConnect: args.onConnect,
-    });
-  });
+    }),
+  );
 }
 
 // `document.elementFromPoint` doesn't work in jsdom. We mock it to
@@ -450,18 +444,12 @@ describe('useConnectionDrag', () => {
 
       // Hook starts with source + target + other.
       const { result, rerender } = renderHook(
-        ({ data }: { data: ToCData }) => {
-          const containerRef = useRef<HTMLDivElement>(null);
-          const c = document.createElement('div');
-          document.body.appendChild(c);
-          containerRef.current = c;
-          return useConnectionDrag({
+        ({ data }: { data: ToCData }) =>
+          useConnectionDrag({
             data,
-            containerRef,
             editMode: true,
             onConnect,
-          });
-        },
+          }),
         { initialProps: { data: sampleData() } },
       );
 
