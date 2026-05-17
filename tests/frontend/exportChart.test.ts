@@ -111,6 +111,66 @@ describe('exportToJson', () => {
     expect(JSON.parse(text)).toEqual(minimalData);
   });
 
+  it('round-trips a chart with PR 7 waypoints byte-identically', async () => {
+    // PR 7 added an optional `Connection.waypoints` field. A future
+    // export-side change (e.g. a "clean up exported JSON" pass that
+    // strips unknown fields) could silently drop the waypoints on
+    // round-trip. This test pins the field as load-bearing so the
+    // regression is loud rather than silent (waypoints look like a
+    // pure layout convenience, but the user spent time placing them
+    // and would lose work on export/import).
+    const dataWithWaypoints: ToCData = {
+      sections: [
+        {
+          title: 'Inputs',
+          columns: [
+            {
+              nodes: [
+                {
+                  id: 'n1',
+                  title: 'A',
+                  text: 'a',
+                  connectionIds: [],
+                  connections: [
+                    {
+                      targetId: 'n2',
+                      confidence: 75,
+                      waypoints: [
+                        { x: 100, y: 50 },
+                        { x: 200, y: 75 },
+                      ],
+                    },
+                  ],
+                },
+                { id: 'n2', title: 'B', text: 'b', connectionIds: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    let captured: Blob | null = null;
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      captured = blob;
+      return 'blob:cap-waypoints';
+    }) as typeof URL.createObjectURL;
+
+    const { exportToJson } = await import('../../src/utils/exportChart');
+    exportToJson(dataWithWaypoints, 'waypoints-roundtrip');
+    expect(captured).not.toBeNull();
+    const text = await (captured as unknown as Blob).text();
+    const parsed = JSON.parse(text) as ToCData;
+    // Whole-blob equality + an explicit assertion on the waypoint
+    // field. The redundancy is intentional: if a future fixture
+    // refactor accidentally drops waypoints from `dataWithWaypoints`,
+    // the explicit assertion still fails loudly.
+    expect(parsed).toEqual(dataWithWaypoints);
+    expect(parsed.sections[0].columns[0].nodes[0].connections![0].waypoints).toEqual([
+      { x: 100, y: 50 },
+      { x: 200, y: 75 },
+    ]);
+  });
+
   it('revokes the object URL after the click is dispatched', async () => {
     const { exportToJson } = await import('../../src/utils/exportChart');
     exportToJson(minimalData, 'revoke-test');
