@@ -762,11 +762,6 @@ function ToCViewer() {
     setToken();
   }, [isAuthenticated, authLoading, getIdTokenClaims, getAccessTokenSilently]);
 
-  // `getTimeAgo` + `handleManualSync` were both consumed only by the
-  // old EditToolbar's sync button (manual-sync action + "Last synced
-  // X ago" label). PR 1 task 1.7 dropped them. Periodic auto-sync
-  // still runs from `useEffect` below.
-
   // Logging session lifecycle (session init, activity tracking, cleanup)
   const { initializeLogging, handlePrivacyAccept, handleLoggingEnabled, logGraphChange } =
     useLoggingSession({ chartId: currentChartId, graphData: data });
@@ -1130,11 +1125,8 @@ function ToCViewer() {
     };
   }, [handleUndo, handleRedo]); // Re-run when handlers change
 
-  // Delete chart handler. Identity-migrated from
-  // `EditToolbar.handleDeleteChart` — original lived inside the share
-  // dialog; it now lives at App-level so FileMenu (in TopBar) can call
-  // it without prop-drilling through TheoryOfChangeGraph.
-  //
+  // Delete chart handler. Lives at App-level so FileMenu (in TopBar)
+  // can call it without prop-drilling through TheoryOfChangeGraph.
   // Owner gating is enforced by the FileMenu (it doesn't render the
   // Delete item for non-owners); calling deleteChart without ownership
   // would 403 on the server.
@@ -1172,12 +1164,6 @@ function ToCViewer() {
     },
     [currentEditToken, currentChartId, isAuthenticated],
   );
-
-  // `copyGraphJSON` / `resetToOriginal` were the JsonDropdown's two
-  // affordances. The dropdown is gone (PR 1 task 1.5); FileMenu's
-  // Import → JSON and Export → JSON will land properly in PR 6 with
-  // dedicated download/upload flows, so the legacy clipboard-only
-  // helper is intentionally not preserved.
 
   // Add beforeunload warning for unsaved changes
   useEffect(() => {
@@ -1431,9 +1417,6 @@ function ToCViewer() {
     };
   }, [editToken, isSaving, authTokenReady]);
 
-  // The "time ago" display + forceUpdate ticker were tied to the old
-  // EditToolbar sync button. PR 1 task 1.7 dropped both.
-
   if (loading) {
     return (
       <div className="h-screen w-screen bg-white flex items-center justify-center">
@@ -1575,14 +1558,8 @@ function ToCViewer() {
 
   return (
     <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0">
-      {/* New TopBar (mounted parallel to the existing EditToolbar during
-        PR 1's identity-copy phase). Once Task 1.7 moves the residual
-        share dialog into <EditToolbarRemnant>, the old EditToolbar
-        component goes away entirely and this TopBar is the sole
-        chrome on top. */}
       <TopBar
         editMode={true}
-        setEditMode={() => {}}
         showEditButton={true}
         undoHistory={undoHistory}
         redoHistory={redoHistory}
@@ -1591,14 +1568,9 @@ function ToCViewer() {
         isSaving={isSaving}
         saveError={saveError}
         currentEditToken={currentEditToken}
-        data={data}
-        containerSize={containerSize}
-        onChartCreated={handleChartCreated}
         // Format-menu setters write through `handleDataChange` so the
         // canonical state lives in `data.*` (TheoryOfChangeGraph's
-        // initialData effect picks them up). The old EditToolbar still
-        // owns the separate-state copy for now; once it's deleted in
-        // Task 1.7 the data-side state is the only one.
+        // initialData effect picks them up).
         fontFamily={data.fontFamily ?? "'Ubuntu', sans-serif"}
         setFontFamily={(next) => handleDataChange({ ...data, fontFamily: next })}
         textSize={data.textSize ?? 1}
@@ -1613,11 +1585,11 @@ function ToCViewer() {
         isOwner={isOwner}
         currentChartId={currentChartId}
         onDeleteChart={handleDeleteChart}
-        // Share button: relay to the legacy EditToolbar's share dropdown
-        // via a CustomEvent. This is a short-lived bridge that ends when
-        // Task 1.7 moves the dialog into <EditToolbarRemnant> and we
-        // pass a direct handler instead.
+        // Share button: relays to <ShareDialogShim> inside
+        // <EditToolbarRemnant> via a CustomEvent. PR 2's redesigned
+        // ShareDialog will replace this bridge with a direct prop pair.
         onShareClick={() => window.dispatchEvent(new CustomEvent('toc:open-share'))}
+        profileSlot={<AuthButton onLoggingEnabled={handleLoggingEnabled} />}
       />
 
       {/* Left Sidebar - AI Assistant */}
@@ -1678,18 +1650,6 @@ function ToCViewer() {
         </div>
       </div>
 
-      {/* Auth Button - Top Right */}
-      <div
-        className="fixed"
-        style={{
-          top: '4rem',
-          right: '1rem',
-          zIndex: 9999,
-        }}
-      >
-        <AuthButton onLoggingEnabled={handleLoggingEnabled} />
-      </div>
-
       {/* Zoom Controls - Google Maps Style (hidden on mobile) */}
       <div
         className="fixed z-20 bg-white rounded-lg shadow-lg border border-gray-200 hidden md:block"
@@ -1723,14 +1683,14 @@ function ToCViewer() {
         </div>
       </div>
 
-      {/* JsonDropdown removed in PR 1 (plan §1.5 + failure-mode #9):
-        chrome at the bottom-left looked clickable but added no value
-        on top of the FileMenu Import/Export entries (wired in PR 6).
-        Helpers `copyGraphJSON` and `resetToOriginal` stay in App so
-        future FileMenu items can reach them without re-implementing. */}
-
       {/* Privacy Policy Popup */}
       <PrivacyPolicyPopup onAccept={handlePrivacyAccept} />
+
+      {/* View-mode walkthrough. Mounted here (editor route) and in
+        ToCViewerOnly so the HelpPanel "Replay tutorial" button re-arms
+        from either entrypoint. <GraphTutorial> self-gates on
+        localStorage('graph-tutorial-seen') and is invisible by default. */}
+      <GraphTutorial />
     </div>
   );
 }
