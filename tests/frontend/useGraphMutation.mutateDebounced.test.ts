@@ -195,3 +195,48 @@ describe('useGraphMutation.mutateDebounced', () => {
     }
   });
 });
+
+describe('useGraphMutation.discardBuffered', () => {
+  it('drops the buffered updater and clears the idle timer so no auto-commit fires', async () => {
+    // The `mutateDebounced` 200ms idle timer auto-commits any buffered
+    // key if neither `commit(key)` nor a follow-up `mutateDebounced`
+    // arrives. `discardBuffered(key)` is the "true cancel" surface: it
+    // clears the buffer entry and the idle timer so the live preview
+    // stays in-memory but no parent notify lands.
+    vi.useFakeTimers();
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+    act(() => {
+      result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.9 }), 'curvature');
+    });
+    // Live preview applied synchronously.
+    expect(result.current.data.curvature).toBe(0.9);
+
+    act(() => {
+      result.current.discardBuffered('curvature');
+    });
+
+    // Advance past the 200ms idle timer.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await vi.runAllTimersAsync();
+
+    // No parent notify was scheduled by either the discard or the idle
+    // timer.
+    expect(onDataChange).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('no-ops cleanly for an unknown key', () => {
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+    act(() => {
+      result.current.discardBuffered('never-buffered');
+    });
+
+    expect(onDataChange).not.toHaveBeenCalled();
+  });
+});

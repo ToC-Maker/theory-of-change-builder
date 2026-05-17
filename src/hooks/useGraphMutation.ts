@@ -117,6 +117,15 @@ export interface UseGraphMutationResult {
   mutate: (updater: GraphUpdater) => void;
   mutateDebounced: (updater: GraphUpdater, key: string) => void;
   commit: (key?: string) => void;
+  /**
+   * Drop the buffered updater for `key` WITHOUT scheduling a parent
+   * notify. Cancels the per-key idle timer that would otherwise
+   * auto-commit ~200ms after the last `mutateDebounced` call. Used by
+   * gesture hooks (waypoint Escape / pointercancel / second-pointer) to
+   * make cancel semantics true: the live-preview state remains in
+   * memory but no undo entry lands. No-op for unknown keys.
+   */
+  discardBuffered: (key: string) => void;
 }
 
 const applyUpdater = (prev: ToCData, updater: GraphUpdater): ToCData =>
@@ -259,6 +268,19 @@ export function useGraphMutation(
     [writeLocal, scheduleNotify],
   );
 
+  // Drop the buffered updater for `key` without scheduling a parent
+  // notify. Pairs with `mutateDebounced` for true-cancel semantics:
+  // live preview stays as-is (writeLocal was synchronous), but neither
+  // the explicit commit path nor the 200ms idle timer fires.
+  const discardBuffered = useCallback((key: string) => {
+    const timer = idleTimersRef.current.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      idleTimersRef.current.delete(key);
+    }
+    bufferedRef.current.delete(key);
+  }, []);
+
   // Cleanup: flip isMountedRef and clear pending timers. Pending
   // microtask still fires (microtasks aren't cancellable), but is gated
   // by `isMountedRef.current`.
@@ -290,5 +312,6 @@ export function useGraphMutation(
     mutate,
     mutateDebounced,
     commit,
+    discardBuffered,
   };
 }
