@@ -19,8 +19,6 @@ interface MDXEditorComponentProps {
   markdown: string;
   onChange?: (markdown: string) => void;
   placeholder?: string;
-  readOnly?: boolean;
-  simple?: boolean; // For title fields - no toolbar, minimal plugins
   fontFamily?: string;
 }
 
@@ -28,14 +26,11 @@ export function MDXEditorComponent({
   markdown,
   onChange,
   placeholder = 'Enter text...',
-  readOnly = false,
-  simple = false,
   fontFamily,
 }: MDXEditorComponentProps) {
   return (
     <div
-      className={`mdx-editor-wrapper ${simple ? 'simple' : ''}`}
-      data-readonly={readOnly}
+      className="mdx-editor-wrapper"
       style={{ fontFamily }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
@@ -44,38 +39,26 @@ export function MDXEditorComponent({
         markdown={markdown}
         onChange={onChange}
         placeholder={placeholder}
-        readOnly={readOnly}
         plugins={[
-          // Simple mode for titles - minimal plugins
-          ...(simple
-            ? []
-            : [
-                headingsPlugin(),
-                listsPlugin(),
-                quotePlugin(),
-                thematicBreakPlugin(),
-                linkPlugin(),
-              ]),
-          ...(readOnly || simple ? [] : [markdownShortcutPlugin()]),
-
-          // Toolbar with basic formatting (only if not read-only and not simple)
-          ...(readOnly || simple
-            ? []
-            : [
-                toolbarPlugin({
-                  toolbarContents: () => (
-                    <>
-                      <UndoRedo />
-                      <Separator />
-                      <BoldItalicUnderlineToggles />
-                      <Separator />
-                      <ListsToggle />
-                      <Separator />
-                      <BlockTypeSelect />
-                    </>
-                  ),
-                }),
-              ]),
+          headingsPlugin(),
+          listsPlugin(),
+          quotePlugin(),
+          thematicBreakPlugin(),
+          linkPlugin(),
+          markdownShortcutPlugin(),
+          toolbarPlugin({
+            toolbarContents: () => (
+              <>
+                <UndoRedo />
+                <Separator />
+                <BoldItalicUnderlineToggles />
+                <Separator />
+                <ListsToggle />
+                <Separator />
+                <BlockTypeSelect />
+              </>
+            ),
+          }),
         ]}
         contentEditableClassName="mdx-editor-content"
       />
@@ -100,19 +83,6 @@ export function MDXEditorComponent({
           min-height: 120px;
           text-align: left !important;
           font-family: inherit !important;
-        }
-
-        .mdx-editor-wrapper.simple .mdx-editor-content {
-          min-height: 40px;
-          font-size: 18px;
-          font-weight: 700;
-          color: #111827;
-          padding: 8px 12px;
-        }
-
-        /* Remove min-height for read-only mode - content should size naturally */
-        .mdx-editor-wrapper[data-readonly="true"] .mdx-editor-content {
-          min-height: auto;
         }
 
         .mdx-editor-content ul {

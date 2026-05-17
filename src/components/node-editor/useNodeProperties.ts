@@ -55,7 +55,7 @@
 // commitDetails()). This keeps the hook pure data and avoids surprising
 // double-commits when NodeEditor sub-components mount/unmount.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Dispatch, SetStateAction } from 'react';
+import type { SetStateAction } from 'react';
 import type { Node as GraphNode, ToCData } from '../../types';
 
 type GraphUpdater = SetStateAction<ToCData>;
@@ -88,13 +88,8 @@ export interface UseNodePropertiesResult {
   commitTitle: () => void;
   commitDetails: () => void;
   commitWidth: () => void;
-  commitColor: () => void;
   // Discrete delete action.
   deleteSelectedNodes: () => void;
-  // True iff any buffered key still has unflushed live state. Currently
-  // a coarse proxy — true while any setX has been called since the last
-  // selection change.
-  isDirty: boolean;
 }
 
 const DEFAULT_WIDTH = 192;
@@ -109,8 +104,13 @@ function findNodeById(data: ToCData, id: string): GraphNode | undefined {
 }
 
 /**
- * Stable, order-independent key for a selection. Switching from {a,b} to
- * {b,a} produces the same key, so the per-key idle buffer stays warm.
+ * Stable, order-independent key for a selection. One key per *selection*
+ * (sorted-joined), not per-node — multi-select with N nodes produces one
+ * key, not N, so the per-key buffer in `useGraphMutation` doesn't blow
+ * up. Trade-off: switching selection drops unflushed typing on the
+ * previous selection's local buffer (the live state still has it, via
+ * `mutateDebounced`, so typing isn't lost — only the local-buffer
+ * preview of the previous selection is dropped).
  */
 function selectionKey(ids: string[]): string {
   if (ids.length === 0) return 'none';
@@ -168,19 +168,17 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
   const width = selectedNodes[0]?.width ?? DEFAULT_WIDTH;
   const color = selectedNodes[0]?.color ?? DEFAULT_COLOR;
 
-  // Dirty bit: any setX since the last selection change. Cleared on
-  // commit*.
-  const [isDirty, setIsDirty] = useState(false);
-  useEffect(() => {
-    setIsDirty(false);
-  }, [selKey]);
-
   // ---------------------------------------------------------------
   // Setters
   // ---------------------------------------------------------------
 
-  // Build an updater that maps `mapper` over every selected node. This
-  // is the workhorse of every multi-selection write.
+  // Build an updater that maps `mapper` over every selected node.
+  //
+  // Invariant: every selected node receives the same mutation. Every
+  // setter below (single-emit `setColor`, streaming `setTitle` /
+  // `setWidth` / `setDetails`) routes through here, so changing this
+  // scope changes every property setter at once. Pair with
+  // `selectionKey` for stable per-selection idle buffering.
   const mapSelected = useCallback(
     (mapper: (node: GraphNode) => GraphNode) => {
       return (prev: ToCData): ToCData => ({
@@ -200,7 +198,6 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
   const setTitle = useCallback(
     (next: string) => {
       setTitleBuffer(next);
-      setIsDirty(true);
       mutateDebounced(
         mapSelected((node) => ({ ...node, title: next })),
         `title-${selKey}`,
@@ -212,7 +209,6 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
   const setDetails = useCallback(
     (next: string) => {
       setDetailsBuffer(next);
-      setIsDirty(true);
       mutateDebounced(
         mapSelected((node) => ({ ...node, text: next })),
         `details-${selKey}`,
@@ -223,7 +219,6 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
 
   const setWidth = useCallback(
     (next: number) => {
-      setIsDirty(true);
       mutateDebounced(
         mapSelected((node) => ({ ...node, width: next })),
         `width-${selKey}`,
@@ -234,7 +229,6 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
 
   const setColor = useCallback(
     (next: string) => {
-      setIsDirty(true);
       // Color is a single-emit picker, not a stream — use the discrete
       // `mutate` so the undo entry lands immediately.
       mutate(mapSelected((node) => ({ ...node, color: next })));
@@ -248,24 +242,15 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
 
   const commitTitle = useCallback(() => {
     commit(`title-${selKey}`);
-    setIsDirty(false);
   }, [commit, selKey]);
 
   const commitDetails = useCallback(() => {
     commit(`details-${selKey}`);
-    setIsDirty(false);
   }, [commit, selKey]);
 
   const commitWidth = useCallback(() => {
     commit(`width-${selKey}`);
-    setIsDirty(false);
   }, [commit, selKey]);
-
-  // color uses `mutate` directly, so there's no buffered key to flush.
-  // The commit is a no-op kept for symmetry / future use.
-  const commitColor = useCallback(() => {
-    setIsDirty(false);
-  }, []);
 
   const deleteSelectedNodes = useCallback(() => {
     if (selectedNodeIds.length === 0) return;
@@ -301,10 +286,6 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
     commitTitle,
     commitDetails,
     commitWidth,
-    commitColor,
     deleteSelectedNodes,
-    isDirty,
   };
 }
-
-export type { Dispatch, SetStateAction };
