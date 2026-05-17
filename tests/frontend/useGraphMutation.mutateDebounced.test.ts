@@ -135,4 +135,63 @@ describe('useGraphMutation.mutateDebounced', () => {
     expect(emitted?.curvature).toBe(0.9);
     expect(emitted?.textSize).toBe(2);
   });
+
+  it('idle-commits the buffered key after 200ms with no further calls', async () => {
+    // Load-bearing for layout-setting sliders (curvature, textSize,
+    // paddings) in PR 0: they call mutateDebounced but do NOT wire
+    // pointerup -> commit. The hook's 200ms idle timer is the only
+    // mechanism that ships the buffered updater to the parent. If it
+    // breaks, slider changes never persist.
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.9 }), 'curvature');
+      });
+      expect(onDataChange).not.toHaveBeenCalled();
+
+      // Advance just past the 200ms idle window.
+      await act(async () => {
+        vi.advanceTimersByTime(200);
+        // Drain the queued microtask that scheduleNotify posts.
+        await Promise.resolve();
+      });
+
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+      expect(onDataChange.mock.calls[0]?.[0].curvature).toBe(0.9);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('explicit commit clears the idle timer (no double-fire)', async () => {
+    // Subtle bug class: if commit('key') schedules the notify but forgets
+    // to clear the buffered key's idle timer, the timer fires 200ms
+    // later and produces a second notify with the same value.
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.9 }), 'curvature');
+      });
+      await act(async () => {
+        result.current.commit('curvature');
+        await Promise.resolve();
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+
+      // Past where the idle timer WOULD have fired.
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        await Promise.resolve();
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
