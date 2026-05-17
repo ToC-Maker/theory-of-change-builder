@@ -185,7 +185,14 @@ export function NodeEditor(props: NodeEditorProps) {
         <span className="text-xs font-semibold text-gray-700">{headerText}</span>
         <button
           type="button"
-          onClick={() => props_.deleteSelectedNodes()}
+          onClick={() => {
+            // Match EdgeEditor.handleDelete: clear the selection alongside
+            // the data delete so the editor doesn't re-render anchored to
+            // the now-detached node ref. The keyboard-delete path in
+            // `useKeyboardShortcuts` does the same.
+            props_.deleteSelectedNodes();
+            onRequestClose();
+          }}
           className="p-1 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
           title={selectedNodeIds.length === 1 ? 'Delete node' : 'Delete nodes'}
           aria-label={selectedNodeIds.length === 1 ? 'Delete node' : 'Delete nodes'}
