@@ -80,6 +80,12 @@ export function ToC({
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null;
   }>({});
+  // Ref mirror of `nodeRefs` for the drag-handler hot path (read-only).
+  // Reading via a ref keeps `handleDragStart`'s useCallback dep list
+  // stable across node mount/unmount churn (a `useState`-keyed dep
+  // mutates on every ref-callback fire, invalidating React.memo on
+  // every node and defeating Task 0.4's bail-out work).
+  const nodeRefsRef = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [nodeHeights, setNodeHeights] = useState<{
     [key: string]: number;
   }>({});
@@ -123,6 +129,7 @@ export function ToC({
   const graphContainerRef = useRef<HTMLDivElement>(null);
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
+    nodeRefsRef.current[id] = ref;
     setNodeRefs((prev) => ({ ...prev, [id]: ref }));
 
     // Update height when ref changes - use offsetHeight for local (pre-transform) height
@@ -540,8 +547,10 @@ export function ToC({
   }, [editMode, setDataAndNotify, nodeHeights]);
 
   // useCallback so React.memo(NodeComponent) can bail out on drag handler
-  // identity. Both setters are stable (useState dispatch); deps are
-  // editMode + zoomScale + nodeRefs (mutates as nodes mount/unmount).
+  // identity. Reads `nodeRefsRef.current[node.id]` instead of the
+  // `nodeRefs` state so node mount/unmount doesn't churn this callback's
+  // identity (which would invalidate the React.memo bail-out on every
+  // remaining node — defeating Task 0.4's whole point).
   const handleDragStart = useCallback(
     (node: Node, event: React.DragEvent) => {
       if (!editMode) {
@@ -552,7 +561,7 @@ export function ToC({
       setDraggedNode(node);
 
       // Calculate the offset from where the user clicked to the top of the node
-      const nodeElement = nodeRefs[node.id];
+      const nodeElement = nodeRefsRef.current[node.id];
       if (nodeElement) {
         const rect = nodeElement.getBoundingClientRect();
         const offsetX = event.clientX - rect.left;
@@ -589,7 +598,7 @@ export function ToC({
         });
       }
     },
-    [editMode, nodeRefs, zoomScale],
+    [editMode, zoomScale],
   );
 
   const handleDragEnd = useCallback(() => {
