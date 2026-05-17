@@ -656,6 +656,10 @@ function ToCViewer() {
   // PR 2 §769: notification badge for the Share button. Polled at the
   // App level so it stays visible even when the dialog is closed.
   const [pendingRequestCount, setPendingRequestCount] = useState(0);
+  // True when the pending-request poll has been failing for >=2
+  // consecutive attempts. Drives a stale visual on the badge so the
+  // owner has a cue that the count may be lagging behind reality.
+  const [pendingRequestCountStale, setPendingRequestCountStale] = useState(false);
 
   // Calculate viewport offset based on sidebar state
   const viewportOffset = useMemo(
@@ -1203,23 +1207,49 @@ function ToCViewer() {
   // "the actual correctness guarantee"). Resets to 0 when the chart or
   // owner-status changes so a flip from owner -> non-owner doesn't
   // leave a stale badge.
+  //
+  // Failure handling: a transient 5xx / 401 (Auth0 silent refresh /
+  // Neon cold start) used to be silently swallowed, leaving the badge
+  // frozen at its last-known-good value. We now flag the badge as
+  // stale after >=2 consecutive failures and report to
+  // `loggingService.reportError` so the operator has a signal. The
+  // count itself is preserved (better to show a stale 3 than a fresh 0)
+  // and resets to non-stale on the next successful poll.
   useEffect(() => {
     if (!currentChartId || !isAuthenticated || !isOwner) {
       setPendingRequestCount(0);
+      setPendingRequestCountStale(false);
       return;
     }
 
     let cancelled = false;
+    let consecutiveFailures = 0;
+    let reported = false;
     const fetchPending = async () => {
       try {
         const result = await ChartService.getChartPermissions(currentChartId);
         if (cancelled) return;
-        const rows = Array.isArray(result)
-          ? (result as { status?: string }[])
-          : (result.permissions as { status?: string }[]);
-        setPendingRequestCount(rows.filter((p) => p.status === 'pending').length);
+        setPendingRequestCount(result.permissions.filter((p) => p.status === 'pending').length);
+        consecutiveFailures = 0;
+        reported = false;
+        setPendingRequestCountStale(false);
       } catch (err) {
-        if (!cancelled) console.error('[App] pending-request poll failed:', err);
+        if (cancelled) return;
+        consecutiveFailures += 1;
+        console.error('[App] pending-request poll failed:', err);
+        if (consecutiveFailures >= 2) {
+          setPendingRequestCountStale(true);
+          // Report once per failure streak so we don't flood
+          // logging_errors during a multi-hour outage.
+          if (!reported) {
+            reported = true;
+            loggingService.reportError({
+              error_name: 'PendingRequestPollFailed',
+              error_message: err instanceof Error ? err.message : String(err),
+              chart_id: currentChartId,
+            });
+          }
+        }
       }
     };
     void fetchPending();
@@ -1635,6 +1665,7 @@ function ToCViewer() {
         // EditToolbarRemnant.ShareDialogShim, which has been deleted.
         onShareClick={() => setShareOpen(true)}
         pendingRequestCount={pendingRequestCount}
+        pendingRequestCountStale={pendingRequestCountStale}
         profileSlot={<AuthButton onLoggingEnabled={handleLoggingEnabled} />}
       />
 
