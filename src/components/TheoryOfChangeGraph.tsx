@@ -228,7 +228,7 @@ export function ToC({
     setData(initialData);
     // Recalculate node heights when data changes (e.g., from AI edits)
     recalculateAllNodeHeights();
-  }, [initialData, recalculateAllNodeHeights]);
+  }, [initialData, recalculateAllNodeHeights, setData]);
 
   // Update settings when data changes
   useEffect(() => {
