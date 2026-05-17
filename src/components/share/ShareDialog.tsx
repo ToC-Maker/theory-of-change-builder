@@ -16,10 +16,19 @@
 //   - Embed code is hidden when `linkSharingLevel === 'restricted'`.
 //   - Permissions list is inline (no collapse toggle).
 //
-// L1 mitigation: this dialog wires `usePermissionsRefresh` so opening
-// it always fetches the freshest `linkSharingLevel`, and a banner
-// surfaces if the server's state diverges from local state (e.g. a
-// sibling tab toggled the mode).
+// State ownership (PR 2 fix-pass):
+//   - App.tsx owns `permissions`, `linkSharingLevel`, `permissionsLoading`,
+//     and `permissionsFetchError`. It polls every 30s and reacts to
+//     cross-tab storage events. ShareDialog is a presentational consumer.
+//   - Write handlers (approve/reject/remove/updateLevel/updateLinkSharing)
+//     call ChartService directly, then call `onPermissionsChanged()` so
+//     App refetches.
+//   - `linkSharingLevel` writes go through `onOptimisticLinkSharingLevel`
+//     so the App-level state updates immediately; on failure ShareDialog
+//     rolls back via the same channel.
+//   - Divergence banner: when the prop level changes to something other
+//     than what we last acknowledged AND no local write is in flight —
+//     i.e. a sibling tab flipped it — surface the banner until acked.
 //
 // L6 mitigation: `LinkCopyRow` for the edit variant renders "Anyone
 // with this link can edit" subtext only when mode is 'editor'.
@@ -34,7 +43,6 @@ import { ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ChartService, type CreateChartResponse } from '../../services/chartService';
 import type { Permission, LinkSharingLevel } from '../../../shared/permissions';
 import type { ToCData } from '../../types';
-import { usePermissionsRefresh } from '../../hooks/usePermissionsRefresh';
 import { GeneralAccessSelector } from './GeneralAccessSelector';
 import { LinkCopyRow } from './LinkCopyRow';
 import { PermissionsList } from './PermissionsList';
@@ -47,6 +55,23 @@ export interface ShareDialogProps {
   /** Width/height for the embed iframe aspect ratio. */
   containerSize?: { width: number; height: number };
   onChartCreated?: (token: string, chartId: string) => void;
+  /** App-owned permissions array (single source of truth). */
+  permissions: Permission[];
+  /** App-owned current link-sharing level (single source of truth). */
+  linkSharingLevel: LinkSharingLevel;
+  /** True while App is fetching permissions; surfaces loading UI. */
+  permissionsLoading: boolean;
+  /** Last permissions-fetch error, if any (surfaced as a warning banner). */
+  permissionsFetchError: string | null;
+  /** Tell App to refetch permissions (e.g. after a write). */
+  onPermissionsChanged: () => Promise<void> | void;
+  /**
+   * Optimistic-update channel: ShareDialog calls this with the next
+   * level *before* the network write resolves so the App-level state
+   * updates instantly. On success the next poll confirms; on failure
+   * ShareDialog calls this again with the previous level to roll back.
+   */
+  onOptimisticLinkSharingLevel: (level: LinkSharingLevel) => void;
 }
 
 const STORAGE_PING_KEY = 'toc:permissions';
@@ -58,6 +83,12 @@ export function ShareDialog({
   currentEditToken,
   containerSize,
   onChartCreated,
+  permissions,
+  linkSharingLevel,
+  permissionsLoading,
+  permissionsFetchError,
+  onPermissionsChanged,
+  onOptimisticLinkSharingLevel,
 }: ShareDialogProps) {
   const { user, isAuthenticated } = useAuth0();
   const navigate = useNavigate();
@@ -66,16 +97,22 @@ export function ShareDialog({
   const [shareLoading, setShareLoading] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [isOwner, setIsOwner] = useState(false);
-  const [permissions, setPermissions] = useState<Permission[]>([]);
   const [permissionError, setPermissionError] = useState<string | null>(null);
-  const [loadingPermissions, setLoadingPermissions] = useState(false);
-  const [linkSharingLevel, setLinkSharingLevel] = useState<LinkSharingLevel>('restricted');
   const [showEmbed, setShowEmbed] = useState(false);
   const [copiedEmbed, setCopiedEmbed] = useState(false);
   // Divergence-banner acknowledgement. Reset whenever the dialog opens
   // or a fresh divergence is observed; cleared by the user clicking
-  // "Got it" (which also folds serverLevel into linkSharingLevel).
+  // "Got it".
   const [bannerAcked, setBannerAcked] = useState(false);
+
+  // Track the last level we believe both sides agree on. When the prop
+  // moves to something different and no write is in flight, that's a
+  // genuine cross-tab divergence to surface.
+  const ackedLevelRef = useRef<LinkSharingLevel>(linkSharingLevel);
+  // True from `onOptimisticLinkSharingLevel` call until the write
+  // resolves. Prop changes during this window are assumed to be the
+  // App's confirmation of our write, not a sibling-tab change.
+  const writeInFlightRef = useRef(false);
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -165,114 +202,61 @@ export function ShareDialog({
     }
   }, [open, shareData, shareLoading, currentEditToken, loadExistingShareData, createNewChart]);
 
-  // `loadPermissions` owns the initial-load + 30s polling fetch. It
-  // folds the server's `linkSharingLevel` into local state so the UI
-  // reflects the latest on initial load, and refreshes the permissions
-  // array. Called by the polling effect and from each write handler
-  // (approve / reject / updateLevel / remove).
-  const loadPermissions = useCallback(async () => {
-    if (!shareData?.chartId || !isAuthenticated || !isOwner) return;
-    setLoadingPermissions(true);
-    setPermissionError(null);
-    try {
-      const result = await ChartService.getChartPermissions(shareData.chartId);
-      setPermissions(result.permissions);
-      if (result.linkSharingLevel) {
-        setLinkSharingLevel(result.linkSharingLevel);
-      }
-    } catch (err) {
-      setPermissionError(err instanceof Error ? err.message : 'Failed to load permissions');
-    } finally {
-      setLoadingPermissions(false);
-    }
-  }, [shareData?.chartId, isAuthenticated, isOwner]);
-
-  // L1 mitigation: refresh on dialog open + cross-tab storage event.
-  // The hook tracks `serverLevel` separately from `linkSharingLevel`
-  // so it can flag divergence (server changed under our feet, e.g.
-  // another tab flipped the mode). We ride along on the shared
-  // round-trip by also updating the `permissions` array here, so the
-  // 30s `loadPermissions` poll and the storage-event refresh don't
-  // each fetch independently. If this dual responsibility grows,
-  // factor both into a `useChartPermissions(chartId)` hook.
-  const fetchPermissionsLevel = useCallback(async (chartId: string) => {
-    const result = await ChartService.getChartPermissions(chartId);
-    setPermissions(result.permissions);
-    return { linkSharingLevel: result.linkSharingLevel };
-  }, []);
-
-  const { serverLevel, divergedFromLocal, fetchError } = usePermissionsRefresh({
-    open,
-    chartId: shareData?.chartId ?? null,
-    localLevel: linkSharingLevel,
-    fetcher: fetchPermissionsLevel,
-  });
-
-  // Reset the banner-ack flag each time the dialog opens, so a fresh
-  // open always shows a fresh divergence banner if one is observed.
+  // Reset the banner-ack flag each time the dialog opens, and snapshot
+  // the prop as the acked baseline. We only want to surface divergence
+  // observed *while* the dialog is open.
   useEffect(() => {
-    if (open) setBannerAcked(false);
+    if (open) {
+      setBannerAcked(false);
+      ackedLevelRef.current = linkSharingLevel;
+    }
+    // Snapshot-on-open only. Re-running on prop changes would erase
+    // a genuine divergence before the user sees it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Reset the ack flag whenever a *new* divergence is observed (i.e.
-  // serverLevel changed under our feet after a previous ack). Without
-  // this, a second cross-tab change after an ack would be invisible.
-  const prevServerLevelRef = useRef<LinkSharingLevel | null>(null);
+  // Detect divergence: when the prop level changes to something other
+  // than what we last acknowledged AND no local write is in flight,
+  // unack the banner.
   useEffect(() => {
-    if (serverLevel && serverLevel !== prevServerLevelRef.current) {
-      prevServerLevelRef.current = serverLevel;
-      if (serverLevel !== linkSharingLevel) {
-        setBannerAcked(false);
-      }
+    if (writeInFlightRef.current) return;
+    if (linkSharingLevel !== ackedLevelRef.current) {
+      setBannerAcked(false);
     }
-  }, [serverLevel, linkSharingLevel]);
+  }, [linkSharingLevel]);
 
-  // Show the banner only when (a) the hook reports divergence and
-  // (b) the user has not yet acked it. The fold from serverLevel into
-  // linkSharingLevel intentionally does NOT happen automatically — it
-  // happens when the user clicks "Got it", which both clears the banner
-  // and adopts the server's level. This guarantees the banner is
-  // visible for at least one user interaction (previously, an auto-fold
-  // raced the banner away in ~16ms).
-  const showDivergenceBanner = divergedFromLocal && !bannerAcked;
+  const showDivergenceBanner =
+    !writeInFlightRef.current && linkSharingLevel !== ackedLevelRef.current && !bannerAcked;
 
   const handleAcknowledgeDivergence = () => {
-    if (serverLevel) {
-      setLinkSharingLevel(serverLevel);
-    }
+    ackedLevelRef.current = linkSharingLevel;
     setBannerAcked(true);
   };
-
-  // Permissions polling — owner-gated, kicks off on first owner-confirmed
-  // load and refreshes every 30s (the actual correctness guarantee per
-  // the L1 doc comment in usePermissionsRefresh.ts).
-  useEffect(() => {
-    if (!open || !shareData?.chartId || !isAuthenticated || !isOwner) return;
-    void loadPermissions();
-    const interval = setInterval(() => {
-      void loadPermissions();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [open, shareData?.chartId, isAuthenticated, isOwner, loadPermissions]);
 
   const handleUpdateLinkSharing = async (newLevel: LinkSharingLevel) => {
     if (!shareData?.chartId || !isAuthenticated) return;
     setPermissionError(null);
     const previousLevel = linkSharingLevel;
-    setLinkSharingLevel(newLevel);
+    writeInFlightRef.current = true;
+    onOptimisticLinkSharingLevel(newLevel);
+    ackedLevelRef.current = newLevel;
     try {
       await ChartService.updateLinkSharing(shareData.chartId, newLevel);
       // Sibling-tab signal: bumping a sentinel key fires the `storage`
-      // event in other tabs, which kicks their usePermissionsRefresh.
+      // event in other tabs, which kicks App's usePermissionsRefresh.
       try {
         localStorage.setItem(STORAGE_PING_KEY, String(Date.now()));
       } catch {
         // localStorage may be unavailable (privacy mode, quota); the
         // 30s poll catches the divergence regardless.
       }
+      await onPermissionsChanged();
     } catch (err) {
-      setLinkSharingLevel(previousLevel);
+      onOptimisticLinkSharingLevel(previousLevel);
+      ackedLevelRef.current = previousLevel;
       setPermissionError(err instanceof Error ? err.message : 'Failed to update link sharing');
+    } finally {
+      writeInFlightRef.current = false;
     }
   };
 
@@ -281,7 +265,7 @@ export function ShareDialog({
     setPermissionError(null);
     try {
       await ChartService.approveAccessRequest(shareData.chartId, targetUserId);
-      await loadPermissions();
+      await onPermissionsChanged();
     } catch (err) {
       setPermissionError(err instanceof Error ? err.message : 'Failed to approve access');
     }
@@ -292,7 +276,7 @@ export function ShareDialog({
     setPermissionError(null);
     try {
       await ChartService.rejectAccessRequest(shareData.chartId, targetUserId);
-      await loadPermissions();
+      await onPermissionsChanged();
     } catch (err) {
       setPermissionError(err instanceof Error ? err.message : 'Failed to reject access');
     }
@@ -303,7 +287,7 @@ export function ShareDialog({
     setPermissionError(null);
     try {
       await ChartService.removePermission(shareData.chartId, targetUserId);
-      await loadPermissions();
+      await onPermissionsChanged();
     } catch (err) {
       setPermissionError(err instanceof Error ? err.message : 'Failed to remove permission');
     }
@@ -314,7 +298,7 @@ export function ShareDialog({
     setPermissionError(null);
     try {
       await ChartService.updatePermissionLevel(shareData.chartId, targetUserId, level);
-      await loadPermissions();
+      await onPermissionsChanged();
     } catch (err) {
       setPermissionError(err instanceof Error ? err.message : 'Failed to update permission');
     }
@@ -394,10 +378,7 @@ export function ShareDialog({
           {shareData && (
             <>
               {/* L1 divergence banner — server changed under our feet.
-                  Persists until the user clicks "Got it", which folds
-                  the server's level into local state. Previously the
-                  banner self-erased within one render due to an
-                  auto-fold effect that raced its own render. */}
+                  Persists until the user clicks "Got it". */}
               {showDivergenceBanner && (
                 <div
                   role="status"
@@ -414,12 +395,12 @@ export function ShareDialog({
                 </div>
               )}
 
-              {/* L1 fetch-error banner — the refresh hook couldn't verify
-                  the server's current sharing level (transient 401 during
-                  Auth0 silent refresh, 5xx blip, offline). Surfacing it
-                  prevents the divergence mitigation from silently
-                  no-op'ing on first failure. */}
-              {fetchError && (
+              {/* L1 fetch-error banner — the App-level poller couldn't
+                  verify the server's current sharing level (transient
+                  401 during Auth0 silent refresh, 5xx blip, offline).
+                  Surfacing it prevents the divergence mitigation from
+                  silently no-op'ing on first failure. */}
+              {permissionsFetchError && (
                 <div
                   role="status"
                   className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2"
@@ -543,7 +524,7 @@ export function ShareDialog({
                     onRemove={(id) => void handleRemove(id)}
                     onUpdateLevel={(id, level) => void handleUpdateLevel(id, level)}
                     errorMessage={permissionError}
-                    loading={loadingPermissions}
+                    loading={permissionsLoading}
                   />
                 </section>
               )}

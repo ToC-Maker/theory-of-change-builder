@@ -23,10 +23,12 @@ import { TopBar } from './components/top-bar/TopBar';
 import { validateToCShape } from './utils/validateToCShape';
 import type { SaveError } from './components/top-bar/SaveIndicator';
 import { ShareDialog } from './components/share/ShareDialog';
+import { usePermissionsRefresh } from './hooks/usePermissionsRefresh';
 import { getFreshIdToken } from './utils/auth';
 import { isInputFocused } from './utils/isInputFocused';
 import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
+import type { Permission, LinkSharingLevel } from '../shared/permissions';
 import './App.css';
 
 // Helper: map a thrown error from a save attempt into the SaveIndicator
@@ -667,13 +669,27 @@ function ToCViewer() {
   // button can flip it directly (no CustomEvent bridge through the old
   // EditToolbar — its share-dialog block went away with PR 2).
   const [shareOpen, setShareOpen] = useState(false);
-  // PR 2 §769: notification badge for the Share button. Polled at the
-  // App level so it stays visible even when the dialog is closed.
-  const [pendingRequestCount, setPendingRequestCount] = useState(0);
-  // True when the pending-request poll has been failing for >=2
-  // consecutive attempts. Drives a stale visual on the badge so the
-  // owner has a cue that the count may be lagging behind reality.
+  // Single owner for chart permissions. Previously: ShareDialog's
+  // `loadPermissions` (own 30s poll), `usePermissionsRefresh` (own
+  // storage-event fetch), and App's pending-request badge poll were
+  // three independent callers of `getChartPermissions(chartId)` on
+  // the same chart. Collapsed here: App polls every 30s + invalidates
+  // on cross-tab `storage` events; ShareDialog reads via props.
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [linkSharingLevel, setLinkSharingLevel] = useState<LinkSharingLevel>('restricted');
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [permissionsFetchError, setPermissionsFetchError] = useState<string | null>(null);
+  // True when the permissions poll has been failing for >=2
+  // consecutive attempts. Drives a stale visual on the Share-button
+  // badge (count may lag reality) and lets the ShareDialog surface
+  // the same warning as before.
   const [pendingRequestCountStale, setPendingRequestCountStale] = useState(false);
+  // Derived counter for the TopBar Share badge. Pulled out of state
+  // (was duplicated) — recomputed on every render from `permissions`.
+  const pendingRequestCount = useMemo(
+    () => permissions.filter((p) => p.status === 'pending').length,
+    [permissions],
+  );
 
   // PR 4: 30s sync poll pauses while a pointer-drag is in flight.
   // `ToC.onDragActiveChange` toggles this ref; `syncData` reads it and
@@ -1225,13 +1241,13 @@ function ToCViewer() {
     currentEditTokenRef.current = currentEditToken;
   }, [currentEditToken]);
 
-  // PR 2: pending-request badge poll. Owner-gated; the chart_permissions
-  // endpoint 403s for non-owners so guarding by `isOwner` keeps the
-  // console clean. The 30s cadence matches the legacy ShareDialogShim
-  // poll cadence (the L1 doc in `usePermissionsRefresh.ts` calls 30s
-  // "the actual correctness guarantee"). Resets to 0 when the chart or
-  // owner-status changes so a flip from owner -> non-owner doesn't
-  // leave a stale badge.
+  // PR 2 fix-pass: single permissions poll. Replaces three overlapping
+  // callers (ShareDialog's `loadPermissions`, `usePermissionsRefresh`,
+  // and the standalone pending-badge poll). Owner-gated; the
+  // chart_permissions endpoint 403s for non-owners so guarding by
+  // `isOwner` keeps the console clean. 30s cadence is the L1 race
+  // correctness guarantee. Resets on chart / owner-status change so a
+  // flip from owner -> non-owner doesn't leave a stale badge.
   //
   // Failure handling: a transient 5xx / 401 (Auth0 silent refresh /
   // Neon cold start) used to be silently swallowed, leaving the badge
@@ -1240,50 +1256,69 @@ function ToCViewer() {
   // `loggingService.reportError` so the operator has a signal. The
   // count itself is preserved (better to show a stale 3 than a fresh 0)
   // and resets to non-stale on the next successful poll.
+  //
+  // Consecutive-failure counter for the polling closure. Stable across
+  // re-renders so the effect re-runs only on chart / auth changes, not
+  // on every fetch outcome. We report once per streak by checking
+  // `=== 2` on the increment side (the boundary where we first hit
+  // stale); subsequent failures bump the counter without re-reporting.
+  const permissionsFailuresRef = useRef(0);
+  const fetchPermissions = useCallback(async () => {
+    if (!currentChartId || !isAuthenticated || !isOwner) return;
+    setPermissionsLoading(true);
+    try {
+      const result = await ChartService.getChartPermissions(currentChartId);
+      setPermissions(result.permissions);
+      if (result.linkSharingLevel) {
+        setLinkSharingLevel(result.linkSharingLevel);
+      }
+      permissionsFailuresRef.current = 0;
+      setPermissionsFetchError(null);
+      setPendingRequestCountStale(false);
+    } catch (err) {
+      permissionsFailuresRef.current += 1;
+      console.error('[App] permissions poll failed:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      setPermissionsFetchError(message);
+      if (permissionsFailuresRef.current >= 2) {
+        setPendingRequestCountStale(true);
+      }
+      // Report exactly once per streak (at the boundary where we
+      // first hit stale) so we don't flood logging_errors during a
+      // multi-hour outage.
+      if (permissionsFailuresRef.current === 2) {
+        loggingService.reportError({
+          error_name: 'PermissionsPollFailed',
+          error_message: message,
+          chart_id: currentChartId,
+        });
+      }
+    } finally {
+      setPermissionsLoading(false);
+    }
+  }, [currentChartId, isAuthenticated, isOwner]);
+
   useEffect(() => {
     if (!currentChartId || !isAuthenticated || !isOwner) {
-      setPendingRequestCount(0);
+      setPermissions([]);
+      setLinkSharingLevel('restricted');
+      setPermissionsFetchError(null);
       setPendingRequestCountStale(false);
+      permissionsFailuresRef.current = 0;
       return;
     }
+    void fetchPermissions();
+    const interval = setInterval(() => void fetchPermissions(), 30_000);
+    return () => clearInterval(interval);
+  }, [currentChartId, isAuthenticated, isOwner, fetchPermissions]);
 
-    let cancelled = false;
-    let consecutiveFailures = 0;
-    let reported = false;
-    const fetchPending = async () => {
-      try {
-        const result = await ChartService.getChartPermissions(currentChartId);
-        if (cancelled) return;
-        setPendingRequestCount(result.permissions.filter((p) => p.status === 'pending').length);
-        consecutiveFailures = 0;
-        reported = false;
-        setPendingRequestCountStale(false);
-      } catch (err) {
-        if (cancelled) return;
-        consecutiveFailures += 1;
-        console.error('[App] pending-request poll failed:', err);
-        if (consecutiveFailures >= 2) {
-          setPendingRequestCountStale(true);
-          // Report once per failure streak so we don't flood
-          // logging_errors during a multi-hour outage.
-          if (!reported) {
-            reported = true;
-            loggingService.reportError({
-              error_name: 'PendingRequestPollFailed',
-              error_message: err instanceof Error ? err.message : String(err),
-              chart_id: currentChartId,
-            });
-          }
-        }
-      }
-    };
-    void fetchPending();
-    const interval = setInterval(() => void fetchPending(), 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [currentChartId, isAuthenticated, isOwner]);
+  // Cross-tab nudge: when a sibling tab writes a sentinel key (e.g.
+  // after `updateLinkSharing` in ShareDialog), refetch immediately
+  // rather than waiting up to 30s for the poll.
+  usePermissionsRefresh({
+    enabled: Boolean(currentChartId && isAuthenticated && isOwner),
+    onInvalidate: () => void fetchPermissions(),
+  });
 
   // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
@@ -1713,6 +1748,12 @@ function ToCViewer() {
         currentEditToken={currentEditToken}
         containerSize={containerSize}
         onChartCreated={handleChartCreated}
+        permissions={permissions}
+        linkSharingLevel={linkSharingLevel}
+        permissionsLoading={permissionsLoading}
+        permissionsFetchError={permissionsFetchError}
+        onPermissionsChanged={fetchPermissions}
+        onOptimisticLinkSharingLevel={setLinkSharingLevel}
       />
 
       {/* Left Sidebar - AI Assistant */}

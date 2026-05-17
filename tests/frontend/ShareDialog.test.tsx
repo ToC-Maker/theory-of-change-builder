@@ -1,29 +1,34 @@
 // Integration tests for ShareDialog — the redesigned share modal.
 //
-// These tests stub ChartService (no real network) and Auth0 (no real
-// session) so the dialog can be exercised end-to-end in jsdom. The
-// assertions are layered:
+// As of the App-owns-permissions refactor, ShareDialog is a
+// presentational consumer: it receives `permissions`,
+// `linkSharingLevel`, `permissionsLoading`, and
+// `permissionsFetchError` as props. It still owns the chart-create
+// bootstrap (`getChartByEditToken` / `createChart`) and the
+// optimistic-update + rollback flow for `updateLinkSharing`. These
+// tests cover:
 //   - Layout: header, 3-mode selector, two LinkCopyRows, conditional
 //     embed expander, inline PermissionsList for owners.
 //   - Restricted gate: embed expander hidden when level=restricted.
 //   - Wiring: clicking "Anyone can edit" calls
-//     ChartService.updateLinkSharing(chartId, 'editor').
-//   - Rollback: a rejected updateLinkSharing rolls back to the previous
-//     level and surfaces the error.
+//     ChartService.updateLinkSharing(chartId, 'editor') and bumps the
+//     parent's level via `onOptimisticLinkSharingLevel`.
+//   - Rollback: a rejected updateLinkSharing rolls back the optimistic
+//     level via the same channel and surfaces the error.
 //   - Confirm cancel: when window.confirm returns false, the dialog
 //     does NOT call updateLinkSharing and the local level is unchanged.
 //   - Divergence banner: persists until the user acknowledges it
 //     (regression for the one-frame banner-flash bug).
 //
-// Note on chartService mock — we replace the static methods on the
-// imported class directly, which is simpler than module-level mocking
-// for one-off integration tests. Each test resets the mocks in afterEach.
+// chartService is stubbed via per-test spies (no real network). Each
+// test resets mocks in afterEach.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ChartService } from '../../src/services/chartService';
-import { ShareDialog } from '../../src/components/share/ShareDialog';
+import { ShareDialog, type ShareDialogProps } from '../../src/components/share/ShareDialog';
+import type { Permission, LinkSharingLevel } from '../../shared/permissions';
 
 // Auth0 stub. We only need useAuth0().{user, isAuthenticated, isLoading}
 // for ShareDialog; we don't exercise the Auth0Provider lifecycle.
@@ -35,13 +40,27 @@ vi.mock('@auth0/auth0-react', () => ({
   }),
 }));
 
-const baseProps = {
+const ownerRow: Permission = {
+  user_id: 'auth0|abc',
+  user_email: 'owner@example.test',
+  permission_level: 'owner',
+  granted_at: '2026-01-01',
+  granted_by: 'auth0|abc',
+};
+
+const baseProps: ShareDialogProps = {
   open: true,
   onClose: vi.fn(),
   data: { sections: [], title: 'My ToC' } as never,
   currentEditToken: 'tok-abc' as string | null,
   containerSize: { width: 1024, height: 768 },
   onChartCreated: vi.fn(),
+  permissions: [ownerRow],
+  linkSharingLevel: 'restricted',
+  permissionsLoading: false,
+  permissionsFetchError: null,
+  onPermissionsChanged: vi.fn(),
+  onOptimisticLinkSharingLevel: vi.fn(),
 };
 
 beforeEach(() => {
@@ -50,27 +69,6 @@ beforeEach(() => {
     chartData: { sections: [] } as never,
     canEdit: true,
     isOwner: true,
-  });
-  vi.spyOn(ChartService, 'getChartPermissions').mockResolvedValue({
-    permissions: [
-      {
-        user_id: 'auth0|abc',
-        user_email: 'owner@example.test',
-        permission_level: 'owner',
-        granted_at: '2026-01-01',
-        granted_by: 'auth0|abc',
-      },
-      {
-        user_id: 'auth0|pending',
-        user_email: 'alice@example.test',
-        permission_level: 'edit',
-        granted_at: '2026-01-02',
-        granted_by: 'auth0|abc',
-        // chartService's response shape doesn't expose status in the
-        // typed interface but the runtime does — cast through any.
-      } as never,
-    ],
-    linkSharingLevel: 'restricted',
   });
   vi.spyOn(ChartService, 'updateLinkSharing').mockResolvedValue(undefined);
 });
@@ -81,7 +79,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const renderDialog = (props: Partial<typeof baseProps> = {}) =>
+const renderDialog = (props: Partial<ShareDialogProps> = {}) =>
   render(
     <MemoryRouter>
       <ShareDialog {...baseProps} {...props} />
@@ -122,22 +120,8 @@ describe('ShareDialog', () => {
     expect(screen.queryByText(/embed code/i)).toBeNull();
   });
 
-  it('shows the embed expander when mode flips to viewer or editor', async () => {
-    // Boot with mode=viewer from the server.
-    (ChartService.getChartPermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
-      permissions: [
-        {
-          user_id: 'auth0|abc',
-          user_email: 'owner@example.test',
-          permission_level: 'owner',
-          granted_at: '2026-01-01',
-          granted_by: 'auth0|abc',
-        },
-      ],
-      linkSharingLevel: 'viewer',
-    });
-
-    renderDialog();
+  it('shows the embed expander when mode is viewer or editor', async () => {
+    renderDialog({ linkSharingLevel: 'viewer' });
     await waitFor(() => {
       expect(screen.getByText('View link')).toBeInTheDocument();
     });
@@ -176,25 +160,15 @@ describe('ShareDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  // Wiring assertion the test-file header promises: clicking a mode
-  // radio invokes ChartService.updateLinkSharing with the new mode.
-  it('calls ChartService.updateLinkSharing when the owner picks a different mode', async () => {
-    // Boot with mode=viewer so picking "Anyone can edit" doesn't trip
-    // the restricted-confirm prompt.
-    (ChartService.getChartPermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
-      permissions: [
-        {
-          user_id: 'auth0|abc',
-          user_email: 'owner@example.test',
-          permission_level: 'owner',
-          granted_at: '2026-01-01',
-          granted_by: 'auth0|abc',
-        },
-      ],
-      linkSharingLevel: 'viewer',
-    });
+  it('calls ChartService.updateLinkSharing and the optimistic channel when the owner picks a different mode', async () => {
+    const onOptimisticLinkSharingLevel = vi.fn();
+    const onPermissionsChanged = vi.fn();
     const user = userEvent.setup();
-    renderDialog();
+    renderDialog({
+      linkSharingLevel: 'viewer',
+      onOptimisticLinkSharingLevel,
+      onPermissionsChanged,
+    });
     await waitFor(() => {
       expect(screen.getByText('View link')).toBeInTheDocument();
     });
@@ -202,74 +176,65 @@ describe('ShareDialog', () => {
     await waitFor(() => {
       expect(ChartService.updateLinkSharing).toHaveBeenCalledWith('chart-xyz', 'editor');
     });
+    // Optimistic push happens before the API call resolves; the parent
+    // gets the new level immediately, then a refetch after success.
+    expect(onOptimisticLinkSharingLevel).toHaveBeenCalledWith('editor');
+    await waitFor(() => {
+      expect(onPermissionsChanged).toHaveBeenCalled();
+    });
   });
 
-  it('rolls back the optimistic local update when updateLinkSharing rejects', async () => {
-    // Boot with mode=viewer.
-    (ChartService.getChartPermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
-      permissions: [
-        {
-          user_id: 'auth0|abc',
-          user_email: 'owner@example.test',
-          permission_level: 'owner',
-          granted_at: '2026-01-01',
-          granted_by: 'auth0|abc',
-        },
-      ],
-      linkSharingLevel: 'viewer',
+  it('does not fetch permissions itself — the array comes from props', async () => {
+    const getPermsSpy = vi.spyOn(ChartService, 'getChartPermissions');
+    renderDialog({ linkSharingLevel: 'viewer' });
+    await waitFor(() => {
+      expect(screen.getByText('View link')).toBeInTheDocument();
     });
+    // Give any latent polling effects a chance to fire.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getPermsSpy).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the optimistic update via the parent channel when updateLinkSharing rejects', async () => {
+    const onOptimisticLinkSharingLevel = vi.fn();
     (ChartService.updateLinkSharing as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error('network down'),
     );
 
     const user = userEvent.setup();
-    renderDialog();
+    renderDialog({
+      linkSharingLevel: 'viewer',
+      onOptimisticLinkSharingLevel,
+    });
     await waitFor(() => {
       expect(screen.getByText('View link')).toBeInTheDocument();
     });
 
-    // Pre-click: viewer is selected (server level folded into local).
-    await waitFor(() => {
-      expect(screen.getByRole('radio', { name: /anyone can view/i })).toHaveAttribute(
-        'aria-checked',
-        'true',
-      );
-    });
-
-    await user.click(screen.getByRole('radio', { name: /anyone can edit/i }));
-
-    // After rejection: error surfaces AND viewer is selected again
-    // (the optimistic update was rolled back).
-    await waitFor(() => {
-      expect(screen.getByText(/network down/i)).toBeInTheDocument();
-    });
+    // Pre-click: viewer is selected (the prop drives the selector).
     expect(screen.getByRole('radio', { name: /anyone can view/i })).toHaveAttribute(
       'aria-checked',
       'true',
     );
-    expect(screen.getByRole('radio', { name: /anyone can edit/i })).toHaveAttribute(
-      'aria-checked',
-      'false',
-    );
+
+    await user.click(screen.getByRole('radio', { name: /anyone can edit/i }));
+
+    // Optimistic forward call: 'editor'.
+    await waitFor(() => {
+      expect(onOptimisticLinkSharingLevel).toHaveBeenCalledWith('editor');
+    });
+    // Rollback call: back to 'viewer'.
+    await waitFor(() => {
+      expect(onOptimisticLinkSharingLevel).toHaveBeenLastCalledWith('viewer');
+    });
+    // Error surfaces.
+    await waitFor(() => {
+      expect(screen.getByText(/network down/i)).toBeInTheDocument();
+    });
   });
 
   it('does not call updateLinkSharing when the embed-break confirm is cancelled', async () => {
-    // Boot with mode=viewer. Going viewer → restricted prompts confirm.
-    (ChartService.getChartPermissions as ReturnType<typeof vi.fn>).mockResolvedValue({
-      permissions: [
-        {
-          user_id: 'auth0|abc',
-          user_email: 'owner@example.test',
-          permission_level: 'owner',
-          granted_at: '2026-01-01',
-          granted_by: 'auth0|abc',
-        },
-      ],
-      linkSharingLevel: 'viewer',
-    });
-
     const user = userEvent.setup();
-    renderDialog();
+    renderDialog({ linkSharingLevel: 'viewer' });
     await waitFor(() => {
       expect(screen.getByText('View link')).toBeInTheDocument();
     });
@@ -292,97 +257,40 @@ describe('ShareDialog', () => {
     );
   });
 
-  it('keeps the divergence banner visible until the user acks it (regression)', async () => {
-    // Scenario the L1 mitigation guards: dialog has already booted at
-    // one level (initial load); a cross-tab event triggers the refresh
-    // hook, which then sees a different level. We use a closure flag
-    // that flips AFTER initial load so the storage-triggered fetches
-    // see the new ('editor') level; closure makes this robust to
-    // race ordering between loadPermissions and the L1 hook's adapter.
-    const ownerRow = {
-      user_id: 'auth0|abc',
-      user_email: 'owner@example.test',
-      permission_level: 'owner' as const,
-      granted_at: '2026-01-01',
-      granted_by: 'auth0|abc',
-    };
-    let serverLevel: 'restricted' | 'editor' = 'restricted';
-    (ChartService.getChartPermissions as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      return {
-        permissions: [ownerRow],
-        linkSharingLevel: serverLevel,
-      };
-    });
+  it('shows the divergence banner when the prop level changes under our feet, and persists it until acked', async () => {
+    const Wrapper = ({ level }: { level: LinkSharingLevel }) => (
+      <MemoryRouter>
+        <ShareDialog {...baseProps} linkSharingLevel={level} />
+      </MemoryRouter>
+    );
 
-    const user = userEvent.setup();
-    renderDialog();
-
-    // Wait for the initial load to settle.
+    const { rerender } = render(<Wrapper level="restricted" />);
     await waitFor(() => {
       expect(screen.getByText('View link')).toBeInTheDocument();
     });
 
-    // Flip the server-side level under our feet, then fire a storage
-    // event to trigger the L1 hook to re-fetch.
-    serverLevel = 'editor';
-    act(() => {
-      window.dispatchEvent(new StorageEvent('storage', { key: 'toc:permissions' }));
-    });
+    // Sibling-tab effect: prop flips to 'editor' while dialog is open.
+    rerender(<Wrapper level="editor" />);
 
-    // Banner shows up after the storage-triggered fetch resolves.
     const banner = await screen.findByText(/changed by another tab/i);
     expect(banner).toBeInTheDocument();
 
-    // Wait through a couple of microtasks — banner must NOT auto-dismiss
-    // (was previously gone in the same render after the auto-fold).
+    // Wait through a couple of microtasks — banner must NOT auto-dismiss.
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.getByText(/changed by another tab/i)).toBeInTheDocument();
 
     // User acks via the Got it button.
+    const user = userEvent.setup();
     const ackButton = screen.getByRole('button', { name: /got it/i });
     await user.click(ackButton);
 
-    // Banner is gone.
     await waitFor(() => {
       expect(screen.queryByText(/changed by another tab/i)).toBeNull();
     });
   });
 
-  it('shows the fetch-error warning when the L1 hook fetch rejects', async () => {
-    // Initial loads succeed; after the storage-triggered re-fetch, the
-    // mock starts rejecting. Use a closure flag to be robust to race
-    // ordering between loadPermissions and the L1 hook's adapter.
-    const ownerRow = {
-      user_id: 'auth0|abc',
-      user_email: 'owner@example.test',
-      permission_level: 'owner' as const,
-      granted_at: '2026-01-01',
-      granted_by: 'auth0|abc',
-    };
-    let shouldFail = false;
-    (ChartService.getChartPermissions as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      if (shouldFail) {
-        throw new Error('hook fetch failed');
-      }
-      return {
-        permissions: [ownerRow],
-        linkSharingLevel: 'restricted',
-      };
-    });
-
-    renderDialog();
-
-    // Wait for the initial load to settle.
-    await waitFor(() => {
-      expect(screen.getByText('View link')).toBeInTheDocument();
-    });
-
-    // Flip to failing, then trigger the L1 hook to re-fetch.
-    shouldFail = true;
-    act(() => {
-      window.dispatchEvent(new StorageEvent('storage', { key: 'toc:permissions' }));
-    });
-
+  it('shows the fetch-error warning when permissionsFetchError prop is set', async () => {
+    renderDialog({ permissionsFetchError: 'hook fetch failed' });
     await waitFor(() => {
       expect(screen.getByText(/couldn't verify current sharing level/i)).toBeInTheDocument();
     });
