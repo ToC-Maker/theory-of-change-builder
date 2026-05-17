@@ -83,16 +83,13 @@ describe('exportToJson', () => {
     expect(createdObjectURLs).toHaveLength(1);
   });
 
-  it('appends .json if the filename does not already end in .json', async () => {
+  it.each([
+    { input: 'My Chart', expected: 'My Chart.json' },
+    { input: 'already.json', expected: 'already.json' },
+  ])('ensureExtension($input) -> $expected', async ({ input, expected }) => {
     const { exportToJson } = await import('../../src/utils/exportChart');
-    exportToJson(minimalData, 'My Chart');
-    expect(lastClickedAnchor!.download).toBe('My Chart.json');
-  });
-
-  it('does not double-suffix .json', async () => {
-    const { exportToJson } = await import('../../src/utils/exportChart');
-    exportToJson(minimalData, 'already.json');
-    expect(lastClickedAnchor!.download).toBe('already.json');
+    exportToJson(minimalData, input);
+    expect(lastClickedAnchor!.download).toBe(expected);
   });
 
   it('produces a Blob whose content round-trips back to the original data', async () => {
@@ -205,18 +202,102 @@ describe('exportToPng — transform-snapshot logic (red-team Critical)', () => {
     await expect(exportToPng(root, 'throw-test')).rejects.toThrow('boom');
     expect(root.style.transform).toMatch(/scale\(2\)/);
   });
-});
 
-describe('exportToPdf — fits canvas into a single page', () => {
-  it('calls jspdf with a single page sized to the canvas, then triggers a save', async () => {
+  it('omits fontEmbedCSS (and warns) when getFontEmbedCSS throws', async () => {
+    // Regression guard: a previous version coerced the failure to
+    // `''`, which html-to-image accepts verbatim (`options.fontEmbedCSS
+    // != null` is true for empty string) and uses to SKIP its own
+    // fallback walk. The fix is to pass `undefined` (omit the option)
+    // so the library re-walks the stylesheets internally — and to
+    // `console.warn` so the failure leaves a trace in DevTools.
     const root = document.createElement('div');
     document.body.appendChild(root);
 
-    // Mock toCanvas to return a fake canvas whose dimensions drive the
-    // jspdf layout math.
+    let receivedOptions: { fontEmbedCSS?: string } | null = null;
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async (_node: HTMLElement, opts: { fontEmbedCSS?: string }) => {
+        receivedOptions = opts;
+        return 'data:image/png;base64,AAAA';
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => {
+        throw new Error('CORS-tainted stylesheet');
+      }),
+    }));
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await exportToPng(root, 'font-fail-test');
+
+    // Export still completes.
+    expect(receivedOptions).not.toBeNull();
+    // The option is OMITTED (not present, or `undefined`) — NOT set
+    // to `""`. The library's internal walk gets a chance to fire.
+    expect(receivedOptions!.fontEmbedCSS).toBeUndefined();
+    // Diagnostic warning was logged so a maintainer can find this.
+    expect(warn).toHaveBeenCalled();
+    const firstCall = warn.mock.calls[0];
+    expect(String(firstCall[0])).toMatch(/getFontEmbedCSS failed/);
+  });
+
+  it('walks ancestors and neutralizes their transforms too', async () => {
+    // Production case: in App.tsx the canvas root sits inside a
+    // `<div style={{ transform: scale(z) }}>` zoom/pan wrapper. The
+    // inline transform lives on the PARENT, not the root itself. The
+    // ancestor walk must capture + restore the parent's transform.
+    // Without this test, a regression to root-only would silently
+    // reintroduce the zoomed-export bug (only caught by manual
+    // smoke-test).
+    const grandparent = document.createElement('div');
+    grandparent.style.transform = 'translate(5px, 7px)';
+    const parent = document.createElement('div');
+    parent.style.transform = 'scale(0.5)';
+    const root = document.createElement('div');
+    grandparent.appendChild(parent);
+    parent.appendChild(root);
+    document.body.appendChild(grandparent);
+
+    let observedParentTransform: string | null = null;
+    let observedGrandparentTransform: string | null = null;
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async () => {
+        observedParentTransform = parent.style.transform;
+        observedGrandparentTransform = grandparent.style.transform;
+        return 'data:image/png;base64,AAAA';
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await exportToPng(root, 'ancestor-test');
+
+    // Both ancestor transforms were neutralized for the capture.
+    expect(observedParentTransform).toBe('none');
+    expect(observedGrandparentTransform).toBe('none');
+    // Both were restored after.
+    expect(parent.style.transform).toMatch(/scale\(0\.5\)/);
+    expect(grandparent.style.transform).toMatch(/translate\(5px,\s*7px\)/);
+  });
+});
+
+describe('exportToPdf — fits canvas into a single page', () => {
+  // Parameterized orientation cases. The implementation uses
+  // `width >= height ? 'landscape' : 'portrait'`, so equal-dim ties
+  // resolve to landscape. A regression that flips the comparator (e.g.
+  // `<` -> `<=`, or swap the branches) is otherwise invisible.
+  it.each([
+    { w: 1200, h: 800, expected: 'landscape' as const },
+    { w: 800, h: 1200, expected: 'portrait' as const },
+    { w: 1000, h: 1000, expected: 'landscape' as const }, // tie -> landscape per `>=`
+  ])('creates a $expected PDF when the canvas is ${w}x${h}', async ({ w, h, expected }) => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+
     const fakeCanvas = {
-      width: 1200,
-      height: 800,
+      width: w,
+      height: h,
       toDataURL: vi.fn(() => 'data:image/png;base64,FAKE'),
     } as unknown as HTMLCanvasElement;
 
@@ -247,13 +328,14 @@ describe('exportToPdf — fits canvas into a single page', () => {
     const { exportToPdf } = await import('../../src/utils/exportChart');
     await exportToPdf(root, 'pdf-test');
 
-    // Single-page PDF, landscape-or-portrait inferred from aspect.
+    // Single-page PDF, format = canvas pixel size, orientation
+    // inferred from aspect.
     expect(constructorArgs).toMatchObject({
       unit: 'px',
-      format: [1200, 800],
-      orientation: 'landscape',
+      format: [w, h],
+      orientation: expected,
     });
-    // The PNG was placed at (0,0) at full size — single page, centered
+    // The PNG was placed at (0,0) at full size — single page,
     // because the page IS the canvas.
     expect(addImageArgs).not.toBeNull();
     expect(addImageArgs![0]).toBe('data:image/png;base64,FAKE');

@@ -37,9 +37,12 @@
 // silently falls back to a default sans-serif which makes the export
 // look wrong. We pre-compute the embed CSS via `getFontEmbedCSS` and
 // pass it explicitly so the capture has the same font signal it would
-// have had on a same-origin page. Even when `getFontEmbedCSS`
-// internally fails, the result is "" — passing "" still beats letting
-// html-to-image re-walk the stylesheets on its second pass.
+// have had on a same-origin page. If `getFontEmbedCSS` throws, we
+// `console.warn` and pass `undefined` (omit the option) so html-to-
+// image's internal walk gets a second chance. Passing `""` here would
+// be wrong: the library's check is `options.fontEmbedCSS != null`,
+// which accepts the empty string verbatim and skips the fallback walk
+// entirely.
 import type { ToCData } from '../types';
 
 /**
@@ -119,21 +122,13 @@ async function withTransformNeutralized<T>(root: HTMLElement, fn: () => Promise<
     }
     cursor = cursor.parentElement;
   }
-  // Always snapshot the root itself even if its transform was empty,
-  // so the test that pins the snapshot behavior on the root has a
-  // deterministic write-then-restore path (the test sets a transform
-  // on the root and reads it back).
-  if (snapshots.length === 0) {
-    snapshots.push({ el: root, prev: root.style.transform });
-    root.style.transform = 'none';
-  }
 
   try {
     return await fn();
   } finally {
-    // Restore in reverse so the outermost frame's restore wins if
-    // there's any ordering subtlety. Most cases this is a single
-    // element so the loop is trivial.
+    // Each snapshot targets a distinct ancestor element (no revisits
+    // in the parent-chain walk), so restoration order is irrelevant —
+    // writes are independent. Iterating in any order works.
     for (let i = snapshots.length - 1; i >= 0; i--) {
       snapshots[i].el.style.transform = snapshots[i].prev;
     }
@@ -141,38 +136,52 @@ async function withTransformNeutralized<T>(root: HTMLElement, fn: () => Promise<
 }
 
 /**
- * Render the canvas root to a PNG and trigger a download.
- *
- * Implementation notes:
- *  - Dynamic-imports `html-to-image` (Vite chunks it separately).
- *  - Pre-computes `fontEmbedCSS` via `getFontEmbedCSS` so the capture
- *    doesn't silently fall back to a default font when the live
- *    stylesheet walk is blocked (cross-origin / CSP).
- *  - Wraps `toPng` in `withTransformNeutralized` so zoom/pan
- *    transforms don't clip the output.
- *  - `pixelRatio: 2` keeps the export crisp on hidpi displays without
- *    blowing up bytes for screen-only previews.
+ * Shared capture-options shape for `toPng` / `toCanvas`. The `Options`
+ * type from html-to-image is wider; we narrow to the fields we set.
  */
-export async function exportToPng(canvasRoot: HTMLElement, filename: string): Promise<void> {
-  const htmlToImage = await import('html-to-image');
-  const { toPng, getFontEmbedCSS } = htmlToImage;
+interface CaptureOptions {
+  fontEmbedCSS?: string;
+  pixelRatio: number;
+  skipAutoScale: boolean;
+  backgroundColor: string;
+  cacheBust: boolean;
+}
 
-  // Resolve font embed CSS up front. If this throws (rare; happens
-  // when the stylesheet collection is empty or cross-origin), we
-  // continue with an empty string so the export still completes —
-  // html-to-image's internal fallback path is the same result.
-  let fontEmbedCSS = '';
+/**
+ * Resolve `fontEmbedCSS` via html-to-image's `getFontEmbedCSS`, then
+ * invoke `capture` with the merged options inside
+ * `withTransformNeutralized`. Used by both `exportToPng` (renderer:
+ * `toPng`) and `exportToPdf` (renderer: `toCanvas`).
+ *
+ * On `getFontEmbedCSS` failure (cross-origin tainted stylesheet, CSP
+ * blocked the fetch, etc.) we `console.warn` and pass `undefined` so
+ * html-to-image's internal fallback walk gets a second chance. Passing
+ * `""` would be wrong — the library's check is `options.fontEmbedCSS
+ * != null`, which accepts an empty string verbatim and skips the
+ * fallback.
+ */
+async function captureWithFonts<T>(
+  canvasRoot: HTMLElement,
+  getFontEmbedCSS: (node: HTMLElement) => Promise<string>,
+  capture: (opts: CaptureOptions) => Promise<T>,
+): Promise<T> {
+  let fontEmbedCSS: string | undefined;
   try {
     fontEmbedCSS = await getFontEmbedCSS(canvasRoot);
-  } catch {
-    fontEmbedCSS = '';
+  } catch (err) {
+    // Leave `fontEmbedCSS` as `undefined` so the option is omitted
+    // below and html-to-image's internal walk gets a second chance.
+    console.warn(
+      '[exportChart] getFontEmbedCSS failed; falling back to html-to-image internal walk',
+      err,
+    );
   }
 
-  const dataUrl = await withTransformNeutralized(canvasRoot, () =>
-    toPng(canvasRoot, {
-      // Pass the pre-computed CSS; html-to-image will skip its own
-      // re-walk and embed exactly what we resolved.
-      fontEmbedCSS,
+  return withTransformNeutralized(canvasRoot, () =>
+    capture({
+      // Omit `fontEmbedCSS` when undefined so html-to-image performs
+      // its internal walk. When defined, pass through verbatim.
+      ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
       // 2x for hidpi. `skipAutoScale: true` tells the library not to
       // back off the resolution for "very large" trees — we already
       // know our canvas size and want fidelity.
@@ -184,6 +193,22 @@ export async function exportToPng(canvasRoot: HTMLElement, filename: string): Pr
       backgroundColor: '#ffffff',
       cacheBust: true,
     }),
+  );
+}
+
+/**
+ * Render the canvas root to a PNG and trigger a download.
+ *
+ * Implementation notes:
+ *  - Dynamic-imports `html-to-image` (Vite chunks it separately).
+ *  - Delegates font handling and transform neutralization to
+ *    `captureWithFonts`.
+ */
+export async function exportToPng(canvasRoot: HTMLElement, filename: string): Promise<void> {
+  const { toPng, getFontEmbedCSS } = await import('html-to-image');
+
+  const dataUrl = await captureWithFonts(canvasRoot, getFontEmbedCSS, (opts) =>
+    toPng(canvasRoot, opts),
   );
 
   // Convert the data URL back to a Blob so we can use the same
@@ -210,21 +235,8 @@ export async function exportToPdf(canvasRoot: HTMLElement, filename: string): Pr
   const { toCanvas, getFontEmbedCSS } = htmlToImage;
   const JsPdfCtor = jspdfMod.jsPDF;
 
-  let fontEmbedCSS = '';
-  try {
-    fontEmbedCSS = await getFontEmbedCSS(canvasRoot);
-  } catch {
-    fontEmbedCSS = '';
-  }
-
-  const canvas = await withTransformNeutralized(canvasRoot, () =>
-    toCanvas(canvasRoot, {
-      fontEmbedCSS,
-      pixelRatio: 2,
-      skipAutoScale: true,
-      backgroundColor: '#ffffff',
-      cacheBust: true,
-    }),
+  const canvas = await captureWithFonts(canvasRoot, getFontEmbedCSS, (opts) =>
+    toCanvas(canvasRoot, opts),
   );
 
   const dataUrl = canvas.toDataURL('image/png');
