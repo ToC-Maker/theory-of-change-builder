@@ -4,16 +4,21 @@
 // caller can surface in UI (plan §PR 2 Task 2.3, L1 mitigation).
 //
 // The hook is intentionally narrow:
-//   - input:  { open, chartId, fetcher } where fetcher is the chartService call
-//   - output: { serverLevel, divergedFromLocal, refresh }
+//   - input:  { open, chartId, localLevel, fetcher } where fetcher is
+//     the chartService call
+//   - output: { serverLevel, divergedFromLocal, fetchError, refresh }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { usePermissionsRefresh } from '../../src/hooks/usePermissionsRefresh';
+import { loggingService } from '../../src/services/loggingService';
 
 let fetcher: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   fetcher = vi.fn(async () => ({ linkSharingLevel: 'restricted' as const }));
+  // Silence error reports in tests; we re-spy in the test that asserts on it.
+  vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -146,5 +151,91 @@ describe('usePermissionsRefresh', () => {
       }),
     );
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('exposes fetchError when the fetcher rejects', async () => {
+    fetcher.mockRejectedValueOnce(new Error('boom'));
+
+    const { result } = renderHook(() =>
+      usePermissionsRefresh({
+        open: true,
+        chartId: 'c1',
+        localLevel: 'restricted',
+        fetcher,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.fetchError).toBe('boom');
+    });
+    expect(result.current.serverLevel).toBe(null);
+  });
+
+  it('clears fetchError on a subsequent successful refresh', async () => {
+    fetcher.mockRejectedValueOnce(new Error('boom'));
+    fetcher.mockResolvedValue({ linkSharingLevel: 'viewer' as const });
+
+    const { result } = renderHook(() =>
+      usePermissionsRefresh({
+        open: true,
+        chartId: 'c1',
+        localLevel: 'restricted',
+        fetcher,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.fetchError).toBe('boom');
+    });
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await waitFor(() => {
+      expect(result.current.fetchError).toBe(null);
+    });
+    expect(result.current.serverLevel).toBe('viewer');
+  });
+
+  it('reports the fetch error via loggingService.reportError', async () => {
+    fetcher.mockRejectedValueOnce(new Error('5xx blip'));
+
+    renderHook(() =>
+      usePermissionsRefresh({
+        open: true,
+        chartId: 'c1',
+        localLevel: 'restricted',
+        fetcher,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(loggingService.reportError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error_name: 'PermissionsRefreshFailed',
+          error_message: '5xx blip',
+          chart_id: 'c1',
+        }),
+      );
+    });
+  });
+
+  it('removes the storage listener on unmount', () => {
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+
+    const { unmount } = renderHook(() =>
+      usePermissionsRefresh({
+        open: true,
+        chartId: 'c1',
+        localLevel: 'restricted',
+        fetcher,
+      }),
+    );
+
+    unmount();
+
+    const storageCalls = removeSpy.mock.calls.filter((c) => c[0] === 'storage');
+    expect(storageCalls.length).toBeGreaterThan(0);
   });
 });
