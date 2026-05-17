@@ -121,36 +121,34 @@ export function DetailsEditor({
 
   const togglerLabel = expanded ? 'Hide details' : markdown ? 'Edit details' : 'Add details';
 
+  // Local fallback for the ErrorBoundary: never the full-screen reload
+  // UI. The rest of NodeEditor (title input, width, color, delete)
+  // stays usable while the user retries the editor chunk.
   const errorFallback = useCallback(
-    ({ error, reset }: { error: Error; reset: () => void }) => {
-      // Local fallback: never the full-screen reload UI. The rest of
-      // NodeEditor (title input, width, color, delete) stays usable.
-      void error;
-      return (
-        <div
-          role="alert"
-          className="details-editor__error text-xs text-red-600 mt-1 p-2 border border-red-200 rounded bg-red-50"
-          style={{ fontFamily }}
+    ({ reset }: { error: Error; reset: () => void }) => (
+      <div
+        role="alert"
+        className="details-editor__error text-xs text-red-600 mt-1 p-2 border border-red-200 rounded bg-red-50"
+        style={{ fontFamily }}
+      >
+        Editor failed to load.{' '}
+        <button
+          type="button"
+          className="underline"
+          onClick={() => {
+            reset();
+            retry();
+          }}
         >
-          Editor failed to load.{' '}
-          <button
-            type="button"
-            className="underline"
-            onClick={() => {
-              reset();
-              retry();
-            }}
-          >
-            Retry
-          </button>
-          {markdown ? (
-            // Fall back to raw markdown so the user can still read the
-            // existing content while the editor is unavailable.
-            <div className="mt-2 whitespace-pre-wrap text-gray-700">{markdown}</div>
-          ) : null}
-        </div>
-      );
-    },
+          Retry
+        </button>
+        {markdown ? (
+          // Fall back to raw markdown so the user can still read the
+          // existing content while the editor is unavailable.
+          <div className="mt-2 whitespace-pre-wrap text-gray-700">{markdown}</div>
+        ) : null}
+      </div>
+    ),
     [fontFamily, markdown, retry],
   );
 
