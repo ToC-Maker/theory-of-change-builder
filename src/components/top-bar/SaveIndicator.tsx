@@ -21,7 +21,6 @@ import { loggingService } from '../../services/loggingService';
 
 export interface SaveError {
   message: string;
-  httpStatus?: number;
 }
 
 interface Props {
@@ -42,13 +41,11 @@ export function SaveIndicator({ isSaving, hasEditToken, saveError }: Props) {
       lastReportedFingerprintRef.current = null;
       return;
     }
-    const fingerprint = `${saveError.httpStatus ?? ''}:${saveError.message}`;
-    if (lastReportedFingerprintRef.current === fingerprint) return;
-    lastReportedFingerprintRef.current = fingerprint;
+    if (lastReportedFingerprintRef.current === saveError.message) return;
+    lastReportedFingerprintRef.current = saveError.message;
     loggingService.reportError({
       error_name: 'SaveError',
       error_message: saveError.message,
-      http_status: saveError.httpStatus,
       request_metadata: { component: 'SaveIndicator' },
     });
   }, [saveError]);
@@ -64,11 +61,7 @@ export function SaveIndicator({ isSaving, hasEditToken, saveError }: Props) {
         data-state="error"
         className="flex items-center gap-1 px-1 sm:px-2 py-1 text-red-700 text-sm cursor-help"
         data-tooltip-id={tooltipId}
-        data-tooltip-content={
-          saveError.httpStatus
-            ? `${saveError.message} (HTTP ${saveError.httpStatus})`
-            : saveError.message
-        }
+        data-tooltip-content={saveError.message}
       >
         <span className="inline-block w-2 h-2 rounded-full bg-red-500" aria-hidden="true" />
         <span className="hidden md:inline">Error</span>

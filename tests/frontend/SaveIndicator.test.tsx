@@ -36,7 +36,7 @@ describe('SaveIndicator', () => {
       <SaveIndicator
         isSaving={false}
         hasEditToken={true}
-        saveError={{ message: 'Network down', httpStatus: 500 }}
+        saveError={{ message: 'Network down' }}
       />,
     );
     const errorRegion = screen.getByRole('status');
@@ -57,13 +57,12 @@ describe('SaveIndicator', () => {
       <SaveIndicator
         isSaving={false}
         hasEditToken={true}
-        saveError={{ message: 'Network down', httpStatus: 500 }}
+        saveError={{ message: 'Network down' }}
       />,
     );
     expect(reportSpy).toHaveBeenCalledTimes(1);
     expect(reportSpy.mock.calls[0]?.[0]).toMatchObject({
       error_name: 'SaveError',
-      http_status: 500,
       error_message: expect.stringMatching(/network down/i),
       request_metadata: { component: 'SaveIndicator' },
     });
@@ -73,7 +72,7 @@ describe('SaveIndicator', () => {
       <SaveIndicator
         isSaving={false}
         hasEditToken={true}
-        saveError={{ message: 'Network down', httpStatus: 500 }}
+        saveError={{ message: 'Network down' }}
       />,
     );
     expect(reportSpy).toHaveBeenCalledTimes(1);
@@ -86,7 +85,7 @@ describe('SaveIndicator', () => {
       <SaveIndicator
         isSaving={false}
         hasEditToken={true}
-        saveError={{ message: 'first failure', httpStatus: 500 }}
+        saveError={{ message: 'first failure' }}
       />,
     );
     expect(reportSpy).toHaveBeenCalledTimes(1);
@@ -100,7 +99,7 @@ describe('SaveIndicator', () => {
       <SaveIndicator
         isSaving={false}
         hasEditToken={true}
-        saveError={{ message: 'second failure', httpStatus: 503 }}
+        saveError={{ message: 'second failure' }}
       />,
     );
     expect(reportSpy).toHaveBeenCalledTimes(2);

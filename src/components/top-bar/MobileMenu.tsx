@@ -6,10 +6,9 @@
 // Excludes: Mode toggle (deleted in PR 1), Layout Mode toggle (deleted
 // in PR 5), Sync button (deleted in PR 1).
 //
-// We render the same three sub-menus inline as labels rather than
-// re-implementing each one as a flat list. Tapping a label cycles to
-// that sub-menu inside the drawer. The Share / Save indicator / Profile
-// sit at the bottom for one-tap reach.
+// Re-uses FileMenu / FormatMenu / HelpPanel as their full popovers,
+// stacked vertically under section headings. The Share / Save indicator
+// / Profile sit at the bottom for one-tap reach.
 import { useState } from 'react';
 import { Bars3Icon, XMarkIcon, ShareIcon } from '@heroicons/react/24/outline';
 import { FileMenu } from './FileMenu';
@@ -62,7 +61,11 @@ export function MobileMenu(props: Props) {
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-2 w-72 max-h-[80vh] overflow-y-auto bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+        // No `overflow-y-auto` here: the drawer hosts nested dropdowns
+        // (FileMenu, FormatMenu, HelpPanel) whose `absolute` popovers
+        // would be clipped by the scroll container otherwise. Mobile
+        // screens are short and the drawer rarely exceeds the viewport.
+        <div className="absolute top-full right-0 mt-2 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
           <div className="p-3 space-y-3">
             {/* File */}
             <section>
