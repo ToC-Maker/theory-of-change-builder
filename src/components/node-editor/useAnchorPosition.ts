@@ -70,9 +70,16 @@ export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition 
   // directly without changing the RefObject identity; without this
   // state-mirror, the ResizeObserver effect captures the FIRST element
   // at mount and silently keeps observing it after selection changes.
-  // Updated unconditionally on every render — `setState` is a no-op
-  // when the value is identical, so there's no extra render cost.
+  //
+  // Runs on every render and only writes when `.current` actually
+  // changes — React bails out on identical setState, so the no-op
+  // path costs one comparison.
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(anchorRef.current);
+  // Intentionally runs every render. Listing deps would defeat the
+  // purpose (the whole point is to detect `.current` changes that the
+  // RefObject identity doesn't surface). The `if` short-circuits the
+  // infinite-update loop the linter is warning about.
+  /* eslint-disable-next-line react-hooks/exhaustive-deps */
   useEffect(() => {
     if (anchorRef.current !== anchorEl) setAnchorEl(anchorRef.current);
   });
