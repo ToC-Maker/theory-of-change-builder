@@ -20,6 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 import AuthButton from './components/AuthButton';
 import { TopBar } from './components/top-bar/TopBar';
+import { validateToCShape } from './utils/validateToCShape';
 import type { SaveError } from './components/top-bar/SaveIndicator';
 import { ShareDialog } from './components/share/ShareDialog';
 import { getFreshIdToken } from './utils/auth';
@@ -864,19 +865,18 @@ function ToCViewer() {
 
   const handleUploadJSON = useCallback(
     (jsonData: unknown) => {
-      // Validate that the uploaded data has the expected structure
-      if (!jsonData || typeof jsonData !== 'object') {
-        alert('Invalid JSON file: Data must be an object');
+      // Defense in depth: FileMenu already deep-validates before
+      // calling us, but any other future caller (programmatic, dev
+      // console, future paste-from-clipboard, etc.) goes through here
+      // with possibly malformed data. Walk the full shape — same
+      // validator — and surface a console error if it fails. The
+      // legacy `alert()` was a UX anti-pattern from PR 1 era.
+      const result = validateToCShape(jsonData);
+      if (!result.ok) {
+        console.error('[App] handleUploadJSON received malformed data:', result.reason);
         return;
       }
-
-      const candidate = jsonData as { sections?: unknown };
-      if (!candidate.sections || !Array.isArray(candidate.sections)) {
-        alert('Invalid JSON file: Missing or invalid sections array');
-        return;
-      }
-
-      const validData = jsonData as ToCData;
+      const validData = result.data;
       console.log('Uploading JSON data:', validData);
 
       // Save current state to history before updating

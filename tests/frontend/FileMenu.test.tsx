@@ -334,4 +334,138 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     expect(onImportJson).not.toHaveBeenCalled();
     expect(await screen.findByText(/does not look like a theory of change/i)).toBeInTheDocument();
   });
+
+  it('rejects files with non-array columns inside a section', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({ data: { sections: [] }, onImportJson });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    // sections[0].columns is a string, not an array — shape-only.
+    await user.upload(
+      fileInput,
+      makeJsonFile({ sections: [{ title: 'X', columns: 'not-an-array' }] }),
+    );
+
+    await Promise.resolve();
+    expect(onImportJson).not.toHaveBeenCalled();
+    // Specific reason in the error body.
+    expect(await screen.findByText(/columns/i)).toBeInTheDocument();
+  });
+
+  it('rejects files with non-array nodes inside a column', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({ data: { sections: [] }, onImportJson });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(
+      fileInput,
+      makeJsonFile({
+        sections: [{ title: 'X', columns: [{ nodes: null }] }],
+      }),
+    );
+
+    await Promise.resolve();
+    expect(onImportJson).not.toHaveBeenCalled();
+    expect(await screen.findByText(/nodes/i)).toBeInTheDocument();
+  });
+
+  it('rejects malformed connection waypoints (NaN / string / wrong shape)', async () => {
+    // PR 7 will add `waypoints: {x: number, y: number}[]` on connections.
+    // Guard against malformed coords now so a bad import does not crash
+    // the renderer or persist invalid data.
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({ data: { sections: [] }, onImportJson });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(
+      fileInput,
+      makeJsonFile({
+        sections: [
+          {
+            title: 'X',
+            columns: [
+              {
+                nodes: [
+                  {
+                    id: 'n1',
+                    title: 'A',
+                    text: 'a',
+                    connectionIds: [],
+                    connections: [
+                      {
+                        targetId: 'n2',
+                        confidence: 80,
+                        waypoints: [{ x: 'oops', y: 10 }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    await Promise.resolve();
+    expect(onImportJson).not.toHaveBeenCalled();
+    expect(await screen.findByText(/waypoint/i)).toBeInTheDocument();
+  });
+
+  it('does NOT call onImportJson when the user cancels the replace-confirm modal', async () => {
+    // Symmetric with the delete-cancel test.
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({ data: sampleData, onImportJson });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(fileInput, makeJsonFile(sampleData));
+
+    const modal = await screen.findByTestId('confirm-modal');
+    expect(modal).toBeInTheDocument();
+    await user.click(screen.getByTestId('confirm-modal-cancel'));
+
+    expect(onImportJson).not.toHaveBeenCalled();
+  });
+});
+
+describe('FileMenu — Error modal titles distinguish export vs import (I2)', () => {
+  it('shows "Import failed" title (not "Export failed") for an invalid-import error', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({ data: { sections: [] }, onImportJson });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(
+      fileInput,
+      new File(['not valid json'], 'bad.json', { type: 'application/json' }),
+    );
+
+    await Promise.resolve();
+    expect(await screen.findByText(/import failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^export failed$/i)).toBeNull();
+  });
 });

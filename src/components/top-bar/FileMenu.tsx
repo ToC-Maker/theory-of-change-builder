@@ -27,6 +27,7 @@ import { useAuth0 } from '@auth0/auth0-react';
 import { ChartService, type UserChart } from '../../services/chartService';
 import { ConfirmModal } from '../ConfirmModal';
 import type { ToCData } from '../../types';
+import { validateToCShape } from '../../utils/validateToCShape';
 // `src/utils/exportChart.ts` is dynamic-imported inside handlers, not
 // statically imported here. The library it pulls in (html-to-image,
 // jspdf) is large; Vite chunks it into its own bundle so the user
@@ -69,14 +70,13 @@ type Submenu = 'main' | 'import' | 'export' | 'recent';
  * 'theory-of-change' when the slug is empty.
  */
 function slugify(title: string | undefined): string {
-  if (!title) return 'theory-of-change';
-  const slug = title
+  const slug = (title ?? '')
     .toLowerCase()
     .normalize('NFKD')
-    // Strip combining diacritical marks (the canonical Unicode range
-    // for the NFKD-decomposed accents we just produced). ̀-ͯ
-    // is the "Combining Diacritical Marks" block.
-    .replace(/[̀-ͯ]/g, '')
+    // `\p{M}` matches every Unicode combining mark across all blocks
+    // (not just the basic "Combining Diacritical Marks" range). After
+    // NFKD decomposition we want every combining mark stripped.
+    .replace(/\p{M}/gu, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return slug || 'theory-of-change';
@@ -128,7 +128,11 @@ export function FileMenu({
   // gives the user feedback so they don't double-click and queue
   // two captures.
   const [busyFormat, setBusyFormat] = useState<'PNG' | 'PDF' | null>(null);
+  // Separate error states for export vs import so the modal title can
+  // accurately describe what failed. Both states render via the same
+  // ConfirmModal primitive below — only one is open at a time.
   const [exportError, setExportError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth0();
@@ -271,9 +275,11 @@ export function FileMenu({
       }
     } catch (err) {
       console.error(`[FileMenu] ${format} export failed`, err);
-      setExportError(
-        `${format} export failed. The graph may be too large or the browser refused the download.`,
-      );
+      // Surface the underlying message when available so the user (or
+      // a maintainer reading a bug report) gets a real signal instead
+      // of a generic "may be too large" guess.
+      const detail = err instanceof Error ? err.message : String(err);
+      setExportError(`${format} export failed: ${detail} (see console for details).`);
     } finally {
       setBusyFormat(null);
     }
@@ -286,27 +292,37 @@ export function FileMenu({
 
   const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    // Reset the input so the same filename can be re-imported (browsers
-    // don't fire `change` again for an identical file otherwise).
+    // Reset the input *before* the early-return so a subsequent import
+    // of the same file still fires `change` (browsers suppress the
+    // event for an identical-named file otherwise). Unconditional on
+    // purpose so cancelling and reselecting works.
     e.target.value = '';
     if (!file) return;
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as unknown;
-      // Basic shape validation: must have a `sections` array. Deeper
-      // validation happens at the `setData` level (the parent already
-      // has the same check in `handleUploadJSON`).
-      if (
-        !parsed ||
-        typeof parsed !== 'object' ||
-        !Array.isArray((parsed as { sections?: unknown }).sections)
-      ) {
-        setExportError(
-          'That file does not look like a Theory of Change chart (missing `sections` array).',
+      // Deep shape validation — walk sections/columns/nodes and any
+      // optional connections/waypoints. The shallow `sections` check
+      // would pass shapes like `{sections: [{columns: "string"}]}` and
+      // let them silently overwrite the user's graph.
+      const result = validateToCShape(parsed);
+      if (!result.ok) {
+        // Heuristic: prefer the most-likely-recognizable framing when
+        // the top-level keys themselves are wrong (a JSON file from a
+        // different app entirely), vs a specific "looks like a ToC
+        // chart but malformed at path X" framing when the shape is
+        // recognizable but corrupt.
+        const isTopLevelMissing =
+          result.reason === 'top-level is not an object' ||
+          result.reason === 'sections is not an array';
+        setImportError(
+          isTopLevelMissing
+            ? 'That file does not look like a Theory of Change chart (missing `sections` array).'
+            : `Imported file is malformed: ${result.reason}.`,
         );
         return;
       }
-      const validData = parsed as ToCData;
+      const validData = result.data;
       closeAndReset();
       if (totalNodeCount(data) > 0) {
         // Existing graph is non-empty; require confirmation before
@@ -318,7 +334,7 @@ export function FileMenu({
       }
     } catch (err) {
       console.error('[FileMenu] import failed', err);
-      setExportError(
+      setImportError(
         err instanceof SyntaxError
           ? 'Could not parse that file as JSON. Is it the right format?'
           : 'Could not read the file. Please try again.',
@@ -584,6 +600,15 @@ export function FileMenu({
         confirmVariant="primary"
         onConfirm={() => setExportError(null)}
         onCancel={() => setExportError(null)}
+      />
+      <ConfirmModal
+        open={importError !== null}
+        title="Import failed"
+        body={importError ?? ''}
+        confirmLabel="OK"
+        confirmVariant="primary"
+        onConfirm={() => setImportError(null)}
+        onCancel={() => setImportError(null)}
       />
     </div>
   );
