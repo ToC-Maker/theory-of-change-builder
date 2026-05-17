@@ -1,6 +1,6 @@
 // Client-side cost tracker for the SSE chat stream.
 //
-// Extracted from chatService.ts (Task 10 of byok-cost-stream-recovery) so the
+// Extracted from `chatService.ts::ChatService.streamChat` so the
 // per-`content_block_delta` cost estimation, the running-locals MAX merge,
 // and the `/api/reconcile-cost` debounce/transport logic can be unit-tested
 // without spinning up the full chat-streaming machinery (?raw prompt
@@ -14,10 +14,10 @@
 //     and triggers `maybePostReconcile()`.
 //   - `recordUsage(usage)` — call on `message_start.message.usage` and
 //     `message_delta.usage`. MAX-merges per field into running locals
-//     (C8 fix in plan: never use shallow-merged `usage` object — it can
-//     lose `cache_creation_input_tokens` if a later delta omits it). The
-//     output token count is also MAX-merged against the char-derived
-//     estimate.
+//     (per-field MAX-merge rule: never use a shallow-merged `usage`
+//     object — it can lose `cache_creation_input_tokens` if a later
+//     delta omits it). The output token count is also MAX-merged against
+//     the char-derived estimate.
 //   - `recordServerCostMicroUsd(parsed)` — call on `running_cost` SSE frame
 //     when `cost_micro_usd` is a parseable bigint. The server-tracked
 //     value can dominate the client's reconstruction; only frames with a
@@ -37,9 +37,9 @@
 // and the client's estimate contributes only the output-side cost. This is
 // strictly better than the previous "wait until message_stop" behavior —
 // the BYOK pill catches up to the streaming reality before the user clicks
-// Stop. C3 fix in plan: also fires `onCostUpdate` so the pill updates in
-// real time, not just `lastCostMicroUsd` (which only fed the post-stream
-// reconcile POST).
+// Stop. `recordOutputChars` also fires `onCostUpdate` on every strict
+// cost increase so the pill updates in real time, not just
+// `lastCostMicroUsd` (which only fed the post-stream reconcile POST).
 import { computeCostMicroUsd, type AnthropicUsage } from '../../shared/cost';
 
 /** $0.01 in µUSD — minimum cost delta between consecutive /api/reconcile-cost POSTs. */
@@ -50,7 +50,7 @@ const RECONCILE_INTERVAL_MS = 5_000;
 export interface CostTrackerOptions {
   /** Anthropic model id. Drives the per-token rate via shared/cost.ts. */
   model: string;
-  /** Fired with running cost in USD on every strict increase. C3 fix: keeps the BYOK pill live. */
+  /** Fired with running cost in USD on every strict increase. Keeps the BYOK pill live during streaming. */
   onCostUpdate?: (runningCostUsd: number) => void;
   /** logging_messages.id this stream writes against. Required for /api/reconcile-cost POSTs. */
   loggingMessageId: string | undefined;
@@ -92,7 +92,7 @@ export interface ReconcileRequest {
 }
 
 export class CostTracker {
-  // Running locals (MAX-merged per field — C7/C8 fix in plan).
+  // Running locals (per-field MAX-merge; see `recordUsage` for rationale).
   private runningInput = 0;
   private runningOutput = 0;
   private runningCacheCreate = 0;

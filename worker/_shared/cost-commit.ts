@@ -70,9 +70,10 @@ export type ApplyDeltaCommitResult =
  * lower than the existing settled or projected baseline is a no-op
  * cost write. Refunds (when the post-stream reconcile observes that
  * the reservation was higher than the actual final cost) happen via
- * the signed-delta SQL in Task 8's `/api/reconcile-cost` path —
- * separate from this helper precisely so the in-stream writes never
- * have to think about negative deltas.
+ * the signed-delta CTE in the post-stream reconcile block of
+ * `worker/api/anthropic-stream.ts` (and the `/api/reconcile-cost`
+ * endpoint that mirrors it) — separate from this helper precisely
+ * so the in-stream writes never have to think about negative deltas.
  *
  * Why one SQL statement (NOT a TS transaction over multiple calls):
  * Neon HTTP rows-of-flight do not span statement boundaries — the
@@ -88,11 +89,11 @@ export type ApplyDeltaCommitResult =
  *
  * Pre-PR, the per-stream BYOK reconcile path was gated by
  * `if (isCapped(tier))`, so BYOK never wrote to `user_api_usage` at all.
- * Tasks 7+8 in this PR dropped that gate (the per-update writer + the
- * post-stream signed-delta reconcile now write to user_api_usage
- * unconditionally for cost-accuracy reasons), which inadvertently
- * coupled BYOK spend to the free cap: `reserveCost` (the cap-check
- * pre-flight in `anthropic-stream.ts`) still reads
+ * This PR's per-update writer (`firePerUpdateCommit`) and post-stream
+ * signed-delta reconcile dropped that gate (both now write to
+ * user_api_usage unconditionally for cost-accuracy reasons), which
+ * inadvertently coupled BYOK spend to the free cap: `reserveCost`
+ * (the cap-check pre-flight in `anthropic-stream.ts`) still reads
  * `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD`. A user who
  * spent $4 via BYOK, then removed the key, ended up with only $1 of
  * free cap remaining instead of the full $5 — a Critical regression

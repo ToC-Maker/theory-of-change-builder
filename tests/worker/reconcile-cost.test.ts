@@ -1,15 +1,15 @@
 // Tests for `POST /api/reconcile-cost` body validation
 // (worker/api/reconcile-cost.ts).
 //
-// Endpoint architecture (post-Task 11): body parse → `applyDeltaCommit`
-// (worker/_shared/cost-commit.ts) → diagnostic. The previous endpoint
-// inlined an `UPDATE logging_messages` plus a JS-side ownership + GREATEST
-// clamp via a `computeReconcileOutcome` helper. Task 11 replaced both with
-// the shared helper, which bakes ownership (`AND user_id = $`), the
-// monotonic clamp (`GREATEST(cost_settled, $)`), and the late-retry lock
-// (`AND reconciled_at IS NULL`) into one atomic CTE.
+// Endpoint architecture (current shape): body parse → `applyDeltaCommit`
+// (worker/_shared/cost-commit.ts) → diagnostic. An earlier shape of this
+// endpoint inlined an `UPDATE logging_messages` plus a JS-side ownership
+// + GREATEST clamp via a `computeReconcileOutcome` helper; both were
+// replaced by the shared helper, which bakes ownership (`AND user_id = $`),
+// the monotonic clamp (`GREATEST(cost_settled, $)`), and the late-retry
+// lock (`AND reconciled_at IS NULL`) into one atomic CTE.
 //
-// Wave 2 wire-shapes pass (cross-unit Important finding I3):
+// Wire-shape contract:
 //  - `cost_micro_usd` is now STRING-ONLY. The previous contract accepted
 //    `string | number` "defensively"; the client always sends string
 //    (chatCostTracker.ts::maybePostReconcile), and the loose accept-both
@@ -283,9 +283,9 @@ describe('parseReconcileBody', () => {
 //     → in-memory backend → both `logging_messages` rows mutated +
 //     `user_api_usage` signed delta credited).
 // What's left here is just `parseReconcileBody`, the only pure helper the
-// endpoint still owns post-Task 11.
+// endpoint still owns.
 //
 // TODO: integration tests that need a real Workers runtime + Neon DB
-// (mocked JWKS, real-Postgres FOR UPDATE, etc.) — those are spec'd in the
-// runbook (Task 12) and tracked outside this file.
+// (mocked JWKS, real-Postgres FOR UPDATE, etc.) — those are tracked in
+// the project runbook and live outside this file.
 // ---------------------------------------------------------------------------

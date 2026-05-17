@@ -140,13 +140,14 @@ describe('applyDeltaCommit', () => {
     });
 
     it('returns reason:row_not_found_or_foreign_or_reconciled when reconciled_at is non-null (late-retry lock)', async () => {
-      // The post-stream reconcile (Task 8) stamps `reconciled_at = NOW()`
-      // atomically with the signed-delta SQL. A late retry from the 7-day
-      // localStorage retry queue (`chatService.ts` reconcile-cost retry
-      // path, see C5 in plan) would otherwise re-inflate the cap. The
-      // `WHERE reconciled_at IS NULL` clause causes the CTE to no-op. The
-      // mock returns the same empty-row shape as the previous two cases
-      // (the helper can't distinguish them — they're all "CTE excluded").
+      // The post-stream reconcile in `anthropic-stream.ts` stamps
+      // `reconciled_at = NOW()` atomically with the signed-delta SQL.
+      // A late retry from the 7-day localStorage retry queue
+      // (`chatService.ts::drainPendingReconciles`) would otherwise
+      // re-inflate the cap. The `WHERE reconciled_at IS NULL` clause
+      // causes the CTE to no-op. The mock returns the same empty-row
+      // shape as the previous two cases (the helper can't distinguish
+      // them — they're all "CTE excluded").
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
       const result = await applyDeltaCommit(
         sql,
@@ -167,12 +168,12 @@ describe('applyDeltaCommit', () => {
     it('returns reason:row_not_found_or_foreign_or_reconciled when SQL returns zero rows (defensive)', async () => {
       // Belt-and-braces: even if a future driver or schema change made the
       // outer SELECT return zero rows instead of one row with `applied=false`,
-      // the helper still reports the no-op shape. The plan's CTE is
-      // structured to always return one row (the EXISTS scalar wraps the
-      // emptiness), but this guard prevents a silent NaN / undefined leak
-      // if the contract drifts. Same `reason` bucket as the SQL-returned-
-      // `applied:false` cases above — functionally equivalent from the
-      // caller's perspective.
+      // the helper still reports the no-op shape. The production CTE in
+      // `applyDeltaCommit` is structured to always return one row (the
+      // EXISTS scalar wraps the emptiness), but this guard prevents a
+      // silent NaN / undefined leak if the contract drifts. Same `reason`
+      // bucket as the SQL-returned-`applied:false` cases above —
+      // functionally equivalent from the caller's perspective.
       const { sql } = makeSqlSpy([]);
       const result = await applyDeltaCommit(sql, 'msg_zero_rows', 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({
@@ -334,7 +335,8 @@ describe('applyDeltaCommit', () => {
       await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
       // The tagged-template values are the raw arguments — `messageId` and
       // `userId` interpolate as strings; `projected` and `newCost` as
-      // strings (per the plan SQL using `${projStr}::bigint` casts).
+      // strings (the production CTE casts via `${projStr}::bigint` /
+      // `${newStr}::bigint`).
       const flat = calls[0].values.map(String);
       expect(flat).toContain('msg_x');
       expect(flat).toContain('auth0|alice');

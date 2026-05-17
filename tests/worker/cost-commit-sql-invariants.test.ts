@@ -239,9 +239,9 @@ describe('applyDeltaCommit SQL structural invariants — pins production CTE sha
   });
 
   // -------------------------------------------------------------------------
-  // BYOK routing (C1 fix, 2026-05-17): the delta lands in exactly one
-  // of `cost_micro_usd` (free cap, applies when `isByok=false`) or
-  // `byok_cost_micro_usd` (BYOK, applies when `isByok=true`). The two
+  // BYOK routing (split-column fix, 2026-05-17): the delta lands in
+  // exactly one of `cost_micro_usd` (free cap, applies when `isByok=false`)
+  // or `byok_cost_micro_usd` (BYOK, applies when `isByok=true`). The two
   // CASE-WHEN arms must be mirror images:
   //
   //   free arm: ... THEN 0::bigint ELSE (SELECT delta FROM computed) END

@@ -1,7 +1,8 @@
-// End-to-end seam tests for `POST /api/reconcile-cost` (Task 11).
+// End-to-end seam tests for `POST /api/reconcile-cost`.
 //
-// Task 11 replaced the endpoint's inline `UPDATE logging_messages` with a
-// call to the shared `applyDeltaCommit` helper. The helper atomically:
+// An earlier shape of this endpoint inlined an `UPDATE logging_messages`
+// and a JS-side ownership check; both were replaced by a call to the
+// shared `applyDeltaCommit` helper. The helper atomically:
 //   1. Locks the logging_messages row (`SELECT ... FOR UPDATE`).
 //   2. Updates BOTH `cost_micro_usd` (monotone HWM) AND
 //      `cost_settled_micro_usd` (the settled value the reconcile compares
@@ -14,12 +15,11 @@
 // What this file pins:
 //   - The endpoint's argument shape: `applyDeltaCommit(sql, loggingMessageId,
 //     actorId, 0n, clientCost)`. `projected = 0n` is the load-bearing
-//     decision documented in plans/byok-cost-stream-recovery.md § Task 11 —
-//     the endpoint runs in a fresh Worker invocation with no reservation
-//     context, and the helper's `max(projected, cost_settled)` baseline
-//     correctly degenerates to `cost_settled` (which already incorporates
-//     the reservation via earlier mid-stream / message_start / abort-handler
-//     writers).
+//     decision: the endpoint runs in a fresh Worker invocation with no
+//     reservation context, and the helper's `max(projected, cost_settled)`
+//     baseline correctly degenerates to `cost_settled` (which already
+//     incorporates the reservation via earlier mid-stream / message_start /
+//     abort-handler writers).
 //   - Both `logging_messages` columns AND `user_api_usage` mutate on an
 //     `applied=true` push. A regression where the endpoint resurrected the
 //     inline UPDATE would touch only `logging_messages.cost_micro_usd` and
@@ -91,14 +91,17 @@ async function endpointCall(
   // routing into either cost_micro_usd (free) or byok_cost_micro_usd (BYOK).
   isByok: boolean = false,
 ): ReturnType<typeof applyDeltaCommit> {
-  // projected = 0n: see header comment + plan § Task 11.
+  // projected = 0n: see file-header rationale (the endpoint runs in a
+  // fresh Worker invocation with no reservation context, so the helper's
+  // baseline degenerates to `cost_settled`).
   return applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
 }
 
 describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
   describe('argument shape', () => {
     it('passes projected = 0n so the baseline degenerates to cost_settled', async () => {
-      // The headline contract pin for Task 11. The endpoint runs in a
+      // The headline contract pin for the endpoint: it must call
+      // `applyDeltaCommit` with `projected = 0n`. The endpoint runs in a
       // fresh Worker invocation with no reservation context — if a future
       // refactor accidentally threaded a non-zero `projected` here, the
       // helper's baseline would over-clamp and the endpoint could
@@ -152,13 +155,14 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
 
   describe('applied: true — dual-row mutation', () => {
     it('a successful push advances BOTH cost_micro_usd AND cost_settled_micro_usd', async () => {
-      // The pre-Task-11 endpoint inlined an `UPDATE logging_messages SET
-      // cost_micro_usd = GREATEST(...)` that touched ONLY `cost_micro_usd`,
-      // leaving `cost_settled_micro_usd` stuck at whatever the in-stream
-      // writers wrote. That left the post-stream reconcile's baseline
-      // (`max(projected, cost_settled)`) below the actual settle, and the
-      // per-user cap could under-credit. Task 11's helper advances BOTH
-      // columns atomically — pin that both moved.
+      // An earlier shape of this endpoint inlined an `UPDATE
+      // logging_messages SET cost_micro_usd = GREATEST(...)` that touched
+      // ONLY `cost_micro_usd`, leaving `cost_settled_micro_usd` stuck at
+      // whatever the in-stream writers wrote. That left the post-stream
+      // reconcile's baseline (`max(projected, cost_settled)`) below the
+      // actual settle, and the per-user cap could under-credit. The
+      // current `applyDeltaCommit` helper advances BOTH columns
+      // atomically — pin that both moved.
       const { sql, state } = makeBackend({
         message: {
           message_id: 'msg_x',
@@ -358,9 +362,9 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
     });
 
     it('returns applied=false when reconciled_at is non-null (late-retry lock)', async () => {
-      // The critical late-retry lock. The post-stream IIFE stamps
-      // `reconciled_at = NOW()` atomically with the signed-delta SQL
-      // (Task 8). A late retry from the 7-day client localStorage queue
+      // The critical late-retry lock. The post-stream reconcile IIFE
+      // stamps `reconciled_at = NOW()` atomically with the signed-delta
+      // SQL. A late retry from the 7-day client localStorage queue
       // would otherwise re-inflate the cap — the helper's
       // `AND reconciled_at IS NULL` clause excludes the row, and the
       // endpoint returns 200 idempotent no-op without mutating either row.

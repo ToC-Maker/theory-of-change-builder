@@ -33,11 +33,11 @@
 // branch with credentials provisioned in the Workers test runtime
 // (`@cloudflare/vitest-pool-workers` runs inside workerd, which can't
 // reach a local Docker postgres via raw TCP) or a dedicated integration
-// suite outside the current vitest harness. The plan's
-// `tests/worker/delta-commit-concurrency.test.ts` entry was specced
-// against real Postgres; this file is the acceptable Option B fallback
-// (see the Task 5 Decision Record / "concurrency simulation (in-memory)"
-// note in the prompt that introduced this file).
+// suite outside the current vitest harness. This file is the in-memory
+// simulation fallback: we model the CTE algebra inline and pin the
+// algebraic invariants (baseline/delta/clamp/GREATEST) that the real
+// `FOR UPDATE` lock would enforce under concurrent writers. The fast
+// unit-level coverage trades real concurrency semantics for speed.
 //
 // If real-Postgres coverage is added later, this file should stay —
 // it remains a fast unit-level pin on the algebra. The integration
@@ -48,7 +48,9 @@ import { makeBackend } from '../_shared/in-memory-cost-backend';
 
 describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
   // ---------------------------------------------------------------------
-  // Headline scenario from the plan (Test Design § Integration tests):
+  // Headline scenario: two concurrent writers landing different newCost
+  // values for the same message_id must converge to the deterministic
+  // final state regardless of acquisition order.
   //   Initial: cost_settled = $0.20 (200k µUSD), projected = $0.10 (100k).
   //   Two writers: newCost = $0.30 (300k) and $0.50 (500k).
   //   Expected: final settled = $0.50, total user_api_usage delta = $0.30.
@@ -81,8 +83,8 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
 
     // Both writers report applied:true; the order of which produces the
     // larger delta depends on lock-acquisition order (whichever runs
-    // first sees the lower baseline). The invariants below are what the
-    // plan pins: deterministic final state regardless of order.
+    // first sees the lower baseline). The invariants below are what this
+    // file pins: deterministic final state regardless of order.
     expect(a.applied).toBe(true);
     expect(b.applied).toBe(true);
 
@@ -147,7 +149,7 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
   });
 
   it('a reconciled_at-stamped row produces applied:false with no state change', async () => {
-    // The post-stream reconcile (Task 8) stamps reconciled_at = NOW();
+    // The post-stream reconcile IIFE stamps reconciled_at = NOW();
     // late retries from the localStorage queue must no-op. The simulated
     // backend mirrors the real `WHERE reconciled_at IS NULL` behaviour by
     // falling through to the CTE-empty shape.

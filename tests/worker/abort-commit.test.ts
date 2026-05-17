@@ -2,14 +2,15 @@
 //
 // SCOPE NOTE — read this before adding cases:
 //
-// Goal of Task 9: when `request.signal.abort` fires (user clicked Stop, or
-// the connection dropped), schedule a final `applyDeltaCommit` via
-// `ctx.waitUntil` AT THE MOMENT OF ABORT — earlier than the post-stream
-// reconcile IIFE actually starts running. The reconcile IIFE awaits
-// `tracked.done` and may not start its commit for many ms after abort
-// (especially if `ctx.waitUntil`'s budget is contended); pre-scheduling a
-// snapshot-and-commit gives the running cost its own slot in the queue,
-// so it lands even if the reconcile IIFE dies before its commit.
+// What `fireAbortCommit` guarantees: when `request.signal.abort` fires
+// (user clicked Stop, or the connection dropped), schedule a final
+// `applyDeltaCommit` via `ctx.waitUntil` AT THE MOMENT OF ABORT — earlier
+// than the post-stream reconcile IIFE actually starts running. The
+// reconcile IIFE awaits `tracked.done` and may not start its commit for
+// many ms after abort (especially if `ctx.waitUntil`'s budget is
+// contended); pre-scheduling a snapshot-and-commit gives the running
+// cost its own slot in the queue, so it lands even if the reconcile IIFE
+// dies before its commit.
 //
 // The production wiring lives inside the `abortController.signal`
 // addEventListener at the bottom of the handler (the same place that
@@ -17,8 +18,9 @@
 // `teeCtx.accumulator` synchronously into a fresh object, computes a snap
 // µUSD via `computeCostMicroUsd(model, accumulatorToUsage(snap))`, and
 // passes the bigint into `fireAbortCommit` — exactly mirroring the
-// `firePerUpdateCommit` discipline (C2 closure-snapshot rule from the
-// plan's adversarial review).
+// `firePerUpdateCommit` discipline (synchronous snapshot before
+// fire-and-forget, because the closure may not run for many ms after
+// this point).
 //
 // Testing approach: HYBRID, identical to `per-update-write-e2e.test.ts`.
 //   - `applyDeltaCommit` is exercised against an in-memory simulation backend
@@ -31,8 +33,9 @@
 // What this file pins that nothing else does:
 //   1. The fire-and-forget IIFE inside `fireAbortCommit` writes a
 //      `DiagnosticAbortCommit` diagnostic with the snap value and applied flag.
-//   2. The C2 snapshot rule: mutating the caller's binding after the call
-//      does not affect what lands in the DB.
+//   2. The snapshot rule: mutating the caller's binding after the call
+//      does not affect what lands in the DB (the IIFE captures the
+//      snapshotted value, not the live binding).
 //   3. The early-bail branches (snap = 0n, loggingMessageId null) do not
 //      schedule a no-op IIFE.
 //   4. Idempotency: an abort-commit at snap=X followed by a reconcile-commit
@@ -48,8 +51,9 @@
 //     handler. That requires running the full SSE harness and is more
 //     practical to assert via the integration tests in
 //     `iife-death-recovery.test.ts`. The acceptance gate for the wiring
-//     is the grep-count check from the plan:
-//     `grep -c "DiagnosticAbortCommit" worker/api/anthropic-stream.ts` ≥ 1.
+//     is a grep-count check: every abort path is required to emit at
+//     least one `DiagnosticAbortCommit` row
+//     (`grep -c "DiagnosticAbortCommit" worker/api/anthropic-stream.ts` ≥ 1).
 //   - Real Postgres `FOR UPDATE` lock semantics
 //     (`delta-commit-concurrency.test.ts` covers that).
 import { describe, expect, it, vi } from 'vitest';
@@ -60,12 +64,12 @@ import { makeCtxStub, makeDeps } from '../_shared/commit-helpers';
 
 describe('fireAbortCommit — final commit on request.signal.abort', () => {
   it('headline: a snap > 0 with loggingMessageId set commits and writes a DiagnosticAbortCommit row', async () => {
-    // The regression target of Task 9: a stream that gets aborted mid-flight
-    // (Stop button, browser close, network drop) should still leave
-    // user_api_usage at the last-known running cost — even if the post-
-    // stream reconcile IIFE dies before its commit. This test pins the
-    // happy path: snap > 0n, loggingMessageId set, applyDeltaCommit runs
-    // and credits the delta.
+    // The regression target of `fireAbortCommit`: a stream that gets
+    // aborted mid-flight (Stop button, browser close, network drop) should
+    // still leave user_api_usage at the last-known running cost — even if
+    // the post-stream reconcile IIFE dies before its commit. This test
+    // pins the happy path: snap > 0n, loggingMessageId set, applyDeltaCommit
+    // runs and credits the delta.
     const { sql, state, diagnosticInserts } = makeBackend({
       message: {
         message_id: 'msg_x',
@@ -135,12 +139,13 @@ describe('fireAbortCommit — final commit on request.signal.abort', () => {
     expect(diagnosticInserts).toHaveLength(0);
   });
 
-  it('C2 snapshot rule: mutation of caller binding after the call cannot leak into the DB', async () => {
-    // Mirrors the C2 test in `per-update-write-e2e.test.ts`. The abort
-    // handler snapshots the live accumulator's cost into a `const snap`
-    // before invoking `fireAbortCommit`. Because bigint is a primitive
-    // and `snap` is passed by value, any subsequent mutation of the
-    // caller's local binding is invisible to the IIFE.
+  it('closure-snapshot rule: mutation of caller binding after the call cannot leak into the DB', async () => {
+    // Mirrors the matching closure-snapshot test in
+    // `per-update-write-e2e.test.ts`. The abort handler snapshots the
+    // live accumulator's cost into a `const snap` before invoking
+    // `fireAbortCommit`. Because bigint is a primitive and `snap` is
+    // passed by value, any subsequent mutation of the caller's local
+    // binding is invisible to the IIFE.
     const { sql, state } = makeBackend({
       message: {
         message_id: 'msg_x',
@@ -171,13 +176,12 @@ describe('fireAbortCommit — final commit on request.signal.abort', () => {
   });
 
   it('idempotency with reconcile: abort-commit + reconcile-commit at same snap → no double-credit', async () => {
-    // Models the race the plan's overlap discussion calls out: the
-    // abort-commit IIFE schedules at abort time; the reconcile IIFE
-    // schedules at end-of-handler-body. Both eventually fire
-    // `applyDeltaCommit` against the same row. GREATEST + delta-clamp
-    // means whichever runs second sees baseline=settled=snap and
-    // contributes a delta of 0 — user_api_usage stays at the first
-    // commit's value, not 2× it.
+    // Models the abort-vs-reconcile overlap: the abort-commit IIFE
+    // schedules at abort time; the reconcile IIFE schedules at
+    // end-of-handler-body. Both eventually fire `applyDeltaCommit`
+    // against the same row. GREATEST + delta-clamp means whichever runs
+    // second sees baseline=settled=snap and contributes a delta of 0 —
+    // user_api_usage stays at the first commit's value, not 2× it.
     const { sql, state, diagnosticInserts } = makeBackend({
       message: {
         message_id: 'msg_x',

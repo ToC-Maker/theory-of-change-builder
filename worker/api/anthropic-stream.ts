@@ -1026,8 +1026,8 @@ export function isCostCapKill(killDiagnostic: KillDiagnostic | null): boolean {
 
 /**
  * The discriminator label on per-update commit diagnostics. Each emit site
- * passes its own value; the runbook (Task 12) queries
- * `request_metadata->>'source'` to bucket by site.
+ * passes its own value; operational queries against `logging_errors`
+ * filter on `request_metadata->>'source'` to bucket by site.
  */
 export type PerUpdateCommitSource = 'poll' | 'message_start' | 'message_delta';
 
@@ -1065,11 +1065,11 @@ export interface PerUpdateCommitDeps {
  * commit → diagnose → swallow on failure.
  *
  * The caller MUST snapshot the live cost into a `const snap`
- * synchronously before invoking this. `snap` is taken by value (bigint is
- * a primitive) so any mutation of the outer binding after the call
- * cannot leak into the closure. This is the C2 closure-snapshot rule
- * from the plan's adversarial review; bypassing it lets a stale
- * post-call `finalMicro` reassignment land in the DB.
+ * synchronously before invoking this (closure-snapshot rule). `snap`
+ * is taken by value (bigint is a primitive) so any mutation of the outer
+ * binding after the call cannot leak into the closure (the closure may
+ * not run for many ms after this point); bypassing this rule lets a
+ * stale post-call `finalMicro` reassignment land in the DB.
  *
  * Three idempotent no-op shapes are handled by the underlying
  * `applyDeltaCommit`:
@@ -1141,8 +1141,8 @@ function scheduleCommitIife(
  * discipline, idempotent no-op surface, and failure-swallow contract.
  *
  * The caller MUST snapshot the live cost (`finalMicro` / `estimatedMicro`)
- * into a `const snap` synchronously before invoking this — the C2
- * hazard from the plan's adversarial review. Exported as a named
+ * into a `const snap` synchronously before invoking this — see
+ * `scheduleCommitIife`'s closure-snapshot rule. Exported as a named
  * function (rather than inlined) so unit tests can drive it directly
  * without spinning up the full SSE harness, and so the
  * `'DiagnosticPerUpdateCommit'` label + `source` discriminator stay
@@ -1174,14 +1174,14 @@ export function firePerUpdateCommit(
 /**
  * Fire a final `applyDeltaCommit` on `request.signal.abort` (user clicked
  * Stop, browser closed, network drop). Mirrors `firePerUpdateCommit`'s
- * shape — same `PerUpdateCommitDeps` slice, same C2 closure-snapshot
+ * shape — same `PerUpdateCommitDeps` slice, same closure-snapshot
  * discipline, same idempotent no-op surface — with two differences:
  *   - The diagnostic carries `error_name: 'DiagnosticAbortCommit'` so
  *     observability can bucket abort-driven commits separately from
- *     per-update poll/message_start/message_delta commits. The plan's
- *     headline scenario ("Stop button mid-stream → user_api_usage still
- *     reflects the running cost") is what `DiagnosticAbortCommit` rows
- *     attest to in production logs.
+ *     per-update poll/message_start/message_delta commits. The headline
+ *     scenario this guards ("Stop button mid-stream → user_api_usage
+ *     still reflects the running cost") is what `DiagnosticAbortCommit`
+ *     rows attest to in production logs.
  *   - Caller MUST gate on `snap > 0n` BEFORE invoking; the helper
  *     additionally guards on `loggingMessageId` via `scheduleCommitIife`
  *     (same as `firePerUpdateCommit`). Both bail before scheduling so
@@ -1279,7 +1279,7 @@ type SseTeeContext = {
   isByok: boolean;
   /**
    * Worker environment bindings. Plumbed through for downstream writers
-   * that need access to env vars / secrets (Task 7 per-update writes may
+   * that need access to env vars / secrets (`firePerUpdateCommit` may
    * read flags from here). The pre-stream branch holds it in handler-local
    * scope; carrying it on the context unifies the access path.
    */
@@ -1505,8 +1505,9 @@ export function buildAssistantBlocksForCountTokens(
   // twice, but the bound was implicit in the control flow):
   //
   //   Step 1 — strip the trailing block if it's text that right-trims to
-  //   empty. The earlier filter at line 1158 rejects whitespace-only text
-  //   blocks, so this only fires for an edge case where the filter's
+  //   empty. The earlier per-block filter above (the `block.text.trim()
+  //   .length === 0` continue in the loop body) rejects whitespace-only
+  //   text blocks, so this only fires for an edge case where the filter's
   //   `.trim()` (both sides) and this step's `\s+$` (right-only) disagree
   //   on what counts as empty — defensive but cheap.
   //
@@ -1861,10 +1862,11 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
 
   // Per-update write: persist the running cost to logging_messages +
   // user_api_usage so the DB tracks running cost continuously, surviving
-  // stream abort or isolate death (Task 7). Snapshot synchronously so a
-  // subsequent poll tick reassigning `estimatedMicro` can't leak into the
-  // closure. Idempotent under the helper's GREATEST + delta-clamp; safe
-  // to fire on every tick.
+  // stream abort or isolate death. Snapshot synchronously before
+  // fire-and-forget so a subsequent poll tick reassigning `estimatedMicro`
+  // can't leak into the closure (the closure may not run for many ms
+  // after this point). Idempotent under the helper's GREATEST +
+  // delta-clamp; safe to fire on every tick.
   const snap = estimatedMicro;
   firePerUpdateCommit(teeCtx, snap, 'poll');
 
@@ -2334,15 +2336,15 @@ function createCostTrackingStream(
 
         // Per-update write: persist the running cost to logging_messages +
         // user_api_usage so the DB tracks running cost continuously,
-        // surviving stream abort or isolate death (Task 7). Snapshot
-        // `finalMicro` synchronously so the closure can't capture a
-        // subsequently-reassigned binding (C2 hazard from the plan's
-        // adversarial review). Fires for both message_start and
-        // message_delta. The overlap with the message_start floor write
-        // below is intentional and safe — both call applyDeltaCommit, which
-        // is idempotent through GREATEST + delta-clamp-to-zero; floorMicro
-        // equals finalMicro at message_start so the second call is a perfect
-        // no-op on the cost row (and a near-no-op delta on user_api_usage).
+        // surviving stream abort or isolate death. Snapshot `finalMicro`
+        // synchronously before fire-and-forget so the closure can't capture
+        // a subsequently-reassigned binding (the closure may not run for
+        // many ms after this point). Fires for both message_start and
+        // message_delta. On message_start this call and the floor-write
+        // IIFE below both invoke applyDeltaCommit with the same value; the
+        // overlap is harmless because the helper is idempotent (GREATEST
+        // settle + delta-clamp-to-zero) so the second call is a no-op on
+        // the cost row.
         const snap = finalMicro;
         firePerUpdateCommit(teeCtx, snap, eventType);
 
@@ -2362,10 +2364,6 @@ function createCostTrackingStream(
         // keep BYOK / lifetime accounting accurate. GREATEST + delta-
         // clamped-to-zero preserves the prior monotone-increase semantics;
         // late retries no-op via `WHERE reconciled_at IS NULL`.
-        //
-        // Overlaps intentionally with the Task 7 running_cost emit on
-        // message_start (both call `applyDeltaCommit`); the overlap is safe
-        // because both paths are idempotent.
         //
         // Fire-and-forget via teeCtx.ctx.waitUntil so the stream isn't
         // blocked on Postgres; the diagnostic insert doubles as observability
@@ -2830,7 +2828,9 @@ export async function handler(
   //   1. `X-User-Anthropic-Key` header — legacy path for an explicit per-request
   //      override (a user testing a different key without re-saving it).
   //   2. Server-stored `user_byok_keys` row for authenticated users — the
-  //      Round-2 design: key is stored once, encrypted, and loaded here.
+  //      key is stored once, encrypted (see `worker/_shared/byok-crypto.ts`
+  //      for the AES-GCM wrap/unwrap with `user_id` as AAD), and loaded
+  //      here on each request.
   //   3. Our `ANTHROPIC_API_KEY` fallback for the free/anon tier.
   //
   // Anonymous actors cannot BYOK — they have no user_id to key the row on,
@@ -3235,14 +3235,14 @@ export async function handler(
   // Lifecycle: capture when our abort fires (separate from the existing
   // client_disconnect log to disambiguate "client dropped" vs "we aborted
   // for another reason like kill switch"). Also fires the abort-commit
-  // (Task 9): snapshot the live accumulator BEFORE the controller closes;
-  // the IIFE may not run for many ms after this point and the accumulator
-  // is mutable. Pre-scheduling a commit here gives the running cost its
-  // own slot in the ctx.waitUntil queue, so it lands even if the
-  // post-stream reconcile IIFE later dies before its commit (Cloudflare's
-  // waitUntil budget kill is the canonical failure mode this guards
-  // against). Idempotent under overlap with the reconcile IIFE via
-  // applyDeltaCommit's GREATEST + delta-clamp semantics.
+  // via `fireAbortCommit`: snapshot the live accumulator BEFORE the
+  // controller closes; the IIFE may not run for many ms after this point
+  // and the accumulator is mutable. Pre-scheduling a commit here gives
+  // the running cost its own slot in the ctx.waitUntil queue, so it lands
+  // even if the post-stream reconcile IIFE later dies before its commit
+  // (Cloudflare's waitUntil budget kill is the canonical failure mode
+  // this guards against). Idempotent under overlap with the reconcile
+  // IIFE via applyDeltaCommit's GREATEST + delta-clamp semantics.
   abortController.signal.addEventListener('abort', () => {
     // Once-only guard: AbortController.abort() is itself idempotent on
     // re-call, but defensive — multiple simultaneous abort sources (kill
@@ -3264,11 +3264,11 @@ export async function handler(
     try {
       snap = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(snapshot));
     } catch (e) {
-      // Cost-table miss for the model (e.g. unknown variant). The Task 7
-      // poll path also bails on this — a model whose cost we can't compute
-      // can't have its delta-commit either. Surface to wrangler tail and
-      // skip the commit; reconcile will fail symmetrically and the
-      // outer revert path kicks in.
+      // Cost-table miss for the model (e.g. unknown variant). The
+      // pollCostEstimate path also bails on this — a model whose cost we
+      // can't compute can't have its delta-commit either. Surface to
+      // wrangler tail and skip the commit; reconcile will fail
+      // symmetrically and the outer revert path kicks in.
       console.warn('[abort-commit] cost compute failed, skipping abort commit:', e);
       return;
     }
@@ -3551,13 +3551,24 @@ export async function handler(
         start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
       });
 
-      // Post-stream reconcile (Task 8): one atomic signed-delta CTE settles
+      // Post-stream reconcile: one atomic signed-delta CTE settles
       // `logging_messages.cost_settled_micro_usd`, GREATEST-clamps
       // `logging_messages.cost_micro_usd`, stamps `reconciled_at = NOW()`
       // (so late retries from the 7-day client retry queue and any in-flight
       // per-update writes no-op via the `WHERE reconciled_at IS NULL` guard),
       // and applies the SIGNED delta `actual - max(projected, cost_settled)`
-      // to `user_api_usage.cost_micro_usd`. Signed-delta atomically:
+      // to `user_api_usage.cost_micro_usd`.
+      //
+      // The shared concurrency / monotonicity invariants this CTE relies on
+      // are documented at the unsigned-delta sibling helper:
+      // see `worker/_shared/cost-commit.ts::applyDeltaCommit`. The two
+      // statements must stay in sync on baseline math (max(projected,
+      // cost_settled)), the FOR UPDATE single-statement lock, and the
+      // `WHERE reconciled_at IS NULL` late-retry guard. The only
+      // intentional divergence: this reconcile uses a SIGNED delta (to
+      // refund over-projection) where applyDeltaCommit clamps to ≥ 0.
+      //
+      // Signed-delta atomically:
       //   - settles the remaining cost when mid-stream writers fell short of
       //     the final actual (e.g. tracked.done timeout before the last poll);
       //   - REFUNDS over-projection when actual < projected and no mid-stream

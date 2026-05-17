@@ -1153,7 +1153,7 @@ export function ChatInterface({
   // Structured cost-error handler. Maps CostErrorType → UI state transition
   // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
   // under the last user message so BYOK retries can reuse the same messages
-  // array — plan v2 decision 8).
+  // array — preserves the user's prompt across cap-error recovery).
   const handleCostError = useCallback(
     (error: CostError) => {
       switch (error.type) {

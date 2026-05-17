@@ -1,5 +1,6 @@
-// Tests for Task 8's post-stream reconcile signed-delta SQL in
-// `worker/api/anthropic-stream.ts`.
+// Tests for the post-stream reconcile signed-delta CTE in
+// `worker/api/anthropic-stream.ts` (Step 10, search for "Post-stream
+// reconcile" in that file).
 //
 // SCOPE NOTE — read this before adding cases:
 //
@@ -225,7 +226,7 @@ const ZERO_ACC: ReconcileAccumulator = {
   web_search_requests: 0,
 };
 
-describe('reconcile signed-delta SQL — Task 8', () => {
+describe('reconcile signed-delta SQL (post-stream IIFE)', () => {
   // -------------------------------------------------------------------------
   // Excess direction A: actual > projected and no mid-stream writer.
   //
@@ -453,8 +454,8 @@ describe('reconcile signed-delta SQL — Task 8', () => {
   // Late-retry lock: after reconcile stamps reconciled_at, subsequent
   // `applyDeltaCommit` calls (e.g. from the 7-day localStorage retry queue,
   // or a delayed worker poll completing post-reconcile) must no-op via the
-  // `WHERE reconciled_at IS NULL` guard. The plan calls this the "late
-  // retry re-inflation" failure mode (Decision Record C5).
+  // `WHERE reconciled_at IS NULL` guard. This is the "late-retry
+  // re-inflation" failure mode the guard exists to prevent.
   // -------------------------------------------------------------------------
   it('post-reconcile applyDeltaCommit: returns applied:false, no state mutation', async () => {
     const { sql, state, reconcile } = makeBackend({
@@ -507,13 +508,13 @@ describe('reconcile signed-delta SQL — Task 8', () => {
   });
 
   // -------------------------------------------------------------------------
-  // IIFE death recovery: per the plan's Decision Record C5 narrative — the
-  // reconcile IIFE was killed by Cloudflare's time budget AFTER per-update
-  // writes captured cost_settled = $0.30 but BEFORE the reconcile signed-
-  // delta SQL ran. cost_settled = $0.30, reconciled_at = NULL. A late client
-  // retry POSTing $0.30 must succeed (no `reconciled_at` lock yet) but be a
-  // no-op (GREATEST short-circuit). Once a subsequent reconcile completes,
-  // reconciled_at is stamped and further retries no-op.
+  // IIFE death recovery: the reconcile IIFE was killed by Cloudflare's
+  // time budget AFTER per-update writes captured cost_settled = $0.30 but
+  // BEFORE the reconcile signed-delta SQL ran. cost_settled = $0.30,
+  // reconciled_at = NULL. A late client retry POSTing $0.30 must succeed
+  // (no `reconciled_at` lock yet) but be a no-op (GREATEST short-circuit).
+  // Once a subsequent reconcile completes, reconciled_at is stamped and
+  // further retries no-op.
   // -------------------------------------------------------------------------
   it('IIFE-death-recovery: late client retry pre-reconcile is a GREATEST no-op; post-reconcile retries are locked', async () => {
     const { sql, state, reconcile } = makeBackend({

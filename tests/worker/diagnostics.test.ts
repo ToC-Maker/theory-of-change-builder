@@ -59,7 +59,7 @@ describe('writeDiagnostic — request_metadata auto-injection', () => {
     vi.restoreAllMocks();
   });
 
-  describe('start_at_ms (new in Task 4 — diagnostic_elapsed_ms)', () => {
+  describe('start_at_ms (drives diagnostic_elapsed_ms via NOW() - start_at_ms)', () => {
     it('computes diagnostic_elapsed_ms = Date.now() - start_at_ms when fired_at_ms is omitted', async () => {
       // Pin Date.now() to a deterministic instant so we can assert the
       // computed elapsed value exactly (instead of asserting "approximately

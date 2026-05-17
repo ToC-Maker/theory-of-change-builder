@@ -22,7 +22,8 @@ import type { StreamEvent } from '../../shared/wire-shapes';
  * keep their `chatService` import surface stable. The shared type is the
  * single source of truth for the Anthropic SSE usage payload — it's also
  * consumed by `computeCostMicroUsd` so the client and Worker stay in
- * lockstep on shape (Task 10 in plans/byok-cost-stream-recovery.md).
+ * lockstep on shape (the same type definition is imported by both sides
+ * from `shared/cost.ts`).
  */
 export type { AnthropicUsage };
 
@@ -784,12 +785,12 @@ class ChatService {
     let tLast = t0;
     const blockStartAt = new Map<number, number>();
 
-    // Per-stream cost tracker. Owns the running-locals (MAX-merged per field
-    // — C7/C8 in plans/byok-cost-stream-recovery.md), the character-derived
-    // output estimate on every `content_block_delta`, and the debounced
-    // /api/reconcile-cost POST cadence ($0.01 or 5s thresholds). Fires
-    // onCostUpdate on every strict cost increase so the BYOK pill updates
-    // in real time (C3 fix). Output-only fallback applies when no
+    // Per-stream cost tracker. Owns the running-locals (per-field MAX-merge
+    // so partial `message_delta.usage` events don't drop earlier counters),
+    // the character-derived output estimate on every `content_block_delta`,
+    // and the debounced /api/reconcile-cost POST cadence ($0.01 or 5s
+    // thresholds). Fires onCostUpdate on every strict cost increase so the
+    // BYOK pill updates in real time. Output-only fallback applies when no
     // `running_cost` SSE frame has arrived yet — `runningInput`,
     // `runningCacheCreate`, `runningCacheRead`, `runningWebSearch` stay at
     // 0 and only the char-derived output estimate is contributed.
@@ -1037,9 +1038,9 @@ class ChatService {
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);
-                // Per-delta output-cost estimate (Task 10 / C3): each text
-                // chunk advances the BYOK pill in real time and may trigger
-                // a debounced /api/reconcile-cost POST.
+                // Per-delta output-cost estimate (via CostTracker):
+                // each text chunk advances the BYOK pill in real time and
+                // may trigger a debounced /api/reconcile-cost POST.
                 tracker.recordOutputChars(chunk.length);
               } else if (
                 event.type === 'content_block_delta' &&
@@ -1059,9 +1060,10 @@ class ChatService {
                 // Build a new `usage` snapshot for the onComplete payload via
                 // MAX-merge against the running tracker locals so a partial
                 // message_delta (one that omits cache fields) doesn't drop
-                // the running figures (C8). Reading from the tracker keeps
-                // the audit-trail shape consistent with what the cost math
-                // saw.
+                // the running figures (per-field MAX-merge rule; see
+                // `chatCostTracker.recordUsage`). Reading from the tracker
+                // keeps the audit-trail shape consistent with what the cost
+                // math saw.
                 tracker.recordUsage(event.usage);
                 usage = {
                   ...(usage ?? {}),

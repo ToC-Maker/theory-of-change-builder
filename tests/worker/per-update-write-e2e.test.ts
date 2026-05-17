@@ -2,9 +2,9 @@
 //
 // SCOPE NOTE — read this before adding cases:
 //
-// Goal of Task 7: every `running_cost` SSE emit on the server should fire a
-// fire-and-forget `applyDeltaCommit` so the DB tracks running cost
-// continuously, surviving stream abort or isolate death.
+// What `firePerUpdateCommit` guarantees: every `running_cost` SSE emit on
+// the server should fire a fire-and-forget `applyDeltaCommit` so the DB
+// tracks running cost continuously, surviving stream abort or isolate death.
 //
 // The production code paths (parseFrame's message_start / message_delta
 // branches, plus `pollCostEstimate`) all funnel through a shared helper —
@@ -33,7 +33,9 @@
 //   1. The fire-and-forget IIFE inside `firePerUpdateCommit` calls
 //      `applyDeltaCommit` with the **snapshot** value — i.e. mutating the
 //      caller's `let` binding after the call does not change what
-//      eventually lands in the DB. This is the C2 closure-snapshot rule.
+//      eventually lands in the DB (closure-snapshot rule: the IIFE may
+//      not run for many ms after this point, and the caller's binding is
+//      mutable).
 //   2. The `DiagnosticPerUpdateCommit` row is written with the correct
 //      `source` label ('poll' / 'message_start' / 'message_delta') and
 //      contains the snap value, projected, new_settled, and applied flag.
@@ -41,16 +43,20 @@
 //      mismatch) do not throw; the helper logs but completes.
 //   4. Successive emits at simulated 5s / 10s / 15s converge to the
 //      last-seen value for both `cost_settled_micro_usd` and
-//      `user_api_usage.cost_micro_usd` — the headline scenario from the
-//      Task 7 plan section.
+//      `user_api_usage.cost_micro_usd` — the headline "stream dies
+//      mid-flight still leaves user_api_usage at the last-known running
+//      cost" scenario `firePerUpdateCommit` was built to deliver.
 //
 // What this file does NOT pin (covered elsewhere):
 //   - Real Postgres `FOR UPDATE` lock semantics
 //     (`delta-commit-concurrency.test.ts` notes the same gap).
 //   - parseFrame / pollCostEstimate driving the helper from real SSE
 //     bytes — we trust the integration via the helper-extraction.
-//     Acceptance gate for the wiring is the grep-count check in the
-//     plan: `grep -c "DiagnosticPerUpdateCommit" worker/api/anthropic-stream.ts` ≥ 3.
+//     Acceptance gate for the wiring is a grep-count check: at least
+//     three call sites in `anthropic-stream.ts` must emit the
+//     `DiagnosticPerUpdateCommit` label (one each for poll,
+//     message_start, message_delta):
+//     `grep -c "DiagnosticPerUpdateCommit" worker/api/anthropic-stream.ts` ≥ 3.
 import { describe, expect, it, vi } from 'vitest';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { firePerUpdateCommit } from '../../worker/api/anthropic-stream';
@@ -64,8 +70,9 @@ describe('firePerUpdateCommit — per-update commit on running_cost emit', () =>
     // is independent of which IIFE runs first (verified in
     // delta-commit-concurrency.test.ts too); here we additionally
     // pin that the helper actually schedules a commit on every emit
-    // — the regression target of Task 7 is "a stream that dies mid-flight
-    // still leaves user_api_usage at the last-known running cost".
+    // — the regression target of `firePerUpdateCommit` is "a stream that
+    // dies mid-flight still leaves user_api_usage at the last-known
+    // running cost".
     const { sql, state } = makeBackend({
       message: {
         message_id: 'msg_x',
@@ -154,7 +161,7 @@ describe('firePerUpdateCommit — per-update commit on running_cost emit', () =>
   });
 
   it('applied=false path: reconciled_at non-null no-ops late emits without re-inflating', async () => {
-    // The post-stream reconcile (Task 8) stamps reconciled_at = NOW().
+    // The post-stream reconcile IIFE stamps reconciled_at = NOW().
     // A late running_cost emit (e.g. retried IIFE from a 7-day localStorage
     // queue, or a poll-in-flight that returns after reconcile) must not
     // re-credit user_api_usage. The `WHERE reconciled_at IS NULL` guard
@@ -209,13 +216,13 @@ describe('firePerUpdateCommit — per-update commit on running_cost emit', () =>
     ]);
   });
 
-  it('C2 closure-snapshot rule: post-call mutation of the caller binding does not change what gets committed', async () => {
-    // The plan calls this out explicitly: the caller must snapshot
-    // `finalMicro` synchronously into a `const snap` BEFORE the IIFE
-    // closure runs. The helper takes `snap` as a value-type bigint
-    // parameter, so even a caller that reassigns the outer `let
-    // finalMicro` between the helper call and the awaited IIFE
-    // settling cannot affect what lands in the DB.
+  it('closure-snapshot rule: post-call mutation of the caller binding does not change what gets committed', async () => {
+    // The caller must snapshot `finalMicro` synchronously into a `const
+    // snap` BEFORE the IIFE closure runs (the closure may not run for
+    // many ms after this point). The helper takes `snap` as a value-type
+    // bigint parameter, so even a caller that reassigns the outer `let
+    // finalMicro` between the helper call and the awaited IIFE settling
+    // cannot affect what lands in the DB.
     const { sql, state } = makeBackend({
       message: {
         message_id: 'msg_x',
