@@ -62,13 +62,14 @@
 // Coordinate translation
 // ---------------------------------------------------------------------------
 //
-// `clientX/Y` is viewport coordinates. Consumers (the ghost line
-// renderer in `ConnectionsComponent`) translate to container-local
-// using the same approach as `TheoryOfChangeGraph`'s drop-preview
-// ghost: `(clientX - containerRect.left) / zoomScale`.
+// `clientX/Y` is viewport coordinates. The connection-drag ghost block
+// in `TheoryOfChangeGraph` (~line 1696, `data-testid="connection-drag-
+// ghost"`) reads `dragState.ghostPos` and translates to container-local
+// coords as `(clientX - containerRect.left) / zoomScale` — the same
+// approach `usePointerDrag` consumers use for the drop-preview ghost.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { RefObject, PointerEvent as ReactPointerEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { isCanvasGestureActive, setCanvasGestureActive } from './_canvasGestureState';
 import type { ToCData } from '../types';
 import { loggingService } from '../services/loggingService';
@@ -89,8 +90,6 @@ export interface ConnectionDragState {
 export interface UseConnectionDragArgs {
   /** Current graph data; consulted on drop for stale-node guard. */
   data: ToCData;
-  /** Container that wraps the canvas; used for hit-testing if needed. */
-  containerRef: RefObject<HTMLElement | null>;
   /** When false, pointerdown is a no-op (read-only mode). */
   editMode: boolean;
   /**
