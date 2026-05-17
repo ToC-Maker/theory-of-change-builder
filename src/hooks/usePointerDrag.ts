@@ -35,6 +35,7 @@ import { classifyRegion } from './useGraphLayout';
 import { isCanvasGestureActive, setCanvasGestureActive } from './_canvasGestureState';
 import type { ToCData } from '../types';
 import { loggingService } from '../services/loggingService';
+import { nodeExistsInData } from '../utils/findNode';
 
 /**
  * Where the drop would land if the pointer were released right now.
@@ -164,17 +165,6 @@ function regionToDragOverLocation(region: Region | null): DragOverLocation | nul
       // round of plumbing.
       return { kind: 'new-section', sectionIndex: region.sectionIdx };
   }
-}
-
-function nodeExistsInData(data: ToCData, nodeId: string): boolean {
-  for (const section of data.sections) {
-    for (const column of section.columns) {
-      for (const node of column.nodes) {
-        if (node.id === nodeId) return true;
-      }
-    }
-  }
-  return false;
 }
 
 export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {

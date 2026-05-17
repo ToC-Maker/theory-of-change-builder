@@ -3,7 +3,7 @@ import React, { useRef, useEffect, memo } from 'react';
 import { Node } from '../types';
 import { getContrastTextColor } from '../utils';
 import { ConnectionHandles } from './canvas/ConnectionHandles';
-import type { HandleSide } from '../hooks/useConnectionDrag';
+import type { BindConnectionHandle } from '../hooks/useConnectionDrag';
 
 /**
  * DOM attribute the node root carries. Read by:
@@ -61,10 +61,7 @@ interface NodeComponentProps {
    * editMode=false or when the parent opts out of connection drag.
    * Visibility of the dots is gated by `isHovered || isHighlighted`.
    */
-  bindConnectionHandle?: (
-    nodeId: string,
-    side: HandleSide,
-  ) => { onPointerDown: (e: React.PointerEvent) => void };
+  bindConnectionHandle?: BindConnectionHandle;
   editMode: boolean;
   textSize: number;
   fontFamily: string;

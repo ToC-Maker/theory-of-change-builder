@@ -73,14 +73,13 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { isCanvasGestureActive, setCanvasGestureActive } from './_canvasGestureState';
 import type { ToCData } from '../types';
 import { loggingService } from '../services/loggingService';
+import { nodeExistsInData } from '../utils/findNode';
 
 export type HandleSide = 'left' | 'right';
 
 export interface ConnectionDragState {
   sourceNodeId: string;
   sourceSide: HandleSide;
-  /** Viewport coords of the cursor at the moment of capture. */
-  startPos: { x: number; y: number };
   /** Current viewport coords; updated on every pointermove. */
   ghostPos: { x: number; y: number };
   /** The node under the cursor right now, if any (and not the source). */
@@ -101,32 +100,23 @@ export interface UseConnectionDragArgs {
   onConnect: (sourceNodeId: string, targetNodeId: string) => void;
 }
 
+/**
+ * Returns the props to spread on a handle dot. The pointerdown handler
+ * starts the gesture if no other canvas gesture is in flight; otherwise
+ * it's a no-op. Shared signature consumed by `ConnectionHandles` and
+ * `NodeComponent` so the three sites stay in lockstep (a type change
+ * here cascades to consumers).
+ */
+export type BindConnectionHandle = (
+  nodeId: string,
+  side: HandleSide,
+) => { onPointerDown: (e: ReactPointerEvent) => void };
+
 export interface UseConnectionDragResult {
   dragState: ConnectionDragState | null;
-  /**
-   * Returns the props to spread on a handle dot. The pointerdown
-   * handler starts the gesture if no other canvas gesture is in
-   * flight; otherwise it's a no-op.
-   */
-  bindHandle: (
-    nodeId: string,
-    side: HandleSide,
-  ) => {
-    onPointerDown: (e: ReactPointerEvent) => void;
-  };
+  bindHandle: BindConnectionHandle;
   /** Convenience read of `dragState !== null` for the polling-pause guard. */
   isActive: boolean;
-}
-
-function nodeExistsInData(data: ToCData, nodeId: string): boolean {
-  for (const section of data.sections) {
-    for (const column of section.columns) {
-      for (const node of column.nodes) {
-        if (node.id === nodeId) return true;
-      }
-    }
-  }
-  return false;
 }
 
 /**
@@ -354,7 +344,6 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
       setDragState({
         sourceNodeId: nodeId,
         sourceSide: side,
-        startPos: { x: e.clientX, y: e.clientY },
         ghostPos: { x: e.clientX, y: e.clientY },
         targetNodeId: null,
       });
