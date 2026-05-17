@@ -669,29 +669,35 @@ export function ToC({
   // container" gap that the old global `drop` listener used to cover:
   // captured pointer events deliver `pointerup` everywhere.
   //
-  // pointerOffsetY is the offset (in viewport px) from the cursor to
-  // the top of the dragged node at drag-start. It's the per-gesture
-  // analog of the old `dragOffset.y` ref.
+  // `pointerOffset` is the offset (in viewport px) from the cursor to
+  // the top of the dragged node at drag-start; the hook passes it
+  // through so we don't have to re-read it from React state at drop
+  // time (closing the scheduling gap `dragStateRef` exists to cover).
   const handleDrop = useCallback(
-    (target: DragOverLocation, draggedNodeId: string, pointerOffsetY: number) => {
+    (target: DragOverLocation, draggedNodeId: string, pointerOffset: { x: number; y: number }) => {
       const sourceLocation = findNodeLocation(draggedNodeId);
       if (!sourceLocation) {
         console.log('Source location not found for node:', draggedNodeId);
         return;
       }
+      // No drag-driven new-section path today; ignore the signal.
+      if (target.kind === 'new-section') return;
+
       const targetSectionIndex = target.sectionIndex;
       const targetColumnIndex = target.columnIndex;
-      const isNewColumn = !!target.isNewColumn;
+      const isNewColumn = target.kind === 'new-column';
 
-      // Adjust yPosition by the drag offset so the node appears where the user grabbed it.
-      // target.yPosition is the cursor's container-local Y (already
-      // zoom-translated by the hook). pointerOffsetY is viewport-space
-      // (no zoom applied at capture time); divide by zoomScale to put
-      // it in the same coord system.
-      let adjustedYPosition = 20; // Default fallback
-      if (target.yPosition !== undefined) {
+      // Adjust yPosition so the node appears where the user grabbed it.
+      // `target.yPosition` (node-slot only) is container-local; the
+      // hook already divided by zoomScale. `pointerOffset.y` is
+      // viewport-space (captured at drag-start with no zoom applied);
+      // divide by zoomScale to put both in the same coord system before
+      // subtracting. Other variants (over-node / new-column) fall back
+      // to the slot-center default.
+      let adjustedYPosition = 20;
+      if (target.kind === 'node-slot') {
         const mouseLocalY = target.yPosition;
-        const dragOffsetLocalY = pointerOffsetY / zoomScale;
+        const dragOffsetLocalY = pointerOffset.y / zoomScale;
         const nodeTopLocal = mouseLocalY - dragOffsetLocalY;
         const actualHeight = nodeHeights[draggedNodeId] || 76;
         adjustedYPosition = nodeTopLocal + actualHeight / 2;
@@ -777,13 +783,13 @@ export function ToC({
     [findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
   );
 
-  // PR 4: `usePointerDrag` owns drag state. `onDrop` bridges to the
-  // refactored `handleDrop` above; `onDragStart` dispatches the
-  // NodeEditor-close callback registered via `nodeEditorDragStartRef`
-  // (set up below in `NodeEditorMount`).
+  // PR 4: `usePointerDrag` owns drag state. `onDrop` flows directly to
+  // `handleDrop` above (the hook supplies `pointerOffset` as the third
+  // argument, so the consumer doesn't have to read it back from React
+  // state). `onDragStart` dispatches the NodeEditor-close callback
+  // registered via `nodeEditorDragStartRef` (set up below in
+  // `NodeEditorMount`).
   const nodeEditorDragStartRef = useRef<(() => void) | null>(null);
-  const dragHookOnDropRef = useRef<typeof handleDrop>(handleDrop);
-  dragHookOnDropRef.current = handleDrop;
 
   const {
     dragState,
@@ -796,12 +802,7 @@ export function ToC({
     editMode,
     zoomScale,
     nodeHeights,
-    onDrop: (target, draggedNodeId) => {
-      // The hook holds the pointerOffset in dragState at the moment of
-      // pointerup; we read it via the ref-mirrored handler.
-      const pointerOffsetY = dragState?.pointerOffset.y ?? 0;
-      dragHookOnDropRef.current(target, draggedNodeId, pointerOffsetY);
-    },
+    onDrop: handleDrop,
     onDragStart: () => {
       // Notify the anchored NodeEditor to dismiss (if mounted).
       nodeEditorDragStartRef.current?.();
@@ -810,8 +811,16 @@ export function ToC({
 
   // Notify parent (App) of drag-active transitions so the 30s sync
   // poll can pause while a gesture is in flight (red-team Important).
+  //
+  // Cleanup fires `false` if this component unmounts while a drag is
+  // active — otherwise the parent's `isDragInFlightRef` stays `true`
+  // for the rest of the App's lifetime (the polling effect would
+  // silently skip every sync tick).
   useEffect(() => {
     onDragActiveChange?.(isDragActive);
+    return () => {
+      if (isDragActive) onDragActiveChange?.(false);
+    };
   }, [isDragActive, onDragActiveChange]);
 
   const connectedNodes = useMemo(() => {
@@ -1507,19 +1516,53 @@ export function ToC({
           />
         )}
 
-        {/* PR 4: drop-preview ghost. Renders while a pointer-drag is in
-            flight; sits in the same transform stack as the canvas so it
-            translates with pan/zoom. The original node renders at half
-            opacity via NodeComponent's `isDragging` prop above (set
-            from `dragState?.nodeId === node.id`).
+        {/* PR 4: drop-preview ghosts. While `dragState !== null` we render
+            up to two translucent silhouettes (spec § 4.5):
 
-            The ghost is intentionally generic — a translucent rounded
-            rectangle matching the dragged node's footprint, not a
-            full clone — so PR 5's connection-handle ghost and PR 7's
-            waypoint ghost can plug into the same render slot without
-            re-architecting node-specific markup. */}
-        {dragState && graphContainerRef.current
-          ? (() => {
+            1. A drop-location ghost anchored at `dragOverLocation`,
+               showing the user where the dropped node will settle. Only
+               rendered when the current region maps to a concrete slot
+               (node-slot / over-node / new-column).
+            2. A cursor-following ghost that tracks the finger / mouse
+               while the gesture is in flight.
+
+            The original node renders at half opacity via NodeComponent's
+            `isDragging` prop above (`dragState?.nodeId === node.id`).
+            Both ghosts sit in the same transform stack as the canvas,
+            so they translate with pan/zoom. */}
+        {dragState && graphContainerRef.current ? (
+          <>
+            {(() => {
+              const loc = dragState.dragOverLocation;
+              if (!loc || loc.kind === 'new-section') return null;
+              const snap = getSnapshot();
+              const rect = snap.columnRects[loc.sectionIndex]?.[loc.columnIndex];
+              if (!rect) return null;
+              const { width: ghostW, height: ghostH } = dragState.nodeSize;
+              // Centre the silhouette within the target column. For
+              // node-slot, use the cursor-derived yPosition minus half
+              // the node height to mirror handleDrop's math; for
+              // over-node / new-column we have no y signal, so place at
+              // the top of the column (offset by 12px for visual
+              // separation from the column header).
+              const left = (rect.left + rect.right) / 2 - ghostW / 2;
+              const top = loc.kind === 'node-slot' ? loc.yPosition - ghostH / 2 : rect.top + 12;
+              return (
+                <div
+                  className="pointer-events-none absolute z-[55]"
+                  style={{
+                    left: `${left}px`,
+                    top: `${top}px`,
+                    width: `${ghostW}px`,
+                    height: `${ghostH}px`,
+                  }}
+                  aria-hidden
+                >
+                  <div className="rounded-xl bg-indigo-50 ring-2 ring-indigo-300 ring-dashed opacity-60 w-full h-full" />
+                </div>
+              );
+            })()}
+            {(() => {
               // Translate ghostPos (viewport coords) to container-local
               // so the absolute-positioned ghost lines up with the
               // canvas geometry. The cursor offset within the node is
@@ -1543,8 +1586,9 @@ export function ToC({
                   <div className="rounded-xl bg-indigo-100 ring-2 ring-indigo-400 opacity-70 w-full h-full shadow-lg" />
                 </div>
               );
-            })()
-          : null}
+            })()}
+          </>
+        ) : null}
       </div>
     </div>
   );

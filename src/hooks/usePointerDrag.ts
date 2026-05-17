@@ -1,82 +1,32 @@
 // `usePointerDrag` — pointer-events node drag, replacing the HTML5
 // Drag and Drop API on the node-drag interaction.
 //
-// Why pointer events:
+// Why pointer events (not HTML5 DnD):
 //   - Touch parity: HTML5 DnD has poor mobile support (no `dragstart`
 //     on iOS Safari for many surfaces, partial Android behavior).
 //   - Mid-gesture cancellation: HTML5 DnD has no programmatic cancel;
 //     pointer events let us reset state cleanly on Escape, on a
 //     second-finger touch (pinch-zoom takeover), and on cross-tab
 //     deletion of the dragged node.
-//   - Zoom-aware coordinates: pointer events deliver `clientX/Y` we
-//     can translate to canvas-local via `useGraphLayout.getLocalPosition`
-//     for the drop calculation.
-//   - Future-proof: PR 5 (`useConnectionDrag`) and PR 7 (`useWaypointDrag`)
-//     are built on the same pattern. They check
-//     `isCanvasGestureActive()` (see `./_canvasGestureState.ts`) on
-//     pointerdown and short-circuit if another canvas gesture is in
-//     flight — the mutual-exclusion primitive that the red-team
-//     Important finding "PR 7 waypoint × connection-drag gesture
-//     coordination" called for.
+//   - The captured-pointer model also closes the "drop outside
+//     container" gap that the old global `drop` listener used to
+//     cover: a captured pointer keeps delivering `pointerup`
+//     everywhere on the page.
 //
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
+// Cross-PR coordination:
+//   PR 5 (`useConnectionDrag`) and PR 7 (`useWaypointDrag`) are built
+//   on the same pattern. They check `isCanvasGestureActive()` (see
+//   `./_canvasGestureState.ts`) on pointerdown and short-circuit if
+//   another canvas gesture is in flight — the mutual-exclusion
+//   primitive the red-team Important "PR 7 waypoint × connection-drag
+//   gesture coordination" finding called for.
 //
-//   pointerdown on node →
-//     - check editMode + isCanvasGestureActive guards
-//     - capture pointer (so we keep receiving moves even if the
-//       cursor leaves the node element)
-//     - set isCanvasGestureActive(true)
-//     - fire onDragStart (NodeEditor uses this to dismiss itself)
-//     - subscribe document-level pointermove/up/cancel/keydown +
-//       second-pointer pointerdown
-//     - return; the React state update sets dragState != null
-//
-//   pointermove →
-//     - update ghostPos to {clientX, clientY}
-//     - translate to container-local, call classifyRegion, map the
-//       resulting region into the existing DragOverLocation shape
-//
-//   pointerup →
-//     - stale-node guard: verify the dragged node id still exists in
-//       current data (red-team Important "PR 4 pointer-capture during
-//       cross-tab delete race"); if not, abort with
-//       loggingService.reportError
-//     - if region is non-null, call onDrop with the mapped target
-//     - cleanup (release pointer capture, clear listeners, clear
-//       isCanvasGestureActive, reset state)
-//
-//   pointercancel →
-//     - cleanup, no onDrop
-//
-//   keydown Escape →
-//     - cleanup, no onDrop
-//
-//   pointerdown (second pointer) →
-//     - cleanup, no onDrop. Pinch-zoom (via useZoomPan or similar)
-//       then takes over.
-//
-//   hook unmount mid-drag →
-//     - cleanup so the gesture flag doesn't leak to PR 5/7's pointer
-//       handlers.
-//
-// ---------------------------------------------------------------------------
-// Coordinate translation
-// ---------------------------------------------------------------------------
-//
-// `clientX/Y` is viewport coordinates. The container may be inside a
-// CSS-transform stack (zoom/pan from `useZoomPan`). We translate to
-// container-local by subtracting the container's bounding-rect origin
-// and dividing by `zoomScale`. This matches the existing
-// `useGraphLayout.classifyRegion` contract (snapshot rects are stored
-// in container-local px, captured via `el.getBoundingClientRect()` —
-// itself in viewport space, but the snapshot already subtracts
-// `containerRect.left/top`).
-//
-// Note: zoom is applied uniformly (no rotate/skew), so a single divide
-// is sufficient. If the zoom hook ever introduces non-uniform scale
-// the translation here will need an inverse-matrix step.
+// Coordinate translation:
+//   `clientX/Y` is viewport coordinates. The container may sit inside
+//   a CSS-transform stack (zoom/pan from `useZoomPan`). We translate
+//   to container-local by subtracting the container's bounding-rect
+//   origin and dividing by `zoomScale`. Snapshot rects from
+//   `classifyRegion` live in the same container-local space.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject, PointerEvent as ReactPointerEvent } from 'react';
@@ -86,16 +36,21 @@ import { isCanvasGestureActive, setCanvasGestureActive } from './_canvasGestureS
 import type { ToCData } from '../types';
 import { loggingService } from '../services/loggingService';
 
-export interface DragOverLocation {
-  sectionIndex: number;
-  columnIndex: number;
-  /** Container-local Y where the cursor sits, in node-slot regions only. */
-  yPosition?: number;
-  /** True for new-column gutters (drop becomes a column-insert at columnIndex). */
-  isNewColumn?: boolean;
-  /** True for new-section gutters (drop becomes a section-insert at sectionIndex). */
-  isNewSection?: boolean;
-}
+/**
+ * Where the drop would land if the pointer were released right now.
+ *
+ * Mirrors the inner `Region` discriminated union from `useGraphLayout`
+ * one-to-one so PR 5/7 consumers can `switch (kind)` and let TS check
+ * exhaustiveness instead of probing optional flags. (Earlier shape
+ * collapsed all four cases into optional `yPosition`/`isNewColumn`/
+ * `isNewSection` flags, which were under-constrained at the type level
+ * and prone to "which one wins?" bugs.)
+ */
+export type DragOverLocation =
+  | { kind: 'node-slot'; sectionIndex: number; columnIndex: number; yPosition: number }
+  | { kind: 'over-node'; sectionIndex: number; columnIndex: number }
+  | { kind: 'new-column'; sectionIndex: number; columnIndex: number }
+  | { kind: 'new-section'; sectionIndex: number };
 
 export interface DragState {
   nodeId: string;
@@ -123,10 +78,29 @@ export interface UsePointerDragArgs {
   zoomScale?: number;
   /** Node heights, keyed by node id, in container-local px. */
   nodeHeights: Record<string, number>;
-  /** Fired on drop with the mapped target. */
-  onDrop: (target: DragOverLocation, draggedNodeId: string) => void;
+  /**
+   * Fired on drop with the mapped target. `pointerOffset` is the
+   * viewport-coord offset from cursor to dragged node's top-left,
+   * captured at drag-start (so the consumer can place the node such
+   * that the grab point stays under the cursor). Passing it through
+   * the callback (rather than letting the consumer read it from React
+   * state) closes the scheduling gap that `dragStateRef` exists for
+   * inside the hook.
+   */
+  onDrop: (
+    target: DragOverLocation,
+    draggedNodeId: string,
+    pointerOffset: { x: number; y: number },
+  ) => void;
   /** Fired once at drag-start. NodeEditor uses this to dismiss itself. */
   onDragStart?: (nodeId: string) => void;
+  /**
+   * Fired when a drop is aborted because the dragged node id is no
+   * longer present in `data` (cross-tab delete race). Consumer can
+   * surface a toast / banner so the user knows their drag was
+   * discarded for a reason rather than vanishing silently.
+   */
+  onStaleDrop?: (nodeId: string) => void;
 }
 
 export interface UsePointerDragResult {
@@ -139,43 +113,38 @@ export interface UsePointerDragResult {
   isActive: boolean;
 }
 
-/** Map a classifyRegion result to the legacy DragOverLocation shape. */
+/** Map a classifyRegion result onto the public DragOverLocation union. */
 function regionToDragOverLocation(region: Region | null): DragOverLocation | null {
   if (!region) return null;
   switch (region.kind) {
     case 'node-slot':
       return {
+        kind: 'node-slot',
         sectionIndex: region.sectionIdx,
         columnIndex: region.columnIdx,
         yPosition: region.yPosition,
-        isNewColumn: false,
       };
     case 'over-node':
       // Over an existing node: treat as a node-slot in the same column
-      // so the drop reorders within the column. Drop math uses
-      // yPosition from the cursor; we don't have it here, so we leave
-      // it undefined and let the consumer fall back to its default.
+      // so the drop reorders within the column. We don't have a cursor
+      // y here (classifyRegion didn't pass it through for this variant);
+      // the consumer falls back to its default position.
       return {
+        kind: 'over-node',
         sectionIndex: region.sectionIdx,
         columnIndex: region.columnIdx,
-        isNewColumn: false,
       };
     case 'new-column':
       return {
+        kind: 'new-column',
         sectionIndex: region.sectionIdx,
         columnIndex: region.columnIdx,
-        isNewColumn: true,
       };
     case 'new-section':
       // No existing code path inserts a new section via drag, but we
       // expose the signal so PR 5+ can react to it without another
-      // round of plumbing. The legacy `handleDrop` ignores
-      // isNewSection.
-      return {
-        sectionIndex: region.sectionIdx,
-        columnIndex: 0,
-        isNewSection: true,
-      };
+      // round of plumbing.
+      return { kind: 'new-section', sectionIndex: region.sectionIdx };
   }
 }
 
@@ -200,6 +169,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
     nodeHeights,
     onDrop,
     onDragStart,
+    onStaleDrop,
   } = args;
 
   const [dragState, setDragStateInternal] = useState<DragState | null>(null);
@@ -230,15 +200,17 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   const dataRef = useRef(data);
   dataRef.current = data;
 
-  // Latest zoomScale / nodeHeights / onDrop ref so the document-level
-  // listeners (installed once) read the live values without re-installing
-  // on every prop change.
+  // Latest zoomScale / nodeHeights / onDrop / onStaleDrop ref so the
+  // document-level listeners (installed once) read the live values
+  // without re-installing on every prop change.
   const zoomRef = useRef(zoomScale);
   zoomRef.current = zoomScale;
   const nodeHeightsRef = useRef(nodeHeights);
   nodeHeightsRef.current = nodeHeights;
   const onDropRef = useRef(onDrop);
   onDropRef.current = onDrop;
+  const onStaleDropRef = useRef(onStaleDrop);
+  onStaleDropRef.current = onStaleDrop;
 
   // The pointer id we captured so we can release it on cleanup. Also
   // the active pointer id we ignore on the second-pointer guard.
@@ -248,19 +220,18 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
 
   // Cleanup: release pointer capture (if any), reset module-scope flag,
   // and clear local state. Safe to call multiple times.
+  //
+  // Per the Pointer Events spec, `releasePointerCapture` is a no-op when
+  // no capture is held, so we don't precheck `hasPointerCapture`. The
+  // try/catch still covers jsdom (no method) and detached elements.
   const cleanup = useCallback(() => {
     const el = captureElRef.current;
     const pointerId = activePointerIdRef.current;
     if (el && pointerId != null) {
       try {
-        if (typeof el.hasPointerCapture === 'function' && el.hasPointerCapture(pointerId)) {
-          el.releasePointerCapture(pointerId);
-        } else if (typeof el.releasePointerCapture === 'function') {
-          el.releasePointerCapture(pointerId);
-        }
+        el.releasePointerCapture?.(pointerId);
       } catch {
-        // jsdom or detached element — non-fatal. Pointer capture is a
-        // best-effort signal; clearing local state is what matters.
+        // jsdom or detached element — non-fatal.
       }
     }
     captureElRef.current = null;
@@ -297,23 +268,47 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   );
 
   // pointerup handler — stale-node guard, then fire onDrop if valid.
+  //
+  // The consumer-supplied `onDrop` callback runs inside `try { ... }
+  // finally { cleanup() }`. Without that, a throw in the consumer
+  // escapes the listener and leaves four pieces of state stuck:
+  //   - `isCanvasGestureActive` = true (PR 5/7 hooks short-circuit
+  //      every pointerdown until next click anywhere)
+  //   - dragState non-null (phantom ghost rendered indefinitely)
+  //   - pointer capture not released
+  //   - `isDragActive` stuck true (consumer's polling-pause never lifts)
+  // The bug is silent and self-heals on next pointerdown via
+  // `handleSecondPointer` → `cleanup()`, which is exactly what makes it
+  // hard to diagnose. Surfacing the error via `loggingService` makes it
+  // observable.
   const handlePointerUp = useCallback(
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
       const state = dragStateRef.current;
-      if (state) {
-        // Stale-node guard: cross-tab delete race.
-        if (!nodeExistsInData(dataRef.current, state.nodeId)) {
-          loggingService.reportError({
-            error_name: 'stale-node-drop',
-            error_message: `Dropped node ${state.nodeId} no longer exists in data`,
-            request_metadata: { nodeId: state.nodeId },
-          });
-        } else if (state.dragOverLocation) {
-          onDropRef.current(state.dragOverLocation, state.nodeId);
+      try {
+        if (state) {
+          // Stale-node guard: cross-tab delete race.
+          if (!nodeExistsInData(dataRef.current, state.nodeId)) {
+            loggingService.reportError({
+              error_name: 'stale-node-drop',
+              error_message: `Dropped node ${state.nodeId} no longer exists in data`,
+              request_metadata: { nodeId: state.nodeId },
+            });
+            onStaleDropRef.current?.(state.nodeId);
+          } else if (state.dragOverLocation) {
+            onDropRef.current(state.dragOverLocation, state.nodeId, state.pointerOffset);
+          }
         }
+      } catch (err) {
+        loggingService.reportError({
+          error_name: 'drop-handler-threw',
+          error_message: err instanceof Error ? err.message : String(err),
+          stack_trace: err instanceof Error ? err.stack : undefined,
+          request_metadata: { nodeId: state?.nodeId },
+        });
+      } finally {
+        cleanup();
       }
-      cleanup();
     },
     [cleanup],
   );
@@ -375,9 +370,15 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   // Hook-unmount safety: if the consumer unmounts mid-drag (e.g. route
   // change while a finger is down), make sure the gesture flag doesn't
   // leak to PR 5/7's pointer handlers.
+  //
+  // We only clear the flag if WE set it (i.e. our own dragStateRef is
+  // populated). The earlier shape cleared unconditionally on any
+  // `isCanvasGestureActive()`, which would wipe a sibling drag hook's
+  // claim if a PR 5/7 hook held the flag when this one unmounted. The
+  // ref check makes ownership explicit.
   useEffect(() => {
     return () => {
-      if (isCanvasGestureActive()) {
+      if (dragStateRef.current !== null && isCanvasGestureActive()) {
         setCanvasGestureActive(false);
       }
     };
