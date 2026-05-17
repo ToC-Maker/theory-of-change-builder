@@ -17,18 +17,12 @@
 // The two dots are rendered as Fragment siblings (no wrapping element)
 // so they don't introduce a hit-test target between them.
 
-import React from 'react';
-import type { HandleSide } from '../../hooks/useConnectionDrag';
+import type { BindConnectionHandle } from '../../hooks/useConnectionDrag';
 
 interface ConnectionHandlesProps {
   nodeId: string;
   visible: boolean;
-  bindHandle: (
-    nodeId: string,
-    side: HandleSide,
-  ) => {
-    onPointerDown: (e: React.PointerEvent) => void;
-  };
+  bindHandle: BindConnectionHandle;
 }
 
 export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHandlesProps) {
