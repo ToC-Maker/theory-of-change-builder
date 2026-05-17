@@ -151,15 +151,15 @@ describe('computePathWithWaypoints', () => {
   });
 
   describe('dash-phase shape regression (acceptance test 7.1)', () => {
-    // The red-team Critical finding (plan/figma-redesign.md:160-163) requires
-    // that confidence-driven stroke styles look continuous at waypoint
-    // corners across confidence 20 / 50 / 90 and 0 / 1 / 2 waypoints. The
-    // visual continuity comes from rendering ONE `<path>` per connection
-    // with a stroke-dasharray that spans the whole path. This test pins
-    // the SHAPE of the path string so a future regression in segment
-    // count or anchor ordering fails loudly. Visual dash continuity is a
+    // The red-team Critical finding (plan/figma-redesign.md:160-163)
+    // requires confidence-driven stroke styles to look continuous at
+    // waypoint corners. The visual continuity comes from rendering ONE
+    // `<path>` per connection with a stroke-dasharray spanning the
+    // whole path; this test pins the SHAPE of the path string for 0 /
+    // 1 / 2 waypoints. Confidence is NOT iterated: it doesn't enter
+    // `computePathWithWaypoints` (only stroke style), so iterating it
+    // would just multiply the test count. Visual dash continuity is a
     // QA check done in a real browser; this is the algorithmic guard.
-
     const cases: { waypoints: { x: number; y: number }[]; expectedCurves: number }[] = [
       { waypoints: [], expectedCurves: 1 },
       { waypoints: [{ x: 100, y: 80 }], expectedCurves: 2 },
@@ -171,26 +171,19 @@ describe('computePathWithWaypoints', () => {
         expectedCurves: 3,
       },
     ];
-    const confidences = [20, 50, 90];
 
     for (const { waypoints, expectedCurves } of cases) {
-      for (const _conf of confidences) {
-        // Note: confidence does not enter `computePathWithWaypoints`
-        // (it affects only stroke style). We iterate confidences here
-        // to make the test matrix explicit and document the acceptance
-        // gate; the path string is invariant in confidence.
-        it(`waypoints=${waypoints.length}, confidence=${_conf}: single Move + ${expectedCurves} Curves`, () => {
-          const d = computePathWithWaypoints({
-            source: { x: 0, y: 50 },
-            waypoints,
-            target: { x: 200, y: 50 },
-            curvature: 0.5,
-            direction: 'forward',
-          });
-          expect((d.match(/M /g) ?? []).length).toBe(1);
-          expect((d.match(/ C /g) ?? []).length).toBe(expectedCurves);
+      it(`waypoints=${waypoints.length}: single Move + ${expectedCurves} Curves`, () => {
+        const d = computePathWithWaypoints({
+          source: { x: 0, y: 50 },
+          waypoints,
+          target: { x: 200, y: 50 },
+          curvature: 0.5,
+          direction: 'forward',
         });
-      }
+        expect((d.match(/M /g) ?? []).length).toBe(1);
+        expect((d.match(/ C /g) ?? []).length).toBe(expectedCurves);
+      });
     }
   });
 
@@ -217,6 +210,99 @@ describe('computePathWithWaypoints', () => {
       // Reflect c2 across waypoint (100, 50): expect (200 - c2x, 100 - c2y) = (c3x, c3y).
       expect(c3x).toBeCloseTo(200 - c2x, 6);
       expect(c3y).toBeCloseTo(100 - c2y, 6);
+    });
+  });
+
+  describe('malformed waypoint input — defense-in-depth', () => {
+    // A malformed import (string coords, NaN, null entries, non-object
+    // items) must not produce an SVG `d` string containing `NaN`
+    // (which silently hides the connection) or throw (which would
+    // unmount the canvas subtree). The function filters non-finite
+    // / non-{x,y} entries and falls back to the byte-identical
+    // 0-waypoint shape if NO valid waypoints remain.
+    const baseArgs = {
+      source: { x: 0, y: 50 },
+      target: { x: 200, y: 50 },
+      curvature: 0.5,
+      direction: 'forward' as const,
+    };
+
+    it('returns the 0-waypoint fallback when all waypoints are NaN-coord', () => {
+      const d = computePathWithWaypoints({
+        ...baseArgs,
+        waypoints: [{ x: Number.NaN, y: 50 }],
+      });
+      expect(d).not.toMatch(/NaN/);
+      // Same byte-identical shape as the 0-waypoint case.
+      expect(d).toBe('M 0 50 C 105 50, 95 50, 200 50');
+    });
+
+    it('returns the 0-waypoint fallback when all waypoints have string coords', () => {
+      const d = computePathWithWaypoints({
+        ...baseArgs,
+        // Cast — simulates a malformed JSON import.
+        waypoints: [{ x: '100', y: '50' }] as unknown as Array<{ x: number; y: number }>,
+      });
+      expect(d).not.toMatch(/NaN/);
+      expect(d).toBe('M 0 50 C 105 50, 95 50, 200 50');
+    });
+
+    it('returns the 0-waypoint fallback when waypoints contains a null entry', () => {
+      const d = computePathWithWaypoints({
+        ...baseArgs,
+        waypoints: [null] as unknown as Array<{ x: number; y: number }>,
+      });
+      expect(d).not.toMatch(/NaN/);
+      expect(d).toBe('M 0 50 C 105 50, 95 50, 200 50');
+    });
+
+    it('returns the 0-waypoint fallback when waypoints itself is not an array', () => {
+      const d = computePathWithWaypoints({
+        ...baseArgs,
+        waypoints: 'not-an-array' as unknown as Array<{ x: number; y: number }>,
+      });
+      expect(d).not.toMatch(/NaN/);
+      expect(d).toBe('M 0 50 C 105 50, 95 50, 200 50');
+    });
+
+    it('drops only the malformed entries, keeping the valid ones', () => {
+      const d = computePathWithWaypoints({
+        ...baseArgs,
+        waypoints: [
+          { x: Number.NaN, y: 50 },
+          { x: 100, y: 50 },
+          null as unknown as { x: number; y: number },
+        ],
+      });
+      expect(d).not.toMatch(/NaN/);
+      // Should be the 1-waypoint shape using just (100, 50).
+      expect((d.match(/M /g) ?? []).length).toBe(1);
+      expect((d.match(/ C /g) ?? []).length).toBe(2);
+      expect(d).toMatch(/100 50/);
+    });
+  });
+
+  describe('many-waypoint stress (N=5+)', () => {
+    it('handles N=8 waypoints with correct segment count and anchor placement', () => {
+      // The loop is N-agnostic, but a single large-N test catches any
+      // future change that hard-codes N≤2 assumptions.
+      const waypoints = Array.from({ length: 8 }, (_, i) => ({
+        x: 25 + i * 25,
+        y: i % 2 === 0 ? 80 : 20,
+      }));
+      const d = computePathWithWaypoints({
+        source: { x: 0, y: 50 },
+        waypoints,
+        target: { x: 250, y: 50 },
+        curvature: 0.5,
+        direction: 'forward',
+      });
+      expect((d.match(/M /g) ?? []).length).toBe(1);
+      expect((d.match(/ C /g) ?? []).length).toBe(9); // N+1
+      // Each anchor appears in the path string.
+      for (const w of waypoints) {
+        expect(d).toContain(`${w.x} ${w.y}`);
+      }
     });
   });
 });
