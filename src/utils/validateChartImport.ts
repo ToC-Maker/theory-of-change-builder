@@ -6,12 +6,14 @@
 // `columns: "not an array"`); we walk deeper before letting the
 // import overwrite the user's graph.
 //
-// PR 7 will add `connections[].waypoints: {x: number, y: number}[]`.
-// We guard against bad coords now so the renderer never sees them
-// (NaN/string coords would otherwise crash the SVG path builder).
+// Single canonical validator: callers (FileMenu.handleFileChosen,
+// App.handleUploadJSON) all route through this. PR 7's waypoint
+// shape — `connections[].waypoints: {x: number, y: number}[]` — is
+// covered, with finite-coord checks so the renderer never sees
+// NaN/string coords that would crash the SVG path builder.
 import type { ToCData } from '../types';
 
-export function validateToCShape(
+export function validateChartImport(
   parsed: unknown,
 ): { ok: true; data: ToCData } | { ok: false; reason: string } {
   if (!parsed || typeof parsed !== 'object') {
