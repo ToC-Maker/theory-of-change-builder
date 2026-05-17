@@ -26,6 +26,13 @@ const TOC_EXPLAINER_URL = 'https://en.wikipedia.org/wiki/Theory_of_change';
 
 export function HelpPanel() {
   const [open, setOpen] = useState(false);
+  // Set when `localStorage.removeItem` throws (private mode, storage
+  // disabled, quota errors). Surfaced inline beside the Replay button
+  // so the user knows why the tutorial didn't re-arm — the previous
+  // silent-catch + unconditional reload made the affordance look
+  // broken (reload happened, but the flag was still set, so the
+  // tutorial silently skipped on the next render).
+  const [storageError, setStorageError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -44,8 +51,12 @@ export function HelpPanel() {
     try {
       localStorage.removeItem('graph-tutorial-seen');
     } catch {
-      // ignore — private mode etc.
+      // Storage unavailable. Surface inline + skip the reload so we
+      // don't lie to the user about resetting the tutorial.
+      setStorageError("Couldn't reset the tutorial. Storage may be disabled.");
+      return;
     }
+    setStorageError(null);
     setOpen(false);
     // Reload so <GraphTutorial> re-runs its first-time check.
     window.location.reload();
@@ -107,6 +118,11 @@ export function HelpPanel() {
             >
               Replay the view-mode walkthrough
             </button>
+            {storageError && (
+              <div role="alert" className="text-xs text-red-600 px-1 py-1">
+                {storageError}
+              </div>
+            )}
             <div className="text-xs text-gray-500 px-1 py-1">Edit-mode tutorial — coming soon.</div>
           </div>
 
