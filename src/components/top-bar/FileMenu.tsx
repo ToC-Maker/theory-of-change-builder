@@ -302,9 +302,10 @@ export function FileMenu({
       const text = await file.text();
       const parsed = JSON.parse(text) as unknown;
       // Deep shape validation — walk sections/columns/nodes and any
-      // optional connections/waypoints. The shallow `sections` check
-      // would pass shapes like `{sections: [{columns: "string"}]}` and
-      // let them silently overwrite the user's graph.
+      // optional connections/waypoints. `validateToCShape` covers
+      // waypoint validation (rejects NaN/string/null/non-array
+      // shapes), so PR 7's adversarial / corrupted imports can't
+      // NaN-poison the SVG path.
       const result = validateToCShape(parsed);
       if (!result.ok) {
         // Heuristic: prefer the most-likely-recognizable framing when
