@@ -1,4 +1,4 @@
-// Unit tests for `src/utils/validateToCShape.ts` — deep shape
+// Unit tests for `src/utils/validateChartImport.ts` — deep shape
 // validation for imported / programmatically supplied ToC JSON.
 //
 // The validator is used by `FileMenu.handleFileChosen` (before
@@ -10,18 +10,18 @@
 //   - Tolerate optional fields being absent (no `connections`,
 //     no `waypoints`, etc.).
 import { describe, expect, it } from 'vitest';
-import { validateToCShape } from '../../src/utils/validateToCShape';
+import { validateChartImport } from '../../src/utils/validateChartImport';
 
-describe('validateToCShape', () => {
+describe('validateChartImport', () => {
   it('accepts the minimal well-formed shape', () => {
-    const result = validateToCShape({
+    const result = validateChartImport({
       sections: [{ title: 'A', columns: [{ nodes: [] }] }],
     });
     expect(result.ok).toBe(true);
   });
 
   it('accepts nodes with optional connections + finite-numeric waypoints', () => {
-    const result = validateToCShape({
+    const result = validateChartImport({
       sections: [
         {
           title: 'A',
@@ -137,7 +137,7 @@ describe('validateToCShape', () => {
   ])(
     'rejects malformed input with a path-stamped reason ($expectedReason)',
     ({ input, expectedReason }) => {
-      const result = validateToCShape(input);
+      const result = validateChartImport(input);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.reason).toMatch(expectedReason);
