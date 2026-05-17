@@ -20,7 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 import AuthButton from './components/AuthButton';
 import { TopBar } from './components/top-bar/TopBar';
-import { validateToCShape } from './utils/validateToCShape';
+import { validateChartImport } from './utils/validateChartImport';
 import type { SaveError } from './components/top-bar/SaveIndicator';
 import { ShareDialog } from './components/share/ShareDialog';
 import { usePermissionsRefresh } from './hooks/usePermissionsRefresh';
@@ -888,9 +888,10 @@ function ToCViewer() {
       // validator — and surface a console error if it fails. The
       // legacy `alert()` was a UX anti-pattern from PR 1 era.
       //
-      // `validateToCShape` covers waypoint validation introduced by
-      // PR 7 (it was designed in PR 6 fix to anticipate the new shape).
-      const result = validateToCShape(jsonData);
+      // `validateChartImport` covers waypoint validation introduced
+      // by PR 7 (it was designed in PR 6 fix to anticipate the new
+      // shape).
+      const result = validateChartImport(jsonData);
       if (!result.ok) {
         console.error('[App] handleUploadJSON received malformed data:', result.reason);
         return;

@@ -27,7 +27,7 @@ import { useAuth0 } from '@auth0/auth0-react';
 import { ChartService, type UserChart } from '../../services/chartService';
 import { ConfirmModal } from '../ConfirmModal';
 import type { ToCData } from '../../types';
-import { validateToCShape } from '../../utils/validateToCShape';
+import { validateChartImport } from '../../utils/validateChartImport';
 // `src/utils/exportChart.ts` is dynamic-imported inside handlers, not
 // statically imported here. The library it pulls in (html-to-image,
 // jspdf) is large; Vite chunks it into its own bundle so the user
@@ -302,11 +302,11 @@ export function FileMenu({
       const text = await file.text();
       const parsed = JSON.parse(text) as unknown;
       // Deep shape validation — walk sections/columns/nodes and any
-      // optional connections/waypoints. `validateToCShape` covers
+      // optional connections/waypoints. `validateChartImport` covers
       // waypoint validation (rejects NaN/string/null/non-array
       // shapes), so PR 7's adversarial / corrupted imports can't
       // NaN-poison the SVG path.
-      const result = validateToCShape(parsed);
+      const result = validateChartImport(parsed);
       if (!result.ok) {
         // Heuristic: prefer the most-likely-recognizable framing when
         // the top-level keys themselves are wrong (a JSON file from a
