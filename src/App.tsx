@@ -871,6 +871,9 @@ function ToCViewer() {
       // with possibly malformed data. Walk the full shape — same
       // validator — and surface a console error if it fails. The
       // legacy `alert()` was a UX anti-pattern from PR 1 era.
+      //
+      // `validateToCShape` covers waypoint validation introduced by
+      // PR 7 (it was designed in PR 6 fix to anticipate the new shape).
       const result = validateToCShape(jsonData);
       if (!result.ok) {
         console.error('[App] handleUploadJSON received malformed data:', result.reason);

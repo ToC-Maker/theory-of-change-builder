@@ -61,15 +61,45 @@ export interface ComputePathArgs {
  *   - 0 waypoints: `M sx sy C c1x c1y, c2x c2y, tx ty`
  *   - 1 waypoint:  `M sx sy C c1x c1y, c2x c2y, wx wy C c3x c3y, c4x c4y, tx ty`
  *   - N waypoints: one Move + (N+1) Curve segments.
+ *
+ * Defensive: filters non-finite or non-`{x,y}` entries from
+ * `waypoints` (and accepts a non-array `waypoints` value by treating it
+ * as empty). A malformed JSON import with NaN coords or string coords
+ * would otherwise produce an SVG `d` containing `NaN` (browsers
+ * silently drop the path) or throw on null entries; both render the
+ * canvas subtree unrendered. Filtering here closes that gap at the
+ * renderer; the JSON-import boundary additionally rejects malformed
+ * shapes before they reach state.
  */
 export function computePathWithWaypoints(args: ComputePathArgs): string {
   const { source, target, waypoints, curvature, direction } = args;
 
-  if (waypoints.length === 0) {
+  const safeWaypoints = sanitizeWaypoints(waypoints);
+  if (safeWaypoints.length === 0) {
     return buildZeroWaypointPath(source, target, curvature, direction);
   }
 
-  return buildMultiWaypointPath(source, target, waypoints, curvature, direction);
+  return buildMultiWaypointPath(source, target, safeWaypoints, curvature, direction);
+}
+
+function sanitizeWaypoints(input: unknown): Point[] {
+  if (!Array.isArray(input)) return [];
+  const out: Point[] = [];
+  for (const w of input) {
+    if (
+      w &&
+      typeof w === 'object' &&
+      'x' in w &&
+      'y' in w &&
+      typeof (w as Point).x === 'number' &&
+      typeof (w as Point).y === 'number' &&
+      Number.isFinite((w as Point).x) &&
+      Number.isFinite((w as Point).y)
+    ) {
+      out.push({ x: (w as Point).x, y: (w as Point).y });
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,15 +219,9 @@ function buildMultiWaypointPath(
   const lastWp = anchors[anchors.length - 2];
   const targetOffset = computeControlPointOffset(lastWp.x, target.x, curvature, direction);
   // The target-side control offset SIGN mirrors the 0-waypoint shape:
-  //   forward  : target - offset (control sits left of target).
-  //   backward : target + offset (control sits right of target).
-  //   vertical : target + offset (no-op when offset=0).
-  const targetInX =
-    direction === 'forward'
-      ? target.x - targetOffset
-      : direction === 'backward'
-        ? target.x + targetOffset
-        : target.x + targetOffset;
+  // forward sits left of target (`-offset`); backward / vertical sit on
+  // or right of it (`+offset`; vertical is a no-op since offset=0).
+  const targetInX = direction === 'forward' ? target.x - targetOffset : target.x + targetOffset;
   const targetInY = target.y;
 
   // Build segments. For each segment i from anchors[i] to anchors[i+1]:

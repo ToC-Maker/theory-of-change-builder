@@ -330,9 +330,51 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
 
     await Promise.resolve();
     // Bad file -> onImportJson is never called; an export-error modal
-    // appears via the third ConfirmModal instance.
+    // surfaces the validation reason.
     expect(onImportJson).not.toHaveBeenCalled();
-    expect(await screen.findByText(/does not look like a theory of change/i)).toBeInTheDocument();
+    expect(await screen.findByText(/missing `sections` array/i)).toBeInTheDocument();
+  });
+
+  it('rejects files with malformed waypoints (NaN coords)', async () => {
+    const user = userEvent.setup();
+    const onImportJson = vi.fn();
+    renderMenu({
+      data: { sections: [] },
+      onImportJson,
+    });
+
+    await user.click(screen.getByRole('button', { name: /file/i }));
+    await user.click(screen.getByText(/^import$/i));
+    await user.click(screen.getByTestId('file-menu-import-json'));
+
+    const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
+    await user.upload(
+      fileInput,
+      makeJsonFile({
+        sections: [
+          {
+            title: 'A',
+            columns: [
+              {
+                nodes: [
+                  {
+                    id: 'n1',
+                    title: 'A',
+                    text: 'a',
+                    connectionIds: [],
+                    connections: [{ targetId: 'n2', waypoints: [{ x: Number.NaN, y: 50 }] }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    await Promise.resolve();
+    expect(onImportJson).not.toHaveBeenCalled();
+    expect(await screen.findByText(/waypoints/i)).toBeInTheDocument();
   });
 
   it('rejects files with non-array columns inside a section', async () => {
