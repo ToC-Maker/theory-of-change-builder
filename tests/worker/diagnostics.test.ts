@@ -170,4 +170,81 @@ describe('writeDiagnostic — request_metadata auto-injection', () => {
       expect(meta.deployment_host).toBe('baked-in.example');
     });
   });
+
+  describe('swallow-on-failure contract (recovery-of-recovery)', () => {
+    // These two tests pin the "swallow + console.error, never re-throw"
+    // contract documented at the top of `worker/_shared/diagnostics.ts`.
+    // The helper exists specifically to be safe to call from inside other
+    // catch blocks: if the diagnostic insert itself fails, re-throwing
+    // would replace the original error with a less informative one. A
+    // regression that turned this into either (a) silent swallow with no
+    // console.error, or (b) unconditional throw, would otherwise sail
+    // through CI because every other test in this file uses an SQL spy
+    // that always resolves cleanly.
+    //
+    // Verified 2026-05-17: temporarily removed the try/catch in
+    // `writeDiagnostic` (let the rejection propagate) — both tests below
+    // failed loudly (the no-throw assertion threw "boom from sql", and
+    // the console.error assertion failed with `Number of calls: 0`).
+    // Re-instated the try/catch and both pass. So the regression these
+    // tests guard against is genuinely detectable, not coincidental.
+
+    // Tag function whose every invocation rejects, mirroring a SQL
+    // transport error. Declared without parameters because the helper
+    // never inspects them in the failure case and the no-unused-vars
+    // lint rule doesn't honour leading underscores in this repo.
+    function makeRejectingSql(): {
+      sql: NeonQueryFunction<false, false>;
+      callCount: () => number;
+    } {
+      let count = 0;
+      const fn = () => {
+        count += 1;
+        return Promise.reject(new Error('boom from sql'));
+      };
+      return {
+        sql: fn as unknown as NeonQueryFunction<false, false>,
+        callCount: () => count,
+      };
+    }
+
+    it('does not throw when the sql call rejects', async () => {
+      const { sql, callCount } = makeRejectingSql();
+      // Suppress the console.error so vitest's output stays clean; the
+      // assertion about the log call lives in the next test.
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(
+        writeDiagnostic(sql, {
+          error_name: 'TestSwallowNoThrow',
+          error_message: 'test',
+          user_id: 'user-x',
+          request_metadata: {},
+        }),
+      ).resolves.toBeUndefined();
+      expect(callCount()).toBe(1);
+    });
+
+    it('logs to console.error when sql rejects, including the diagnostic name', async () => {
+      const { sql } = makeRejectingSql();
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await writeDiagnostic(sql, {
+        error_name: 'TestSwallowProbe',
+        error_message: 'test',
+        user_id: 'user-x',
+        request_metadata: {},
+      });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      // Future debuggers should be able to grep journald / wrangler tail
+      // for the diagnostic name and land on the failing call site, so
+      // pin that the name shows up somewhere in the log arguments. The
+      // implementation uses a prefix like `writeDiagnostic(TestName) insert failed:`
+      // but we don't lock that exact format — just the name being grep-able.
+      const firstCall = consoleSpy.mock.calls[0] ?? [];
+      const haystack = firstCall.map((arg) => (typeof arg === 'string' ? arg : '')).join(' ');
+      expect(haystack).toContain('TestSwallowProbe');
+    });
+  });
 });
