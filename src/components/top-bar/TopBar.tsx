@@ -34,7 +34,6 @@ export interface TopBarProps {
   // Mode + selection (PR 1 strips the in-bar mode toggle; viewer mode
   // shows a read-only badge instead).
   editMode: boolean;
-  setEditMode: React.Dispatch<React.SetStateAction<boolean>>;
   showEditButton: boolean;
 
   // Undo / redo.
@@ -47,11 +46,6 @@ export interface TopBarProps {
   isSaving: boolean;
   saveError: SaveError | null;
   currentEditToken: string | null;
-
-  // Share / chart.
-  data: ToCData;
-  containerSize?: { width: number; height: number };
-  onChartCreated?: (token: string, chartId: string) => void;
 
   // Format menu pass-through.
   fontFamily: string;
@@ -85,11 +79,11 @@ export interface TopBarProps {
 
 const MD_PX = 768;
 
-const noopDelete = () => {};
-
 function useBreakpoint(forced?: Breakpoint): Breakpoint {
-  // Initial state from `window.innerWidth` if available (jsdom + SSR
-  // both fall back to `'md'`).
+  // Initial state from `window.innerWidth` if available. SSR (no window)
+  // falls back to `'md'` because indexable HTML should be desktop-first.
+  // jsdom uses 1024px by default, so tests also see `'md'` unless the
+  // test sets `window.innerWidth` explicitly.
   const initial: Breakpoint =
     forced ?? (typeof window !== 'undefined' && window.innerWidth < MD_PX ? 'sm' : 'md');
   const [bp, setBp] = useState<Breakpoint>(initial);
@@ -98,7 +92,6 @@ function useBreakpoint(forced?: Breakpoint): Breakpoint {
     if (forced) return;
     const update = () => setBp(window.innerWidth < MD_PX ? 'sm' : 'md');
     window.addEventListener('resize', update);
-    update();
     return () => window.removeEventListener('resize', update);
   }, [forced]);
 
@@ -112,7 +105,7 @@ export function TopBar(props: TopBarProps) {
   const isAuthenticated = props.isAuthenticated ?? false;
   const isOwner = props.isOwner ?? false;
   const currentChartId = props.currentChartId ?? null;
-  const onDeleteChart = props.onDeleteChart ?? noopDelete;
+  const onDeleteChart = props.onDeleteChart ?? (() => {});
   const onShareClick = props.onShareClick ?? (() => {});
 
   const isViewer = !props.showEditButton;
