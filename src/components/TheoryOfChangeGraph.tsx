@@ -13,6 +13,7 @@ import { useGraphMutation } from '../hooks/useGraphMutation';
 import { usePointerDrag } from '../hooks/usePointerDrag';
 import type { DragOverLocation } from '../hooks/usePointerDrag';
 import { useConnectionDrag } from '../hooks/useConnectionDrag';
+import { useWaypointDrag } from '../hooks/useWaypointDrag';
 import { buildConnectionPath } from './canvas/connectionPath';
 import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
 import { GutterAffordance } from './canvas/GutterAffordance';
@@ -81,6 +82,7 @@ export function ToC({
     mutate: setDataAndNotify,
     mutateDebounced,
     commit: commitMutation,
+    discardBuffered: discardBufferedMutation,
   } = useGraphMutation(initialData, onDataChange);
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null;
@@ -905,16 +907,48 @@ export function ToC({
     onConnect: addConnection,
   });
 
+  // PR 7: waypoint drag is hoisted up to `TheoryOfChangeGraph` (parity
+  // with `useConnectionDrag` placement) so its `isActive` flag can OR
+  // into `isAnyDragActive` below — that is the polling-pause signal the
+  // 30s sync poll consumes via App.tsx's `isDragInFlightRef`. Previously
+  // this hook lived inside `<ConnectionsComponent>` and the signal
+  // never reached the parent (a poll mid-waypoint-drag could overwrite
+  // the buffered `mutateDebounced` state). Bind accessors and the
+  // current drag state are passed down to `<ConnectionsComponent>`,
+  // which forwards them to per-connection `<ConnectionWaypointHandles>`.
+  const clientToContainer = useCallback(
+    (clientX: number, clientY: number) => {
+      const container = graphContainerRef.current;
+      if (!container) return { x: clientX, y: clientY };
+      const rect = container.getBoundingClientRect();
+      const zoom = camera?.z ?? 1;
+      return {
+        x: (clientX - rect.left) / zoom,
+        y: (clientY - rect.top) / zoom,
+      };
+    },
+    [camera],
+  );
+
+  const waypointDrag = useWaypointDrag({
+    data,
+    editMode,
+    mutateDebounced,
+    commit: commitMutation,
+    discardBuffered: discardBufferedMutation,
+    clientToContainer,
+  });
+
   // Notify parent (App) of drag-active transitions so the 30s sync
   // poll can pause while a gesture is in flight (red-team Important).
-  // We OR-combine the node-drag and connection-drag flags so either
-  // gesture pauses polling.
+  // We OR-combine the node-drag, connection-drag, and waypoint-drag
+  // flags so any gesture pauses polling.
   //
   // Cleanup fires `false` if this component unmounts while a drag is
   // active — otherwise the parent's `isDragInFlightRef` stays `true`
   // for the rest of the App's lifetime (the polling effect would
   // silently skip every sync tick).
-  const isAnyDragActive = isDragActive || isConnectionDragActive;
+  const isAnyDragActive = isDragActive || isConnectionDragActive || waypointDrag.isActive;
   useEffect(() => {
     onDragActiveChange?.(isAnyDragActive);
     return () => {
@@ -1441,6 +1475,9 @@ export function ToC({
           containerRef={graphContainerRef}
           camera={camera}
           fontFamily={fontFamily}
+          bindWaypoint={waypointDrag.bindWaypoint}
+          bindMidpoint={waypointDrag.bindMidpoint}
+          waypointDragState={waypointDrag.dragState}
         />
 
         {/* PR 3: only the alignment-suggestion banner remains in this

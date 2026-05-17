@@ -29,12 +29,23 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
+
+// Mock loggingService so stale-waypoint-drop reports can be asserted.
+vi.mock('../../src/services/loggingService', () => {
+  return {
+    loggingService: {
+      reportError: vi.fn(),
+    },
+  };
+});
+
 import { useWaypointDrag } from '../../src/hooks/useWaypointDrag';
 import {
   isCanvasGestureActive,
   setCanvasGestureActive,
   _resetCanvasGestureStateForTest,
 } from '../../src/hooks/_canvasGestureState';
+import { loggingService } from '../../src/services/loggingService';
 import type { ToCData } from '../../src/types';
 
 afterEach(() => {
@@ -127,10 +138,11 @@ function pointerEvent(
 
 interface HookContext {
   mutateDebounced: ReturnType<typeof vi.fn>;
-  mutate: ReturnType<typeof vi.fn>;
   commit: ReturnType<typeof vi.fn>;
+  discardBuffered: ReturnType<typeof vi.fn>;
   clientToContainer: ReturnType<typeof vi.fn>;
   data: ToCData;
+  rerender: (props: { data: ToCData }) => void;
 }
 
 function setupHook(args: {
@@ -143,8 +155,8 @@ function setupHook(args: {
   result: ReturnType<typeof renderHook>['result'];
 } {
   const mutateDebounced = vi.fn();
-  const mutate = vi.fn();
   const commit = vi.fn();
+  const discardBuffered = vi.fn();
   const clientToContainer = vi.fn(
     args.translate ?? ((cx: number, cy: number) => ({ x: cx, y: cy })),
   );
@@ -152,12 +164,28 @@ function setupHook(args: {
   // The hook reads the latest data via a ref-mirrored `dataRef`.
   // Provide a function so callers can mutate the data they pass in.
   const dataRef = { current: args.data };
+  const { result, rerender } = renderHook(
+    ({ data }: { data: ToCData }) =>
+      useWaypointDrag({
+        data,
+        editMode: args.editMode ?? true,
+        mutateDebounced,
+        commit,
+        discardBuffered,
+        clientToContainer,
+      }),
+    { initialProps: { data: args.data } },
+  );
   const ctx: HookContext = {
     mutateDebounced,
-    mutate,
     commit,
+    discardBuffered,
     clientToContainer,
     data: args.data,
+    rerender: (props) => {
+      dataRef.current = props.data;
+      rerender(props);
+    },
   };
   Object.defineProperty(ctx, 'data', {
     get: () => dataRef.current,
@@ -165,21 +193,6 @@ function setupHook(args: {
       dataRef.current = next;
     },
   });
-
-  const { result, rerender } = renderHook(
-    ({ data }: { data: ToCData }) =>
-      useWaypointDrag({
-        data,
-        editMode: args.editMode ?? true,
-        mutate,
-        mutateDebounced,
-        commit,
-        clientToContainer,
-      }),
-    { initialProps: { data: args.data } },
-  );
-  // expose rerender for stale-data tests
-  (ctx as unknown as { rerender: typeof rerender }).rerender = rerender;
   return { ctx, result };
 }
 
@@ -389,6 +402,151 @@ describe('useWaypointDrag', () => {
       expect(ctx.commit).not.toHaveBeenCalled();
       expect(isCanvasGestureActive()).toBe(false);
       expect(result.current.isActive).toBe(false);
+    });
+
+    it('discards the buffered updater on Escape so no auto-commit fires 200ms later', () => {
+      // `mutateDebounced`'s 200ms idle timer would otherwise auto-commit
+      // the in-flight drag position as if the user had released — making
+      // Escape a 200ms-delayed commit rather than a true cancel. The
+      // hook now calls `discardBuffered(key)` on cancel paths.
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 200, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+
+      const expectedKey = `waypoints-${sourceId}->${targetId}`;
+      expect(ctx.discardBuffered).toHaveBeenCalledWith(expectedKey);
+      expect(ctx.commit).not.toHaveBeenCalled();
+    });
+
+    it('discards the buffered updater on pointercancel', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 200, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointercancel', { clientX: 200, clientY: 50 }));
+      });
+
+      const expectedKey = `waypoints-${sourceId}->${targetId}`;
+      expect(ctx.discardBuffered).toHaveBeenCalledWith(expectedKey);
+      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(result.current.isActive).toBe(false);
+    });
+
+    it('discards the buffered updater when a second pointer interrupts the gesture', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50, pointerId: 1 }));
+      });
+      // Second pointer with a different pointerId → cancel.
+      act(() => {
+        document.dispatchEvent(
+          pointerEvent('pointerdown', { clientX: 0, clientY: 0, pointerId: 2 }),
+        );
+      });
+
+      const expectedKey = `waypoints-${sourceId}->${targetId}`;
+      expect(ctx.discardBuffered).toHaveBeenCalledWith(expectedKey);
+      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(result.current.isActive).toBe(false);
+    });
+  });
+
+  describe('stale-edge race observability', () => {
+    it('reports stale-waypoint-drop and survives a mid-gesture rerender where the connection has been deleted', () => {
+      // Cross-tab / AI-streaming-edit class of race: the user starts a
+      // waypoint move; before pointerup, an external update wipes the
+      // connection from `data`. The replay updater MUST defend against
+      // this (no throw, no corrupt write) and the drop site is the only
+      // place where the stale-drop log should fire (pointermove-internal
+      // logging would flood per-tick during the race).
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 160, clientY: 80 }));
+      });
+
+      // Mid-drag: rerender with a `data` that no longer has the
+      // connection. The hook's dataRef should pick up the new shape.
+      const emptyData = makeData([]);
+      const dataNoConnection: ToCData = {
+        ...emptyData,
+        sections: emptyData.sections.map((section) => ({
+          ...section,
+          columns: section.columns.map((column) => ({
+            ...column,
+            nodes: column.nodes.map((node) =>
+              node.id === sourceId ? { ...node, connections: [] } : node,
+            ),
+          })),
+        })),
+      };
+      act(() => {
+        ctx.rerender({ data: dataNoConnection });
+      });
+
+      // Pointerup: the replay updater walks data and finds no
+      // connection — defensive return-unchanged path triggers; the
+      // hook fires one `stale-waypoint-drop` log at the drop site.
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 160, clientY: 80 }));
+      });
+
+      expect(loggingService.reportError).toHaveBeenCalledTimes(1);
+      expect((loggingService.reportError as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(
+        expect.objectContaining({ error_name: 'stale-waypoint-drop' }),
+      );
+      // The replay updater itself no-ops gracefully (no throw).
+      const lastUpdater = ctx.mutateDebounced.mock.calls.at(-1)![0];
+      expect(typeof lastUpdater).toBe('function');
+      const next = (lastUpdater as (p: ToCData) => ToCData)(dataNoConnection);
+      // Original data should be returned unchanged (defensive guard at
+      // `updateConnectionWaypoints` finds no matching connection).
+      expect(next).toBe(dataNoConnection);
+    });
+
+    it('does not report stale-waypoint-drop on a successful drop', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 160, clientY: 80 }));
+      });
+
+      expect(loggingService.reportError).not.toHaveBeenCalled();
     });
   });
 
