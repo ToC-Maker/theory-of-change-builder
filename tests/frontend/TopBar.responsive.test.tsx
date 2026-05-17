@@ -180,4 +180,31 @@ describe('TopBar responsive layout', () => {
     const badge = screen.getByLabelText(/42 pending access requests/i);
     expect(badge.textContent).toBe('9+');
   });
+
+  it('renders a stale indicator on the badge when pendingRequestCountStale is true', () => {
+    renderWithRouter(
+      <TopBar
+        {...defaultProps}
+        breakpoint="md"
+        pendingRequestCount={3}
+        pendingRequestCountStale={true}
+      />,
+    );
+    const badge = screen.getByLabelText(/may be stale/i);
+    expect(badge).toBeInTheDocument();
+  });
+
+  it('does not render a stale indicator when pendingRequestCountStale is false', () => {
+    renderWithRouter(
+      <TopBar
+        {...defaultProps}
+        breakpoint="md"
+        pendingRequestCount={3}
+        pendingRequestCountStale={false}
+      />,
+    );
+    expect(screen.queryByLabelText(/may be stale/i)).toBeNull();
+    // Original badge still present and non-stale.
+    expect(screen.getByLabelText(/3 pending access requests$/i)).toBeInTheDocument();
+  });
 });

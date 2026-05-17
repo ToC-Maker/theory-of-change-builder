@@ -73,6 +73,12 @@ export interface TopBarProps {
   // access requests the current user (owner) can approve. 0 = hidden.
   pendingRequestCount?: number;
 
+  // When the pending-request poll has been failing repeatedly, the
+  // displayed count is the last-successful one — flag the badge so the
+  // owner has a visible cue that it may be stale (otherwise the poll
+  // failing silently lets pending requests pile up unseen).
+  pendingRequestCountStale?: boolean;
+
   // Profile slot rendered on the far right (typically <AuthButton />).
   profileSlot?: React.ReactNode;
 
@@ -228,10 +234,23 @@ export function TopBar(props: TopBarProps) {
                     Share
                     {(props.pendingRequestCount ?? 0) > 0 && (
                       <span
-                        aria-label={`${props.pendingRequestCount} pending access request${
-                          (props.pendingRequestCount ?? 0) === 1 ? '' : 's'
+                        aria-label={
+                          props.pendingRequestCountStale
+                            ? `${props.pendingRequestCount} pending access request${
+                                (props.pendingRequestCount ?? 0) === 1 ? '' : 's'
+                              } (count may be stale — refresh failed)`
+                            : `${props.pendingRequestCount} pending access request${
+                                (props.pendingRequestCount ?? 0) === 1 ? '' : 's'
+                              }`
+                        }
+                        title={
+                          props.pendingRequestCountStale
+                            ? 'Pending-request count may be stale (refresh failed)'
+                            : undefined
+                        }
+                        className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-white text-[10px] font-semibold flex items-center justify-center ${
+                          props.pendingRequestCountStale ? 'bg-gray-400' : 'bg-red-500'
                         }`}
-                        className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center"
                       >
                         {(props.pendingRequestCount ?? 0) > 9 ? '9+' : props.pendingRequestCount}
                       </span>
