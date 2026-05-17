@@ -296,15 +296,15 @@ describe('usePointerDrag', () => {
 
       expect(result.current.dragState?.dragOverLocation).toEqual(
         expect.objectContaining({
+          kind: 'node-slot',
           sectionIndex: 0,
           columnIndex: 1,
-          isNewColumn: false,
         }),
       );
       expect(result.current.dragState?.ghostPos).toEqual({ x: 350, y: 400 });
     });
 
-    it('classifies new-column gutter as isNewColumn=true', () => {
+    it('classifies new-column gutter with kind="new-column"', () => {
       const onDrop = vi.fn();
       const { result } = setupHook({ data: sampleData(), onDrop });
 
@@ -323,9 +323,9 @@ describe('usePointerDrag', () => {
 
       expect(result.current.dragState?.dragOverLocation).toEqual(
         expect.objectContaining({
+          kind: 'new-column',
           sectionIndex: 0,
           columnIndex: 1,
-          isNewColumn: true,
         }),
       );
     });
@@ -355,10 +355,16 @@ describe('usePointerDrag', () => {
       expect(onDrop).toHaveBeenCalledTimes(1);
       expect(onDrop.mock.calls[0][0]).toEqual(
         expect.objectContaining({
+          kind: 'node-slot',
           sectionIndex: 0,
           columnIndex: 1,
         }),
       );
+      // Hook supplies pointerOffset as the third argument, captured at
+      // drag-start (cursor at 100,200; node rect anchored at 0,0 in
+      // makeMockElement) so offset is {x: 100, y: 200}.
+      expect(onDrop.mock.calls[0][1]).toBe('n-1');
+      expect(onDrop.mock.calls[0][2]).toEqual({ x: 100, y: 200 });
       expect(result.current.dragState).toBeNull();
       expect(isCanvasGestureActive()).toBe(false);
     });
@@ -483,8 +489,9 @@ describe('usePointerDrag', () => {
   });
 
   describe('stale-node abort', () => {
-    it('aborts drop when node id no longer exists in data', () => {
+    it('aborts drop when node id no longer exists in data, fires onStaleDrop', () => {
       const onDrop = vi.fn();
+      const onStaleDrop = vi.fn();
       // Start with node 'n-1'; mid-flight the data prop will be replaced.
       let containerEl: HTMLDivElement | null = null;
       const { result, rerender } = renderHook(
@@ -515,6 +522,7 @@ describe('usePointerDrag', () => {
             zoomScale: 1,
             nodeHeights: { 'n-1': 60 },
             onDrop,
+            onStaleDrop,
           });
         },
         { initialProps: { data: sampleData() } },
@@ -546,6 +554,10 @@ describe('usePointerDrag', () => {
           error_name: 'stale-node-drop',
         }),
       );
+      // I2 (silent-failure-hunter): user must be able to surface a
+      // toast / inline notice when the drag silently aborts.
+      expect(onStaleDrop).toHaveBeenCalledTimes(1);
+      expect(onStaleDrop).toHaveBeenCalledWith('n-1');
       expect(isCanvasGestureActive()).toBe(false);
       expect(result.current.dragState).toBeNull();
     });
@@ -589,6 +601,49 @@ describe('usePointerDrag', () => {
       expect(isCanvasGestureActive()).toBe(true);
       unmount();
       expect(isCanvasGestureActive()).toBe(false);
+    });
+  });
+
+  describe('onDrop callback throws (C1: try/finally cleanup)', () => {
+    it('still cleans up all state when onDrop throws', () => {
+      // C1 from silent-failure-hunter: without try/finally around
+      // onDropRef.current(...), a throw escapes pointerup and leaves
+      // (a) isCanvasGestureActive=true forever, (b) dragState non-null
+      // (phantom ghost stuck on screen), (c) pointer capture leaked.
+      // The hook must guarantee cleanup regardless of consumer behavior.
+      const onDrop = vi.fn(() => {
+        throw new Error('boom');
+      });
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      const move = pointerEvent('pointermove', { clientX: 350, clientY: 400 });
+      act(() => {
+        document.dispatchEvent(move);
+      });
+
+      // pointerup triggers onDrop which throws. The hook must still
+      // run cleanup and surface the error via loggingService.
+      const up = pointerEvent('pointerup', { clientX: 350, clientY: 400 });
+      act(() => {
+        document.dispatchEvent(up);
+      });
+
+      expect(onDrop).toHaveBeenCalledTimes(1);
+      // Cleanup guarantees: all four observable surfaces back to neutral.
+      expect(isCanvasGestureActive()).toBe(false);
+      expect(result.current.dragState).toBeNull();
+      expect(result.current.isActive).toBe(false);
+      // The thrown error must be reported (so the user-invisible bug is
+      // observable in logs rather than silently swallowed).
+      expect(loggingService.reportError).toHaveBeenCalledWith(
+        expect.objectContaining({ error_name: 'drop-handler-threw' }),
+      );
     });
   });
 });
