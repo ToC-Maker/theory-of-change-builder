@@ -8,18 +8,13 @@
 //   - People with access: owner + approved editors. Owner row is
 //     non-editable; everyone else gets level/remove controls.
 //
-// Permission row shape mirrors the chartService.getChartPermissions
-// response (the API existed in PR 1's shim; we keep the same shape so
-// callers don't transform).
+// Row shape is the canonical `Permission` from `shared/permissions.ts`;
+// re-exported here as `PermissionRow` for legacy callsite ergonomics.
 import { XMarkIcon } from '@heroicons/react/24/outline';
+import type { Permission } from '../../../shared/permissions';
 
-export interface PermissionRow {
-  user_id: string;
-  user_email: string;
-  permission_level: 'owner' | 'edit';
-  status?: 'pending' | 'approved' | 'rejected';
-  granted_at: string;
-}
+/** Legacy alias kept for readability at call sites. */
+export type PermissionRow = Permission;
 
 export interface PermissionsListProps {
   permissions: PermissionRow[];

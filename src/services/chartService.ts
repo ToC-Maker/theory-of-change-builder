@@ -1,4 +1,7 @@
 import { ToCData } from '../types';
+import type { LinkSharingLevel, Permission } from '../../shared/permissions';
+
+export type { LinkSharingLevel, Permission, PermissionStatus } from '../../shared/permissions';
 
 const API_BASE = '/api';
 
@@ -28,14 +31,6 @@ export interface UserChart {
   updatedAt: string;
   createdAt: string;
   permissionLevel: 'owner' | 'edit';
-}
-
-export interface Permission {
-  user_id: string;
-  user_email: string;
-  permission_level: 'owner' | 'edit';
-  granted_at: string;
-  granted_by: string;
 }
 
 export class ChartService {
@@ -201,10 +196,14 @@ export class ChartService {
     return result.charts;
   }
 
-  // Get permissions for a chart (owner only)
+  // Get permissions for a chart (owner only).
+  //
+  // The server returns `{ permissions, linkSharingLevel }`. `linkSharingLevel`
+  // is optional only to cover the chart-not-found edge case; in normal
+  // responses the field is always present.
   static async getChartPermissions(
     chartId: string,
-  ): Promise<{ permissions: Permission[]; linkSharingLevel?: 'restricted' | 'viewer' | 'editor' }> {
+  ): Promise<{ permissions: Permission[]; linkSharingLevel?: LinkSharingLevel }> {
     if (!this.authToken) {
       throw new Error('Authentication required');
     }
@@ -277,7 +276,7 @@ export class ChartService {
   // Update link sharing settings (owner only)
   static async updateLinkSharing(
     chartId: string,
-    linkSharingLevel: 'restricted' | 'viewer' | 'editor',
+    linkSharingLevel: LinkSharingLevel,
   ): Promise<void> {
     if (!this.authToken) {
       throw new Error('Authentication required');
