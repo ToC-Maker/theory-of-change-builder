@@ -26,6 +26,7 @@ import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
 import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
+import { ConfirmModal } from './ConfirmModal';
 import type { ToCData } from '../types';
 import {
   formatCostUsd,
@@ -752,6 +753,9 @@ export function ChatInterface({
   // and the effort selector. Replaces the inline magnifying-glass
   // button + side-by-side effort dropdown.
   const [showComposerOptions, setShowComposerOptions] = useState(false);
+  // Clear-chat confirmation modal (PR 5 red-team L4 closure: replaces
+  // window.confirm). Same pattern as FileMenu's delete-chart retrofit.
+  const [confirmClearChatOpen, setConfirmClearChatOpen] = useState(false);
   const composerOptionsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!showComposerOptions) return;
@@ -2976,13 +2980,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         // Destructive: wipes the in-memory chat + attached files +
                         // any uploaded file chips from the server. Confirm first so
                         // a mis-click can't silently delete a long conversation.
-                        if (
-                          window.confirm(
-                            'Clear the entire chat? This removes all messages and any files attached in Chat. Your chart and Generate state are unaffected.',
-                          )
-                        ) {
-                          clearChat();
-                        }
+                        setConfirmClearChatOpen(true);
                       }}
                       className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
                       title="Clear chat"
@@ -3833,6 +3831,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           </div>
         </div>
       </div>
+      <ConfirmModal
+        open={confirmClearChatOpen}
+        title="Clear chat?"
+        body="Clear the entire chat? This removes all messages and any files attached in Chat. Your chart and Generate state are unaffected."
+        confirmLabel="Clear chat"
+        confirmVariant="danger"
+        onConfirm={() => {
+          setConfirmClearChatOpen(false);
+          clearChat();
+        }}
+        onCancel={() => setConfirmClearChatOpen(false)}
+      />
     </>
   );
 }
