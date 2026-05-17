@@ -267,7 +267,6 @@ describe('ShareDialog', () => {
       ],
       linkSharingLevel: 'viewer',
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     const user = userEvent.setup();
     renderDialog();
@@ -277,8 +276,13 @@ describe('ShareDialog', () => {
 
     await user.click(screen.getByRole('radio', { name: /^restricted$/i }));
 
-    // Confirm was prompted, but the user said no.
-    expect(confirmSpy).toHaveBeenCalled();
+    // PR 5: GeneralAccessSelector migrated from window.confirm to the
+    // shared ConfirmModal primitive (red-team L4). The modal opens
+    // with a testid; cancelling it aborts the level change.
+    const modal = await screen.findByTestId('confirm-modal');
+    expect(modal).toBeInTheDocument();
+    await user.click(screen.getByTestId('confirm-modal-cancel'));
+
     // No write.
     expect(ChartService.updateLinkSharing).not.toHaveBeenCalled();
     // Selector still shows the previous mode.
