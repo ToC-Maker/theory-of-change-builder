@@ -61,8 +61,17 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
 
     const [userRows, byokRows] = await Promise.all([
+      // Two separate columns:
+      //   - cost_micro_usd: free-tier counter. This is the column
+      //     reserveCost (worker/api/anthropic-stream.ts) checks against
+      //     LIFETIME_CAP_MICRO_USD. Returned as `used_usd` so the cap-bar
+      //     UI shows free-only spend.
+      //   - byok_cost_micro_usd: BYOK counter, independent of the free
+      //     cap. Returned as `byok_used_usd` so the BYOK pill shows
+      //     self-funded spend. (See cost-commit.ts BYOK regression note
+      //     for why these are split.)
       sql`
-        SELECT cost_micro_usd
+        SELECT cost_micro_usd, byok_cost_micro_usd
         FROM user_api_usage
         WHERE user_id = ${userId}
       `,
@@ -87,6 +96,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     const hasByok = byokRows.length > 0;
     const byokLast4 = hasByok ? ((byokRows[0].key_last4 as string | null) ?? null) : null;
     const userMicro = userRows.length > 0 ? (userRows[0].cost_micro_usd as bigint | number) : 0;
+    const byokMicro =
+      userRows.length > 0 ? (userRows[0].byok_cost_micro_usd as bigint | number) : 0;
 
     // Global monthly spend is observability-only (tracked in `global_monthly_usage`,
     // written via anthropic-stream's reconcile). It's NOT exposed here — users
@@ -98,7 +109,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     if (authLinkSetCookie) headers.append('Set-Cookie', authLinkSetCookie);
     return new Response(
       JSON.stringify({
+        // used_usd: free-tier counter, the one reserveCost checks.
         used_usd: microToUsd(userMicro),
+        // byok_used_usd: BYOK counter, separate from the cap. Sum the two
+        // client-side to show total cumulative spend.
+        byok_used_usd: microToUsd(byokMicro),
         limit_usd: LIFETIME_CAP_USD,
         tier: tierFor(userId, hasByok),
         byok_last4: byokLast4,

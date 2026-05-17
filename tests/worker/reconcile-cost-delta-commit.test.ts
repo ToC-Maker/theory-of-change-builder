@@ -77,9 +77,14 @@ async function endpointCall(
   loggingMessageId: string,
   actorId: string,
   clientCost: bigint,
+  // BYOK routing flag (default false). The endpoint resolves this from
+  // the actor's stored BYOK key at request time (see
+  // `worker/api/reconcile-cost.ts`); tests pass it explicitly to pin the
+  // routing into either cost_micro_usd (free) or byok_cost_micro_usd (BYOK).
+  isByok: boolean = false,
 ): ReturnType<typeof applyDeltaCommit> {
   // projected = 0n: see header comment + plan § Task 11.
-  return applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost);
+  return applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
 }
 
 describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
@@ -448,6 +453,72 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       await expect(endpointCall(sql, 'msg_x', 'auth0|alice', 500n)).rejects.toThrow(
         'connection refused',
       );
+    });
+  });
+
+  describe('BYOK routing (regression fix 2026-05-17)', () => {
+    // The endpoint resolves `isByok` from whether the actor has a stored
+    // BYOK key (see worker/api/reconcile-cost.ts step 2.5). These tests
+    // pin the routing at the `applyDeltaCommit` boundary: when `isByok=true`
+    // is threaded through, the delta lands in `byok_cost_micro_usd` and
+    // the free-cap column `cost_micro_usd` is left untouched.
+    //
+    // Headline invariant: a user with $4.50 of pre-existing free spend
+    // who then issues a BYOK reconcile must not see their free cap
+    // depleted. Pre-fix this exact scenario was the Critical regression:
+    // `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD` would fail
+    // after BYOK spend pushed the column past $5.
+    it('isByok=true: credits byok_cost_micro_usd, leaves cost_micro_usd untouched (cap preserved)', async () => {
+      const { sql, state } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          cost_settled_micro_usd: 0n,
+          reconciled_at: null,
+        },
+        // Pre-existing free spend: $4.50 of the $5 free cap already used.
+        user_usage: {
+          user_id: 'auth0|alice',
+          cost_micro_usd: 4_500_000n,
+          byok_cost_micro_usd: 0n,
+        },
+      });
+      // BYOK push of $2.00 worth of running cost.
+      const out = await endpointCall(sql, 'msg_x', 'auth0|alice', 2_000_000n, true);
+      expect(out).toEqual({ applied: true, delta: 2_000_000n, new_settled: 2_000_000n });
+      // Free cap UNCHANGED — user can still spend their remaining $0.50.
+      expect(state.user_usage.cost_micro_usd).toBe(4_500_000n);
+      // BYOK column carries the new spend.
+      expect(state.user_usage.byok_cost_micro_usd).toBe(2_000_000n);
+      // logging_messages.cost_settled_micro_usd still records the truth
+      // regardless of routing (it's the per-message attribution key).
+      expect(state.message.cost_settled_micro_usd).toBe(2_000_000n);
+    });
+
+    it('isByok=false: credits cost_micro_usd (default behavior, BYOK column untouched)', async () => {
+      // The pre-fix behavior, now made explicit via the `isByok` flag.
+      // Confirms the routing genuinely diverges based on the flag.
+      const { sql, state } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          cost_settled_micro_usd: 0n,
+          reconciled_at: null,
+        },
+        user_usage: {
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          byok_cost_micro_usd: 100n, // pre-existing BYOK spend; should stay
+        },
+      });
+      const out = await endpointCall(sql, 'msg_x', 'auth0|alice', 500n, false);
+      expect(out).toEqual({ applied: true, delta: 500n, new_settled: 500n });
+      // Free cap column got the credit.
+      expect(state.user_usage.cost_micro_usd).toBe(500n);
+      // BYOK column unchanged.
+      expect(state.user_usage.byok_cost_micro_usd).toBe(100n);
     });
   });
 });

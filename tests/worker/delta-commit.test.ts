@@ -54,7 +54,7 @@ describe('applyDeltaCommit', () => {
       // an SQL roundtrip in that window — it would 1) waste a Neon HTTP
       // request and 2) match nothing anyway.
       const { sql, calls } = makeSqlSpy([]);
-      const result = await applyDeltaCommit(sql, null, 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(sql, null, 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
       expect(calls).toHaveLength(0);
     });
@@ -64,7 +64,7 @@ describe('applyDeltaCommit', () => {
       // caller's SseTeeContext; cover the undefined branch too so a future
       // refactor can't silently start issuing SQL for unset ids.
       const { sql, calls } = makeSqlSpy([]);
-      const result = await applyDeltaCommit(sql, undefined, 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(sql, undefined, 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
       expect(calls).toHaveLength(0);
     });
@@ -75,7 +75,7 @@ describe('applyDeltaCommit', () => {
       // (which would treat '' as truthy) wouldn't silently start firing
       // SQL with WHERE message_id = ''.
       const { sql, calls } = makeSqlSpy([]);
-      const result = await applyDeltaCommit(sql, '', 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(sql, '', 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
       expect(calls).toHaveLength(0);
     });
@@ -89,7 +89,7 @@ describe('applyDeltaCommit', () => {
       // the row, msg_upd RETURNING returns zero rows, and the EXISTS clause
       // produces `applied = false`.
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
-      const result = await applyDeltaCommit(sql, 'msg_missing', 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(sql, 'msg_missing', 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
     });
 
@@ -103,7 +103,7 @@ describe('applyDeltaCommit', () => {
       // idempotent no-op without distinguishing the three CTE-empty
       // cases (missing / IDOR / reconciled).
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
-      const result = await applyDeltaCommit(sql, 'msg_bob_owned', 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(sql, 'msg_bob_owned', 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
     });
 
@@ -116,7 +116,14 @@ describe('applyDeltaCommit', () => {
       // mock returns the same empty-row shape as the previous two cases
       // (the helper can't distinguish them — they're all "CTE excluded").
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
-      const result = await applyDeltaCommit(sql, 'msg_reconciled', 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(
+        sql,
+        'msg_reconciled',
+        'auth0|alice',
+        100n,
+        500n,
+        false,
+      );
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
     });
 
@@ -128,7 +135,7 @@ describe('applyDeltaCommit', () => {
       // emptiness), but this guard prevents a silent NaN / undefined leak
       // if the contract drifts.
       const { sql } = makeSqlSpy([]);
-      const result = await applyDeltaCommit(sql, 'msg_zero_rows', 'auth0|alice', 100n, 500n);
+      const result = await applyDeltaCommit(sql, 'msg_zero_rows', 'auth0|alice', 100n, 500n, false);
       expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
     });
   });
@@ -145,7 +152,7 @@ describe('applyDeltaCommit', () => {
       // the UPDATE statement ran (RETURNING produced a row). `delta = 0n`
       // is the signal callers use to decide whether to log the write.
       const { sql } = makeSqlSpy([{ new_settled: '500000', delta: '0', applied: true }]);
-      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
       expect(result).toEqual({ applied: true, delta: 0n, new_settled: 500_000n });
     });
 
@@ -158,7 +165,7 @@ describe('applyDeltaCommit', () => {
       // GREATEST(0, ...) clamp is the line of defence; here we pin the
       // helper's output mapping for that case.
       const { sql } = makeSqlSpy([{ new_settled: '500000', delta: '0', applied: true }]);
-      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 200_000n);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 200_000n, false);
       expect(result).toEqual({ applied: true, delta: 0n, new_settled: 500_000n });
     });
   });
@@ -174,7 +181,7 @@ describe('applyDeltaCommit', () => {
       // baseline = max(0.10, 0.20) = 0.20; delta = max(0, 0.50 - 0.20) = 0.30.
       // settled becomes 0.50.
       const { sql } = makeSqlSpy([{ new_settled: '500000', delta: '300000', applied: true }]);
-      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
       expect(result).toEqual({
         applied: true,
         delta: 300_000n,
@@ -193,7 +200,14 @@ describe('applyDeltaCommit', () => {
       const { sql } = makeSqlSpy([
         { new_settled: '999999999999', delta: '888888888888', applied: true },
       ]);
-      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 0n, 999_999_999_999n);
+      const result = await applyDeltaCommit(
+        sql,
+        'msg_x',
+        'auth0|alice',
+        0n,
+        999_999_999_999n,
+        false,
+      );
       expect(result.delta).toBe(888_888_888_888n);
       expect(result.new_settled).toBe(999_999_999_999n);
     });
@@ -203,7 +217,7 @@ describe('applyDeltaCommit', () => {
       // The toBigInt helper truncates; pin this so a future refactor that
       // dropped the coercion (returning `row.delta` directly) would fail.
       const { sql } = makeSqlSpy([{ new_settled: 1000, delta: 200, applied: true }]);
-      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 800n, 1000n);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 800n, 1000n, false);
       expect(result.delta).toBe(200n);
       expect(result.new_settled).toBe(1000n);
     });
@@ -215,7 +229,7 @@ describe('applyDeltaCommit', () => {
       // would visibly fail.
       const huge = 1n << 60n;
       const { sql } = makeSqlSpy([{ new_settled: huge, delta: huge, applied: true }]);
-      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 0n, huge);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 0n, huge, false);
       expect(result.delta).toBe(huge);
       expect(result.new_settled).toBe(huge);
     });
@@ -231,7 +245,7 @@ describe('applyDeltaCommit', () => {
       const { sql, calls } = makeSqlSpy([
         { new_settled: '500000', delta: '300000', applied: true },
       ]);
-      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
       expect(calls).toHaveLength(1);
     });
 
@@ -244,7 +258,7 @@ describe('applyDeltaCommit', () => {
       const { sql, calls } = makeSqlSpy([
         { new_settled: '500000', delta: '300000', applied: true },
       ]);
-      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
       // The tagged-template values are the raw arguments — `messageId` and
       // `userId` interpolate as strings; `projected` and `newCost` as
       // strings (per the plan SQL using `${projStr}::bigint` casts).
@@ -253,6 +267,63 @@ describe('applyDeltaCommit', () => {
       expect(flat).toContain('auth0|alice');
       expect(flat).toContain('100000');
       expect(flat).toContain('500000');
+    });
+  });
+
+  describe('isByok column routing (BYOK regression fix)', () => {
+    // Background: pre-PR, the per-stream BYOK reconcile was gated by
+    // `if (isCapped(tier))`, so BYOK spend NEVER touched user_api_usage.
+    // Tasks 7+8 dropped the gate (the per-update writer + the post-stream
+    // signed-delta reconcile now write to user_api_usage unconditionally),
+    // which inadvertently coupled BYOK spend to the free cap: reserveCost
+    // still checks `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD`.
+    // A user who spent $4 via BYOK, then removed the key, ended up with $1
+    // of free cap remaining instead of the full $5.
+    //
+    // Option A from the review: split the user_api_usage column. The
+    // helper routes the delta into `cost_micro_usd` (free) or
+    // `byok_cost_micro_usd` (BYOK) based on the new `isByok` parameter.
+    // The cap-check (reserveCost) keeps reading `cost_micro_usd`-only;
+    // BYOK writes never inflate it.
+    //
+    // The SQL string is asserted at a structural level — we look for the
+    // CASE-WHEN routing tokens — not character-for-character. The Neon
+    // tagged-template captures the interpolated `isByok` boolean in the
+    // values array; we pin that the value flowed through as `true`/`false`.
+    it('isByok=true: passes the boolean through to the CTE values', async () => {
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, true);
+      // The CTE casts the parameter via `::bool`; pin that the booleans
+      // arrived as JS booleans (Neon serializes them via `::bool` cast).
+      // A refactor that dropped the param would fail the
+      // `expect(flat).toContain('true')` below.
+      const flat = calls[0].values.map(String);
+      expect(flat).toContain('true');
+    });
+
+    it('isByok=false: passes the boolean through to the CTE values', async () => {
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
+      const flat = calls[0].values.map(String);
+      expect(flat).toContain('false');
+    });
+
+    it('uses CASE-WHEN on isByok to route between cost_micro_usd and byok_cost_micro_usd', async () => {
+      // Structural pin: the SQL must contain both column names AND a CASE
+      // clause keyed on the `isByok` boolean. A regression that dropped
+      // the routing (e.g. only updating cost_micro_usd) would fail this.
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, true);
+      const joinedSql = calls[0].strings.join('');
+      expect(joinedSql).toMatch(/byok_cost_micro_usd/);
+      expect(joinedSql).toMatch(/cost_micro_usd/);
+      expect(joinedSql).toMatch(/CASE\s+WHEN/i);
     });
   });
 });

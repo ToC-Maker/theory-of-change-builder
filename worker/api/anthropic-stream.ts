@@ -1045,6 +1045,15 @@ export interface PerUpdateCommitDeps {
   chartId: string | null;
   deploymentHost: string;
   lifecycle: { handlerStartedAtMs: number };
+  /**
+   * BYOK routing flag for `applyDeltaCommit`. When true, the delta lands
+   * in `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
+   * When false, it lands in `cost_micro_usd` (the column reserveCost
+   * checks against `LIFETIME_CAP_MICRO_USD`). Plumbed from the
+   * teeCtx so per-update + abort commits route correctly for the request's
+   * tier. See the BYOK regression note in `cost-commit.ts` for context.
+   */
+  isByok: boolean;
 }
 
 /**
@@ -1089,6 +1098,7 @@ export function firePerUpdateCommit(
           deps.actorId,
           deps.projectedMicroUsd,
           snap,
+          deps.isByok,
         );
         await writeDiagnostic(deps.sql, {
           error_name: 'DiagnosticPerUpdateCommit',
@@ -1170,6 +1180,7 @@ export function fireAbortCommit(deps: PerUpdateCommitDeps, snap: bigint): void {
           deps.actorId,
           deps.projectedMicroUsd,
           snap,
+          deps.isByok,
         );
         await writeDiagnostic(deps.sql, {
           error_name: 'DiagnosticAbortCommit',
@@ -1230,6 +1241,17 @@ type SseTeeContext = {
    * a separate plumbing path from the handler.
    */
   projectedMicroUsd: bigint;
+  /**
+   * Derived from the request's resolved tier: true iff `tier === 'byok'`.
+   * Used as the `isByok` argument to `applyDeltaCommit` from every
+   * per-stream commit site (per-update IIFE, abort IIFE, message_start
+   * floor). When true, deltas land in `user_api_usage.byok_cost_micro_usd`
+   * (independent of the free cap); when false, they land in
+   * `cost_micro_usd` (the column reserveCost reads against
+   * `LIFETIME_CAP_MICRO_USD`). See the BYOK regression note in
+   * `cost-commit.ts` for the full rationale.
+   */
+  isByok: boolean;
   /**
    * Worker environment bindings. Plumbed through for downstream writers
    * that need access to env vars / secrets (Task 7 per-update writes may
@@ -2336,6 +2358,7 @@ function createCostTrackingStream(
                   teeCtx.actorId,
                   teeCtx.projectedMicroUsd,
                   floorMicro,
+                  teeCtx.isByok,
                 );
               } catch (uerr) {
                 console.error('message_start floor applyDeltaCommit failed:', uerr);
@@ -3139,6 +3162,7 @@ export async function handler(
     loggingMessageId,
     actorId,
     projectedMicroUsd: projected,
+    isByok: tier === 'byok',
     env,
     ctx,
     deploymentHost: requestUrl.hostname,
@@ -3232,11 +3256,14 @@ export async function handler(
   });
 
   // Step 10: post-stream reconcile. ctx.waitUntil extends the Worker lifetime
-  // past the Response being fully flushed so we still get the DB write. Skip
-  // user_api_usage / global_monthly_usage updates for BYOK (no reservation to
-  // reconcile), but always try to write logging_messages.cost_micro_usd when
-  // a message_id was supplied — it's the per-chart attribution key and is
-  // independent of tier.
+  // past the Response being fully flushed so we still get the DB write.
+  // Updates BOTH user_api_usage cost columns via the signed-delta CTE:
+  //   - Free/anon writes land in cost_micro_usd (the column reserveCost
+  //     checks against LIFETIME_CAP_MICRO_USD).
+  //   - BYOK writes land in byok_cost_micro_usd (independent of cap; visible
+  //     in /api/usage as byok_used_usd).
+  // global_monthly_usage stays observability-only (BYOK excluded; tracks
+  // OUR spend, not customer spend).
   ctx.waitUntil(
     (async () => {
       // Trace marker: insert a row at reconcile entry so we can tell whether
@@ -3525,9 +3552,10 @@ export async function handler(
       // reconciled (concurrent reconcile path beat us to it) — idempotent.
       //
       // Token counters on user_api_usage are updated UNCONDITIONALLY (all
-      // tiers, including BYOK), matching the cost path: Task 7's per-update
-      // applyDeltaCommit already touches user_api_usage.cost_micro_usd for
-      // BYOK; this reconcile is the authoritative final write of the same row.
+      // tiers, including BYOK). Cost is routed via CASE-WHEN on `tierIsByok`:
+      // BYOK deltas land in `byok_cost_micro_usd` (the parallel BYOK counter
+      // that doesn't deplete the free cap); free/anon deltas land in
+      // `cost_micro_usd` (the column reserveCost reads against the cap).
       //
       // NO `actualMicro > 0n` gate: a user-aborted stream can produce
       // actualMicro=0 if the abort raced parseFrame's accumulator update, but
@@ -3540,6 +3568,7 @@ export async function handler(
         try {
           const projStr = projected.toString();
           const actualStr = actualMicro.toString();
+          const tierIsByok = tier === 'byok';
           await sql`
             WITH locked AS (
               SELECT cost_settled_micro_usd FROM logging_messages
@@ -3561,7 +3590,8 @@ export async function handler(
               RETURNING cost_settled_micro_usd
             )
             UPDATE user_api_usage
-            SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + (SELECT d FROM signed_delta)),
+            SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN 0::bigint ELSE (SELECT d FROM signed_delta) END),
+                byok_cost_micro_usd = GREATEST(0::bigint, byok_cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN (SELECT d FROM signed_delta) ELSE 0::bigint END),
                 input_tokens = input_tokens + ${reconciledAccumulator.input_tokens},
                 output_tokens = output_tokens + ${reconciledAccumulator.output_tokens},
                 cache_create_tokens = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},

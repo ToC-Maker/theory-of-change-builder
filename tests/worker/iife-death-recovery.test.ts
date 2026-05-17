@@ -49,12 +49,15 @@ import {
 } from '../_shared/in-memory-cost-backend';
 
 // Extended user_api_usage shape — the shared backend's required base is
-// `{user_id, cost_micro_usd}`, and we add the token-counter columns the
-// reconcile-CTE mirror needs to mutate. Passed through the generic on
-// `makeSharedBackend` so `state.user_usage` is typed with all 7 fields.
+// `{user_id, cost_micro_usd}` with `byok_cost_micro_usd?` optional (the
+// latter added for the BYOK regression fix, 2026-05-17; defaults to 0n
+// in `makeBackend`). We add the token-counter columns the reconcile-CTE
+// mirror needs to mutate. Passed through the generic on
+// `makeSharedBackend` so `state.user_usage` is typed with all fields.
 type UserApiUsageRow = {
   user_id: string;
   cost_micro_usd: bigint;
+  byok_cost_micro_usd?: bigint;
   input_tokens: number;
   output_tokens: number;
   cache_create_tokens: number;
@@ -91,13 +94,28 @@ function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiU
     projected: bigint;
     actualMicro: bigint;
     accumulator: ReconcileAccumulator;
+    /**
+     * BYOK routing flag, mirroring the production `tierIsByok` interpolation
+     * in `anthropic-stream.ts`. When true, the signed delta is routed to
+     * `byok_cost_micro_usd` (independent of free cap); when false, it goes
+     * to `cost_micro_usd` (the column reserveCost reads). Defaults to false
+     * so existing free/anon tests stay green without modification.
+     */
+    isByok?: boolean;
   }): {
     settled: bigint;
     appliedSignedDelta: bigint;
     userCost: bigint;
     reconciledAt: Date | null;
   } {
-    const { loggingMessageId, actorId, projected, actualMicro, accumulator } = input;
+    const {
+      loggingMessageId,
+      actorId,
+      projected,
+      actualMicro,
+      accumulator,
+      isByok = false,
+    } = input;
     const row = state.message;
     const matches =
       row.message_id === loggingMessageId && row.user_id === actorId && row.reconciled_at === null;
@@ -121,10 +139,20 @@ function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiU
       cost_settled_micro_usd: actualMicro,
       reconciled_at: newReconciledAt,
     };
-    const newUserCost = state.user_usage.cost_micro_usd + signedDelta;
+    // Route the signed delta to one of the two cost columns based on
+    // `isByok`, mirroring the production CASE-WHEN in the reconcile SQL.
+    // GREATEST(0, ...) clamp applies to both columns (negative-clamp
+    // safety regardless of routing). `?? 0n` defaults the optional
+    // byok column to zero for tests that don't initialize it.
+    const currentByok = state.user_usage.byok_cost_micro_usd ?? 0n;
+    const newFreeCost = isByok
+      ? state.user_usage.cost_micro_usd
+      : state.user_usage.cost_micro_usd + signedDelta;
+    const newByokCost = isByok ? currentByok + signedDelta : currentByok;
     state.user_usage = {
       ...state.user_usage,
-      cost_micro_usd: newUserCost < 0n ? 0n : newUserCost,
+      cost_micro_usd: newFreeCost < 0n ? 0n : newFreeCost,
+      byok_cost_micro_usd: newByokCost < 0n ? 0n : newByokCost,
       input_tokens: state.user_usage.input_tokens + accumulator.input_tokens,
       output_tokens: state.user_usage.output_tokens + accumulator.output_tokens,
       cache_create_tokens:
@@ -135,7 +163,13 @@ function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiU
     return {
       settled: actualMicro,
       appliedSignedDelta: signedDelta,
-      userCost: state.user_usage.cost_micro_usd,
+      // userCost reports the column the delta routed into for assertion
+      // convenience (most existing tests are free-tier and check this
+      // exact field). BYOK tests can read state.user_usage.byok_cost_micro_usd
+      // directly.
+      userCost: isByok
+        ? (state.user_usage.byok_cost_micro_usd ?? 0n)
+        : state.user_usage.cost_micro_usd,
       reconciledAt: newReconciledAt,
     };
   };
@@ -649,5 +683,105 @@ describe('reconcile signed-delta SQL — Task 8', () => {
     expect(state.message.cost_settled_micro_usd).toBe(0n);
     expect(state.message.reconciled_at).toBeNull();
     expect(state.user_usage.cost_micro_usd).toBe(100_000n);
+  });
+
+  // -------------------------------------------------------------------------
+  // BYOK routing pin (regression fix 2026-05-17): when `isByok=true`, the
+  // signed delta lands in `byok_cost_micro_usd`, NOT `cost_micro_usd`.
+  // The headline invariant of the fix: a BYOK reconcile MUST NOT inflate
+  // the free-tier cap. `cost_micro_usd` is the column reserveCost reads
+  // against `LIFETIME_CAP_MICRO_USD`, so a BYOK write to that column would
+  // silently deplete the free cap — the exact bug this fix targets.
+  // -------------------------------------------------------------------------
+  it('BYOK routing: positive signed_delta credits byok_cost_micro_usd, leaves cost_micro_usd untouched (cap not depleted)', () => {
+    const { state, reconcile } = makeBackend({
+      message: {
+        message_id: 'msg_x',
+        user_id: 'auth0|alice',
+        cost_micro_usd: 0n,
+        cost_settled_micro_usd: 0n,
+        reconciled_at: null,
+      },
+      user_usage: {
+        user_id: 'auth0|alice',
+        // Pre-BYOK free spend: $0.10. The cap-check column.
+        cost_micro_usd: 100_000n,
+        byok_cost_micro_usd: 0n,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_create_tokens: 0,
+        cache_read_tokens: 0,
+        web_search_uses: 0,
+      },
+    });
+
+    // A BYOK stream reconciles with $4.00 of additional spend. Pre-fix this
+    // would land in cost_micro_usd, leaving only $0.90 of free cap and
+    // breaking the documented invariant "BYOK bypasses the per-user
+    // lifetime cap".
+    const result = reconcile({
+      loggingMessageId: 'msg_x',
+      actorId: 'auth0|alice',
+      projected: 0n, // BYOK doesn't reserve (no cap to gate against)
+      actualMicro: 4_000_000n, // $4.00
+      accumulator: ZERO_ACC,
+      isByok: true,
+    });
+
+    // signed_delta = 4_000_000 - max(0, 0) = 4_000_000 (positive).
+    expect(result.appliedSignedDelta).toBe(4_000_000n);
+    // Free-cap column is UNTOUCHED — BYOK doesn't deplete the free cap.
+    expect(state.user_usage.cost_micro_usd).toBe(100_000n);
+    // BYOK column carries the full spend.
+    expect(state.user_usage.byok_cost_micro_usd).toBe(4_000_000n);
+    // logging_messages.cost_settled_micro_usd still records the truth
+    // regardless of routing (it's the per-message attribution key).
+    expect(state.message.cost_settled_micro_usd).toBe(4_000_000n);
+    expect(state.message.reconciled_at).not.toBeNull();
+  });
+
+  it('BYOK routing: token counters land regardless of routing (observability invariant)', () => {
+    // The token-counter columns on user_api_usage track observability,
+    // not cost. They increment additively whether the delta routed to
+    // free or BYOK — a refactor that gated tokens behind the free arm
+    // would silently zero out BYOK usage stats.
+    const { state, reconcile } = makeBackend({
+      message: {
+        message_id: 'msg_x',
+        user_id: 'auth0|alice',
+        cost_micro_usd: 0n,
+        cost_settled_micro_usd: 0n,
+        reconciled_at: null,
+      },
+      user_usage: {
+        user_id: 'auth0|alice',
+        cost_micro_usd: 0n,
+        byok_cost_micro_usd: 0n,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_create_tokens: 0,
+        cache_read_tokens: 0,
+        web_search_uses: 0,
+      },
+    });
+    reconcile({
+      loggingMessageId: 'msg_x',
+      actorId: 'auth0|alice',
+      projected: 0n,
+      actualMicro: 100_000n,
+      accumulator: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cache_creation_input_tokens: 100,
+        cache_read_input_tokens: 200,
+        web_search_requests: 3,
+      },
+      isByok: true,
+    });
+    expect(state.user_usage.input_tokens).toBe(1000);
+    expect(state.user_usage.output_tokens).toBe(500);
+    expect(state.user_usage.cache_create_tokens).toBe(100);
+    expect(state.user_usage.cache_read_tokens).toBe(200);
+    expect(state.user_usage.web_search_uses).toBe(3);
   });
 });

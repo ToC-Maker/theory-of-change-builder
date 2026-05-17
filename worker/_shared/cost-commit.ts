@@ -45,11 +45,35 @@ import { toBigInt } from './bigint';
  * statement breaks the concurrency invariant; the single-call
  * assertion in the unit test catches that drift.
  *
+ * isByok routing (BYOK regression fix, 2026-05-17):
+ *
+ * Pre-PR, the per-stream BYOK reconcile path was gated by
+ * `if (isCapped(tier))`, so BYOK never wrote to `user_api_usage` at all.
+ * Tasks 7+8 in this PR dropped that gate (the per-update writer + the
+ * post-stream signed-delta reconcile now write to user_api_usage
+ * unconditionally for cost-accuracy reasons), which inadvertently
+ * coupled BYOK spend to the free cap: `reserveCost` (the cap-check
+ * pre-flight in `anthropic-stream.ts`) still reads
+ * `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD`. A user who
+ * spent $4 via BYOK, then removed the key, ended up with only $1 of
+ * free cap remaining instead of the full $5 — a Critical regression
+ * caught in PR #23 review.
+ *
+ * Fix: split the user_api_usage column. `isByok=true` routes the delta
+ * into `byok_cost_micro_usd` (independent of cap, visible in
+ * `/api/usage` as `byok_used_usd`). `isByok=false` keeps writing to
+ * `cost_micro_usd` (the column reserveCost checks against
+ * `LIFETIME_CAP_MICRO_USD`). The CASE-WHEN form keeps the dual-row
+ * write inside the same atomic CTE so cap-check / display invariants
+ * survive concurrent writers.
+ *
  * @returns `{applied, delta, new_settled}`:
  *   - `applied`: true iff the row exists, is owned by `userId`, and
  *     `reconciled_at` is null. False on any no-op condition.
  *   - `delta`: bigint µUSD credited to `user_api_usage` this call;
- *     `0n` when newCost ≤ max(projected, settled).
+ *     `0n` when newCost ≤ max(projected, settled). The delta is
+ *     applied to `byok_cost_micro_usd` when `isByok=true`, otherwise
+ *     to `cost_micro_usd`.
  *   - `new_settled`: the row's `cost_settled_micro_usd` after the
  *     UPDATE; `0n` on no-op.
  */
@@ -59,6 +83,7 @@ export async function applyDeltaCommit(
   userId: string,
   projectedMicroUsd: bigint,
   newCostMicroUsd: bigint,
+  isByok: boolean,
 ): Promise<{ applied: boolean; delta: bigint; new_settled: bigint }> {
   if (!messageId) return { applied: false, delta: 0n, new_settled: 0n };
   // Neon's tagged-template serialises numeric interpolations through its
@@ -89,7 +114,8 @@ export async function applyDeltaCommit(
     ),
     user_upd AS (
       UPDATE user_api_usage
-      SET cost_micro_usd = cost_micro_usd + (SELECT delta FROM computed)
+      SET cost_micro_usd = cost_micro_usd + CASE WHEN ${isByok}::bool THEN 0::bigint ELSE (SELECT delta FROM computed) END,
+          byok_cost_micro_usd = byok_cost_micro_usd + CASE WHEN ${isByok}::bool THEN (SELECT delta FROM computed) ELSE 0::bigint END
       WHERE user_id = ${userId} AND (SELECT delta FROM computed) > 0
       RETURNING cost_micro_usd
     )

@@ -131,17 +131,42 @@ describe('reconcile SQL structural invariants — pins production CTE shape', ()
     expect(cte).toContain('RETURNING cost_settled_micro_usd');
   });
 
-  it('updates user_api_usage with GREATEST(0::bigint, prev + signed_delta) negative-clamp', () => {
+  it('updates user_api_usage with GREATEST(0::bigint, prev + signed_delta) negative-clamp on both cost columns', () => {
     // Negative-clamp: refunds larger than the current user balance must
     // not push it below zero. Pinned because the simulation in
     // `iife-death-recovery.test.ts` mirrors this clamp via a JS ternary,
     // and a refactor that swaps it for an unclamped `prev + delta` would
     // pass the simulation while breaking real Postgres semantics
-    // (negative bigint stored).
+    // (negative bigint stored). Both `cost_micro_usd` (free) and
+    // `byok_cost_micro_usd` (BYOK) must wear the clamp — see BYOK
+    // regression note in `worker/_shared/cost-commit.ts`.
     const cte = extractReconcileCte();
     expect(cte).toMatch(/UPDATE user_api_usage/);
     expect(cte).toMatch(
-      /cost_micro_usd = GREATEST\(0::bigint, cost_micro_usd \+ \(SELECT d FROM signed_delta\)\)/,
+      /cost_micro_usd = GREATEST\(0::bigint, cost_micro_usd \+ CASE WHEN \$\{tierIsByok\}::bool THEN 0::bigint ELSE \(SELECT d FROM signed_delta\) END\)/,
+    );
+    expect(cte).toMatch(
+      /byok_cost_micro_usd = GREATEST\(0::bigint, byok_cost_micro_usd \+ CASE WHEN \$\{tierIsByok\}::bool THEN \(SELECT d FROM signed_delta\) ELSE 0::bigint END\)/,
+    );
+  });
+
+  it('routes the signed_delta via CASE WHEN tierIsByok to exactly one of the two cost columns', () => {
+    // BYOK regression fix (2026-05-17): the signed_delta lands in
+    // `cost_micro_usd` (free cap) OR `byok_cost_micro_usd` (BYOK), never
+    // both. The CASE-WHEN arms are mirror images: each column's `0::bigint`
+    // arm corresponds to the other column's signed_delta arm. A regression
+    // that swapped the THEN/ELSE on either side would silently couple BYOK
+    // spend back into the free cap (the original bug).
+    const cte = extractReconcileCte();
+    // free arm: free-tier writes signed_delta to cost_micro_usd; BYOK
+    // contributes 0.
+    expect(cte).toMatch(
+      /cost_micro_usd \+ CASE WHEN \$\{tierIsByok\}::bool THEN 0::bigint ELSE \(SELECT d FROM signed_delta\) END/,
+    );
+    // BYOK arm: BYOK writes signed_delta to byok_cost_micro_usd; free
+    // contributes 0.
+    expect(cte).toMatch(
+      /byok_cost_micro_usd \+ CASE WHEN \$\{tierIsByok\}::bool THEN \(SELECT d FROM signed_delta\) ELSE 0::bigint END/,
     );
   });
 

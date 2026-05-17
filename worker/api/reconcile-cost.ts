@@ -170,6 +170,36 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   const sql = getDb(env);
   const url = new URL(request.url);
 
+  // Step 2.5: determine BYOK status for `applyDeltaCommit`'s column-routing
+  // parameter. The endpoint receives no BYOK header on retry-queue replays
+  // (the client never sends `X-User-Anthropic-Key` to `/api/reconcile-cost`),
+  // so we infer `isByok` from whether the user currently has a stored
+  // BYOK key. Two consequences worth noting:
+  //   - For authenticated users with a stored key, the delta routes to
+  //     `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
+  //   - For anon users or auth users without a stored key, it routes to
+  //     `cost_micro_usd` (the column reserveCost checks against the cap).
+  // Edge case (acceptable): if a user toggles BYOK between stream + reconcile
+  // retry, the routing matches their *current* state, not the stream's tier.
+  // Stream-time tier would require a `logging_messages.was_byok` column;
+  // not added in this fix (out of scope).
+  let isByok = false;
+  if (authenticated) {
+    try {
+      const rows = (await sql`
+        SELECT 1 FROM user_byok_keys WHERE user_id = ${actorId} LIMIT 1
+      `) as unknown[];
+      isByok = rows.length > 0;
+    } catch (e) {
+      // BYOK lookup failed — fail closed to the safer routing for the user
+      // (don't accidentally inflate their free cap when they have BYOK).
+      // Log so the issue is visible; return 500 so the client retries
+      // rather than silently routing wrong.
+      console.error('[reconcile-cost] BYOK lookup failed:', e);
+      return Response.json({ error: 'byok_lookup_failed' }, { status: 503 });
+    }
+  }
+
   // Step 3: delegate the dual-row write to `applyDeltaCommit`. The helper
   // atomically:
   //  - Locks the logging_messages row (`SELECT ... FOR UPDATE`) with the
@@ -178,19 +208,21 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   //    `applied=false`, no row write).
   //  - Advances both `cost_micro_usd` (monotone HWM) AND
   //    `cost_settled_micro_usd` (the authoritative settled value).
-  //  - Credits `user_api_usage.cost_micro_usd` by
-  //    `max(0, newCost - max(projected, cost_settled))`. With
-  //    `projected = 0n` here (no reservation context in this fresh Worker
-  //    invocation), the baseline is `cost_settled`, which already
-  //    incorporates the reservation via the earlier mid-stream / abort
-  //    handler writers.
+  //  - Credits `user_api_usage` by `max(0, newCost - max(projected, cost_settled))`.
+  //    With `projected = 0n` here (no reservation context in this fresh Worker
+  //    invocation), the baseline is `cost_settled`, which already incorporates
+  //    the reservation via the earlier mid-stream / abort handler writers.
+  //  - Routes the delta into `cost_micro_usd` or `byok_cost_micro_usd` based
+  //    on `isByok` (resolved above). Free-tier deltas land in `cost_micro_usd`
+  //    (the column reserveCost checks); BYOK deltas land in the parallel
+  //    `byok_cost_micro_usd` column and never inflate the free cap.
   //
   // `applied=false` from the helper is a benign no-op — the row was
   // missing, owned by someone else, or already reconciled. We return 200
   // so the client's retry queue treats it as success (not retry-worthy).
   let out: { applied: boolean; delta: bigint; new_settled: bigint };
   try {
-    out = await applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost);
+    out = await applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
   } catch (e) {
     console.error('[reconcile-cost] applyDeltaCommit failed:', e);
     return Response.json({ error: 'update_failed' }, { status: 500 });
@@ -204,6 +236,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       logging_message_id: loggingMessageId,
       actor_id: actorId,
       authenticated,
+      is_byok: isByok,
       client_cost_micro_usd: clientCost.toString(),
       new_settled_micro_usd: out.new_settled.toString(),
       delta_micro_usd: out.delta.toString(),
@@ -220,12 +253,13 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // there's no handlerStartedAtMs to anchor an elapsed measurement to.
   await writeDiagnostic(sql, {
     error_name: 'DiagnosticReconcileEndpointHit',
-    error_message: `client=${clientCost.toString()} new_settled=${out.new_settled.toString()} delta=${out.delta.toString()} µUSD applied=${out.applied}`,
+    error_message: `client=${clientCost.toString()} new_settled=${out.new_settled.toString()} delta=${out.delta.toString()} µUSD applied=${out.applied} byok=${isByok}`,
     user_id: actorId,
     chart_id: null,
     request_metadata: {
       logging_message_id: loggingMessageId,
       authenticated,
+      is_byok: isByok,
       client_cost_micro_usd: clientCost.toString(),
       new_settled_micro_usd: out.new_settled.toString(),
       delta_micro_usd: out.delta.toString(),

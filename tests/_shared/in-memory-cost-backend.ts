@@ -37,13 +37,18 @@ export type LoggingMessageRow = {
   reconciled_at: Date | null;
 };
 
-// Base shape for `user_api_usage` — only the cost column is required by
-// the helper's CTE. Tests that also exercise token-counter writes
-// (currently only `iife-death-recovery.test.ts`'s reconcile-CTE mirror)
-// extend this via the `TUserUsage` generic on `makeBackend`.
+// Base shape for `user_api_usage` — the cost column is required by the
+// helper's CTE. `byok_cost_micro_usd` was added by the BYOK regression
+// fix (2026-05-17) to split the routing into two columns. It's *optional*
+// at the input boundary so existing tests don't have to add `0n` everywhere;
+// `makeBackend` defaults it to 0n and the on-state representation always
+// has it set. Tests that also exercise token-counter writes (currently
+// only `iife-death-recovery.test.ts`'s reconcile-CTE mirror) extend this
+// via the `TUserUsage` generic on `makeBackend`.
 export type UserApiUsageRow = {
   user_id: string;
   cost_micro_usd: bigint;
+  byok_cost_micro_usd?: bigint;
 };
 
 // Shape captured from `writeDiagnostic` INSERTs into `logging_errors`.
@@ -122,7 +127,12 @@ export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow
 }): Backend<TUserUsage, LoggingMessageRow | null> {
   const state: { message: LoggingMessageRow | null; user_usage: TUserUsage } = {
     message: initial.message ? { ...initial.message } : null,
-    user_usage: { ...initial.user_usage },
+    // Default byok_cost_micro_usd to 0n if the input omits it (it's
+    // optional on UserApiUsageRow). Keeps existing free-tier tests
+    // unchanged — they pass `{user_id, cost_micro_usd}` without the
+    // BYOK column, and the backend's on-state representation always
+    // has it set.
+    user_usage: { byok_cost_micro_usd: 0n, ...initial.user_usage },
   };
   const diagnosticInserts: DiagnosticInsert[] = [];
   const capturedValues: unknown[][] = [];
@@ -161,14 +171,21 @@ export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow
       diagnosticInserts.push({ error_name, metadata });
       return Promise.resolve([]);
     }
-    // applyDeltaCommit CTE: values[0]=messageId, [1]=userId,
-    // [2]=projected (string), [3]=newCost (string). Subsequent
-    // interpolations repeat these in the UPDATE clauses but the values
-    // are the same; we only need to read them once.
+    // applyDeltaCommit CTE: the helper interpolates messageId, userId,
+    // projected (string), newCost (string), and isByok (boolean) — the
+    // CTE references them in the WHERE / UPDATE / CASE clauses, so the
+    // captured `values` array has repeated occurrences. We extract the
+    // distinct values by name: messageId/userId/projected/newCost are
+    // strings; isByok is the only boolean and appears once per CASE arm.
     const messageId = String(values[0]);
     const userId = String(values[1]);
     const projected = BigInt(String(values[2]));
     const newCost = BigInt(String(values[3]));
+    // isByok is interpolated as a JS boolean; `Boolean(v) === v` only when
+    // v is already true/false. Find the first such value (the CASE
+    // expressions interpolate it twice). Default to `false` if absent —
+    // pre-fix tests that don't pass isByok still work.
+    const isByok = values.find((v) => typeof v === 'boolean') === true;
 
     return withRowLock(messageId, async () => {
       // Yield a microtask so concurrent callers race for the lock as
@@ -198,9 +215,21 @@ export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow
         cost_settled_micro_usd: newSettled,
       };
       if (computedDelta > 0n) {
+        // Route the delta into cost_micro_usd or byok_cost_micro_usd based
+        // on `isByok`, mirroring the production CTE's CASE-WHEN arms. The
+        // *other* column stays unchanged (the CASE arm contributes 0).
+        // `?? 0n` lets the optional `byok_cost_micro_usd` default to 0n
+        // for tests that don't initialize it. The state-init constructor
+        // already defaults it, so this is belt-and-braces (and silences
+        // any "object is possibly undefined" check from a strict
+        // typechecker).
+        const currentByok = state.user_usage.byok_cost_micro_usd ?? 0n;
         state.user_usage = {
           ...state.user_usage,
-          cost_micro_usd: state.user_usage.cost_micro_usd + computedDelta,
+          cost_micro_usd: isByok
+            ? state.user_usage.cost_micro_usd
+            : state.user_usage.cost_micro_usd + computedDelta,
+          byok_cost_micro_usd: isByok ? currentByok + computedDelta : currentByok,
         };
       }
       return [
