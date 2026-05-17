@@ -8,7 +8,7 @@ import { EditToolbar } from './EditToolbar';
 import { Legend } from './Legend';
 import { NodePopup } from './NodePopup';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { useGraphLayout } from '../hooks/useGraphLayout';
+import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
 import { useGraphMutation } from '../hooks/useGraphMutation';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
@@ -1691,26 +1691,8 @@ export function ToC({
                   return;
                 }
 
-                // Use the same getLocalPosition function as ConnectionsComponent
-                const getLocalPosition = (element: HTMLElement) => {
-                  let x = 0,
-                    y = 0;
-                  const width = element.offsetWidth,
-                    height = element.offsetHeight;
-                  let current: HTMLElement | null = element;
-
-                  // Walk up the offset parent chain until we reach the container
-                  while (current && current !== container) {
-                    x += current.offsetLeft;
-                    y += current.offsetTop;
-                    current = current.offsetParent as HTMLElement | null;
-                  }
-
-                  return { x, y, width, height };
-                };
-
-                const sourcePos = getLocalPosition(sourceNodeRef);
-                const targetPos = getLocalPosition(targetNodeRef);
+                const sourcePos = getLocalPosition(sourceNodeRef, container as HTMLElement);
+                const targetPos = getLocalPosition(targetNodeRef, container as HTMLElement);
 
                 // Check if nodes are in the same column for vertical connections
                 const sourceLocation = findNodeLocation(sourceId);
