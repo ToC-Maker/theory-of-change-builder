@@ -164,7 +164,12 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
 
     const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 9_000_000n);
 
-    expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+    expect(result).toEqual({
+      applied: false,
+      reason: 'row_not_found_or_foreign_or_reconciled',
+      delta: 0n,
+      new_settled: 0n,
+    });
     // State is untouched: cost_settled stays at 500k, user_api_usage at 500k.
     expect(state.message.cost_settled_micro_usd).toBe(500_000n);
     expect(state.user_usage.cost_micro_usd).toBe(500_000n);
@@ -196,7 +201,12 @@ describe('applyDeltaCommit — concurrency simulation (in-memory)', () => {
       9_000_000n,
     );
 
-    expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+    expect(result).toEqual({
+      applied: false,
+      reason: 'row_not_found_or_foreign_or_reconciled',
+      delta: 0n,
+      new_settled: 0n,
+    });
     expect(state.message.cost_settled_micro_usd).toBe(100_000n);
     expect(state.user_usage.cost_micro_usd).toBe(0n);
   });

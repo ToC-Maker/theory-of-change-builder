@@ -47,42 +47,64 @@ function makeSqlSpy(rows: ReadonlyArray<Record<string, unknown>>): {
 
 describe('applyDeltaCommit', () => {
   describe('null/empty messageId fast-path', () => {
-    it('no-ops when messageId is null (no SQL issued)', async () => {
+    it('no-ops with reason:missing_id when messageId is null (no SQL issued)', async () => {
       // The caller is responsible for passing the captured loggingMessageId
       // through to the helper; before message_start the row id is not yet
       // known, so the caller passes null. The helper must not even attempt
       // an SQL roundtrip in that window — it would 1) waste a Neon HTTP
-      // request and 2) match nothing anyway.
+      // request and 2) match nothing anyway. The `reason: 'missing_id'`
+      // discriminator distinguishes the no-SQL fast-path from the SQL-ran-
+      // but-CTE-empty path (`reason: 'row_not_found_or_foreign_or_reconciled'`).
       const { sql, calls } = makeSqlSpy([]);
       const result = await applyDeltaCommit(sql, null, 'auth0|alice', 100n, 500n, false);
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'missing_id',
+        delta: 0n,
+        new_settled: 0n,
+      });
       expect(calls).toHaveLength(0);
     });
 
-    it('no-ops when messageId is undefined (no SQL issued)', async () => {
+    it('no-ops with reason:missing_id when messageId is undefined (no SQL issued)', async () => {
       // `loggingMessageId` is typed `string | null | undefined` in the
       // caller's SseTeeContext; cover the undefined branch too so a future
       // refactor can't silently start issuing SQL for unset ids.
       const { sql, calls } = makeSqlSpy([]);
       const result = await applyDeltaCommit(sql, undefined, 'auth0|alice', 100n, 500n, false);
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'missing_id',
+        delta: 0n,
+        new_settled: 0n,
+      });
       expect(calls).toHaveLength(0);
     });
 
-    it('no-ops when messageId is empty string (no SQL issued)', async () => {
+    it('no-ops with reason:missing_id when messageId is empty string (no SQL issued)', async () => {
       // Defensive: an empty string is falsy, so the early-return covers it
       // naturally. Pin this so a future refactor to `messageId == null`
       // (which would treat '' as truthy) wouldn't silently start firing
       // SQL with WHERE message_id = ''.
       const { sql, calls } = makeSqlSpy([]);
       const result = await applyDeltaCommit(sql, '', 'auth0|alice', 100n, 500n, false);
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'missing_id',
+        delta: 0n,
+        new_settled: 0n,
+      });
       expect(calls).toHaveLength(0);
     });
   });
 
   describe('row-not-found / ownership / reconciled (CTE produces empty / applied=false)', () => {
-    it('returns applied:false when row is missing', async () => {
+    // All three of these collapse into `reason: 'row_not_found_or_foreign_or_reconciled'`
+    // because the CTE itself cannot distinguish them — they all look identical
+    // to the `EXISTS(SELECT 1 FROM msg_upd)` scalar. The discriminator is
+    // still useful because it separates SQL-ran-but-empty from the no-SQL
+    // `missing_id` fast-path (above).
+    it('returns reason:row_not_found_or_foreign_or_reconciled when row is missing', async () => {
       // The user-message INSERT in `logging-saveMessage.ts` runs concurrently
       // with the streaming worker; the row may not exist when the first
       // per-update write fires. The CTE's `WHERE message_id = $1` excludes
@@ -90,10 +112,15 @@ describe('applyDeltaCommit', () => {
       // produces `applied = false`.
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
       const result = await applyDeltaCommit(sql, 'msg_missing', 'auth0|alice', 100n, 500n, false);
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
     });
 
-    it('returns applied:false when row is owned by a different user (IDOR guard)', async () => {
+    it('returns reason:row_not_found_or_foreign_or_reconciled when row is owned by a different user (IDOR guard)', async () => {
       // `AND user_id = $3` in both the SELECT FOR UPDATE and the UPDATE
       // means a caller posting against another user's logging_message_id
       // gets a CTE-empty result; the helper reports the same shape as
@@ -104,10 +131,15 @@ describe('applyDeltaCommit', () => {
       // cases (missing / IDOR / reconciled).
       const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
       const result = await applyDeltaCommit(sql, 'msg_bob_owned', 'auth0|alice', 100n, 500n, false);
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
     });
 
-    it('returns applied:false when reconciled_at is non-null (late-retry lock)', async () => {
+    it('returns reason:row_not_found_or_foreign_or_reconciled when reconciled_at is non-null (late-retry lock)', async () => {
       // The post-stream reconcile (Task 8) stamps `reconciled_at = NOW()`
       // atomically with the signed-delta SQL. A late retry from the 7-day
       // localStorage retry queue (`chatService.ts` reconcile-cost retry
@@ -124,19 +156,60 @@ describe('applyDeltaCommit', () => {
         500n,
         false,
       );
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
     });
 
-    it('returns applied:false when SQL returns zero rows (defensive)', async () => {
+    it('returns reason:row_not_found_or_foreign_or_reconciled when SQL returns zero rows (defensive)', async () => {
       // Belt-and-braces: even if a future driver or schema change made the
       // outer SELECT return zero rows instead of one row with `applied=false`,
       // the helper still reports the no-op shape. The plan's CTE is
       // structured to always return one row (the EXISTS scalar wraps the
       // emptiness), but this guard prevents a silent NaN / undefined leak
-      // if the contract drifts.
+      // if the contract drifts. Same `reason` bucket as the SQL-returned-
+      // `applied:false` cases above — functionally equivalent from the
+      // caller's perspective.
       const { sql } = makeSqlSpy([]);
       const result = await applyDeltaCommit(sql, 'msg_zero_rows', 'auth0|alice', 100n, 500n, false);
-      expect(result).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
+    });
+  });
+
+  describe('reason discriminator: distinguishes missing_id from CTE-empty', () => {
+    // The headline value of the new discriminator: the no-SQL short-circuit
+    // is now visibly distinct from every other no-op path. Pin this
+    // explicitly so a refactor that collapsed them back into a single
+    // `{applied: false}` shape (or swapped the labels) would fail.
+    it('missing_id reason fires only on the no-SQL fast-path', async () => {
+      const { sql, calls } = makeSqlSpy([]);
+      const result = await applyDeltaCommit(sql, null, 'auth0|alice', 100n, 500n, false);
+      // No SQL was issued.
+      expect(calls).toHaveLength(0);
+      // TS narrowing: only the {applied: false} arm carries reason.
+      expect(result.applied).toBe(false);
+      if (!result.applied) {
+        expect(result.reason).toBe('missing_id');
+      }
+    });
+
+    it('row_not_found_or_foreign_or_reconciled reason fires after SQL when CTE is empty', async () => {
+      const { sql, calls } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100n, 500n, false);
+      // SQL DID run.
+      expect(calls).toHaveLength(1);
+      expect(result.applied).toBe(false);
+      if (!result.applied) {
+        expect(result.reason).toBe('row_not_found_or_foreign_or_reconciled');
+      }
     });
   });
 

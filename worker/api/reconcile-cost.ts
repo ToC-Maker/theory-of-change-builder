@@ -220,11 +220,33 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // `applied=false` from the helper is a benign no-op — the row was
   // missing, owned by someone else, or already reconciled. We return 200
   // so the client's retry queue treats it as success (not retry-worthy).
-  let out: { applied: boolean; delta: bigint; new_settled: bigint };
+  let out: Awaited<ReturnType<typeof applyDeltaCommit>>;
   try {
     out = await applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
   } catch (e) {
     console.error('[reconcile-cost] applyDeltaCommit failed:', e);
+    // Symmetric with every analogous in-stream reconcile path: persist a
+    // logging_errors row so the failure is queryable from the DB instead
+    // of only visible in `wrangler tail`. Matches the metadata shape of
+    // the success-path `DiagnosticReconcileEndpointHit` row written
+    // below in Step 4, so analytics can JOIN/UNION across both event
+    // names by `logging_message_id`.
+    await writeDiagnostic(sql, {
+      error_name: 'DiagnosticReconcileEndpointFailed',
+      error_message: `applyDeltaCommit threw: ${e instanceof Error ? e.message : String(e)}`,
+      user_id: actorId,
+      chart_id: null,
+      request_metadata: {
+        logging_message_id: loggingMessageId,
+        authenticated,
+        is_byok: isByok,
+        client_cost_micro_usd: clientCost.toString(),
+        error_message: e instanceof Error ? e.message : String(e),
+        error_stack: e instanceof Error ? e.stack : null,
+      },
+      deployment_host: url.hostname,
+      fired_at_ms: Date.now(),
+    });
     return Response.json({ error: 'update_failed' }, { status: 500 });
   }
 

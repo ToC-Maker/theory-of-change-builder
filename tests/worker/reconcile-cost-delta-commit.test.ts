@@ -56,6 +56,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { applyDeltaCommit } from '../../worker/_shared/cost-commit';
 import { makeBackend } from '../_shared/in-memory-cost-backend';
+// Raw source import — used by the Finding C structural pin to assert the
+// production catch block in `/api/reconcile-cost` writes a
+// `DiagnosticReconcileEndpointFailed` row before returning 500. Same
+// pattern as `cost-commit-sql-invariants.test.ts` and the Finding A
+// pins in `iife-death-recovery.test.ts`: pulls file bytes without
+// evaluating the module (the handler depends on Workers globals the
+// test runtime doesn't have).
+import reconcileCostSource from '../../worker/api/reconcile-cost.ts?raw';
 
 // In-memory backend lives in `tests/_shared/in-memory-cost-backend.ts`.
 // This file pins the endpoint-specific contract on top of the shared
@@ -309,7 +317,12 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
         user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
       });
       const out = await endpointCall(sql, 'msg_missing', 'auth0|alice', 500n);
-      expect(out).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(out).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
       // State unchanged: no mutation against a non-existent row.
       expect(state.message.cost_settled_micro_usd).toBe(0n);
       expect(state.user_usage.cost_micro_usd).toBe(0n);
@@ -333,7 +346,12 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
         user_usage: { user_id: 'auth0|bob', cost_micro_usd: 0n },
       });
       const out = await endpointCall(sql, 'msg_bobs', 'auth0|alice', 500n);
-      expect(out).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(out).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
       // Bob's row is untouched — Alice cannot advance it.
       expect(state.message.cost_settled_micro_usd).toBe(100n);
       expect(state.user_usage.cost_micro_usd).toBe(0n);
@@ -360,7 +378,12 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       // Client pushes a way-higher value — must NOT advance, because the
       // signed-delta path already settled the truth.
       const out = await endpointCall(sql, 'msg_x', 'auth0|alice', 999_999n);
-      expect(out).toEqual({ applied: false, delta: 0n, new_settled: 0n });
+      expect(out).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
       // Row state unchanged: settled stays at 1000, reconciled_at stays
       // stamped, user_api_usage stays at the post-reconcile value.
       expect(state.message.cost_settled_micro_usd).toBe(1000n);
@@ -395,11 +418,11 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
   });
 
   describe('response shape for client retry queue', () => {
-    it('returns the helper output unchanged — applied + delta + new_settled', async () => {
+    it('happy path returns { applied, delta, new_settled }', async () => {
       // The endpoint's response body is `{ applied, delta, new_settled }`
-      // (with bigints stringified at the JSON boundary). Tests pin the
-      // helper output shape here; the JSON stringification is handled by
-      // `Response.json(...)` in the endpoint and is uniform.
+      // on the happy path (with bigints stringified at the JSON boundary).
+      // Tests pin the helper output shape here; the JSON stringification
+      // is handled by `Response.json(...)` in the endpoint and is uniform.
       const { sql } = makeBackend({
         message: {
           message_id: 'msg_x',
@@ -417,12 +440,16 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       expect(typeof out.new_settled).toBe('bigint');
     });
 
-    it('the no-op shape uses the same key set (so the client decoder is uniform)', async () => {
+    it('no-op shape carries the reason discriminator alongside applied/delta/new_settled', async () => {
       // The client retry queue reads `applied` to decide whether to drop
-      // the entry. `applied=false` is treated as "either the row is gone,
-      // owned by someone else, or already reconciled" — all benign. The
-      // shape must match exactly so the JSON decoder doesn't branch on
-      // missing keys.
+      // the entry — `applied=false` is treated as "either the row is gone,
+      // owned by someone else, or already reconciled" (all benign). The
+      // `reason` discriminator adds a fourth key on the no-op arm so the
+      // server-side diagnostic + analytics can distinguish the no-SQL
+      // fast-path (`missing_id`) from the SQL-ran-but-empty case
+      // (`row_not_found_or_foreign_or_reconciled`). The client decoder
+      // ignores `reason` — it only branches on `applied` — so the extra
+      // key is purely server-side observability.
       const { sql } = makeBackend({
         message: {
           message_id: 'msg_other',
@@ -434,10 +461,16 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
         user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
       });
       const out = await endpointCall(sql, 'msg_missing', 'auth0|alice', 500n);
-      expect(Object.keys(out).sort()).toEqual(['applied', 'delta', 'new_settled']);
+      expect(Object.keys(out).sort()).toEqual(['applied', 'delta', 'new_settled', 'reason']);
       expect(out.applied).toBe(false);
       expect(out.delta).toBe(0n);
       expect(out.new_settled).toBe(0n);
+      if (!out.applied) {
+        // SQL-ran-empty bucket — the endpoint is called with a real
+        // (non-empty) loggingMessageId, so the missing_id fast-path is
+        // unreachable from here.
+        expect(out.reason).toBe('row_not_found_or_foreign_or_reconciled');
+      }
     });
   });
 
@@ -453,6 +486,94 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       await expect(endpointCall(sql, 'msg_x', 'auth0|alice', 500n)).rejects.toThrow(
         'connection refused',
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Finding C: catch block on applyDeltaCommit must writeDiagnostic
+  // before returning 500.
+  //
+  // Pre-fix: the catch around `applyDeltaCommit` in
+  // `worker/api/reconcile-cost.ts` only `console.error`ed and returned
+  // 500 — asymmetric with every analogous in-stream reconcile path
+  // (which all `writeDiagnostic` on failure). A DB outage during the
+  // helper call left only a `wrangler tail` log, not a queryable
+  // `logging_errors` row, so post-mortem from the DB was blind.
+  //
+  // Post-fix: catch must call `writeDiagnostic` with
+  // `error_name: 'DiagnosticReconcileEndpointFailed'` and metadata that
+  // mirrors the success-path `DiagnosticReconcileEndpointHit` row's
+  // shape (so analytics can JOIN/UNION across both event names by
+  // `logging_message_id`).
+  //
+  // Same structural-pin approach as Finding A: the production handler
+  // isn't easily testable without booting Workers (auth, anon cookie,
+  // DB binding), so the test asserts the production source contains the
+  // load-bearing tokens. Each landmark was confirmed to fail loudly
+  // when the corresponding source was temporarily reverted (recorded
+  // 2026-05-17 — revert before committing the regression verification).
+  // ---------------------------------------------------------------------
+  describe('Finding C: catch block writes DiagnosticReconcileEndpointFailed before returning 500', () => {
+    it('catch block calls writeDiagnostic with DiagnosticReconcileEndpointFailed', () => {
+      // The exact error_name matters: dashboards/queries that union on
+      // event names need to key off this string. A rename would break
+      // them silently if we didn't pin it here.
+      expect(reconcileCostSource).toMatch(
+        /error_name:\s*['"]DiagnosticReconcileEndpointFailed['"]/,
+      );
+    });
+
+    it('writeDiagnostic appears BEFORE the 500 response in the catch block', () => {
+      // Ordering matters: returning 500 without first emitting the
+      // diagnostic would re-introduce the bug. Scope the regex to the
+      // catch block by anchoring on `console.error.*applyDeltaCommit`
+      // and asserting writeDiagnostic appears before the
+      // `return Response.json` with status 500.
+      //
+      // The slice spans from the console.error landmark through the
+      // 500 return — must include the writeDiagnostic call in between.
+      const catchSlice =
+        /console\.error\(['"]\[reconcile-cost\][\s\S]{0,2000}?return\s+Response\.json\(\s*\{\s*error:\s*['"]update_failed['"]\s*\}\s*,\s*\{\s*status:\s*500\s*\}/.exec(
+          reconcileCostSource,
+        );
+      expect(catchSlice).not.toBeNull();
+      const slice = catchSlice![0];
+      // The diagnostic write must appear inside this slice (between the
+      // console.error log and the 500 return). If it doesn't, either
+      // the diagnostic was dropped or the ordering was swapped — both
+      // would silently regress the fix.
+      expect(slice).toMatch(/await\s+writeDiagnostic\(/);
+      expect(slice).toMatch(/DiagnosticReconcileEndpointFailed/);
+    });
+
+    it('diagnostic metadata carries logging_message_id, authenticated, is_byok, and client cost', () => {
+      // Match the success-path `DiagnosticReconcileEndpointHit` row's
+      // shape — analytics depend on a uniform metadata schema across
+      // both event names so JOIN/UNION queries don't have to special-case.
+      const diagSlice =
+        /error_name:\s*['"]DiagnosticReconcileEndpointFailed['"][\s\S]{0,2000}/.exec(
+          reconcileCostSource,
+        );
+      expect(diagSlice).not.toBeNull();
+      const slice = diagSlice![0];
+      expect(slice).toMatch(/logging_message_id/);
+      expect(slice).toMatch(/authenticated/);
+      expect(slice).toMatch(/is_byok/);
+      expect(slice).toMatch(/client_cost_micro_usd/);
+    });
+
+    it('diagnostic metadata captures the error message (for replay / debugging)', () => {
+      // The error message is the single most useful field for diagnosing
+      // why applyDeltaCommit threw (connection refused, lock timeout, etc.).
+      // Pin that it lands in the metadata so the failure surface is
+      // queryable end-to-end from the DB.
+      const diagSlice =
+        /error_name:\s*['"]DiagnosticReconcileEndpointFailed['"][\s\S]{0,2000}/.exec(
+          reconcileCostSource,
+        );
+      expect(diagSlice).not.toBeNull();
+      const slice = diagSlice![0];
+      expect(slice).toMatch(/error_message/);
     });
   });
 

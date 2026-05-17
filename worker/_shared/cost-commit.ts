@@ -2,19 +2,58 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
 import { toBigInt } from './bigint';
 
 /**
+ * Discriminated return shape of `applyDeltaCommit`.
+ *
+ * The `applied: true` arm is the happy path: the row existed, was owned
+ * by the caller, was not already reconciled, and the helper credited
+ * (or no-op'd-with-delta-0) `user_api_usage` based on the GREATEST clamp.
+ *
+ * The `applied: false` arm covers every "we couldn't write" branch. It
+ * carries a `reason` discriminator so callers (and diagnostic queries)
+ * can distinguish the two coarse-grained no-op buckets:
+ *
+ *   - `'missing_id'` — the helper short-circuited before issuing any SQL
+ *     because the caller passed a null / undefined / empty `messageId`.
+ *     Typical in the pre-message_start window where the row identifier
+ *     is not yet known. No DB round-trip happens.
+ *
+ *   - `'row_not_found_or_foreign_or_reconciled'` — SQL executed but the
+ *     CTE returned zero rows. Three sub-causes collapse into this bucket
+ *     because the CTE itself cannot distinguish them (all three look
+ *     identical to the `EXISTS(SELECT 1 FROM msg_upd)` scalar):
+ *       1. Row not found by `message_id` (e.g. cross-Worker race).
+ *       2. Row found but `user_id` mismatch (IDOR guard).
+ *       3. Row found but `reconciled_at` is non-null (post-stream
+ *          reconcile stamped it; late client retries from the 7-day
+ *          localStorage queue must not re-inflate the cap).
+ *     Distinguishing 1/2/3 would require a second SELECT after the
+ *     update fails, which would defeat the single-statement lock-
+ *     acquisition invariant. The labeled bucket is still better than
+ *     the previous undifferentiated `applied: false` because the
+ *     `missing_id` short-circuit is now visibly distinct from the
+ *     post-DB-call no-ops.
+ */
+export type ApplyDeltaCommitResult =
+  | { applied: true; delta: bigint; new_settled: bigint }
+  | {
+      applied: false;
+      reason: 'missing_id' | 'row_not_found_or_foreign_or_reconciled';
+      delta: 0n;
+      new_settled: 0n;
+    };
+
+/**
  * Atomic in-stream delta-commit.
  *
  * Single SQL statement issued via Neon HTTP. The CTE bakes ownership
  * (`AND user_id = $3`) into both the `SELECT ... FOR UPDATE` and the
  * `UPDATE`, and the late-retry lock (`AND reconciled_at IS NULL`) into
- * both as well. Three "no-op" conditions collapse into a single return
- * shape (`{applied: false, delta: 0n, new_settled: 0n}`):
- *
- *   1. Row not found by message_id.
- *   2. Row found, but user_id mismatch (IDOR guard).
- *   3. Row found, but `reconciled_at` is non-null (post-stream reconcile
- *      stamped it; late client retries from the localStorage queue
- *      must not re-inflate the cap).
+ * both as well. The two `applied: false` buckets — the `missing_id`
+ * short-circuit and the SQL-returned-zero-rows path — are documented
+ * on `ApplyDeltaCommitResult` above. The `reason` discriminator on the
+ * `applied: false` arm lets diagnostics + downstream gating distinguish
+ * the no-SQL fast-path from the lock-out cases (row missing, IDOR, or
+ * already reconciled).
  *
  * Idempotency: the row UPDATE uses
  * `cost_settled_micro_usd = GREATEST(cost_settled_micro_usd, $newCost)`,
@@ -67,15 +106,20 @@ import { toBigInt } from './bigint';
  * write inside the same atomic CTE so cap-check / display invariants
  * survive concurrent writers.
  *
- * @returns `{applied, delta, new_settled}`:
- *   - `applied`: true iff the row exists, is owned by `userId`, and
- *     `reconciled_at` is null. False on any no-op condition.
- *   - `delta`: bigint µUSD credited to `user_api_usage` this call;
- *     `0n` when newCost ≤ max(projected, settled). The delta is
- *     applied to `byok_cost_micro_usd` when `isByok=true`, otherwise
- *     to `cost_micro_usd`.
- *   - `new_settled`: the row's `cost_settled_micro_usd` after the
- *     UPDATE; `0n` on no-op.
+ * @returns `ApplyDeltaCommitResult` (discriminated union):
+ *   - `{applied: true, delta, new_settled}` — the row was updated (delta
+ *     may be `0n` when newCost ≤ max(projected, settled); `applied: true`
+ *     still holds because the SQL ran and the row was settled monotonically).
+ *     The delta lands in `byok_cost_micro_usd` when `isByok=true`,
+ *     otherwise `cost_micro_usd`.
+ *   - `{applied: false, reason: 'missing_id', delta: 0n, new_settled: 0n}`
+ *     when the helper short-circuited before SQL (null/undefined/empty
+ *     messageId). No DB round-trip happens.
+ *   - `{applied: false, reason: 'row_not_found_or_foreign_or_reconciled',
+ *     delta: 0n, new_settled: 0n}` when SQL ran but the CTE matched no
+ *     rows. The three sub-causes (row missing, IDOR, already reconciled)
+ *     are not individually distinguishable from a single CTE result;
+ *     callers needing finer granularity must SELECT separately.
  */
 export async function applyDeltaCommit(
   sql: NeonQueryFunction<false, false>,
@@ -84,8 +128,10 @@ export async function applyDeltaCommit(
   projectedMicroUsd: bigint,
   newCostMicroUsd: bigint,
   isByok: boolean,
-): Promise<{ applied: boolean; delta: bigint; new_settled: bigint }> {
-  if (!messageId) return { applied: false, delta: 0n, new_settled: 0n };
+): Promise<ApplyDeltaCommitResult> {
+  if (!messageId) {
+    return { applied: false, reason: 'missing_id', delta: 0n, new_settled: 0n };
+  }
   // Neon's tagged-template serialises numeric interpolations through its
   // own type-tagging pipeline; stringifying first + casting via
   // `::bigint` is the canonical "definitely a bigint, not a JSON number"
@@ -129,7 +175,14 @@ export async function applyDeltaCommit(
     applied: boolean;
   }[];
   const row = result[0];
-  if (!row || !row.applied) return { applied: false, delta: 0n, new_settled: 0n };
+  if (!row || !row.applied) {
+    return {
+      applied: false,
+      reason: 'row_not_found_or_foreign_or_reconciled',
+      delta: 0n,
+      new_settled: 0n,
+    };
+  }
   return {
     applied: true,
     new_settled: toBigInt(row.new_settled),

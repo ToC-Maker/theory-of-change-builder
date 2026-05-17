@@ -3569,7 +3569,21 @@ export async function handler(
           const projStr = projected.toString();
           const actualStr = actualMicro.toString();
           const tierIsByok = tier === 'byok';
-          await sql`
+          // Finding A (capture RETURNING): the prior `await sql\`...\`` discarded
+          // the result, so the gating below couldn't tell happy-path apart
+          // from the no-op (row missing / foreign / already reconciled) case.
+          // The outer UPDATE's `WHERE ... AND EXISTS(SELECT 1 FROM msg_upd)`
+          // returns zero rows in the no-op branches; capturing the result
+          // lets us:
+          //   1. gate `global_monthly_usage` INSERT on `length > 0` so a
+          //      reconcile re-entered past the 60s idempotency window
+          //      against an already-reconciled row doesn't double-count
+          //      against the monthly observability table.
+          //   2. emit a queryable `DiagnosticReconcileSkipped` row when
+          //      `length === 0` so the no-op is visible from `logging_errors`
+          //      (previously only `DiagnosticReconcileFailed` — i.e. SQL
+          //      exception — was queryable).
+          const reconcileRows = (await sql`
             WITH locked AS (
               SELECT cost_settled_micro_usd FROM logging_messages
               WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
@@ -3600,18 +3614,50 @@ export async function handler(
                 last_activity_at = NOW()
             WHERE user_id = ${actorId} AND EXISTS(SELECT 1 FROM msg_upd)
             RETURNING cost_micro_usd, (SELECT d FROM signed_delta) AS applied_signed_delta
-          `;
+          `) as {
+            cost_micro_usd: bigint | number | string | null;
+            applied_signed_delta: bigint | number | string | null;
+          }[];
           // Global monthly usage is observability-only and excludes BYOK
           // (BYOK is self-funded; the table tracks our spend, not customer
-          // spend). Runs AFTER the signed-delta SQL — if reconcile failed,
-          // the catch block diagnostics fire and this is skipped.
-          if (isCapped(tier)) {
+          // spend). Gated on `reconcileRows.length > 0` so a no-op reconcile
+          // (row missing, foreign, or already reconciled) doesn't double-
+          // count against the monthly aggregate. Runs AFTER the signed-
+          // delta SQL — if reconcile threw, the catch block diagnostics
+          // fire and this is skipped.
+          if (reconcileRows.length > 0 && isCapped(tier)) {
             await sql`
               INSERT INTO global_monthly_usage (month_start, cost_micro_usd)
               VALUES (DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date, ${actualStr}::bigint)
               ON CONFLICT (month_start) DO UPDATE
               SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
             `;
+          } else if (reconcileRows.length === 0) {
+            // The reconcile CTE matched no rows — the message row is
+            // missing, owned by a different user, or already reconciled
+            // (e.g. concurrent reconcile won the race, or a late re-entry
+            // past the 60s idempotency window). Distinct from
+            // `DiagnosticReconcileFailed` (which fires on SQL exception):
+            // this is the *expected* benign late-reconcile case, but
+            // making it queryable from `logging_errors` is the only way
+            // to tell "reconcile silently skipped" apart from "reconcile
+            // wrote successfully" in the field.
+            await writeDiagnostic(sql, {
+              error_name: 'DiagnosticReconcileSkipped',
+              error_message: 'reconcile no-op: row missing, foreign, or already reconciled',
+              user_id: actorId,
+              chart_id: chartId ?? null,
+              request_metadata: {
+                logging_message_id: loggingMessageId,
+                actual_micro_usd: actualMicro.toString(),
+                projected_micro_usd: projected.toString(),
+                tier,
+                model,
+              },
+              deployment_host: requestUrl.hostname,
+              fired_at_ms: Date.now(),
+              start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+            });
           }
         } catch (e) {
           // Reconcile drift silently accumulates when we only console.error.

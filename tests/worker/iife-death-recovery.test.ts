@@ -47,6 +47,15 @@ import {
   makeBackend as makeSharedBackend,
   type LoggingMessageRow,
 } from '../_shared/in-memory-cost-backend';
+// Raw source import — used by the Finding A structural pins to assert the
+// production reconcile block captures the signed-delta CTE RETURNING into
+// a typed local, gates the `global_monthly_usage` INSERT on that, and
+// emits `DiagnosticReconcileSkipped` on the no-op branch. Vitest's
+// `?raw` is the same mechanism `cost-commit-sql-invariants.test.ts`
+// uses; it pulls the file bytes without ever evaluating the module
+// (the production handler depends on Workers globals that the test
+// runtime doesn't have).
+import anthropicStreamSource from '../../worker/api/anthropic-stream.ts?raw';
 
 // Extended user_api_usage shape — the shared backend's required base is
 // `{user_id, cost_micro_usd}` with `byok_cost_micro_usd?` optional (the
@@ -107,6 +116,19 @@ function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiU
     appliedSignedDelta: bigint;
     userCost: bigint;
     reconciledAt: Date | null;
+    /**
+     * Models the production reconcile SQL's RETURNING row count. The outer
+     * `UPDATE user_api_usage ... WHERE ... AND EXISTS(SELECT 1 FROM msg_upd)
+     * RETURNING ...` produces:
+     *   - 1 row when the CTE found + locked the message row (happy path).
+     *   - 0 rows when msg_upd RETURNING was empty (row missing, foreign,
+     *     or `reconciled_at` already non-null).
+     * Production code in `worker/api/anthropic-stream.ts` (post-Finding A)
+     * uses this count to gate the subsequent `global_monthly_usage` INSERT
+     * and the `DiagnosticReconcileSkipped` emit; pinning the count here
+     * lets the test mirror those branches against deterministic state.
+     */
+    appliedRows: 0 | 1;
   } {
     const {
       loggingMessageId,
@@ -121,11 +143,13 @@ function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiU
       row.message_id === loggingMessageId && row.user_id === actorId && row.reconciled_at === null;
     if (!matches) {
       // EXISTS(SELECT 1 FROM msg_upd) is false: user_api_usage UPDATE skipped.
+      // Production reconcile SQL's RETURNING yields 0 rows here.
       return {
         settled: row.cost_settled_micro_usd,
         appliedSignedDelta: 0n,
         userCost: state.user_usage.cost_micro_usd,
         reconciledAt: row.reconciled_at,
+        appliedRows: 0,
       };
     }
     const baseline =
@@ -171,6 +195,7 @@ function makeReconcile(state: { message: LoggingMessageRow; user_usage: UserApiU
         ? (state.user_usage.byok_cost_micro_usd ?? 0n)
         : state.user_usage.cost_micro_usd,
       reconciledAt: newReconciledAt,
+      appliedRows: 1,
     };
   };
 }
@@ -783,5 +808,195 @@ describe('reconcile signed-delta SQL — Task 8', () => {
     expect(state.user_usage.cache_create_tokens).toBe(100);
     expect(state.user_usage.cache_read_tokens).toBe(200);
     expect(state.user_usage.web_search_uses).toBe(3);
+  });
+
+  // ---------------------------------------------------------------------
+  // Finding A: capture signed-delta CTE RETURNING + gate global_monthly_usage
+  // + emit DiagnosticReconcileSkipped when reconcile no-op'd.
+  //
+  // Pre-fix: the post-stream reconcile in `worker/api/anthropic-stream.ts`
+  // discarded the await result of the signed-delta SQL. Two consequences:
+  //   1. global_monthly_usage INSERT ran unconditionally — narrow double-
+  //      count window when reconcile re-entered past the 60s idempotency
+  //      window against an already-reconciled row.
+  //   2. The "no rows applied" case was invisible to `logging_errors` —
+  //      only `DiagnosticReconcileFailed` (SQL exception path) was queryable.
+  //
+  // Post-fix: production captures `reconcileRows = (await sql\`...\`)` as a
+  // typed array, gates the `global_monthly_usage` INSERT on
+  // `reconcileRows.length > 0 && isCapped(tier)`, and emits
+  // `DiagnosticReconcileSkipped` when `reconcileRows.length === 0`.
+  //
+  // Why structural (?raw source) pins instead of behavioural mirror tests:
+  // the reconcile block is inline in the streaming handler (no extractable
+  // pure helper without much larger scope), and the existing mirror test
+  // for the reconcile-CTE algebra cannot exercise the *production* gate
+  // without an extracted function (a mirror that re-implements the gate
+  // would test the mirror, not production). Structural pins follow the
+  // same `?raw` + landmark pattern as `cost-commit-sql-invariants.test.ts`:
+  // they catch removal/regression of the load-bearing tokens without
+  // locking down formatting.
+  //
+  // Each landmark below was confirmed to fail loudly when the
+  // corresponding production source was temporarily reverted (recorded
+  // 2026-05-17 — revert before committing the regression verification).
+  // ---------------------------------------------------------------------
+  describe('Finding A: gate global_monthly_usage on reconcile rows + emit DiagnosticReconcileSkipped on no-op', () => {
+    // The mirror still exercises the inner reconcile algebra (lock,
+    // GREATEST, signed-delta math) end-to-end; this set of `it()` blocks
+    // only pins the production source's gate landmarks. Without these,
+    // a refactor that re-introduced the unconditional INSERT (or dropped
+    // the diagnostic) would silently regress both fixes.
+    it('captures the signed-delta CTE RETURNING into a typed local', () => {
+      // The discarded-await was the headline of Finding A. Pin that the
+      // RETURNING result is now stashed into a local named `reconcileRows`.
+      // The exact name matters: downstream gating and diagnostic emit
+      // both reference it by name.
+      expect(anthropicStreamSource).toMatch(/const\s+reconcileRows\s*=\s*\(await\s+sql`/);
+    });
+
+    it('gates the global_monthly_usage INSERT on reconcileRows.length > 0', () => {
+      // Pre-fix gate was `if (isCapped(tier))` only — the INSERT fired
+      // even on no-op reconciles, narrow double-count window for repeated
+      // reconciles past the 60s idempotency. Post-fix must include
+      // `reconcileRows.length > 0` in the condition.
+      expect(anthropicStreamSource).toMatch(
+        /if\s*\(\s*reconcileRows\.length\s*>\s*0\s*&&\s*isCapped\(tier\)\s*\)/,
+      );
+    });
+
+    it('emits DiagnosticReconcileSkipped when reconcileRows.length === 0', () => {
+      // Pre-fix the no-op reconcile was invisible to logging_errors —
+      // only the SQL-exception path wrote DiagnosticReconcileFailed.
+      // Post-fix must call writeDiagnostic with `DiagnosticReconcileSkipped`
+      // on the empty-rows branch so the no-op is queryable.
+      expect(anthropicStreamSource).toMatch(
+        /else\s+if\s*\(\s*reconcileRows\.length\s*===\s*0\s*\)/,
+      );
+      expect(anthropicStreamSource).toMatch(/error_name:\s*['"]DiagnosticReconcileSkipped['"]/);
+    });
+
+    it('DiagnosticReconcileSkipped carries logging_message_id, actual, and tier in metadata', () => {
+      // The diagnostic must be queryable by message id to debug the
+      // "did reconcile no-op for this stream?" question. Tier + actual
+      // are observability signals for the reconcile-already-fired vs
+      // ownership-mismatch sub-cases.
+      //
+      // Scope the regex to the writeDiagnostic call site — `error_name:`
+      // anchors past any prose mentioning the name (e.g. in comments) and
+      // captures up to ~1500 chars of metadata after.
+      const skippedBlock = /error_name:\s*['"]DiagnosticReconcileSkipped['"][\s\S]{0,1500}/.exec(
+        anthropicStreamSource,
+      );
+      expect(skippedBlock).not.toBeNull();
+      const slice = skippedBlock![0];
+      expect(slice).toMatch(/logging_message_id/);
+      expect(slice).toMatch(/actual_micro_usd|actualMicro/);
+      expect(slice).toMatch(/tier/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // In-mirror cross-check: the mirror's `appliedRows` discriminator
+  // (added 2026-05-17 alongside Finding A) reports the CTE's outer
+  // RETURNING row count. This gives the file-local algebra mirror parity
+  // with the production code's gate input. Tests below pin that the
+  // mirror produces appliedRows=0 in the same cases the production CTE
+  // would (already-reconciled, foreign user), and appliedRows=1 on the
+  // happy path. Together with the structural pins above, this catches
+  // both mirror drift and production-source regression.
+  // ---------------------------------------------------------------------
+  describe('reconcile mirror: appliedRows discriminator matches production CTE row count', () => {
+    it('happy path: appliedRows=1 when row was found + locked + updated', () => {
+      const { state, reconcile } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          cost_settled_micro_usd: 0n,
+          reconciled_at: null,
+        },
+        user_usage: {
+          user_id: 'auth0|alice',
+          cost_micro_usd: 100_000n,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_create_tokens: 0,
+          cache_read_tokens: 0,
+          web_search_uses: 0,
+        },
+      });
+      const result = reconcile({
+        loggingMessageId: 'msg_x',
+        actorId: 'auth0|alice',
+        projected: 100_000n,
+        actualMicro: 300_000n,
+        accumulator: ZERO_ACC,
+      });
+      expect(result.appliedRows).toBe(1);
+      expect(state.message.reconciled_at).not.toBeNull();
+    });
+
+    it('already reconciled: appliedRows=0 (matches CTE RETURNING empty)', () => {
+      const { state, reconcile } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 500_000n,
+          cost_settled_micro_usd: 500_000n,
+          reconciled_at: new Date('2026-05-17T09:00:00Z'),
+        },
+        user_usage: {
+          user_id: 'auth0|alice',
+          cost_micro_usd: 500_000n,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_create_tokens: 0,
+          cache_read_tokens: 0,
+          web_search_uses: 0,
+        },
+      });
+      const result = reconcile({
+        loggingMessageId: 'msg_x',
+        actorId: 'auth0|alice',
+        projected: 100_000n,
+        actualMicro: 9_000_000n,
+        accumulator: ZERO_ACC,
+      });
+      expect(result.appliedRows).toBe(0);
+      // No state mutation — confirms the row-lock + GREATEST + late-retry
+      // lock all held simultaneously.
+      expect(state.message.cost_settled_micro_usd).toBe(500_000n);
+      expect(state.user_usage.cost_micro_usd).toBe(500_000n);
+    });
+
+    it('foreign user (IDOR): appliedRows=0 (matches CTE RETURNING empty)', () => {
+      const { reconcile } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          cost_settled_micro_usd: 0n,
+          reconciled_at: null,
+        },
+        user_usage: {
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_create_tokens: 0,
+          cache_read_tokens: 0,
+          web_search_uses: 0,
+        },
+      });
+      const result = reconcile({
+        loggingMessageId: 'msg_x',
+        actorId: 'auth0|bob',
+        projected: 100_000n,
+        actualMicro: 9_000_000n,
+        accumulator: ZERO_ACC,
+      });
+      expect(result.appliedRows).toBe(0);
+    });
   });
 });
