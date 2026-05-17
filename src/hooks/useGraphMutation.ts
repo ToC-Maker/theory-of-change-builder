@@ -109,8 +109,11 @@ const DEBOUNCE_IDLE_MS = 200;
 
 export interface UseGraphMutationResult {
   data: ToCData;
-  // Direct setter; rarely needed by callers but exposed so the existing
-  // `setDataAndNotify`-style call shape can be migrated incrementally.
+  // External-replacement setter (no parent notify). Used by the parent's
+  // "absorb new initialData prop" effect (AI-edit / external-state-replace
+  // path). Routes through the same `dataRef.current` write that the
+  // mutate paths use, so a subsequent `mutate(prev => ...)` derives from
+  // the post-replacement state.
   setData: Dispatch<SetStateAction<ToCData>>;
   mutate: (updater: GraphUpdater) => void;
   mutateDebounced: (updater: GraphUpdater, key: string) => void;
@@ -184,6 +187,21 @@ export function useGraphMutation(
     dataRef.current = next;
     setData(() => next);
     return next;
+  }, []);
+
+  // External setter exposed to callers (e.g. the parent's "absorb new
+  // initialData prop" effect in `TheoryOfChangeGraph.tsx:219-224` for the
+  // AI-edit / external-state-replace path). Routes through the same
+  // `dataRef.current` write that `writeLocal` performs, so a subsequent
+  // `mutate(prev => ...)` derives from the post-replacement state — not
+  // the stale snapshot. Without this, an external replacement followed
+  // by any user mutation silently wipes the replacement (AI edit lost).
+  // Does NOT call `scheduleNotify`: the parent already owns the new
+  // value (it triggered the replacement), so re-emitting it would loop.
+  const setDataExternal = useCallback<Dispatch<SetStateAction<ToCData>>>((value) => {
+    const next = applyUpdater(dataRef.current, value);
+    dataRef.current = next;
+    setData(() => next);
   }, []);
 
   const mutate = useCallback(
@@ -275,7 +293,7 @@ export function useGraphMutation(
 
   return {
     data,
-    setData,
+    setData: setDataExternal,
     mutate,
     mutateDebounced,
     commit,
