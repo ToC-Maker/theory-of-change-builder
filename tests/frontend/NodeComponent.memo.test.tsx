@@ -1,14 +1,24 @@
 // Tests for `React.memo(NodeComponent)` with DEFAULT shallow equality.
 //
 // Acceptance (Important fix in plan §0.4):
-//   - Identical props → NodeComponent does NOT re-render.
-//   - Prop change (e.g. selection state) → re-renders.
-//   - New inline callback prop → re-renders (regression test that the
+//   - Identical props -> NodeComponent does NOT re-render.
+//   - Prop change (e.g. selection state) -> re-renders.
+//   - New inline callback prop -> re-renders (regression test that the
 //     parent's `useCallback` wiring is load-bearing; without it the
 //     memo is a no-op).
 //
-// We count renders by spying on a side effect that fires on every
-// render of the inner subtree.
+// We count renders via React.Profiler. When a memoized child bails out,
+// React still calls `onRender` for the Profiler boundary itself, BUT
+// `actualDuration` is essentially 0 because no inner work happened —
+// `baseDuration` (the time it would take without memoization) stays
+// constant. Bailed-out commits report `actualDuration < baseDuration`;
+// real re-renders report `actualDuration >= baseDuration`.
+//
+// This DOES falsify: removing `memo(NodeComponentInner)` and exporting
+// `NodeComponentInner` directly bumps `actualDuration` back up to the
+// real-render value, and the "props identical" test fails.
+import { Profiler } from 'react';
+import type { ComponentProps, ProfilerOnRenderCallback } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { NodeComponent } from '../../src/components/NodeComponent';
@@ -26,13 +36,9 @@ const baseNode: Node = {
   connections: [],
 };
 
-// Render-count spy: a `setNodePopup` callback that gets invoked when
-// the inner update-ref effect runs (useEffect on node.id). Actually the
-// cleanest way is to wrap in a counter component, but for React.memo we
-// can simply verify by re-rendering the parent with the same props
-// reference and checking that internal `useEffect(updateNodeRef)` is
-// called at most once (mount only).
-const baseProps = (overrides: Record<string, unknown> = {}) => ({
+const baseProps = (
+  overrides: Partial<ComponentProps<typeof NodeComponent>> = {},
+): ComponentProps<typeof NodeComponent> => ({
   node: baseNode,
   updateNodeRef: vi.fn(),
   isHighlighted: false,
@@ -54,29 +60,75 @@ const baseProps = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+interface CommitRecord {
+  phase: 'mount' | 'update' | 'nested-update';
+  actualDuration: number;
+  baseDuration: number;
+}
+
+// A "real" render is one where the Profiler's actualDuration is at
+// least roughly equal to baseDuration (the no-memo cost). A "bailed"
+// render reports actualDuration much smaller than baseDuration.
+//
+// We use 50% of baseDuration as the cutoff; in practice bailed-out
+// renders are < 5% of baseDuration and real renders are > 80%.
+function isRealRender(rec: CommitRecord): boolean {
+  return rec.actualDuration >= rec.baseDuration * 0.5;
+}
+
 describe('React.memo(NodeComponent)', () => {
   it('does not re-render when props are referentially identical', () => {
+    const records: CommitRecord[] = [];
+    const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
+      records.push({ phase, actualDuration, baseDuration });
+    };
     const props = baseProps();
-    const { rerender } = render(<NodeComponent {...props} />);
-    // updateNodeRef runs on mount once.
-    expect(props.updateNodeRef).toHaveBeenCalledTimes(1);
+    const { rerender } = render(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...props} />
+      </Profiler>,
+    );
+    // Mount: one real render.
+    expect(records.length).toBe(1);
+    expect(records[0]!.phase).toBe('mount');
+    expect(isRealRender(records[0]!)).toBe(true);
 
-    // Re-render with the SAME props object. React.memo + default
-    // shallow compare should bail out — no second updateNodeRef call.
-    rerender(<NodeComponent {...props} />);
-    expect(props.updateNodeRef).toHaveBeenCalledTimes(1);
+    // Re-render with the SAME props object. React.memo + default shallow
+    // compare should bail out -> NodeComponent doesn't really render,
+    // so actualDuration is near zero.
+    rerender(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...props} />
+      </Profiler>,
+    );
+    expect(records.length).toBe(2);
+    expect(records[1]!.phase).toBe('update');
+    expect(isRealRender(records[1]!)).toBe(false);
   });
 
   it('re-renders when a primitive prop changes (selection)', () => {
+    const records: CommitRecord[] = [];
+    const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
+      records.push({ phase, actualDuration, baseDuration });
+    };
     const props = baseProps();
-    const { rerender } = render(<NodeComponent {...props} />);
-    expect(props.updateNodeRef).toHaveBeenCalledTimes(1);
+    const { rerender } = render(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...props} />
+      </Profiler>,
+    );
+    expect(records.length).toBe(1);
+    expect(isRealRender(records[0]!)).toBe(true);
 
-    rerender(<NodeComponent {...props} isHighlighted={true} />);
-    // Selection change → re-render → effect re-runs (deps unchanged though,
-    // so updateNodeRef itself only fires once. Use a side-channel: the
-    // rendered output should now reflect isHighlighted).
-    // Read DOM to confirm class-list update.
+    rerender(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...props} isHighlighted={true} />
+      </Profiler>,
+    );
+    // Selection change -> real re-render.
+    expect(records.length).toBe(2);
+    expect(isRealRender(records[1]!)).toBe(true);
+    // DOM reflects the new state.
     const node = document.getElementById('node-n-1');
     expect(node?.className).toMatch(/ring-2 ring-black/);
   });
@@ -87,21 +139,27 @@ describe('React.memo(NodeComponent)', () => {
     // breaking React.memo's bail-out. This test demonstrates the failure
     // mode that the `useCallback` audit in TheoryOfChangeGraph.tsx is
     // designed to prevent.
-    const updateNodeRef = vi.fn();
-    const props = {
-      ...baseProps({ updateNodeRef }),
-      // Inline callback — new reference every time.
-      toggleHighlight: () => {},
+    const records: CommitRecord[] = [];
+    const onRender: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
+      records.push({ phase, actualDuration, baseDuration });
     };
-    const { rerender } = render(<NodeComponent {...props} />);
-    expect(updateNodeRef).toHaveBeenCalledTimes(1);
 
-    // New inline callback → new reference → memo bail-out fails → re-render.
-    rerender(<NodeComponent {...props} toggleHighlight={() => {}} />);
-    // We can't easily count renders without instrumenting, but we CAN
-    // verify the inline-callback path doesn't crash and the DOM is
-    // still consistent.
-    const node = document.getElementById('node-n-1');
-    expect(node).not.toBeNull();
+    const { rerender } = render(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...baseProps()} toggleHighlight={() => {}} />
+      </Profiler>,
+    );
+    expect(records.length).toBe(1);
+    expect(isRealRender(records[0]!)).toBe(true);
+
+    // New inline callback -> new reference -> memo bail-out fails ->
+    // real re-render.
+    rerender(
+      <Profiler id="node" onRender={onRender}>
+        <NodeComponent {...baseProps()} toggleHighlight={() => {}} />
+      </Profiler>,
+    );
+    expect(records.length).toBe(2);
+    expect(isRealRender(records[1]!)).toBe(true);
   });
 });
