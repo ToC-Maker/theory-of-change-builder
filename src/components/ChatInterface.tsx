@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
+import { Tooltip } from 'react-tooltip';
 import {
   chatService,
   ChatMessage,
@@ -52,6 +53,7 @@ import {
   SparklesIcon,
   PencilSquareIcon,
   KeyIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -3021,6 +3023,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <> &middot; {formatCostUsd(chartByokSpendUsd)} this chart</>
                           )}
                         </span>
+                        <button
+                          type="button"
+                          data-tooltip-id="byok-cost-info"
+                          aria-label="About this cost estimate"
+                          className="inline-flex items-center text-gray-400 hover:text-gray-600 focus:text-gray-600 focus:outline-none"
+                        >
+                          <InformationCircleIcon className="w-3.5 h-3.5" />
+                        </button>
                       </span>
                     ) : (
                       <div>
@@ -3760,6 +3770,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           </div>
         </div>
       </div>
+
+      {/* BYOK cost info tooltip. Discloses that our client-side tally can
+          under-count Anthropic's actual billing by a few percent on agentic
+          streams (web search, code execution) because some sub-inference
+          usage isn't emitted on SSE. See plans/byok-cost-stream-recovery. */}
+      <Tooltip
+        id="byok-cost-info"
+        place="bottom"
+        className="!max-w-[260px] !text-xs !leading-snug"
+        style={{ zIndex: 9999 }}
+      >
+        Best-effort tally from streaming events. Anthropic&apos;s console may show slightly more
+        (typically a few percent on streams that use web search or code execution; near-exact for
+        simple chats), and is the source of truth for billing.
+      </Tooltip>
     </>
   );
 }
