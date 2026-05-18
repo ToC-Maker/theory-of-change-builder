@@ -1045,7 +1045,7 @@ export interface PerUpdateCommitDeps {
   projectedMicroUsd: bigint;
   chartId: string | null;
   deploymentHost: string;
-  lifecycle: { handlerStartedAtMs: number };
+  lifecycle: { handlerStartedAtMs: number; abortFiredAtMs?: number | null };
   /**
    * BYOK routing flag for `applyDeltaCommit`. When true, the delta lands
    * in `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
@@ -1055,6 +1055,14 @@ export interface PerUpdateCommitDeps {
    * tier. See the BYOK regression note in `cost-commit.ts` for context.
    */
   isByok: boolean;
+  /**
+   * Optional probe of the abort signal state — included verbatim in the
+   * per-update commit's request_metadata so the DB can bisect WHEN the
+   * upstream abort actually fired (vs. inferring from when polls stopped).
+   * Optional so unit tests that build synthetic deps don't need to mock
+   * an AbortController.
+   */
+  abortController?: AbortController;
 }
 
 /**
@@ -1167,6 +1175,13 @@ export function firePerUpdateCommit(
       delta_micro_usd: out.delta.toString(),
       applied: out.applied,
       source,
+      // Abort-state probes: lets us bisect from DB whether/when the upstream
+      // abort fired during the poll loop. signal_aborted reflects the raw
+      // AbortController.signal.aborted bit; abort_fired_at_ms is set by the
+      // line-3246 listener if it ran. signal_aborted=true + abort_fired_at_ms=null
+      // means the listener didn't fire even though the signal aborted.
+      signal_aborted: deps.abortController?.signal.aborted ?? null,
+      abort_fired_at_ms: deps.lifecycle.abortFiredAtMs ?? null,
     }),
   });
 }
@@ -1417,9 +1432,9 @@ type StreamLifecycle = {
   eventTypeCounts: Record<string, number>;
 };
 
-function newStreamLifecycle(): StreamLifecycle {
+function newStreamLifecycle(handlerStartedAtMs: number = Date.now()): StreamLifecycle {
   return {
-    handlerStartedAtMs: Date.now(),
+    handlerStartedAtMs,
     chunkCount: 0,
     totalBytes: 0,
     firstChunkAtMs: null,
@@ -2771,6 +2786,11 @@ export async function handler(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  // Captured once at handler entry so early-firing listeners (e.g. the
+  // request.signal abort listener registered before teeCtx is constructed)
+  // can compute elapsed times and emit start_at_ms without depending on
+  // teeCtx.lifecycle (which doesn't exist yet at that point — TDZ).
+  const handlerStartedAtMs = Date.now();
   // HTTP/2 fallback: when SSE streaming fails over HTTP/3 (QUIC), the client
   // retries with ?force-h2=1. The response includes Alt-Svc: clear (RFC 7838)
   // to tell the browser to stop using H3 for this origin.
@@ -3044,6 +3064,36 @@ export async function handler(
         tier,
       }),
     );
+    // DB-backed equivalent of the console.log above (PR previews don't have
+    // wrangler tail). If this fires but `DiagnosticAbortHandlerEntered`
+    // doesn't, request.signal abort propagates but the listener on
+    // abortController.signal (the one that wires fireAbortCommit) is somehow
+    // missing the event. If neither fires, request.signal.abort itself isn't
+    // firing on this Cloudflare Workers setup for closed SSE streams.
+    // NOTE: this listener runs as early as during the upstream fetch await
+    // (line ~3055), BEFORE teeCtx is constructed (line ~3174). Don't reference
+    // teeCtx here — would TDZ-error if the client disconnects mid-fetch.
+    if (loggingMessageId) {
+      ctx.waitUntil(
+        writeDiagnostic(sql, {
+          error_name: 'DiagnosticClientDisconnect',
+          error_message: 'request.signal aborted (client closed SSE stream)',
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            abort_controller_already_aborted: abortController.signal.aborted,
+            handler_started_at_ms: handlerStartedAtMs,
+            elapsed_ms: Date.now() - handlerStartedAtMs,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: handlerStartedAtMs,
+        }),
+      );
+    }
     try {
       abortController.abort();
     } catch {
@@ -3196,7 +3246,7 @@ export async function handler(
     messageDeltaSeen: false,
     lastPollOutputTokens: 0,
     lastUpstreamChunkAtMs: Date.now(),
-    lifecycle: newStreamLifecycle(),
+    lifecycle: newStreamLifecycle(handlerStartedAtMs),
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
