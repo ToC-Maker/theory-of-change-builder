@@ -5,6 +5,7 @@ import { decryptByokKey } from '../_shared/byok-crypto';
 import { isUserOptedOut } from '../_shared/logging-optout';
 import { extractTurnstileCookie, verifyTurnstileCookie } from '../_shared/turnstile-cookie';
 import { writeDiagnostic } from '../_shared/diagnostics';
+import { applyDeltaCommit, type ApplyDeltaCommitResult } from '../_shared/cost-commit';
 import { toBigInt } from '../_shared/bigint';
 import {
   resolveAnonActor,
@@ -33,6 +34,7 @@ import type { NeonQueryFunction } from '@neondatabase/serverless';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import type { StreamingBlocksMap } from '../../shared/streaming-blocks';
 import { microToUsd } from '../../shared/pricing';
+import type { ServerRunningCostFrame } from '../../shared/wire-shapes';
 
 /**
  * HTTP streaming proxy for Anthropic's /v1/messages with server-side cost
@@ -875,22 +877,36 @@ function accumulatorToUsage(acc: UsageAccumulator): AnthropicUsage {
 /**
  * Merge an Anthropic usage fragment into our accumulator. Anthropic's SSE
  * stream emits usage on `message_start` (input + initial output=1) and
- * `message_delta` (incremental output); we treat later values as authoritative
- * rather than adding. Cache-creation/read counts only appear on message_start.
+ * `message_delta` (incremental output). We use MAX-per-field rather than
+ * last-write-wins so a stale or out-of-order frame with a LOWER value
+ * cannot regress the accumulator (mirrors the client's `Math.max` per
+ * field in `chatService.ts:806-813`). Exported for unit tests.
  */
-function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void {
-  if (typeof usage.input_tokens === 'number') acc.input_tokens = usage.input_tokens;
-  if (typeof usage.output_tokens === 'number') acc.output_tokens = usage.output_tokens;
+export function mergeUsage(acc: UsageAccumulator, usage: Record<string, unknown>): void {
+  if (typeof usage.input_tokens === 'number') {
+    acc.input_tokens = Math.max(acc.input_tokens, usage.input_tokens);
+  }
+  if (typeof usage.output_tokens === 'number') {
+    acc.output_tokens = Math.max(acc.output_tokens, usage.output_tokens);
+  }
   if (typeof usage.cache_creation_input_tokens === 'number') {
-    acc.cache_creation_input_tokens = usage.cache_creation_input_tokens;
+    acc.cache_creation_input_tokens = Math.max(
+      acc.cache_creation_input_tokens,
+      usage.cache_creation_input_tokens,
+    );
   }
   if (typeof usage.cache_read_input_tokens === 'number') {
-    acc.cache_read_input_tokens = usage.cache_read_input_tokens;
+    acc.cache_read_input_tokens = Math.max(
+      acc.cache_read_input_tokens,
+      usage.cache_read_input_tokens,
+    );
   }
   const stu = usage.server_tool_use;
   if (stu && typeof stu === 'object' && !Array.isArray(stu)) {
     const wsr = (stu as Record<string, unknown>).web_search_requests;
-    if (typeof wsr === 'number') acc.web_search_requests = wsr;
+    if (typeof wsr === 'number') {
+      acc.web_search_requests = Math.max(acc.web_search_requests, wsr);
+    }
   }
 }
 
@@ -1008,6 +1024,228 @@ export function isCostCapKill(killDiagnostic: KillDiagnostic | null): boolean {
   return killDiagnostic !== null;
 }
 
+/**
+ * The discriminator label on per-update commit diagnostics. Each emit site
+ * passes its own value; operational queries against `logging_errors`
+ * filter on `request_metadata->>'source'` to bucket by site.
+ */
+export type PerUpdateCommitSource = 'poll' | 'message_start' | 'message_delta';
+
+/**
+ * Minimal slice of `SseTeeContext` that `firePerUpdateCommit` reads.
+ * Exported so unit tests can build a synthetic dep object without
+ * reaching into the private SseTeeContext shape (which carries many
+ * fields irrelevant to the per-update write).
+ */
+export interface PerUpdateCommitDeps {
+  sql: NeonQueryFunction<false, false>;
+  ctx: { waitUntil(p: Promise<unknown>): void };
+  loggingMessageId: string | null;
+  actorId: string;
+  projectedMicroUsd: bigint;
+  chartId: string | null;
+  deploymentHost: string;
+  lifecycle: { handlerStartedAtMs: number; abortFiredAtMs?: number | null };
+  /**
+   * BYOK routing flag for `applyDeltaCommit`. When true, the delta lands
+   * in `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
+   * When false, it lands in `cost_micro_usd` (the column reserveCost
+   * checks against `LIFETIME_CAP_MICRO_USD`). Plumbed from the
+   * teeCtx so per-update + abort commits route correctly for the request's
+   * tier. See the BYOK regression note in `cost-commit.ts` for context.
+   */
+  isByok: boolean;
+  /**
+   * Optional probe of the abort signal state — included verbatim in the
+   * per-update commit's request_metadata so the DB can bisect WHEN the
+   * upstream abort actually fired (vs. inferring from when polls stopped).
+   * Optional so unit tests that build synthetic deps don't need to mock
+   * an AbortController.
+   */
+  abortController?: AbortController;
+}
+
+/**
+ * Schedule a fire-and-forget `applyDeltaCommit` + `writeDiagnostic` pair
+ * via `ctx.waitUntil`. Shared scaffolding behind `firePerUpdateCommit`,
+ * `fireAbortCommit`, and the inline message_start floor write — all
+ * three follow the same lifecycle: snapshot cost → schedule IIFE →
+ * commit → diagnose → swallow on failure.
+ *
+ * The caller MUST snapshot the live cost into a `const snap`
+ * synchronously before invoking this (closure-snapshot rule). `snap`
+ * is taken by value (bigint is a primitive) so any mutation of the outer
+ * binding after the call cannot leak into the closure (the closure may
+ * not run for many ms after this point); bypassing this rule lets a
+ * stale post-call `finalMicro` reassignment land in the DB.
+ *
+ * Three idempotent no-op shapes are handled by the underlying
+ * `applyDeltaCommit`:
+ *   1. `loggingMessageId` null → bail before scheduling (no row to commit).
+ *   2. Row not yet inserted by `saveMessage` → returns `applied: false`.
+ *   3. `reconciled_at` non-null (post-stream reconcile stamped it) →
+ *      `applied: false`, late retries no-op without re-inflating the cap.
+ *
+ * Errors inside the IIFE are swallowed via try/catch + console.error so
+ * a Neon outage doesn't crash the runtime; the diagnostic insert may not
+ * land in that case but per-update / abort / floor writes are
+ * observability, not state.
+ */
+function scheduleCommitIife(
+  deps: PerUpdateCommitDeps,
+  snap: bigint,
+  spec: {
+    /** error_name on the logging_errors row. */
+    diagnosticName: string;
+    /** Bracketed tag prefix for console.error on commit failure. */
+    errorLabel: string;
+    /** Builds the human-readable error_message column from the commit result. */
+    buildErrorMessage: (out: ApplyDeltaCommitResult) => string;
+    /** Builds the request_metadata payload from the commit result. */
+    buildMetadata: (out: ApplyDeltaCommitResult) => Record<string, unknown>;
+    /** Optional console.log invoked synchronously inside the IIFE before the commit attempt. */
+    preLog?: () => void;
+  },
+): void {
+  // No row → no commit. Don't schedule a guaranteed-no-op IIFE that
+  // would still spam diagnostics. saveMessage's row INSERT lands within
+  // a few ms of stream start, so the only emits that hit this branch
+  // are extreme races on the very first emit.
+  if (!deps.loggingMessageId) return;
+  const messageId = deps.loggingMessageId;
+  deps.ctx.waitUntil(
+    (async () => {
+      try {
+        spec.preLog?.();
+        const out = await applyDeltaCommit(
+          deps.sql,
+          messageId,
+          deps.actorId,
+          deps.projectedMicroUsd,
+          snap,
+          deps.isByok,
+        );
+        await writeDiagnostic(deps.sql, {
+          error_name: spec.diagnosticName,
+          error_message: spec.buildErrorMessage(out),
+          user_id: deps.actorId,
+          chart_id: deps.chartId ?? null,
+          request_metadata: spec.buildMetadata(out),
+          deployment_host: deps.deploymentHost,
+          fired_at_ms: Date.now(),
+          start_at_ms: deps.lifecycle.handlerStartedAtMs,
+        });
+      } catch (e) {
+        console.error(`${spec.errorLabel} applyDeltaCommit failed:`, e);
+      }
+    })(),
+  );
+}
+
+/**
+ * Fire a per-update `applyDeltaCommit` for the cost value `snap` and log
+ * a `DiagnosticPerUpdateCommit` row. Thin wrapper around
+ * `scheduleCommitIife`; see that helper's doc for the snapshot
+ * discipline, idempotent no-op surface, and failure-swallow contract.
+ *
+ * The caller MUST snapshot the live cost (`finalMicro` / `estimatedMicro`)
+ * into a `const snap` synchronously before invoking this — see
+ * `scheduleCommitIife`'s closure-snapshot rule. Exported as a named
+ * function (rather than inlined) so unit tests can drive it directly
+ * without spinning up the full SSE harness, and so the
+ * `'DiagnosticPerUpdateCommit'` label + `source` discriminator stay
+ * pinned at one call site.
+ */
+export function firePerUpdateCommit(
+  deps: PerUpdateCommitDeps,
+  snap: bigint,
+  source: PerUpdateCommitSource,
+): void {
+  const messageId = deps.loggingMessageId;
+  scheduleCommitIife(deps, snap, {
+    diagnosticName: 'DiagnosticPerUpdateCommit',
+    errorLabel: '[per-update-write]',
+    buildErrorMessage: (out) =>
+      `${snap.toString()} µUSD committed (applied=${out.applied}, delta=${out.delta})`,
+    buildMetadata: (out) => ({
+      logging_message_id: messageId,
+      cost_micro_usd: snap.toString(),
+      projected_micro_usd: deps.projectedMicroUsd.toString(),
+      new_settled_micro_usd: out.new_settled.toString(),
+      delta_micro_usd: out.delta.toString(),
+      applied: out.applied,
+      source,
+      // Abort-state probes: lets us bisect from DB whether/when the upstream
+      // abort fired during the poll loop. signal_aborted reflects the raw
+      // AbortController.signal.aborted bit; abort_fired_at_ms is set by the
+      // line-3246 listener if it ran. signal_aborted=true + abort_fired_at_ms=null
+      // means the listener didn't fire even though the signal aborted.
+      signal_aborted: deps.abortController?.signal.aborted ?? null,
+      abort_fired_at_ms: deps.lifecycle.abortFiredAtMs ?? null,
+    }),
+  });
+}
+
+/**
+ * Fire a final `applyDeltaCommit` on `request.signal.abort` (user clicked
+ * Stop, browser closed, network drop). Mirrors `firePerUpdateCommit`'s
+ * shape — same `PerUpdateCommitDeps` slice, same closure-snapshot
+ * discipline, same idempotent no-op surface — with two differences:
+ *   - The diagnostic carries `error_name: 'DiagnosticAbortCommit'` so
+ *     observability can bucket abort-driven commits separately from
+ *     per-update poll/message_start/message_delta commits. The headline
+ *     scenario this guards ("Stop button mid-stream → user_api_usage
+ *     still reflects the running cost") is what `DiagnosticAbortCommit`
+ *     rows attest to in production logs.
+ *   - Caller MUST gate on `snap > 0n` BEFORE invoking; the helper
+ *     additionally guards on `loggingMessageId` via `scheduleCommitIife`
+ *     (same as `firePerUpdateCommit`). Both bail before scheduling so
+ *     abort events outside the meaningful window (pre-message_start
+ *     abort, anonymous-without-message-id) don't spam diagnostics with
+ *     guaranteed no-op IIFEs.
+ *
+ * Why this exists separately from `firePerUpdateCommit`: scheduling
+ * ordering matters. `firePerUpdateCommit` fires when the SSE stream
+ * itself emits a `running_cost` frame — bounded by the stream's
+ * cadence. `fireAbortCommit` fires at the moment of abort, which
+ * carries a different lifecycle assumption: the reconcile IIFE may not
+ * run for many ms after this point because it awaits `tracked.done`.
+ * The abort-commit IIFE skips the await and goes straight to
+ * `applyDeltaCommit`, capturing the running cost even if the reconcile
+ * IIFE later dies before its commit (Cloudflare's `ctx.waitUntil`
+ * budget kill is the canonical failure mode this guards against).
+ *
+ * Idempotency under overlap with the reconcile IIFE: the underlying
+ * `applyDeltaCommit` is idempotent through `GREATEST(cost_settled, snap)`
+ * + delta-clamp-to-zero. Whichever IIFE runs second sees baseline ≥ snap
+ * and contributes a delta of 0 — `user_api_usage` lands at the larger of
+ * the two snap values exactly once (verified in the test "idempotency
+ * with reconcile" in `abort-commit.test.ts`).
+ */
+export function fireAbortCommit(deps: PerUpdateCommitDeps, snap: bigint): void {
+  // Early bail: no usage observed yet. Abort fired before any
+  // message_start frame; nothing to commit. Without this guard the
+  // helper would still write a `DiagnosticAbortCommit` row with
+  // applied=false — pure noise on every aborted pre-stream request.
+  // (The `loggingMessageId == null` bail lives inside scheduleCommitIife.)
+  if (snap <= 0n) return;
+  const messageId = deps.loggingMessageId;
+  scheduleCommitIife(deps, snap, {
+    diagnosticName: 'DiagnosticAbortCommit',
+    errorLabel: '[abort-commit]',
+    buildErrorMessage: (out) =>
+      `abort commit: ${snap.toString()} µUSD (applied=${out.applied}, delta=${out.delta})`,
+    buildMetadata: (out) => ({
+      logging_message_id: messageId,
+      cost_micro_usd: snap.toString(),
+      projected_micro_usd: deps.projectedMicroUsd.toString(),
+      new_settled_micro_usd: out.new_settled.toString(),
+      delta_micro_usd: out.delta.toString(),
+      applied: out.applied,
+    }),
+  });
+}
+
 type SseTeeContext = {
   accumulator: UsageAccumulator;
   model: string;
@@ -1033,6 +1271,34 @@ type SseTeeContext = {
   loggingMessageId: string | null;
   /** Actor id (auth0 sub or anon-${uuid}). Used for diagnostic rows fired from inside parseFrame. */
   actorId: string;
+  /**
+   * Pre-stream input-only cost reservation in µUSD, computed by `reserveCost`
+   * before the upstream fetch. Passed as the `baseline` parameter to every
+   * `applyDeltaCommit` call so the helper knows the lower bound below which
+   * a delta of zero credits to `user_api_usage` (the projected reservation
+   * has already been debited at request entry). Carrying it on the context
+   * lets parseFrame / pollCostEstimate emit per-update delta-commits without
+   * a separate plumbing path from the handler.
+   */
+  projectedMicroUsd: bigint;
+  /**
+   * Derived from the request's resolved tier: true iff `tier === 'byok'`.
+   * Used as the `isByok` argument to `applyDeltaCommit` from every
+   * per-stream commit site (per-update IIFE, abort IIFE, message_start
+   * floor). When true, deltas land in `user_api_usage.byok_cost_micro_usd`
+   * (independent of the free cap); when false, they land in
+   * `cost_micro_usd` (the column reserveCost reads against
+   * `LIFETIME_CAP_MICRO_USD`). See the BYOK regression note in
+   * `cost-commit.ts` for the full rationale.
+   */
+  isByok: boolean;
+  /**
+   * Worker environment bindings. Plumbed through for downstream writers
+   * that need access to env vars / secrets (`firePerUpdateCommit` may
+   * read flags from here). The pre-stream branch holds it in handler-local
+   * scope; carrying it on the context unifies the access path.
+   */
+  env: Env;
   /**
    * ExecutionContext, plumbed through so parseFrame can ctx.waitUntil()
    * its own DB writes (e.g. the message_start floor) without the outer
@@ -1166,9 +1432,9 @@ type StreamLifecycle = {
   eventTypeCounts: Record<string, number>;
 };
 
-function newStreamLifecycle(): StreamLifecycle {
+function newStreamLifecycle(handlerStartedAtMs: number = Date.now()): StreamLifecycle {
   return {
-    handlerStartedAtMs: Date.now(),
+    handlerStartedAtMs,
     chunkCount: 0,
     totalBytes: 0,
     firstChunkAtMs: null,
@@ -1254,8 +1520,9 @@ export function buildAssistantBlocksForCountTokens(
   // twice, but the bound was implicit in the control flow):
   //
   //   Step 1 — strip the trailing block if it's text that right-trims to
-  //   empty. The earlier filter at line 1158 rejects whitespace-only text
-  //   blocks, so this only fires for an edge case where the filter's
+  //   empty. The earlier per-block filter above (the `block.text.trim()
+  //   .length === 0` continue in the loop body) rejects whitespace-only
+  //   text blocks, so this only fires for an edge case where the filter's
   //   `.trim()` (both sides) and this step's `\s+$` (right-only) disagree
   //   on what counts as empty — defensive but cheap.
   //
@@ -1381,69 +1648,6 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
   } catch {
     return null;
   }
-}
-
-/**
- * Best-effort estimate of cache_creation_input_tokens / cache_read_input_tokens
- * accrued across an agentic-loop's sub-iterations when `message_delta` never
- * arrived to give us the authoritative cumulative usage. See `mergeUsage`'s
- * doc for why this gap exists: Anthropic emits one `message_start` per
- * outermost SSE stream — not one per inner sub-inference — so the accumulator
- * only ever sees iteration-1's cache numbers. For non-agentic streams (no
- * tool_use blocks) this is a non-issue; for `code_execution` / `web_search`
- * loops it's the dominant under-billing.
- *
- * Returns zeros when no estimation is possible (no tool_use blocks present,
- * polling never armed, or initial input baseline missing). Callers should add
- * the returned values to the accumulator's existing cache fields before
- * computing cost — the accumulator already holds iteration-1's values.
- *
- * Heuristics:
- *   - cache_w: tool_result blocks are server-generated content that gets
- *     written to cache as part of the next sub-iteration's input. count_tokens
- *     refuses these blocks on the assistant turn (Anthropic's validator), so
- *     we fall back to a chars/4 estimate against the JSON-stringified content.
- *     Model-generated output (text + thinking + tool_use input) is already
- *     captured by reconciledOutput and gets billed at output rates, NOT
- *     cache_w — so we don't include it here to avoid double-counting.
- *   - cache_r: each sub-iteration after the first reads the cumulative prefix.
- *     A precise estimate would integrate over the growing prefix; we
- *     under-estimate by using the initial input size flat across N reads
- *     (sub-inference 1 has no cache_r since it IS the first inference; each
- *     of the N tool_use blocks triggers one additional sub-inference that
- *     does). The actual prefix grows, so this is a floor — better an
- *     under-estimate that closes ~70% of the gap than an over-estimate that
- *     could over-charge the user.
- *   - N: count of `server_tool_use` blocks. Each such block represents a
- *     point where the model handed control to the server tool and waited for
- *     a result, which triggered another inference — so N tool_uses ≈ N+1
- *     sub-inferences, with N additional cache_r reads beyond the first.
- */
-function estimateAgenticLoopCacheUsage(teeCtx: SseTeeContext): {
-  additionalCacheW: number;
-  additionalCacheR: number;
-  toolUseCount: number;
-} {
-  let toolUseCount = 0;
-  let toolResultChars = 0;
-  for (const block of teeCtx.streamingContent.blocks.values()) {
-    if (block.type === 'server_tool_use') {
-      toolUseCount++;
-    } else if (
-      block.type === 'web_search_tool_result' ||
-      block.type === 'code_execution_tool_result'
-    ) {
-      // block.content originated from JSON.parse of an SSE frame, so circular
-      // refs are impossible by construction — JSON.stringify cannot throw here.
-      toolResultChars += JSON.stringify(block.content).length;
-    }
-  }
-  if (toolUseCount === 0 || !teeCtx.polling.armed) {
-    return { additionalCacheW: 0, additionalCacheR: 0, toolUseCount };
-  }
-  const additionalCacheW = Math.ceil(toolResultChars / 4);
-  const additionalCacheR = toolUseCount * teeCtx.polling.initialInputTokens;
-  return { additionalCacheW, additionalCacheR, toolUseCount };
 }
 
 async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
@@ -1587,19 +1791,36 @@ async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   // the JSON data payload (it doesn't read the SSE `event:` header), so the
   // type *must* be inside the JSON — otherwise the running_cost branch
   // never matches and the payload is silently discarded.
+  //
+  // Wire shape pinned by `ServerRunningCostFrame` (shared/wire-shapes.ts);
+  // the explicit `const frame:` makes any future field rename here a
+  // compile error on both the worker emit AND the client dispatch
+  // (chatService.ts) simultaneously, instead of producing a silent
+  // wire-shape drift that only surfaces in production telemetry.
+  const pollFrame: ServerRunningCostFrame = {
+    type: 'running_cost',
+    cost_usd: microToUsd(estimatedMicro),
+    output_tokens_est: outputTokensSoFar,
+    source: 'poll',
+    cost_micro_usd: estimatedMicro.toString(),
+    input_tokens: teeCtx.accumulator.input_tokens,
+    cache_creation_input_tokens: teeCtx.accumulator.cache_creation_input_tokens,
+    cache_read_input_tokens: teeCtx.accumulator.cache_read_input_tokens,
+    web_search_requests: teeCtx.streamingContent.webSearchCount,
+  };
   teeCtx.pendingRunningCostFrame = new TextEncoder().encode(
-    `event: running_cost\ndata: ${JSON.stringify({
-      type: 'running_cost',
-      cost_usd: microToUsd(estimatedMicro),
-      output_tokens_est: outputTokensSoFar,
-      source: 'poll',
-      cost_micro_usd: estimatedMicro.toString(),
-      input_tokens: teeCtx.accumulator.input_tokens,
-      cache_creation_input_tokens: teeCtx.accumulator.cache_creation_input_tokens,
-      cache_read_input_tokens: teeCtx.accumulator.cache_read_input_tokens,
-      web_search_requests: teeCtx.streamingContent.webSearchCount,
-    })}\n\n`,
+    `event: running_cost\ndata: ${JSON.stringify(pollFrame)}\n\n`,
   );
+
+  // Per-update write: persist the running cost to logging_messages +
+  // user_api_usage so the DB tracks running cost continuously, surviving
+  // stream abort or isolate death. Snapshot synchronously before
+  // fire-and-forget so a subsequent poll tick reassigning `estimatedMicro`
+  // can't leak into the closure (the closure may not run for many ms
+  // after this point). Idempotent under the helper's GREATEST +
+  // delta-clamp; safe to fire on every tick.
+  const snap = estimatedMicro;
+  firePerUpdateCommit(teeCtx, snap, 'poll');
 
   // Structured log so `wrangler tail` / Cloudflare logs can answer "why did
   // the 'so far' value stop updating?" without a code redeploy. Runs every
@@ -2035,18 +2256,22 @@ function createCostTrackingStream(
         // client can log it alongside its delta-credit math. This is the
         // only way to surface server-side compute on PR-preview deploys
         // where `wrangler tail` isn't available.
+        //
+        // Wire shape pinned by `ServerRunningCostFrame` (shared/wire-shapes.ts);
+        // see the analogous poll-site emit above for the rationale.
+        const usageFrame: ServerRunningCostFrame = {
+          type: 'running_cost',
+          cost_usd: microToUsd(finalMicro),
+          output_tokens_est: merged.output_tokens,
+          source: eventType,
+          cost_micro_usd: finalMicro.toString(),
+          input_tokens: merged.input_tokens,
+          cache_creation_input_tokens: merged.cache_creation_input_tokens,
+          cache_read_input_tokens: merged.cache_read_input_tokens,
+          web_search_requests: merged.web_search_requests,
+        };
         const frame = encoder.encode(
-          `event: running_cost\ndata: ${JSON.stringify({
-            type: 'running_cost',
-            cost_usd: microToUsd(finalMicro),
-            output_tokens_est: merged.output_tokens,
-            source: eventType,
-            cost_micro_usd: finalMicro.toString(),
-            input_tokens: merged.input_tokens,
-            cache_creation_input_tokens: merged.cache_creation_input_tokens,
-            cache_read_input_tokens: merged.cache_read_input_tokens,
-            web_search_requests: merged.web_search_requests,
-          })}\n\n`,
+          `event: running_cost\ndata: ${JSON.stringify(usageFrame)}\n\n`,
         );
         try {
           controller.enqueue(frame);
@@ -2061,14 +2286,36 @@ function createCostTrackingStream(
           );
         }
 
+        // Per-update write: persist the running cost to logging_messages +
+        // user_api_usage so the DB tracks running cost continuously,
+        // surviving stream abort or isolate death. Snapshot `finalMicro`
+        // synchronously before fire-and-forget so the closure can't capture
+        // a subsequently-reassigned binding (the closure may not run for
+        // many ms after this point). Fires for both message_start and
+        // message_delta. On message_start this call and the floor-write
+        // IIFE below both invoke applyDeltaCommit with the same value; the
+        // overlap is harmless because the helper is idempotent (GREATEST
+        // settle + delta-clamp-to-zero) so the second call is a no-op on
+        // the cost row.
+        const snap = finalMicro;
+        firePerUpdateCommit(teeCtx, snap, eventType);
+
         // Lock in a server-known cost floor on message_start. This is the
         // first time we see Anthropic's authoritative input_tokens +
         // cache_read/cache_creation breakdown. Persisting it to
-        // logging_messages.cost_micro_usd here means a subsequent reconcile
-        // bail (waitUntil budget kill, tracked.done timeout, etc.) can't
-        // leave the per-chart pill at 0 — we already have the input cost
-        // recorded. UPDATE uses GREATEST so it's a no-op if the row was
-        // already written by an earlier pass.
+        // logging_messages here means a subsequent reconcile bail
+        // (waitUntil budget kill, tracked.done timeout, etc.) can't leave
+        // the per-chart pill at 0 — we already have the input cost recorded.
+        //
+        // Calls `applyDeltaCommit` instead of a bare UPDATE so the
+        // user_api_usage delta also lands: the message_start floor is
+        // Anthropic-authoritative input cost and exceeds the count_tokens
+        // projection on cache-creation paths (the projection priced
+        // everything as cache-read at 0.1×). The delta over the
+        // projected reservation needs to flow to the user cap counter to
+        // keep BYOK / lifetime accounting accurate. GREATEST + delta-
+        // clamped-to-zero preserves the prior monotone-increase semantics;
+        // late retries no-op via `WHERE reconciled_at IS NULL`.
         //
         // Fire-and-forget via teeCtx.ctx.waitUntil so the stream isn't
         // blocked on Postgres; the diagnostic insert doubles as observability
@@ -2076,48 +2323,26 @@ function createCostTrackingStream(
         if (eventType === 'message_start' && teeCtx.loggingMessageId) {
           const floorMicro = finalMicro;
           const floorMerged = { ...merged };
-          teeCtx.ctx.waitUntil(
-            (async () => {
+          const messageId = teeCtx.loggingMessageId;
+          const floorMetadata = {
+            logging_message_id: messageId,
+            floor_micro_usd: floorMicro.toString(),
+            floor_usd: microToUsd(floorMicro),
+            input_tokens: floorMerged.input_tokens,
+            cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
+            cache_read_input_tokens: floorMerged.cache_read_input_tokens,
+            model: teeCtx.model,
+          };
+          scheduleCommitIife(teeCtx, floorMicro, {
+            diagnosticName: 'DiagnosticMessageStartFloor',
+            errorLabel: '[message_start floor]',
+            buildErrorMessage: () => `floor=${floorMicro.toString()} µUSD locked at message_start`,
+            buildMetadata: () => floorMetadata,
+            preLog: () =>
               console.log(
-                JSON.stringify({
-                  event: 'message_start_floor_persist',
-                  logging_message_id: teeCtx.loggingMessageId,
-                  floor_micro_usd: floorMicro.toString(),
-                  floor_usd: microToUsd(floorMicro),
-                  input_tokens: floorMerged.input_tokens,
-                  cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
-                  cache_read_input_tokens: floorMerged.cache_read_input_tokens,
-                  model: teeCtx.model,
-                }),
-              );
-              try {
-                await teeCtx.sql`
-                  UPDATE logging_messages
-                  SET cost_micro_usd = GREATEST(cost_micro_usd, ${floorMicro.toString()}::bigint)
-                  WHERE message_id = ${teeCtx.loggingMessageId}
-                `;
-              } catch (uerr) {
-                console.error('message_start floor UPDATE failed:', uerr);
-              }
-              await writeDiagnostic(teeCtx.sql, {
-                error_name: 'DiagnosticMessageStartFloor',
-                error_message: `floor=${floorMicro.toString()} µUSD locked at message_start`,
-                user_id: teeCtx.actorId,
-                chart_id: teeCtx.chartId ?? null,
-                request_metadata: {
-                  logging_message_id: teeCtx.loggingMessageId,
-                  floor_micro_usd: floorMicro.toString(),
-                  floor_usd: microToUsd(floorMicro),
-                  input_tokens: floorMerged.input_tokens,
-                  cache_creation_input_tokens: floorMerged.cache_creation_input_tokens,
-                  cache_read_input_tokens: floorMerged.cache_read_input_tokens,
-                  model: teeCtx.model,
-                },
-                deployment_host: teeCtx.deploymentHost,
-                fired_at_ms: Date.now(),
-              });
-            })(),
-          );
+                JSON.stringify({ event: 'message_start_floor_persist', ...floorMetadata }),
+              ),
+          });
         }
       } catch (e) {
         console.error(`running_cost emit failed at ${eventType}:`, e);
@@ -2498,6 +2723,11 @@ export async function handler(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  // Captured once at handler entry so early-firing listeners (e.g. the
+  // request.signal abort listener registered before teeCtx is constructed)
+  // can compute elapsed times and emit start_at_ms without depending on
+  // teeCtx.lifecycle (which doesn't exist yet at that point — TDZ).
+  const handlerStartedAtMs = Date.now();
   // HTTP/2 fallback: when SSE streaming fails over HTTP/3 (QUIC), the client
   // retries with ?force-h2=1. The response includes Alt-Svc: clear (RFC 7838)
   // to tell the browser to stop using H3 for this origin.
@@ -2521,7 +2751,17 @@ export async function handler(
 
   // Optional client context headers (safe to read before auth).
   const chartId = request.headers.get('x-chart-id');
-  const loggingMessageId = request.headers.get('x-logging-message-id');
+  // Symmetric with `x-idempotency-key` validation below: accept the
+  // canonical UUID shape (8-4-4-4-12 hex, case-insensitive), reject any
+  // other non-empty string by treating it as absent. Pre-Wave-2, an
+  // arbitrary string would flow through to the Postgres UUID column and
+  // fail at the DB layer with an opaque error; now bad shapes are
+  // silently dropped at the wire boundary (same policy as
+  // `x-idempotency-key` per `isUuidish`'s contract — "easier for clients
+  // to migrate without breaking").
+  const loggingMessageIdHeader = request.headers.get('x-logging-message-id');
+  const loggingMessageId =
+    loggingMessageIdHeader && isUuidish(loggingMessageIdHeader) ? loggingMessageIdHeader : null;
 
   const sql = getDb(env);
 
@@ -2545,7 +2785,9 @@ export async function handler(
   //   1. `X-User-Anthropic-Key` header — legacy path for an explicit per-request
   //      override (a user testing a different key without re-saving it).
   //   2. Server-stored `user_byok_keys` row for authenticated users — the
-  //      Round-2 design: key is stored once, encrypted, and loaded here.
+  //      key is stored once, encrypted (see `worker/_shared/byok-crypto.ts`
+  //      for the AES-GCM wrap/unwrap with `user_id` as AAD), and loaded
+  //      here on each request.
   //   3. Our `ANTHROPIC_API_KEY` fallback for the free/anon tier.
   //
   // Anonymous actors cannot BYOK — they have no user_id to key the row on,
@@ -2610,20 +2852,17 @@ export async function handler(
       baseTier,
       actorId,
     });
-    try {
-      await sql`
-        INSERT INTO logging_errors (error_id, error_name, error_message, user_id, request_metadata)
-        VALUES (
-          ${crypto.randomUUID()},
-          'ByokTierInvariantViolation',
-          ${`hasByok=true on baseTier=${baseTier}; refused to downgrade silently`},
-          ${actorId},
-          ${JSON.stringify({ baseTier, deployment_host: requestUrl.hostname, fired_at_ms: Date.now() })}
-        )
-      `;
-    } catch (e) {
-      console.error('[anthropic-stream] ByokTierInvariantViolation diagnostic insert failed:', e);
-    }
+    // Pre-lifecycle: teeCtx hasn't been built yet (this fires before
+    // step-7 stream setup), so no start_at_ms — diagnostic_elapsed_ms
+    // will be naturally absent on the row.
+    await writeDiagnostic(sql, {
+      error_name: 'ByokTierInvariantViolation',
+      error_message: `hasByok=true on baseTier=${baseTier}; refused to downgrade silently`,
+      user_id: actorId,
+      request_metadata: { baseTier },
+      deployment_host: requestUrl.hostname,
+      fired_at_ms: Date.now(),
+    });
     return jsonError(
       { error: 'byok_tier_mismatch', detail: 'BYOK rejected on non-eligible base tier' },
       500,
@@ -2762,6 +3001,36 @@ export async function handler(
         tier,
       }),
     );
+    // DB-backed equivalent of the console.log above (PR previews don't have
+    // wrangler tail). If this fires but `DiagnosticAbortHandlerEntered`
+    // doesn't, request.signal abort propagates but the listener on
+    // abortController.signal (the one that wires fireAbortCommit) is somehow
+    // missing the event. If neither fires, request.signal.abort itself isn't
+    // firing on this Cloudflare Workers setup for closed SSE streams.
+    // NOTE: this listener runs as early as during the upstream fetch await
+    // (line ~3055), BEFORE teeCtx is constructed (line ~3174). Don't reference
+    // teeCtx here — would TDZ-error if the client disconnects mid-fetch.
+    if (loggingMessageId) {
+      ctx.waitUntil(
+        writeDiagnostic(sql, {
+          error_name: 'DiagnosticClientDisconnect',
+          error_message: 'request.signal aborted (client closed SSE stream)',
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            abort_controller_already_aborted: abortController.signal.aborted,
+            handler_started_at_ms: handlerStartedAtMs,
+            elapsed_ms: Date.now() - handlerStartedAtMs,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: handlerStartedAtMs,
+        }),
+      );
+    }
     try {
       abortController.abort();
     } catch {
@@ -2899,6 +3168,9 @@ export async function handler(
     polling,
     loggingMessageId,
     actorId,
+    projectedMicroUsd: projected,
+    isByok: tier === 'byok',
+    env,
     ctx,
     deploymentHost: requestUrl.hostname,
     streamingContent: newStreamingAssistantContent(),
@@ -2911,7 +3183,7 @@ export async function handler(
     messageDeltaSeen: false,
     lastPollOutputTokens: 0,
     lastUpstreamChunkAtMs: Date.now(),
-    lifecycle: newStreamLifecycle(),
+    lifecycle: newStreamLifecycle(handlerStartedAtMs),
   };
 
   const tracked = createCostTrackingStream(upstream.body, teeCtx);
@@ -2949,21 +3221,86 @@ export async function handler(
 
   // Lifecycle: capture when our abort fires (separate from the existing
   // client_disconnect log to disambiguate "client dropped" vs "we aborted
-  // for another reason like kill switch").
+  // for another reason like kill switch"). Also fires the abort-commit
+  // via `fireAbortCommit`: snapshot the live accumulator BEFORE the
+  // controller closes; the IIFE may not run for many ms after this point
+  // and the accumulator is mutable. Pre-scheduling a commit here gives
+  // the running cost its own slot in the ctx.waitUntil queue, so it lands
+  // even if the post-stream reconcile IIFE later dies before its commit
+  // (Cloudflare's waitUntil budget kill is the canonical failure mode
+  // this guards against). Idempotent under overlap with the reconcile
+  // IIFE via applyDeltaCommit's GREATEST + delta-clamp semantics.
   abortController.signal.addEventListener('abort', () => {
-    if (teeCtx.lifecycle.abortFiredAtMs === null) {
-      teeCtx.lifecycle.abortFiredAtMs = Date.now();
-      const elapsed = teeCtx.lifecycle.abortFiredAtMs - teeCtx.lifecycle.handlerStartedAtMs;
-      console.log(`[lifecycle] abort_fired t=${elapsed}ms`);
+    // Once-only guard: AbortController.abort() is itself idempotent on
+    // re-call, but defensive — multiple simultaneous abort sources (kill
+    // switch + client disconnect + handler-internal abort) would
+    // otherwise schedule duplicate IIFEs. The commit path is idempotent
+    // (GREATEST), but the diagnostic noise is not.
+    if (teeCtx.lifecycle.abortFiredAtMs !== null) return;
+    teeCtx.lifecycle.abortFiredAtMs = Date.now();
+    const elapsed = teeCtx.lifecycle.abortFiredAtMs - teeCtx.lifecycle.handlerStartedAtMs;
+    console.log(`[lifecycle] abort_fired t=${elapsed}ms`);
+
+    // Diagnostic phase marker: confirms the abort listener actually fired.
+    // If `DiagnosticAbortHandlerEntered` is missing for a turn where the
+    // user clicked Stop, the listener never received the abort signal
+    // (request.signal didn't propagate). Fire-and-forget via ctx.waitUntil
+    // because this listener is synchronous — we can't await writeDiagnostic
+    // inline without blocking the rest of the abort path.
+    if (loggingMessageId) {
+      ctx.waitUntil(
+        writeDiagnostic(sql, {
+          error_name: 'DiagnosticAbortHandlerEntered',
+          error_message: `abort listener fired at t=${elapsed}ms after handler start`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            handler_elapsed_ms: elapsed,
+            accumulator_snapshot: { ...teeCtx.accumulator },
+            live_web_search_count: teeCtx.streamingContent.webSearchCount,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+            killed: teeCtx.killed.v,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+        }),
+      );
     }
+
+    // Snapshot the live accumulator BEFORE the controller closes; the
+    // IIFE may not run for many ms after this point and the accumulator
+    // is mutable. `{ ...teeCtx.accumulator }` shallow-copies the
+    // primitive fields (all numeric counters); subsequent parseFrame
+    // calls mutating teeCtx.accumulator cannot leak into the IIFE.
+    const snapshot = { ...teeCtx.accumulator };
+    let snap: bigint;
+    try {
+      snap = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(snapshot));
+    } catch (e) {
+      // Cost-table miss for the model (e.g. unknown variant). The
+      // pollCostEstimate path also bails on this — a model whose cost we
+      // can't compute can't have its delta-commit either. Surface to
+      // wrangler tail and skip the commit; reconcile will fail
+      // symmetrically and the outer revert path kicks in.
+      console.warn('[abort-commit] cost compute failed, skipping abort commit:', e);
+      return;
+    }
+    fireAbortCommit(teeCtx, snap);
   });
 
   // Step 10: post-stream reconcile. ctx.waitUntil extends the Worker lifetime
-  // past the Response being fully flushed so we still get the DB write. Skip
-  // user_api_usage / global_monthly_usage updates for BYOK (no reservation to
-  // reconcile), but always try to write logging_messages.cost_micro_usd when
-  // a message_id was supplied — it's the per-chart attribution key and is
-  // independent of tier.
+  // past the Response being fully flushed so we still get the DB write.
+  // Updates BOTH user_api_usage cost columns via the signed-delta CTE:
+  //   - Free/anon writes land in cost_micro_usd (the column reserveCost
+  //     checks against LIFETIME_CAP_MICRO_USD).
+  //   - BYOK writes land in byok_cost_micro_usd (independent of cap; visible
+  //     in /api/usage as byok_used_usd).
+  // global_monthly_usage stays observability-only (BYOK excluded; tracks
+  // OUR spend, not customer spend).
   ctx.waitUntil(
     (async () => {
       // Trace marker: insert a row at reconcile entry so we can tell whether
@@ -2985,6 +3322,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3047,6 +3385,38 @@ export async function handler(
         }
       })();
       await Promise.race([tracked.done, stallWatcher]);
+
+      // Diagnostic phase 2: confirms tracked.done resolved (or stall fired).
+      // If `DiagnosticReconcileEntered` is present but `DiagnosticReconcilePhase2TrackedDone`
+      // is missing, the IIFE was killed by ctx.waitUntil budget exhaustion
+      // while still awaiting tracked.done — Anthropic kept slowly emitting bytes
+      // so the stall watcher never tripped, and the worker isolate was cut
+      // before the await resolved.
+      if (loggingMessageId) {
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcilePhase2TrackedDone',
+          error_message: `tracked.done resolved (bail_reason=${bailReason ?? 'natural'})`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            bail_reason: bailReason,
+            wait_elapsed_ms: Date.now() - waitStartedAtMs,
+            stream_done: teeCtx.streamDone.v,
+            killed: teeCtx.killed.v,
+            message_delta_seen: teeCtx.messageDeltaSeen,
+            abort_fired_at_ms: teeCtx.lifecycle.abortFiredAtMs,
+            accumulator,
+            live_web_search_count: teeCtx.streamingContent.webSearchCount,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+        });
+      }
+
       if (bailReason !== null && loggingMessageId) {
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcileTrackedDoneTimeout',
@@ -3069,6 +3439,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3112,30 +3483,50 @@ export async function handler(
         }
       }
 
-      // Agentic-loop cache estimation: only applies when we missed
-      // message_delta AND the stream actually ran tool calls (the only case
-      // where Anthropic's hidden sub-inferences inflate cache_w/cache_r
-      // beyond what message_start reported). Pure text streams without
-      // tool_use blocks don't need this; their accumulator is already
-      // correct from message_start. See estimateAgenticLoopCacheUsage doc.
-      let cacheEstimate: ReturnType<typeof estimateAgenticLoopCacheUsage> = {
-        additionalCacheW: 0,
-        additionalCacheR: 0,
-        toolUseCount: 0,
-      };
-      if (!teeCtx.messageDeltaSeen) {
-        cacheEstimate = estimateAgenticLoopCacheUsage(teeCtx);
-      }
+      // We previously called estimateAgenticLoopCacheUsage(teeCtx) here to
+      // backfill cache_w/cache_r for hidden sub-inferences when message_delta
+      // never arrived (aborted streams). Empirically it over-estimated ~3×
+      // because its formula (additionalCacheR = toolUseCount ×
+      // initialInputTokens) treats each tool_use block as a separate billable
+      // sub-inference, but Anthropic actually bills one sub-inference per
+      // "model-output → wait-for-tools → continue" cycle. After the
+      // enable_request_signal compat flag (574fa59) made aborts propagate to
+      // Anthropic properly, the gap that needed estimating shrank, and
+      // removing the heuristic brings DB cost from 211% → ~92% of Anthropic
+      // actual. cache_creation_input_tokens and cache_read_input_tokens stay
+      // as captured by polls + message_start; no heuristic backfill.
 
       const reconciledAccumulator: UsageAccumulator = {
         ...accumulator,
         output_tokens: reconciledOutput,
         web_search_requests: reconciledWebSearch,
-        cache_creation_input_tokens:
-          accumulator.cache_creation_input_tokens + cacheEstimate.additionalCacheW,
-        cache_read_input_tokens:
-          accumulator.cache_read_input_tokens + cacheEstimate.additionalCacheR,
       };
+
+      // Diagnostic phase 3: confirms we reached cost computation. If
+      // `DiagnosticReconcilePhase2TrackedDone` is present but
+      // `DiagnosticReconcilePhase3PreCostCompute` is missing, the IIFE was
+      // killed between `await tracked.done` and `computeCostMicroUsd` — likely
+      // during `countOutputTokensOnce` (the count_tokens HTTP call).
+      if (loggingMessageId) {
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticReconcilePhase3PreCostCompute',
+          error_message: `pre-computeCostMicroUsd; output_source=${reconcileOutputSource}`,
+          user_id: actorId,
+          chart_id: chartId ?? null,
+          request_metadata: {
+            logging_message_id: loggingMessageId,
+            tier,
+            model,
+            output_source: reconcileOutputSource,
+            reconciled_output: reconciledOutput,
+            reconciled_web_search: reconciledWebSearch,
+            reconciled_accumulator: reconciledAccumulator,
+          },
+          deployment_host: requestUrl.hostname,
+          fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+        });
+      }
 
       let actualMicro: bigint = 0n;
       try {
@@ -3161,6 +3552,7 @@ export async function handler(
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
           });
         }
         // Don't return — fall through with actualMicro=0n so downstream
@@ -3215,79 +3607,48 @@ export async function handler(
           cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
           web_search_requests: reconciledAccumulator.web_search_requests,
           output_source: reconcileOutputSource,
-          // Agentic-loop cache estimation: tracks how much cache_w/cache_r
-          // we PADDED onto the message_start floor at reconcile time, and
-          // why (tool_use count is the heuristic for sub-iter count). Zeros
-          // when message_delta arrived OR when no tool_use blocks ran.
-          cache_estimate_tool_use_count: cacheEstimate.toolUseCount,
-          cache_estimate_additional_cache_w: cacheEstimate.additionalCacheW,
-          cache_estimate_additional_cache_r: cacheEstimate.additionalCacheR,
         },
         deployment_host: requestUrl.hostname,
         fired_at_ms: Date.now(),
+        start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
       });
 
-      if (isCapped(tier)) {
-        const deltaMicro = actualMicro - projected;
-        try {
-          await sql`
-          UPDATE user_api_usage
-          SET cost_micro_usd        = cost_micro_usd + ${deltaMicro.toString()}::bigint,
-              input_tokens          = input_tokens + ${reconciledAccumulator.input_tokens},
-              output_tokens         = output_tokens + ${reconciledAccumulator.output_tokens},
-              cache_create_tokens   = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},
-              cache_read_tokens     = cache_read_tokens + ${reconciledAccumulator.cache_read_input_tokens},
-              web_search_uses       = web_search_uses + ${reconciledAccumulator.web_search_requests},
-              last_activity_at      = NOW()
-          WHERE user_id = ${actorId}
-        `;
-          await sql`
-          INSERT INTO global_monthly_usage (month_start, cost_micro_usd)
-          VALUES (DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date, ${actualMicro.toString()}::bigint)
-          ON CONFLICT (month_start) DO UPDATE
-          SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
-        `;
-        } catch (e) {
-          // Reconcile drift silently accumulates when we only console.error.
-          // Persist enough metadata for a manual replay: the projected figure
-          // we've already reserved, the delta we intended to apply, and the
-          // exception that blocked the write. Best-effort — if this INSERT
-          // also fails, the outer catch logs and we stop there.
-          console.error('Post-stream reconcile failed:', e);
-          try {
-            await sql`
-            INSERT INTO logging_errors (
-              error_id, error_name, error_message, user_id, chart_id,
-              request_metadata
-            )
-            VALUES (
-              ${crypto.randomUUID()},
-              'DiagnosticReconcileFailed',
-              ${`Reconcile failed: ${e instanceof Error ? e.message : String(e)}`},
-              ${actorId},
-              ${chartId ?? null},
-              ${JSON.stringify({
-                user_id: actorId,
-                projected_micro_usd: projected.toString(),
-                observed_delta_micro_usd: deltaMicro.toString(),
-                actual_micro_usd: actualMicro.toString(),
-                error_message: e instanceof Error ? e.message : String(e),
-                model,
-                deployment_host: requestUrl.hostname,
-                fired_at_ms: Date.now(),
-              })}
-            )
-            ON CONFLICT (error_id) DO NOTHING
-          `;
-          } catch (innerErr) {
-            console.error('reconcile-failure diagnostic insert also failed:', innerErr);
-          }
-        }
-      }
-
-      // Per-message attribution: populate logging_messages.cost_micro_usd so
-      // per-chart cost queries can JOIN + SUM without a separate aggregate. Only
-      // runs if the client passed X-Logging-Message-Id. Fire-and-forget.
+      // Post-stream reconcile: one atomic signed-delta CTE settles
+      // `logging_messages.cost_settled_micro_usd`, GREATEST-clamps
+      // `logging_messages.cost_micro_usd`, stamps `reconciled_at = NOW()`
+      // (so late retries from the 7-day client retry queue and any in-flight
+      // per-update writes no-op via the `WHERE reconciled_at IS NULL` guard),
+      // and applies the SIGNED delta `actual - max(projected, cost_settled)`
+      // to `user_api_usage.cost_micro_usd`.
+      //
+      // The shared concurrency / monotonicity invariants this CTE relies on
+      // are documented at the unsigned-delta sibling helper:
+      // see `worker/_shared/cost-commit.ts::applyDeltaCommit`. The two
+      // statements must stay in sync on baseline math (max(projected,
+      // cost_settled)), the FOR UPDATE single-statement lock, and the
+      // `WHERE reconciled_at IS NULL` late-retry guard. The only
+      // intentional divergence: this reconcile uses a SIGNED delta (to
+      // refund over-projection) where applyDeltaCommit clamps to ≥ 0.
+      //
+      // Signed-delta atomically:
+      //   - settles the remaining cost when mid-stream writers fell short of
+      //     the final actual (e.g. tracked.done timeout before the last poll);
+      //   - REFUNDS over-projection when actual < projected and no mid-stream
+      //     writers committed actual (the reservation flowed through
+      //     user_api_usage; we now subtract the overshoot);
+      //   - no-ops when mid-stream writers already committed exactly actual
+      //     (baseline = actual, delta = 0).
+      // `GREATEST(0::bigint, ...)` clamps the result so user_api_usage can
+      // never go negative even if some bookkeeping race left the prior value
+      // lower than the refund amount. `EXISTS(SELECT 1 FROM msg_upd)` guards
+      // the user_api_usage UPDATE so it skips if the row was already
+      // reconciled (concurrent reconcile path beat us to it) — idempotent.
+      //
+      // Token counters on user_api_usage are updated UNCONDITIONALLY (all
+      // tiers, including BYOK). Cost is routed via CASE-WHEN on `tierIsByok`:
+      // BYOK deltas land in `byok_cost_micro_usd` (the parallel BYOK counter
+      // that doesn't deplete the free cap); free/anon deltas land in
+      // `cost_micro_usd` (the column reserveCost reads against the cap).
       //
       // NO `actualMicro > 0n` gate: a user-aborted stream can produce
       // actualMicro=0 if the abort raced parseFrame's accumulator update, but
@@ -3297,29 +3658,130 @@ export async function handler(
       // missed a usage event). Logged via DiagnosticReconcileEmptyAccumulator
       // when this happens to a row that DID stream content.
       if (loggingMessageId) {
-        // GREATEST so a tracked.done timeout with empty accumulator
-        // (`actualMicro=0n`) can't clobber the message_start floor or the
-        // client-side reconcile-cost POST that may have landed first.
         try {
-          await sql`
-          UPDATE logging_messages
-          SET cost_micro_usd = GREATEST(cost_micro_usd, ${actualMicro.toString()}::bigint)
-          WHERE message_id = ${loggingMessageId}
-        `;
+          const projStr = projected.toString();
+          const actualStr = actualMicro.toString();
+          const tierIsByok = tier === 'byok';
+          // Finding A (capture RETURNING): the prior `await sql\`...\`` discarded
+          // the result, so the gating below couldn't tell happy-path apart
+          // from the no-op (row missing / foreign / already reconciled) case.
+          // The outer UPDATE's `WHERE ... AND EXISTS(SELECT 1 FROM msg_upd)`
+          // returns zero rows in the no-op branches; capturing the result
+          // lets us:
+          //   1. gate `global_monthly_usage` INSERT on `length > 0` so a
+          //      reconcile re-entered past the 60s idempotency window
+          //      against an already-reconciled row doesn't double-count
+          //      against the monthly observability table.
+          //   2. emit a queryable `DiagnosticReconcileSkipped` row when
+          //      `length === 0` so the no-op is visible from `logging_errors`
+          //      (previously only `DiagnosticReconcileFailed` — i.e. SQL
+          //      exception — was queryable).
+          const reconcileRows = (await sql`
+            WITH locked AS (
+              SELECT cost_settled_micro_usd FROM logging_messages
+              WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
+              FOR UPDATE
+            ),
+            baseline AS (
+              SELECT GREATEST(${projStr}::bigint, cost_settled_micro_usd) AS bl FROM locked
+            ),
+            signed_delta AS (
+              SELECT ${actualStr}::bigint - (SELECT bl FROM baseline) AS d FROM locked
+            ),
+            msg_upd AS (
+              UPDATE logging_messages
+              SET cost_micro_usd = GREATEST(cost_micro_usd, ${actualStr}::bigint),
+                  cost_settled_micro_usd = ${actualStr}::bigint,
+                  reconciled_at = NOW()
+              WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
+              RETURNING cost_settled_micro_usd
+            )
+            UPDATE user_api_usage
+            SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN 0::bigint ELSE (SELECT d FROM signed_delta) END),
+                byok_cost_micro_usd = GREATEST(0::bigint, byok_cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN (SELECT d FROM signed_delta) ELSE 0::bigint END),
+                input_tokens = input_tokens + ${reconciledAccumulator.input_tokens},
+                output_tokens = output_tokens + ${reconciledAccumulator.output_tokens},
+                cache_create_tokens = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},
+                cache_read_tokens = cache_read_tokens + ${reconciledAccumulator.cache_read_input_tokens},
+                web_search_uses = web_search_uses + ${reconciledAccumulator.web_search_requests},
+                last_activity_at = NOW()
+            WHERE user_id = ${actorId} AND EXISTS(SELECT 1 FROM msg_upd)
+            RETURNING cost_micro_usd, (SELECT d FROM signed_delta) AS applied_signed_delta
+          `) as {
+            cost_micro_usd: bigint | number | string | null;
+            applied_signed_delta: bigint | number | string | null;
+          }[];
+          // Global monthly usage is observability-only and excludes BYOK
+          // (BYOK is self-funded; the table tracks our spend, not customer
+          // spend). Gated on `reconcileRows.length > 0` so a no-op reconcile
+          // (row missing, foreign, or already reconciled) doesn't double-
+          // count against the monthly aggregate. Runs AFTER the signed-
+          // delta SQL — if reconcile threw, the catch block diagnostics
+          // fire and this is skipped.
+          if (reconcileRows.length > 0 && isCapped(tier)) {
+            await sql`
+              INSERT INTO global_monthly_usage (month_start, cost_micro_usd)
+              VALUES (DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date, ${actualStr}::bigint)
+              ON CONFLICT (month_start) DO UPDATE
+              SET cost_micro_usd = global_monthly_usage.cost_micro_usd + EXCLUDED.cost_micro_usd
+            `;
+          } else if (reconcileRows.length === 0) {
+            // The reconcile CTE matched no rows — the message row is
+            // missing, owned by a different user, or already reconciled
+            // (e.g. concurrent reconcile won the race, or a late re-entry
+            // past the 60s idempotency window). Distinct from
+            // `DiagnosticReconcileFailed` (which fires on SQL exception):
+            // this is the *expected* benign late-reconcile case, but
+            // making it queryable from `logging_errors` is the only way
+            // to tell "reconcile silently skipped" apart from "reconcile
+            // wrote successfully" in the field.
+            await writeDiagnostic(sql, {
+              error_name: 'DiagnosticReconcileSkipped',
+              error_message: 'reconcile no-op: row missing, foreign, or already reconciled',
+              user_id: actorId,
+              chart_id: chartId ?? null,
+              request_metadata: {
+                logging_message_id: loggingMessageId,
+                actual_micro_usd: actualMicro.toString(),
+                projected_micro_usd: projected.toString(),
+                tier,
+                model,
+              },
+              deployment_host: requestUrl.hostname,
+              fired_at_ms: Date.now(),
+              start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+            });
+          }
         } catch (e) {
-          console.error('logging_messages cost update failed (non-fatal):', e);
+          // Reconcile drift silently accumulates when we only console.error.
+          // Persist enough metadata for a manual replay: the projected figure
+          // we've already reserved, the actual we computed, and the
+          // exception that blocked the write. Best-effort — if this INSERT
+          // also fails, the outer catch logs and we stop there.
+          //
+          // No revertReservation call here: the signed-delta SQL was supposed
+          // to consume the reservation directly via the additive arithmetic
+          // on user_api_usage.cost_micro_usd. On failure, the reservation
+          // stays in user_api_usage (over-bill, matches prior behavior). The
+          // diagnostic captures enough metadata for a manual replay.
+          console.error('Post-stream reconcile failed:', e);
           await writeDiagnostic(sql, {
-            error_name: 'DiagnosticReconcileCostUpdateFailed',
-            error_message: `logging_messages.cost_micro_usd update failed: ${e instanceof Error ? e.message : String(e)}`,
+            error_name: 'DiagnosticReconcileFailed',
+            error_message: `Reconcile failed: ${e instanceof Error ? e.message : String(e)}`,
             user_id: actorId,
             chart_id: chartId ?? null,
             request_metadata: {
+              user_id: actorId,
               logging_message_id: loggingMessageId,
+              projected_micro_usd: projected.toString(),
               actual_micro_usd: actualMicro.toString(),
               error_message: e instanceof Error ? e.message : String(e),
+              model,
+              tier,
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
           });
         }
 
@@ -3353,6 +3815,7 @@ export async function handler(
             },
             deployment_host: requestUrl.hostname,
             fired_at_ms: Date.now(),
+            start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
           });
         }
       }
@@ -3399,31 +3862,20 @@ export async function handler(
             `;
             } catch (e) {
               console.error('logging_messages was_killed update failed (non-fatal):', e);
-              try {
-                await sql`
-                INSERT INTO logging_errors (
-                  error_id, error_name, error_message, user_id, chart_id,
-                  request_metadata
-                )
-                VALUES (
-                  ${crypto.randomUUID()},
-                  'DiagnosticWasKilledUpdateFailed',
-                  ${`logging_messages.was_killed update failed: ${e instanceof Error ? e.message : String(e)}`},
-                  ${actorId},
-                  ${chartId ?? null},
-                  ${JSON.stringify({
-                    logging_message_id: loggingMessageId,
-                    was_killed: wasKilledByCostCap,
-                    error_message: e instanceof Error ? e.message : String(e),
-                    deployment_host: requestUrl.hostname,
-                    fired_at_ms: Date.now(),
-                  })}
-                )
-                ON CONFLICT (error_id) DO NOTHING
-              `;
-              } catch (innerErr) {
-                console.error('was_killed-failure diagnostic insert also failed:', innerErr);
-              }
+              await writeDiagnostic(sql, {
+                error_name: 'DiagnosticWasKilledUpdateFailed',
+                error_message: `logging_messages.was_killed update failed: ${e instanceof Error ? e.message : String(e)}`,
+                user_id: actorId,
+                chart_id: chartId ?? null,
+                request_metadata: {
+                  logging_message_id: loggingMessageId,
+                  was_killed: wasKilledByCostCap,
+                  error_message: e instanceof Error ? e.message : String(e),
+                },
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+                start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+              });
             }
 
           // Conditional: content_blocks only when we captured blocks.
@@ -3444,34 +3896,21 @@ export async function handler(
             } catch (e) {
               console.error('logging_messages content_blocks update failed (non-fatal):', e);
               // Mirror the reconcile-failure diagnostic pattern: persist a
-              // logging_errors row so silent analytics drift is visible. If
-              // this ALSO fails, fall through — outer console.error already
-              // captured the original.
-              try {
-                await sql`
-                  INSERT INTO logging_errors (
-                    error_id, error_name, error_message, user_id, chart_id,
-                    request_metadata
-                  )
-                  VALUES (
-                    ${crypto.randomUUID()},
-                    'DiagnosticContentBlocksUpdateFailed',
-                    ${`logging_messages.content_blocks update failed: ${e instanceof Error ? e.message : String(e)}`},
-                    ${actorId},
-                    ${chartId ?? null},
-                    ${JSON.stringify({
-                      logging_message_id: loggingMessageId,
-                      block_count: analyticsBlocks.length,
-                      error_message: e instanceof Error ? e.message : String(e),
-                      deployment_host: requestUrl.hostname,
-                      fired_at_ms: Date.now(),
-                    })}
-                  )
-                  ON CONFLICT (error_id) DO NOTHING
-                `;
-              } catch (innerErr) {
-                console.error('content_blocks-failure diagnostic insert also failed:', innerErr);
-              }
+              // logging_errors row so silent analytics drift is visible.
+              await writeDiagnostic(sql, {
+                error_name: 'DiagnosticContentBlocksUpdateFailed',
+                error_message: `logging_messages.content_blocks update failed: ${e instanceof Error ? e.message : String(e)}`,
+                user_id: actorId,
+                chart_id: chartId ?? null,
+                request_metadata: {
+                  logging_message_id: loggingMessageId,
+                  block_count: analyticsBlocks.length,
+                  error_message: e instanceof Error ? e.message : String(e),
+                },
+                deployment_host: requestUrl.hostname,
+                fired_at_ms: Date.now(),
+                start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
+              });
             }
           }
         }
@@ -3507,6 +3946,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3539,6 +3979,11 @@ export async function handler(
             model,
             deployment_host: requestUrl.hostname,
           },
+          // diagnostic_elapsed_ms here = handler-start → reconcile-write time
+          // (NOT handler-start → poll-disable event; that's
+          // p.fired_at_ms - lc.handlerStartedAtMs and is recoverable from the
+          // metadata fields above).
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3586,6 +4031,7 @@ export async function handler(
           user_id: actorId,
           chart_id: chartId ?? null,
           request_metadata: diagnosticMetadata,
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
 
@@ -3644,6 +4090,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: reconcileEndAtMs,
+          start_at_ms: lc.handlerStartedAtMs,
         });
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcileCompleted',
@@ -3659,6 +4106,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
     })().catch(async (outerErr) => {
@@ -3683,6 +4131,7 @@ export async function handler(
           },
           deployment_host: requestUrl.hostname,
           fired_at_ms: Date.now(),
+          start_at_ms: teeCtx.lifecycle.handlerStartedAtMs,
         });
       }
     }),
@@ -3728,34 +4177,24 @@ function revertReservation(
         // A silent revert failure leaves an over-reservation permanently on
         // the user's row with no breadcrumb. Persist the metadata a human
         // needs to reconcile later: the user, the µUSD we failed to return,
-        // and the error that blocked the UPDATE.
+        // and the error that blocked the UPDATE. No start_at_ms: this
+        // helper is invoked on pre-stream failure paths where the stream
+        // lifecycle (and `teeCtx`) was never constructed.
         console.error('Reservation revert failed (leaves a small over-reservation):', e);
-        try {
-          await sql`
-          INSERT INTO logging_errors (
-            error_id, error_name, error_message, user_id, chart_id,
-            request_metadata
-          )
-          VALUES (
-            ${crypto.randomUUID()},
-            'DiagnosticRevertFailed',
-            ${`Reservation revert failed: ${e instanceof Error ? e.message : String(e)}`},
-            ${userId},
-            ${diagCtx?.chartId ?? null},
-            ${JSON.stringify({
-              user_id: userId,
-              projected_micro_usd: projected.toString(),
-              error_message: e instanceof Error ? e.message : String(e),
-              model: diagCtx?.model,
-              deployment_host: diagCtx?.deploymentHost,
-              fired_at_ms: Date.now(),
-            })}
-          )
-          ON CONFLICT (error_id) DO NOTHING
-        `;
-        } catch (innerErr) {
-          console.error('revert-failure diagnostic insert also failed:', innerErr);
-        }
+        await writeDiagnostic(sql, {
+          error_name: 'DiagnosticRevertFailed',
+          error_message: `Reservation revert failed: ${e instanceof Error ? e.message : String(e)}`,
+          user_id: userId,
+          chart_id: diagCtx?.chartId ?? null,
+          request_metadata: {
+            user_id: userId,
+            projected_micro_usd: projected.toString(),
+            error_message: e instanceof Error ? e.message : String(e),
+            model: diagCtx?.model,
+          },
+          deployment_host: diagCtx?.deploymentHost,
+          fired_at_ms: Date.now(),
+        });
       }
     })(),
   );

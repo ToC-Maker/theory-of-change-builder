@@ -49,6 +49,17 @@ export interface DiagnosticInsertParams {
   deployment_host?: string;
   /** When provided, auto-stamped into request_metadata.fired_at_ms. */
   fired_at_ms?: number;
+  /**
+   * Lifecycle origin (typically `teeCtx.lifecycle.handlerStartedAtMs`).
+   * When provided, the helper auto-stamps
+   * `request_metadata.diagnostic_elapsed_ms = (fired_at_ms ?? Date.now()) - start_at_ms`.
+   * Pre-existing `diagnostic_elapsed_ms` in `request_metadata` wins (mirrors
+   * the precedence rule used for `fired_at_ms` and `deployment_host`).
+   * Pre-lifecycle call sites (no `teeCtx` in scope, e.g. tier-validation
+   * failures before the stream context is built) simply omit the field —
+   * `diagnostic_elapsed_ms` will be naturally absent in those rows.
+   */
+  start_at_ms?: number;
 }
 
 export async function writeDiagnostic(
@@ -65,6 +76,7 @@ export async function writeDiagnostic(
     request_metadata,
     deployment_host,
     fired_at_ms,
+    start_at_ms,
   } = params;
 
   // Auto-stamp deployment_host / fired_at_ms when supplied. Pre-existing
@@ -76,6 +88,10 @@ export async function writeDiagnostic(
   }
   if (fired_at_ms !== undefined && merged.fired_at_ms === undefined) {
     merged.fired_at_ms = fired_at_ms;
+  }
+  if (start_at_ms !== undefined && merged.diagnostic_elapsed_ms === undefined) {
+    const firedAt = fired_at_ms ?? Date.now();
+    merged.diagnostic_elapsed_ms = firedAt - start_at_ms;
   }
 
   try {

@@ -2,47 +2,71 @@ import type { Env } from '../_shared/types';
 import { getDb } from '../_shared/db';
 import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { resolveAnonActor } from '../_shared/anon-id';
+import { writeDiagnostic } from '../_shared/diagnostics';
+import { applyDeltaCommit } from '../_shared/cost-commit';
 import { toBigInt } from '../_shared/bigint';
+import { parseLoggingMessageId, type ReconcileCostRequest } from '../../shared/wire-shapes';
 
 /**
  * Client-side reconcile fallback. The streaming worker's post-stream IIFE
  * (anthropic-stream.ts ctx.waitUntil) is the primary path that writes
- * cost_micro_usd to logging_messages, but it can be killed by Cloudflare's
- * waitUntil time budget on streams whose tracked.done hangs (typical when
- * the user's connection drops mid-stream and the abort doesn't propagate
- * cleanly). When that happens, the per-chart pill stays at whatever the
- * message_start floor wrote (input cost only), which under-reports the
- * actual cost.
+ * `cost_settled_micro_usd` + `cost_micro_usd` + the user_api_usage delta,
+ * but it can be killed by Cloudflare's waitUntil time budget on streams
+ * whose tracked.done hangs (typical when the user's connection drops
+ * mid-stream and the abort doesn't propagate cleanly). When that happens,
+ * the per-chart pill stays at whatever the message_start floor wrote
+ * (input cost only), which under-reports the actual cost AND leaves the
+ * user_api_usage balance below the projected reservation. (The pre-stream
+ * reservation already debited the projection, so a no-reconcile outcome
+ * over-charges the cap relative to the real settle figure — refund is
+ * handled by the IIFE's signed-delta SQL when it survives.)
  *
  * This endpoint lets the client push its own running_cost figure (already
- * received via SSE during streaming) so the row gets reconciled in a fresh
- * worker invocation with its own waitUntil budget.
+ * received via SSE during streaming, or estimated locally from
+ * content_block_delta frames) so the row gets reconciled in a fresh
+ * Worker invocation with its own waitUntil budget.
  *
- * Scope: phase 1 — only updates logging_messages.cost_micro_usd. Does NOT
- * update user_api_usage; the cap was already enforced by the pre-stream
- * reservation, and the projected reservation amount stays in user_api_usage
- * regardless of the reconcile path. A future refund/topup phase can be
- * layered on top.
+ * Architecture: the endpoint delegates the dual-row write
+ * (logging_messages.cost_settled_micro_usd + cost_micro_usd, user_api_usage
+ * delta) to the shared `applyDeltaCommit` helper. `projected = 0n` here
+ * because the endpoint has no reservation context (it runs in a fresh
+ * Worker invocation, separate from the stream); the helper's
+ * `max(projected, cost_settled)` baseline correctly degenerates to
+ * `cost_settled`, which already incorporates the reservation via the
+ * earlier mid-stream + message_start writers.
  *
- * Trust model: the value is clamped to GREATEST(existing, client_value),
- * so the client can only push the cost up, never down. Combined with the
- * server-side message_start floor (anthropic-stream.ts), the existing value
- * is at least the input cost we observed Anthropic charge — so a client
- * lying low (cost=0) cannot bypass the floor. Lying high is a self-imposed
- * harm: the user fills their own free-tier cap faster, no harm to us.
+ * Trust + idempotency model (see `worker/_shared/cost-commit.ts` for the
+ * full CTE; the relevant bits are):
+ *  - `WHERE user_id = ${actor}` blocks IDOR — only the row's owner can
+ *    advance its cost.
+ *  - `cost_settled_micro_usd = GREATEST(cost_settled_micro_usd, ${newCost})`
+ *    is monotone: client can only push the cost up, never down. Combined
+ *    with the server-side message_start floor (anthropic-stream.ts), the
+ *    existing value is at least the input cost we observed Anthropic
+ *    charge — so a client lying low (cost=0) cannot bypass the floor.
+ *  - `WHERE reconciled_at IS NULL` is the late-retry lock: once the
+ *    post-stream IIFE has stamped `reconciled_at`, late retries from the
+ *    client's localStorage queue become no-ops, so they cannot
+ *    re-inflate the cap (or over-credit it via the signed-delta path).
+ *  - `applied=false` collapses three cases into a single benign return
+ *    shape: row missing, ownership mismatch, post-reconcile. The
+ *    endpoint returns 200 idempotent no-op for all three so the client
+ *    retry queue can drop the entry without distinguishing.
  *
- * Idempotency: GREATEST makes repeated calls safe. Multiple invocations
- * with the same value are no-ops; with increasing values, the column
- * monotonically rises.
+ * Lying high (over-reporting cost) is a self-imposed harm: the user
+ * fills their own per-user cap faster, no harm to us. The Anthropic
+ * Console customer-set cap still applies globally.
  */
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests).
 //
-// The handler below threads identity → DB row lookup → cost-clamp → DB write.
-// Identity and the DB are environment-bound and exercised manually + via
-// integration tests; the bits below are the call's data-shape decisions and
-// are pure (no I/O), so they're the part we lock down with unit tests.
+// The handler below threads identity → body parse → `applyDeltaCommit` →
+// diagnostic. Identity and the DB are environment-bound and exercised via
+// integration tests (`reconcile-cost-delta-commit.test.ts` with an
+// in-memory backend, plus manual end-to-end testing in dev). The bit
+// below is the call's data-shape decision and is pure (no I/O), so it's
+// the part we lock down with unit tests.
 // ---------------------------------------------------------------------------
 
 /** Discriminated result of `parseReconcileBody`. Either a parsed value, or a
@@ -55,11 +79,15 @@ export type ParseReconcileResult =
 /**
  * Validate the JSON body of a `POST /api/reconcile-cost` request.
  *
- * Acceptance rules (mirror the historical contract; tests pin these so a
- * silent loosening here would be visible):
- *  - `logging_message_id` must be a non-empty string.
- *  - `cost_micro_usd` may be a string (parsed via BigInt) or a finite
- *    number (truncated then BigInt-coerced). Anything else is rejected.
+ * Acceptance rules (see `shared/wire-shapes.ts` for the `ReconcileCostRequest`
+ * shape; tests pin these so a silent loosening here would be visible):
+ *  - `logging_message_id` must be a UUID-shaped string (8-4-4-4-12 hex).
+ *    Postgres column is UUID-typed; pre-Wave-2 the validator accepted any
+ *    non-empty string and bad shapes failed opaquely at the DB layer.
+ *  - `cost_micro_usd` must be a STRING (parsed via BigInt). The pre-Wave-2
+ *    `string | number` accept was "defensive forward-compat" but masked
+ *    client-side type drift — the production client always sends string
+ *    (chatCostTracker.ts::maybePostReconcile).
  *  - The resulting bigint must not be negative.
  *
  * Returning a discriminated union (rather than throwing) keeps the handler
@@ -70,30 +98,46 @@ export function parseReconcileBody(raw: unknown): ParseReconcileResult {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, status: 400, body: { error: 'logging_message_id_required' } };
   }
-  const body = raw as { logging_message_id?: unknown; cost_micro_usd?: unknown };
+  // Cast to a strict-Partial view of the wire shape; both fields still
+  // typed `unknown` because we haven't validated them yet. The cast is
+  // shape-narrowing (object), not value-trusting.
+  const body = raw as Partial<Record<keyof ReconcileCostRequest, unknown>>;
 
-  const loggingMessageId = body.logging_message_id;
-  if (typeof loggingMessageId !== 'string' || loggingMessageId.length === 0) {
+  // Step 1: logging_message_id presence + UUID shape. Surface presence
+  // error before shape error so a client that omitted the field entirely
+  // gets the more actionable code.
+  const loggingMessageIdRaw = body.logging_message_id;
+  if (typeof loggingMessageIdRaw !== 'string' || loggingMessageIdRaw.length === 0) {
     return { ok: false, status: 400, body: { error: 'logging_message_id_required' } };
   }
+  let loggingMessageId: string;
+  try {
+    loggingMessageId = parseLoggingMessageId(loggingMessageIdRaw);
+  } catch {
+    // parseLoggingMessageId throws on non-UUID; map to the wire error
+    // code clients can switch on (distinct from `_required` so retry-queue
+    // logic can drop bad-shape entries rather than retrying them).
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'logging_message_id_invalid_uuid' },
+    };
+  }
 
-  // cost_micro_usd is sent as string by the client (BigInt round-trip via
-  // SSE running_cost frames) but we accept number too in case a future
-  // client changes encoding.
+  // Step 2: cost_micro_usd MUST be a string (BigInt-precision wire format).
+  // The pre-Wave-2 `typeof cost === 'number'` branch was removed — see
+  // doc-comment above for rationale.
   let clientCost: bigint;
   const cost = body.cost_micro_usd;
+  if (typeof cost !== 'string') {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'cost_micro_usd_required', detail: 'must be a string' },
+    };
+  }
   try {
-    if (typeof cost === 'string') {
-      clientCost = BigInt(cost);
-    } else if (typeof cost === 'number' && Number.isFinite(cost)) {
-      clientCost = BigInt(Math.trunc(cost));
-    } else {
-      return {
-        ok: false,
-        status: 400,
-        body: { error: 'cost_micro_usd_required', detail: 'must be a string or number' },
-      };
-    }
+    clientCost = BigInt(cost);
   } catch {
     return { ok: false, status: 400, body: { error: 'cost_micro_usd_invalid_integer' } };
   }
@@ -102,43 +146,6 @@ export function parseReconcileBody(raw: unknown): ParseReconcileResult {
   }
 
   return { ok: true, loggingMessageId, clientCost };
-}
-
-/** Discriminated outcome of `computeReconcileOutcome`. */
-export type ReconcileOutcome =
-  | { kind: 'forbidden' }
-  | { kind: 'apply'; previousCost: bigint; newCost: bigint; applied: boolean };
-
-/**
- * Decide what (if anything) to do with a reconcile request that has already
- * passed body validation and located its `logging_messages` row.
- *
- *  - If the row's `user_id` does not match the caller, return `forbidden`.
- *    A NULL `user_id` (deleted chart / GDPR-erased row) never matches any
- *    caller, so it's also rejected here.
- *  - Otherwise, clamp `clientCost` against the row's existing cost using the
- *    GREATEST monotonic-floor rule, and report whether the new value would
- *    actually change the row (`applied`). Equal values short-circuit to
- *    `applied: false` so the handler can skip the UPDATE.
- *
- * The function is total over its inputs and bigint-clean (no Number → bigint
- * coercions inside), so the GREATEST + idempotency invariants are testable
- * without spinning up a database.
- */
-export function computeReconcileOutcome(
-  actorId: string,
-  row: { user_id: string | null; cost_micro_usd: bigint | number },
-  clientCost: bigint,
-): ReconcileOutcome {
-  if (row.user_id !== actorId) {
-    return { kind: 'forbidden' };
-  }
-  // Driver-version-tolerant coerce: see worker/_shared/bigint.ts. Tests
-  // exercise both `bigint` and `number` row shapes (Neon legacy rows).
-  const previousCost = toBigInt(row.cost_micro_usd);
-  const newCost = clientCost > previousCost ? clientCost : previousCost;
-  const applied = newCost > previousCost;
-  return { kind: 'apply', previousCost, newCost, applied };
 }
 
 export async function handler(request: Request, env: Env): Promise<Response> {
@@ -185,30 +192,117 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   const sql = getDb(env);
   const url = new URL(request.url);
 
-  // Step 3: load the row, verify ownership.
-  const rows = (await sql`
-    SELECT message_id, user_id, chart_id, cost_micro_usd
-    FROM logging_messages
-    WHERE message_id = ${loggingMessageId}
-  `) as {
-    message_id: string;
-    user_id: string | null;
-    chart_id: string | null;
-    cost_micro_usd: bigint | number;
-  }[];
+  // Step 2.5: determine BYOK status for `applyDeltaCommit`'s column-routing
+  // parameter. The endpoint receives no BYOK header on retry-queue replays
+  // (the client never sends `X-User-Anthropic-Key` to `/api/reconcile-cost`),
+  // so we infer `isByok` from whether the user currently has a stored
+  // BYOK key. Two consequences worth noting:
+  //   - For authenticated users with a stored key, the delta routes to
+  //     `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
+  //   - For anon users or auth users without a stored key, it routes to
+  //     `cost_micro_usd` (the column reserveCost checks against the cap).
+  // Edge case (acceptable): if a user toggles BYOK between stream + reconcile
+  // retry, the routing matches their *current* state, not the stream's tier.
+  // Stream-time tier would require a `logging_messages.was_byok` column;
+  // not added in this fix (out of scope).
+  let isByok = false;
+  if (authenticated) {
+    try {
+      const rows = (await sql`
+        SELECT 1 FROM user_byok_keys WHERE user_id = ${actorId} LIMIT 1
+      `) as unknown[];
+      isByok = rows.length > 0;
+    } catch (e) {
+      // BYOK lookup failed — fail closed to the safer routing for the user
+      // (don't accidentally inflate their free cap when they have BYOK).
+      // Log so the issue is visible; return 500 so the client retries
+      // rather than silently routing wrong.
+      console.error('[reconcile-cost] BYOK lookup failed:', e);
+      return Response.json({ error: 'byok_lookup_failed' }, { status: 503 });
+    }
+  }
 
-  if (rows.length === 0) {
-    return Response.json({ error: 'not_found' }, { status: 404 });
+  // Step 3: delegate the dual-row write to `applyDeltaCommit`. The helper
+  // atomically:
+  //  - Locks the logging_messages row (`SELECT ... FOR UPDATE`) with the
+  //    `WHERE user_id = ${actorId} AND reconciled_at IS NULL` guards baked
+  //    in (so ownership mismatch and post-reconcile both collapse to
+  //    `applied=false`, no row write).
+  //  - Advances both `cost_micro_usd` (monotone HWM) AND
+  //    `cost_settled_micro_usd` (the authoritative settled value).
+  //  - Credits `user_api_usage` by `max(0, newCost - max(projected, cost_settled))`.
+  //    With `projected = 0n` here (no reservation context in this fresh Worker
+  //    invocation), the baseline is `cost_settled`, which already incorporates
+  //    the reservation via the earlier mid-stream / abort handler writers.
+  //  - Routes the delta into `cost_micro_usd` or `byok_cost_micro_usd` based
+  //    on `isByok` (resolved above). Free-tier deltas land in `cost_micro_usd`
+  //    (the column reserveCost checks); BYOK deltas land in the parallel
+  //    `byok_cost_micro_usd` column and never inflate the free cap.
+  //
+  // `applied=false` from the helper is a benign no-op — the row was
+  // missing, owned by someone else, or already reconciled. We return 200
+  // so the client's retry queue treats it as success (not retry-worthy).
+  let out: Awaited<ReturnType<typeof applyDeltaCommit>>;
+  try {
+    out = await applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
+  } catch (e) {
+    console.error('[reconcile-cost] applyDeltaCommit failed:', e);
+    // Symmetric with every analogous in-stream reconcile path: persist a
+    // logging_errors row so the failure is queryable from the DB instead
+    // of only visible in `wrangler tail`. Matches the metadata shape of
+    // the success-path `DiagnosticReconcileEndpointHit` row written
+    // below in Step 4, so analytics can JOIN/UNION across both event
+    // names by `logging_message_id`.
+    await writeDiagnostic(sql, {
+      error_name: 'DiagnosticReconcileEndpointFailed',
+      error_message: `applyDeltaCommit threw: ${e instanceof Error ? e.message : String(e)}`,
+      user_id: actorId,
+      chart_id: null,
+      request_metadata: {
+        logging_message_id: loggingMessageId,
+        authenticated,
+        is_byok: isByok,
+        client_cost_micro_usd: clientCost.toString(),
+        error_message: e instanceof Error ? e.message : String(e),
+        error_stack: e instanceof Error ? e.stack : null,
+      },
+      deployment_host: url.hostname,
+      fired_at_ms: Date.now(),
+    });
+    return Response.json({ error: 'update_failed' }, { status: 500 });
   }
-  const row = rows[0];
-  const outcome = computeReconcileOutcome(actorId, row, clientCost);
-  if (outcome.kind === 'forbidden') {
-    // Authoritative reject: only the row owner can reconcile its cost.
-    // Includes the case where row.user_id is NULL (chart deleted / data
-    // erased) — no caller can match a NULL.
-    return Response.json({ error: 'forbidden' }, { status: 403 });
-  }
-  const { previousCost, newCost, applied } = outcome;
+
+  // Step 3.5: read the actual current row state, regardless of whether
+  // `applyDeltaCommit` mutated. The helper's `new_settled` is `0n` when
+  // `applied=false` (its WHERE clause excludes rows missing / foreign /
+  // already-reconciled), so without this read the client can't see the
+  // post-stream IIFE's final settled value once `reconciled_at` is stamped.
+  //
+  // Polling contract: the client posts to this endpoint after a stream
+  // ends and polls until `reconciled:true`. On each call:
+  //   - `applied=true` + `reconciled=false`  → this call advanced the row.
+  //   - `applied=false` + `reconciled=false` → row missing/foreign OR
+  //     pre-reconcile no-op (current value < client value); keep polling.
+  //   - `applied=false` + `reconciled=true`  → IIFE stamped; final value
+  //     is in `cost_settled_micro_usd`; client should stop polling.
+  //
+  // Idempotent-no-op security model: the SELECT's `AND user_id = $actorId`
+  // mirrors `applyDeltaCommit`'s ownership guard. A foreign or missing
+  // message_id yields zero rows; we return `"0"` + `false` rather than
+  // 403/404 so an attacker can't probe for valid IDs by toggling shapes.
+  //
+  // Late-arrival race (row not yet visible): when the client polls before
+  // `loggingService.saveMessage` has INSERTed the row, the SELECT returns
+  // zero rows. The "0" + false shape lets the client treat it identically
+  // to row-missing — keep polling until the row lands.
+  const stateRows = (await sql`
+    SELECT cost_settled_micro_usd, (reconciled_at IS NOT NULL) AS reconciled
+    FROM logging_messages
+    WHERE message_id = ${loggingMessageId} AND user_id = ${actorId}
+  `) as { cost_settled_micro_usd: bigint | number | string | null; reconciled: boolean }[];
+  const currentSettled =
+    stateRows.length > 0 ? toBigInt(stateRows[0].cost_settled_micro_usd ?? 0) : 0n;
+  const reconciled = stateRows.length > 0 ? stateRows[0].reconciled : false;
 
   // Telemetry log (PR-preview-friendly: this lands in `wrangler tail` if
   // attached, plus the diagnostic row below is queryable from the DB).
@@ -216,67 +310,55 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     JSON.stringify({
       event: 'reconcile_cost_endpoint_hit',
       logging_message_id: loggingMessageId,
-      chart_id: row.chart_id,
       actor_id: actorId,
       authenticated,
-      previous_cost_micro_usd: previousCost.toString(),
+      is_byok: isByok,
       client_cost_micro_usd: clientCost.toString(),
-      new_cost_micro_usd: newCost.toString(),
-      applied,
+      new_settled_micro_usd: out.new_settled.toString(),
+      delta_micro_usd: out.delta.toString(),
+      applied: out.applied,
+      current_settled_micro_usd: currentSettled.toString(),
+      reconciled,
     }),
   );
 
-  // Step 4: apply the floor-or-client max. UPDATE only if it changes
-  // anything; saves a write when the row was already fully reconciled by
-  // the streaming worker's IIFE.
-  if (applied) {
-    try {
-      await sql`
-        UPDATE logging_messages
-        SET cost_micro_usd = GREATEST(cost_micro_usd, ${newCost.toString()}::bigint)
-        WHERE message_id = ${loggingMessageId}
-      `;
-    } catch (e) {
-      console.error('[reconcile-cost] UPDATE failed:', e);
-      return Response.json({ error: 'update_failed' }, { status: 500 });
-    }
-  }
-
-  // Step 5: diagnostic row — one per call, including no-op calls. Lets us
-  // count how often clients reach this endpoint and whether they push
-  // values that the streaming worker's reconcile already wrote.
-  try {
-    await sql`
-      INSERT INTO logging_errors (
-        error_id, error_name, error_message, user_id, chart_id,
-        request_metadata
-      )
-      VALUES (
-        ${crypto.randomUUID()},
-        'DiagnosticReconcileEndpointHit',
-        ${`prev=${previousCost.toString()} client=${clientCost.toString()} new=${newCost.toString()} µUSD applied=${applied}`},
-        ${actorId},
-        ${row.chart_id ?? null},
-        ${JSON.stringify({
-          logging_message_id: loggingMessageId,
-          authenticated,
-          previous_cost_micro_usd: previousCost.toString(),
-          client_cost_micro_usd: clientCost.toString(),
-          new_cost_micro_usd: newCost.toString(),
-          applied,
-          deployment_host: url.hostname,
-          fired_at_ms: Date.now(),
-        })}
-      )
-      ON CONFLICT (error_id) DO NOTHING
-    `;
-  } catch (e) {
-    console.error('[reconcile-cost] diagnostic insert failed:', e);
-  }
+  // Step 4: diagnostic row — one per call, including no-op `applied=false`
+  // calls. Lets us count how often clients reach this endpoint, whether
+  // they're pushing values that the streaming worker's reconcile already
+  // wrote, and whether the late-retry lock (`reconciled_at` set) is
+  // catching post-reconcile retries. No start_at_ms: this endpoint runs in
+  // a fresh Worker invocation separate from the streaming lifecycle, so
+  // there's no handlerStartedAtMs to anchor an elapsed measurement to.
+  //
+  // `current_settled` + `reconciled` are also captured here so the
+  // response audit trail lives in the DB — analytics can correlate
+  // poll cadence against the IIFE convergence (how many polls each
+  // client issues before `reconciled` flips to true).
+  await writeDiagnostic(sql, {
+    error_name: 'DiagnosticReconcileEndpointHit',
+    error_message: `client=${clientCost.toString()} new_settled=${out.new_settled.toString()} delta=${out.delta.toString()} current_settled=${currentSettled.toString()} reconciled=${reconciled} µUSD applied=${out.applied} byok=${isByok}`,
+    user_id: actorId,
+    chart_id: null,
+    request_metadata: {
+      logging_message_id: loggingMessageId,
+      authenticated,
+      is_byok: isByok,
+      client_cost_micro_usd: clientCost.toString(),
+      new_settled_micro_usd: out.new_settled.toString(),
+      delta_micro_usd: out.delta.toString(),
+      applied: out.applied,
+      current_settled: currentSettled.toString(),
+      reconciled,
+    },
+    deployment_host: url.hostname,
+    fired_at_ms: Date.now(),
+  });
 
   return Response.json({
-    previous_cost_micro_usd: previousCost.toString(),
-    new_cost_micro_usd: newCost.toString(),
-    applied,
+    applied: out.applied,
+    delta: out.delta.toString(),
+    new_settled: out.new_settled.toString(),
+    cost_settled_micro_usd: currentSettled.toString(),
+    reconciled,
   });
 }

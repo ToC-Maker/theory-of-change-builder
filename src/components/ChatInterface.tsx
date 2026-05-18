@@ -3,11 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
+import { Tooltip } from 'react-tooltip';
 import {
   chatService,
   ChatMessage,
   type CostError,
   type StreamPhase,
+  setReconcilePillBump,
 } from '../services/chatService';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
@@ -52,6 +54,7 @@ import {
   SparklesIcon,
   PencilSquareIcon,
   KeyIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -1089,6 +1092,38 @@ export function ChatInterface({
     }
   }, [isCollapsed]);
 
+  // Register the BYOK pill-bump callback for post-stream
+  // `pollUntilReconciled` + queue drains. The reconcile-cost endpoint
+  // returns the server's `cost_settled_micro_usd` on every call; when it
+  // exceeds the entry's previously-credited baseline (the figure the
+  // tracker last posted), the polling/drain code fires this callback
+  // with the strictly-positive delta. We forward to `addByokSpend` so
+  // the per-chart + per-key BYOK pill catches up to the worker's
+  // post-stream `ctx.waitUntil` IIFE figure (~1-2s of bumped value the
+  // pre-fix client never saw).
+  //
+  // Identifiers come from the bump event (snapshotted at stream start
+  // in chatService.ts, stored on the queue entry, replayed on each
+  // bump). That means this effect runs once on mount and stays stable
+  // across re-renders; we don't need to depend on `params` or the
+  // BYOK key state. Cleanup on unmount drops the global registration
+  // so a navigation that unmounts ChatInterface doesn't leak a stale
+  // closure.
+  useEffect(() => {
+    setReconcilePillBump((event) => {
+      const usd = Number(event.deltaMicroUsd) / 1_000_000;
+      console.log(
+        `[BYOK reconcile-bump] +${event.deltaMicroUsd} µUSD ($${usd.toFixed(6)})` +
+          ` chart=${event.chartId} keyLast4=${event.keyLast4}` +
+          ` newSettled=${event.newSettledMicroUsd}`,
+      );
+      addByokSpend(event.chartId, event.keyLast4, usd);
+    });
+    return () => {
+      setReconcilePillBump(null);
+    };
+  }, []);
+
   // Auth header helper shared by /api/usage and file-upload callers. Returns
   // an empty object for anonymous visitors or when silent refresh fails;
   // those requests hit the worker anonymously and rely on the Turnstile
@@ -1153,7 +1188,7 @@ export function ChatInterface({
   // Structured cost-error handler. Maps CostErrorType → UI state transition
   // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
   // under the last user message so BYOK retries can reuse the same messages
-  // array — plan v2 decision 8).
+  // array — preserves the user's prompt across cap-error recovery).
   const handleCostError = useCallback(
     (error: CostError) => {
       switch (error.type) {
@@ -3021,6 +3056,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <> &middot; {formatCostUsd(chartByokSpendUsd)} this chart</>
                           )}
                         </span>
+                        <button
+                          type="button"
+                          data-tooltip-id="byok-cost-info"
+                          aria-label="About this cost estimate"
+                          className="inline-flex items-center text-gray-400 hover:text-gray-600 focus:text-gray-600 focus:outline-none"
+                        >
+                          <InformationCircleIcon className="w-3.5 h-3.5" />
+                        </button>
                       </span>
                     ) : (
                       <div>
@@ -3760,6 +3803,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           </div>
         </div>
       </div>
+
+      {/* BYOK cost info tooltip. Discloses that our client-side tally can
+          under-count Anthropic's actual billing by a few percent on agentic
+          streams (web search, code execution) because some sub-inference
+          usage isn't emitted on SSE. See plans/byok-cost-stream-recovery. */}
+      <Tooltip
+        id="byok-cost-info"
+        place="bottom"
+        className="!max-w-[260px] !text-xs !leading-snug"
+        style={{ zIndex: 9999 }}
+      >
+        Best-effort tally from streaming events. Anthropic&apos;s console may show slightly more
+        (typically a few percent on streams that use web search or code execution; near-exact for
+        simple chats), and is the source of truth for billing.
+      </Tooltip>
     </>
   );
 }

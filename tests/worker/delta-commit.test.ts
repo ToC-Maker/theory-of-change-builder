@@ -1,0 +1,404 @@
+// Tests for `applyDeltaCommit` (worker/_shared/cost-commit.ts).
+//
+// The helper is the single in-stream cost writer used by every per-update
+// commit and by the post-stream reconcile. The SQL itself is a single CTE
+// statement that bakes ownership (`AND user_id = $3`) and the late-retry
+// lock (`AND reconciled_at IS NULL`) into both the SELECT FOR UPDATE and
+// the UPDATE; the row's existence + ownership + non-reconciled state is
+// observable as a CTE-empty result, and the helper translates that into
+// `{applied: false, delta: 0n, new_settled: 0n}` for every caller.
+//
+// Coverage strategy: we mock the Neon tagged-template returning canned
+// rows for each branch we want to exercise. The SQL string itself is not
+// asserted character-for-character (that would lock down formatting, not
+// behaviour) — the contract being pinned is the helper's input/output
+// mapping plus the no-SQL fast-path on null/empty messageId. Concurrent
+// row-lock semantics are pinned in the sibling
+// `delta-commit-concurrency.test.ts` file.
+import { describe, expect, it } from 'vitest';
+import type { NeonQueryFunction } from '@neondatabase/serverless';
+import { applyDeltaCommit } from '../../worker/_shared/cost-commit';
+
+type CapturedCall = {
+  strings: TemplateStringsArray;
+  values: unknown[];
+};
+
+/**
+ * Build a tagged-template SQL spy. The spy:
+ *   - records every invocation in a `calls[]` array (so tests can assert
+ *     "no SQL was issued" on the null-messageId fast-path);
+ *   - resolves to whatever row array `responder()` returns for that
+ *     invocation index. This lets a single test queue distinct responses
+ *     across multiple calls if needed.
+ */
+function makeSqlSpy(rows: ReadonlyArray<Record<string, unknown>>): {
+  sql: NeonQueryFunction<false, false>;
+  calls: CapturedCall[];
+} {
+  const calls: CapturedCall[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sql: any = (strings: TemplateStringsArray, ...values: unknown[]) => {
+    calls.push({ strings, values });
+    return Promise.resolve(rows);
+  };
+  return { sql: sql as NeonQueryFunction<false, false>, calls };
+}
+
+describe('applyDeltaCommit', () => {
+  describe('null/empty messageId fast-path', () => {
+    it('no-ops with reason:missing_id when messageId is null (no SQL issued)', async () => {
+      // The caller is responsible for passing the captured loggingMessageId
+      // through to the helper; before message_start the row id is not yet
+      // known, so the caller passes null. The helper must not even attempt
+      // an SQL roundtrip in that window — it would 1) waste a Neon HTTP
+      // request and 2) match nothing anyway. The `reason: 'missing_id'`
+      // discriminator distinguishes the no-SQL fast-path from the SQL-ran-
+      // but-CTE-empty path (`reason: 'row_not_found_or_foreign_or_reconciled'`).
+      const { sql, calls } = makeSqlSpy([]);
+      const result = await applyDeltaCommit(sql, null, 'auth0|alice', 100n, 500n, false);
+      expect(result).toEqual({
+        applied: false,
+        reason: 'missing_id',
+        delta: 0n,
+        new_settled: 0n,
+      });
+      expect(calls).toHaveLength(0);
+    });
+
+    it('no-ops with reason:missing_id when messageId is undefined (no SQL issued)', async () => {
+      // `loggingMessageId` is typed `string | null | undefined` in the
+      // caller's SseTeeContext; cover the undefined branch too so a future
+      // refactor can't silently start issuing SQL for unset ids.
+      const { sql, calls } = makeSqlSpy([]);
+      const result = await applyDeltaCommit(sql, undefined, 'auth0|alice', 100n, 500n, false);
+      expect(result).toEqual({
+        applied: false,
+        reason: 'missing_id',
+        delta: 0n,
+        new_settled: 0n,
+      });
+      expect(calls).toHaveLength(0);
+    });
+
+    it('no-ops with reason:missing_id when messageId is empty string (no SQL issued)', async () => {
+      // Defensive: an empty string is falsy, so the early-return covers it
+      // naturally. Pin this so a future refactor to `messageId == null`
+      // (which would treat '' as truthy) wouldn't silently start firing
+      // SQL with WHERE message_id = ''.
+      const { sql, calls } = makeSqlSpy([]);
+      const result = await applyDeltaCommit(sql, '', 'auth0|alice', 100n, 500n, false);
+      expect(result).toEqual({
+        applied: false,
+        reason: 'missing_id',
+        delta: 0n,
+        new_settled: 0n,
+      });
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  describe('row-not-found / ownership / reconciled (CTE produces empty / applied=false)', () => {
+    // All three of these collapse into `reason: 'row_not_found_or_foreign_or_reconciled'`
+    // because the CTE itself cannot distinguish them — they all look identical
+    // to the `EXISTS(SELECT 1 FROM msg_upd)` scalar. The discriminator is
+    // still useful because it separates SQL-ran-but-empty from the no-SQL
+    // `missing_id` fast-path (above).
+    it('returns reason:row_not_found_or_foreign_or_reconciled when row is missing', async () => {
+      // The user-message INSERT in `logging-saveMessage.ts` runs concurrently
+      // with the streaming worker; the row may not exist when the first
+      // per-update write fires. The CTE's `WHERE message_id = $1` excludes
+      // the row, msg_upd RETURNING returns zero rows, and the EXISTS clause
+      // produces `applied = false`.
+      const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
+      const result = await applyDeltaCommit(sql, 'msg_missing', 'auth0|alice', 100n, 500n, false);
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
+    });
+
+    it('returns reason:row_not_found_or_foreign_or_reconciled when row is owned by a different user (IDOR guard)', async () => {
+      // `AND user_id = $3` in both the SELECT FOR UPDATE and the UPDATE
+      // means a caller posting against another user's logging_message_id
+      // gets a CTE-empty result; the helper reports the same shape as
+      // "row missing". Both the streaming worker and the
+      // `/api/reconcile-cost` endpoint funnel through this helper and
+      // treat `applied: false` as benign — the endpoint returns 200
+      // idempotent no-op without distinguishing the three CTE-empty
+      // cases (missing / IDOR / reconciled).
+      const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
+      const result = await applyDeltaCommit(sql, 'msg_bob_owned', 'auth0|alice', 100n, 500n, false);
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
+    });
+
+    it('returns reason:row_not_found_or_foreign_or_reconciled when reconciled_at is non-null (late-retry lock)', async () => {
+      // The post-stream reconcile in `anthropic-stream.ts` stamps
+      // `reconciled_at = NOW()` atomically with the signed-delta SQL.
+      // A late retry from the 7-day localStorage retry queue
+      // (`chatService.ts::drainPendingReconciles`) would otherwise
+      // re-inflate the cap. The `WHERE reconciled_at IS NULL` clause
+      // causes the CTE to no-op. The mock returns the same empty-row
+      // shape as the previous two cases (the helper can't distinguish
+      // them — they're all "CTE excluded").
+      const { sql } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
+      const result = await applyDeltaCommit(
+        sql,
+        'msg_reconciled',
+        'auth0|alice',
+        100n,
+        500n,
+        false,
+      );
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
+    });
+
+    it('returns reason:row_not_found_or_foreign_or_reconciled when SQL returns zero rows (defensive)', async () => {
+      // Belt-and-braces: even if a future driver or schema change made the
+      // outer SELECT return zero rows instead of one row with `applied=false`,
+      // the helper still reports the no-op shape. The production CTE in
+      // `applyDeltaCommit` is structured to always return one row (the
+      // EXISTS scalar wraps the emptiness), but this guard prevents a
+      // silent NaN / undefined leak if the contract drifts. Same `reason`
+      // bucket as the SQL-returned-`applied:false` cases above —
+      // functionally equivalent from the caller's perspective.
+      const { sql } = makeSqlSpy([]);
+      const result = await applyDeltaCommit(sql, 'msg_zero_rows', 'auth0|alice', 100n, 500n, false);
+      expect(result).toEqual({
+        applied: false,
+        reason: 'row_not_found_or_foreign_or_reconciled',
+        delta: 0n,
+        new_settled: 0n,
+      });
+    });
+  });
+
+  describe('reason discriminator: distinguishes missing_id from CTE-empty', () => {
+    // The headline value of the new discriminator: the no-SQL short-circuit
+    // is now visibly distinct from every other no-op path. Pin this
+    // explicitly so a refactor that collapsed them back into a single
+    // `{applied: false}` shape (or swapped the labels) would fail.
+    it('missing_id reason fires only on the no-SQL fast-path', async () => {
+      const { sql, calls } = makeSqlSpy([]);
+      const result = await applyDeltaCommit(sql, null, 'auth0|alice', 100n, 500n, false);
+      // No SQL was issued.
+      expect(calls).toHaveLength(0);
+      // TS narrowing: only the {applied: false} arm carries reason.
+      expect(result.applied).toBe(false);
+      if (!result.applied) {
+        expect(result.reason).toBe('missing_id');
+      }
+    });
+
+    it('row_not_found_or_foreign_or_reconciled reason fires after SQL when CTE is empty', async () => {
+      const { sql, calls } = makeSqlSpy([{ new_settled: null, delta: null, applied: false }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100n, 500n, false);
+      // SQL DID run.
+      expect(calls).toHaveLength(1);
+      expect(result.applied).toBe(false);
+      if (!result.applied) {
+        expect(result.reason).toBe('row_not_found_or_foreign_or_reconciled');
+      }
+    });
+  });
+
+  describe('GREATEST clamp: no-op when newCost ≤ max(projected, settled)', () => {
+    it('reports delta=0n when newCost equals the baseline (CTE GREATEST(0, 0))', async () => {
+      // The CTE's `computed = GREATEST(0::bigint, $newCost::bigint - baseline)`
+      // returns 0 when the new value matches the baseline. The msg_upd row
+      // updates with no-op (GREATEST(cost_settled, newCost) = cost_settled),
+      // and user_upd is gated by `WHERE delta > 0`, so no user_api_usage
+      // write fires.
+      //
+      // The helper still reports `applied: true` because the row exists and
+      // the UPDATE statement ran (RETURNING produced a row). `delta = 0n`
+      // is the signal callers use to decide whether to log the write.
+      const { sql } = makeSqlSpy([{ new_settled: '500000', delta: '0', applied: true }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
+      expect(result).toEqual({ applied: true, delta: 0n, new_settled: 500_000n });
+    });
+
+    it('reports delta=0n when newCost is below the baseline (rare, defensive)', async () => {
+      // In normal flow, `newCost` is monotone-up across a stream — the
+      // client sends running_cost frames that are non-decreasing, and the
+      // mid-stream cost-cap poller computes them too. But a stale client
+      // retry from the localStorage queue (or a network reordering) could
+      // post a lower value than the row already settled. The CTE's
+      // GREATEST(0, ...) clamp is the line of defence; here we pin the
+      // helper's output mapping for that case.
+      const { sql } = makeSqlSpy([{ new_settled: '500000', delta: '0', applied: true }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 200_000n, false);
+      expect(result).toEqual({ applied: true, delta: 0n, new_settled: 500_000n });
+    });
+  });
+
+  describe('positive delta: newCost > max(projected, settled)', () => {
+    it('reports delta = newCost - max(projected, settled) when newCost wins', async () => {
+      // The headline case: a per-update commit observes a higher
+      // running_cost than either the reservation projection or the
+      // currently-settled value. user_api_usage gets credited the diff
+      // (atomically with the row settle).
+      //
+      // Trace: projected=$0.10 ($100k µUSD), settled=$0.20 ($200k), newCost=$0.50 ($500k).
+      // baseline = max(0.10, 0.20) = 0.20; delta = max(0, 0.50 - 0.20) = 0.30.
+      // settled becomes 0.50.
+      const { sql } = makeSqlSpy([{ new_settled: '500000', delta: '300000', applied: true }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
+      expect(result).toEqual({
+        applied: true,
+        delta: 300_000n,
+        new_settled: 500_000n,
+      });
+    });
+
+    it('coerces string-typed bigints from Neon into bigint return values', async () => {
+      // Neon's BIGINT columns deserialize as strings on certain driver
+      // configurations (see `worker/_shared/bigint.ts` JSDoc). The helper
+      // routes both `delta` and `new_settled` through `toBigInt`, so a
+      // stringly-typed result still produces bigint values to callers.
+      // Without the coercion, downstream BigInt arithmetic would throw
+      // ("Cannot mix BigInt and other types") and the per-update write
+      // would silently fail.
+      const { sql } = makeSqlSpy([
+        { new_settled: '999999999999', delta: '888888888888', applied: true },
+      ]);
+      const result = await applyDeltaCommit(
+        sql,
+        'msg_x',
+        'auth0|alice',
+        0n,
+        999_999_999_999n,
+        false,
+      );
+      expect(result.delta).toBe(888_888_888_888n);
+      expect(result.new_settled).toBe(999_999_999_999n);
+    });
+
+    it('coerces number-typed delta/new_settled into bigint', async () => {
+      // Smaller values (under Number.MAX_SAFE_INTEGER) may arrive as `number`.
+      // The toBigInt helper truncates; pin this so a future refactor that
+      // dropped the coercion (returning `row.delta` directly) would fail.
+      const { sql } = makeSqlSpy([{ new_settled: 1000, delta: 200, applied: true }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 800n, 1000n, false);
+      expect(result.delta).toBe(200n);
+      expect(result.new_settled).toBe(1000n);
+    });
+
+    it('handles bigint values past Number.MAX_SAFE_INTEGER without precision loss', async () => {
+      // 2^60 is past 2^53. The helper returns bigint either way (Neon may
+      // hand back bigint for values past 2^53), and downstream cap math is
+      // bigint-native. Pin this so a refactor that funneled through Number
+      // would visibly fail.
+      const huge = 1n << 60n;
+      const { sql } = makeSqlSpy([{ new_settled: huge, delta: huge, applied: true }]);
+      const result = await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 0n, huge, false);
+      expect(result.delta).toBe(huge);
+      expect(result.new_settled).toBe(huge);
+    });
+  });
+
+  describe('SQL invocation shape', () => {
+    it('issues exactly one SQL call (the single-statement invariant)', async () => {
+      // The JSDoc at the top of cost-commit.ts pins this as a contract:
+      // splitting the CTE into two statements would break the FOR UPDATE
+      // row-lock invariant on Neon HTTP (locks expire at statement end).
+      // A future refactor that, e.g., did a SELECT first and then a
+      // separate UPDATE would bump this assertion to 2.
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('passes messageId, projected, newCost, and userId as interpolated values', async () => {
+      // We don't pin the SQL string character-for-character (formatting
+      // changes shouldn't break tests), but we do pin that the helper's
+      // four arguments arrive as interpolated values. The Neon tagged-template
+      // captures them in the `values` array. This catches a refactor that
+      // accidentally dropped one of the parameters.
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
+      // The tagged-template values are the raw arguments — `messageId` and
+      // `userId` interpolate as strings; `projected` and `newCost` as
+      // strings (the production CTE casts via `${projStr}::bigint` /
+      // `${newStr}::bigint`).
+      const flat = calls[0].values.map(String);
+      expect(flat).toContain('msg_x');
+      expect(flat).toContain('auth0|alice');
+      expect(flat).toContain('100000');
+      expect(flat).toContain('500000');
+    });
+  });
+
+  describe('isByok column routing (BYOK regression fix)', () => {
+    // Background: pre-PR, the per-stream BYOK reconcile was gated by
+    // `if (isCapped(tier))`, so BYOK spend NEVER touched user_api_usage.
+    // Tasks 7+8 dropped the gate (the per-update writer + the post-stream
+    // signed-delta reconcile now write to user_api_usage unconditionally),
+    // which inadvertently coupled BYOK spend to the free cap: reserveCost
+    // still checks `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD`.
+    // A user who spent $4 via BYOK, then removed the key, ended up with $1
+    // of free cap remaining instead of the full $5.
+    //
+    // Option A from the review: split the user_api_usage column. The
+    // helper routes the delta into `cost_micro_usd` (free) or
+    // `byok_cost_micro_usd` (BYOK) based on the new `isByok` parameter.
+    // The cap-check (reserveCost) keeps reading `cost_micro_usd`-only;
+    // BYOK writes never inflate it.
+    //
+    // The SQL string is asserted at a structural level — we look for the
+    // CASE-WHEN routing tokens — not character-for-character. The Neon
+    // tagged-template captures the interpolated `isByok` boolean in the
+    // values array; we pin that the value flowed through as `true`/`false`.
+    it('isByok=true: passes the boolean through to the CTE values', async () => {
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, true);
+      // The CTE casts the parameter via `::bool`; pin that the booleans
+      // arrived as JS booleans (Neon serializes them via `::bool` cast).
+      // A refactor that dropped the param would fail the
+      // `expect(flat).toContain('true')` below.
+      const flat = calls[0].values.map(String);
+      expect(flat).toContain('true');
+    });
+
+    it('isByok=false: passes the boolean through to the CTE values', async () => {
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, false);
+      const flat = calls[0].values.map(String);
+      expect(flat).toContain('false');
+    });
+
+    it('uses CASE-WHEN on isByok to route between cost_micro_usd and byok_cost_micro_usd', async () => {
+      // Structural pin: the SQL must contain both column names AND a CASE
+      // clause keyed on the `isByok` boolean. A regression that dropped
+      // the routing (e.g. only updating cost_micro_usd) would fail this.
+      const { sql, calls } = makeSqlSpy([
+        { new_settled: '500000', delta: '300000', applied: true },
+      ]);
+      await applyDeltaCommit(sql, 'msg_x', 'auth0|alice', 100_000n, 500_000n, true);
+      const joinedSql = calls[0].strings.join('');
+      expect(joinedSql).toMatch(/byok_cost_micro_usd/);
+      expect(joinedSql).toMatch(/cost_micro_usd/);
+      expect(joinedSql).toMatch(/CASE\s+WHEN/i);
+    });
+  });
+});

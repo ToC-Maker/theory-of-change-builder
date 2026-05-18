@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAnthropicUsage } from '../../worker/_shared/cost';
+import { parseAnthropicUsage } from '../../shared/cost';
 
 describe('parseAnthropicUsage', () => {
   it('parses a valid usage object with all integer fields', () => {

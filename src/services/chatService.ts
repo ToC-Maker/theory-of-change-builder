@@ -8,26 +8,24 @@ import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import generateModePromptContent from '../prompts/generateModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { loggingService } from './loggingService';
-import {
-  MODEL_INPUT_RATES_USD_PER_MTOK,
-  MODEL_OUTPUT_RATES_USD_PER_MTOK,
-  WEB_SEARCH_USD_PER_USE,
-} from '../utils/cost';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockAccumulator';
 import { buildOutgoingMessages } from './outgoingMessages';
+import { CostTracker } from './chatCostTracker';
+import type { AnthropicUsage } from '../../shared/cost';
+import type { StreamEvent } from '../../shared/wire-shapes';
 
-export interface AnthropicUsage {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
-  server_tool_use?: {
-    web_search_requests?: number;
-  };
-}
+/**
+ * Re-export the shared `AnthropicUsage` shape so existing callers
+ * (`ChatInterface.tsx` reads usage off the `onComplete` callback signature)
+ * keep their `chatService` import surface stable. The shared type is the
+ * single source of truth for the Anthropic SSE usage payload — it's also
+ * consumed by `computeCostMicroUsd` so the client and Worker stay in
+ * lockstep on shape (the same type definition is imported by both sides
+ * from `shared/cost.ts`).
+ */
+export type { AnthropicUsage };
 
 export interface WebSearchResult {
   url: string;
@@ -180,192 +178,79 @@ function newIdempotencyKey(): string {
 }
 
 // ----------------------------------------------------------------------------
-// Pending-reconcile retry queue
+// Pending-reconcile retry queue + post-stream polling
 // ----------------------------------------------------------------------------
 //
-// Failed POSTs to /api/reconcile-cost (typically because the user's network
-// dropped between the SSE stream finishing and the reconcile fetch firing,
-// e.g. ERR_NETWORK_CHANGED / ERR_CONNECTION_RESET) are stashed in localStorage
-// so we can retry them after the network comes back. Without this retry, a
-// turn where the client closes the SSE connection mid-flight leaves only the
-// message_start floor recorded server-side — the streaming-worker reconcile
-// likely also bailed for the same network reason.
+// Two related lifecycles, both backed by the same localStorage queue and
+// implemented in `./reconcilePolling.ts`:
 //
-// Drain triggers (any of):
-//   - `online` event on window (fires when the OS regains connectivity)
-//   - After every successful reconcile-cost POST (opportunistic; the network
-//     just proved it works, so opportunistically replay anything queued)
+//  1. Network-failure retry queue. Failed POSTs to /api/reconcile-cost
+//     (network drops, 5xx) stash in localStorage. Drain triggers:
+//       - `online` event on window
+//       - First non-null setAuthToken (post-Auth0 hydration)
+//       - Stream-end (opportunistic — connectivity just proved alive)
+//       - chatService construction (page/chart load — converges stored
+//         entries from prior sessions). One POST per stored entry; no
+//         polling loop.
 //
-// Note: not draining on app load. The `online` listener handles network-
-// restoration after a hard offline period, and the post-success drain handles
-// "the next time the user does anything." A reload while offline doesn't help
-// (the queue can't drain until connectivity returns), and a reload while
-// online with no other activity is rare enough not to optimize for.
+//  2. Just-ended-stream rapid convergence. The worker's post-stream
+//     `ctx.waitUntil` IIFE writes `cost_settled_micro_usd` ~1-2s AFTER
+//     the SSE response closes. The pre-fix client posted reconcile-cost
+//     once at stream end and never re-checked, so the BYOK pill lagged
+//     by whatever the IIFE added (~8% on average; up to ~50% empirically
+//     on agentic-loop streams). `pollUntilReconciled` polls every 1s
+//     until the server reports `reconciled:true` OR 30s elapse (safety
+//     bound — IIFE may have died on a Cloudflare time budget).
+//
+// Pill-bump: a single global onCostBump callback registered via
+// `setReconcilePillBump` from ChatInterface routes per-chart + per-key
+// BYOK pill increments. Each strict `cost_settled` increase credits the
+// delta to the appropriate bucket. Free-tier streams skip this (their
+// queue entries have no chart/key context).
 //
 // Staleness GC: items older than 7 days are dropped. If a reconcile has been
 // failing for a week, the original logging_messages row probably already has
-// the message_start floor written, and the per-message cost figure has had
-// plenty of time to converge via the streaming-side IIFE on subsequent
-// successful runs. Bound the queue size to keep localStorage healthy.
+// the message_start floor written, and subsequent successful runs will have
+// reconciled their own state.
 
-const PENDING_RECONCILE_KEY = 'byok-reconcile-pending';
-const PENDING_RECONCILE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
-
-interface PendingReconcile {
-  logging_message_id: string;
-  cost_micro_usd: string;
-  queued_at: number;
-}
-
-function isPendingReconcile(v: unknown): v is PendingReconcile {
-  if (typeof v !== 'object' || v === null) return false;
-  const o = v as Record<string, unknown>;
-  return (
-    typeof o.logging_message_id === 'string' &&
-    o.logging_message_id.length > 0 &&
-    typeof o.cost_micro_usd === 'string' &&
-    o.cost_micro_usd.length > 0 &&
-    typeof o.queued_at === 'number' &&
-    Number.isFinite(o.queued_at)
-  );
-}
-
-function readPendingReconciles(): PendingReconcile[] {
-  if (typeof localStorage === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(PENDING_RECONCILE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isPendingReconcile);
-  } catch (e) {
-    // Corrupt JSON: discard. Better to lose the queue than to keep retrying
-    // on every drain cycle with a parse error. Surface the discard so the
-    // event is visible in devtools rather than silently zeroing out a queue
-    // the user expected to drain — corruption from a partial-write or a
-    // disk-full at write time would otherwise look identical to "queue empty".
-    console.warn('[ChatService] discarding corrupt reconcile queue:', e);
-    return [];
-  }
-}
-
-function writePendingReconciles(items: PendingReconcile[]): void {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    if (items.length === 0) {
-      localStorage.removeItem(PENDING_RECONCILE_KEY);
-    } else {
-      localStorage.setItem(PENDING_RECONCILE_KEY, JSON.stringify(items));
-    }
-  } catch (e) {
-    // Quota exceeded / private browsing: ignore. The reconcile is best-effort
-    // and the worker-side message_start floor still locked in input cost.
-    console.warn('[ChatService] failed to persist pending reconciles:', e);
-  }
-}
+import {
+  enqueuePendingReconcile,
+  drainPendingReconciles as drainPendingReconcilesRaw,
+  pollUntilReconciled,
+  getActivePollIds,
+  type OnCostBump,
+} from './reconcilePolling';
 
 /**
- * Add a reconcile to the retry queue, deduplicating by logging_message_id so
- * retried-and-still-failing entries don't pile up across attempts. Always
- * stamps the latest queued_at so the staleness GC measures from the most
- * recent attempt rather than the first.
+ * Global registry for the BYOK pill-bump callback. Set by ChatInterface
+ * on mount so drain + post-stream-poll can credit incremental
+ * `cost_settled` deltas to the correct chart/key bucket. Cleared on
+ * unmount (null = no-op routing). Module-scoped (not a class field on
+ * ChatService) because the free `drainPendingReconciles` callers — the
+ * `online` listener, `setAuthToken` — need access without holding a
+ * ChatService reference.
  */
-function enqueuePendingReconcile(entry: {
-  logging_message_id: string;
-  cost_micro_usd: string;
-}): void {
-  const existing = readPendingReconciles().filter(
-    (p) => p.logging_message_id !== entry.logging_message_id,
-  );
-  existing.push({
-    logging_message_id: entry.logging_message_id,
-    cost_micro_usd: entry.cost_micro_usd,
-    queued_at: Date.now(),
-  });
-  writePendingReconciles(existing);
-  console.log(
-    `[ChatService] queued pending reconcile: msg=${entry.logging_message_id.slice(0, 8)}…` +
-      ` cost=${entry.cost_micro_usd}µUSD queue_size=${existing.length}`,
-  );
-}
+let onCostBumpFromReconcile: OnCostBump | null = null;
 
 /**
- * Attempt to POST every queued reconcile. Items that succeed (HTTP 2xx) or
- * get a definitive client-side rejection (4xx — bad shape, forbidden, not
- * found) are removed. Items that hit a network error or 5xx stay queued for
- * the next drain. Stale items (>7d) are GC'd unconditionally.
- *
- * Best-effort: this never throws. Callers fire-and-forget.
+ * Register the pill-bump callback. Replaces any prior registration so
+ * ChatInterface re-mounts (e.g. navigating between charts) don't accumulate
+ * leaked listeners. Pass `null` to clear (typically on component unmount).
  */
-async function drainPendingReconciles(authToken: string | null): Promise<void> {
-  const all = readPendingReconciles();
-  if (all.length === 0) return;
+export function setReconcilePillBump(cb: OnCostBump | null): void {
+  onCostBumpFromReconcile = cb;
+}
 
-  const now = Date.now();
-  const fresh = all.filter((p) => now - p.queued_at < PENDING_RECONCILE_STALE_MS);
-  const dropped = all.length - fresh.length;
-  if (dropped > 0) {
-    console.log(
-      `[ChatService] dropping ${dropped} stale pending reconciles (>${PENDING_RECONCILE_STALE_MS}ms)`,
-    );
-  }
-  if (fresh.length === 0) {
-    writePendingReconciles([]);
-    return;
-  }
-
-  console.log(`[ChatService] draining ${fresh.length} pending reconciles`);
-  const remaining: PendingReconcile[] = [];
-  for (const item of fresh) {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-    let result: 'ok' | 'drop' | 'retry' = 'retry';
-    try {
-      const resp = await fetch('/api/reconcile-cost', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          logging_message_id: item.logging_message_id,
-          cost_micro_usd: item.cost_micro_usd,
-        }),
-        credentials: 'include',
-      });
-      if (resp.ok) {
-        result = 'ok';
-        let body = 'no-body';
-        try {
-          const j = (await resp.json()) as unknown;
-          body = JSON.stringify(j);
-        } catch {
-          /* ignore */
-        }
-        console.log(
-          `[ChatService] drained reconcile: msg=${item.logging_message_id.slice(0, 8)}…` +
-            ` cost=${item.cost_micro_usd}µUSD result=${body}`,
-        );
-      } else if (resp.status >= 400 && resp.status < 500) {
-        // 401/403/404/etc — definitive reject. The row is gone or the caller
-        // can't claim it. Retrying won't help; drop and move on.
-        result = 'drop';
-        console.warn(
-          `[ChatService] dropping pending reconcile (${resp.status}): msg=${item.logging_message_id.slice(0, 8)}…`,
-        );
-      } else {
-        // 5xx — server-side blip, retry next time.
-        console.warn(
-          `[ChatService] retry-on-next-drain (${resp.status}): msg=${item.logging_message_id.slice(0, 8)}…`,
-        );
-      }
-    } catch (e) {
-      // Network error: keep for next drain.
-      console.warn(
-        `[ChatService] retry-on-next-drain (network): msg=${item.logging_message_id.slice(0, 8)}…`,
-        e,
-      );
-    }
-    if (result === 'retry') remaining.push(item);
-  }
-  writePendingReconciles(remaining);
+/** Internal wrapper that injects the registered onCostBump (if any) and the
+ *  active-poll skip set into every drain call without forcing callers to
+ *  pass them through. The skip set prevents the drain-poll race documented
+ *  on `drainPendingReconciles` (raw). */
+function drainPendingReconciles(authToken: string | null): Promise<void> {
+  return drainPendingReconcilesRaw(
+    authToken,
+    onCostBumpFromReconcile ?? undefined,
+    getActivePollIds(),
+  );
 }
 
 export interface StreamCallbacks {
@@ -619,6 +504,18 @@ class ChatService {
         void drainPendingReconciles(this.authToken);
       });
     }
+
+    // Page/chart load drain. Converges any unreconciled entries left by
+    // a prior session (browser closed during the 30s × 1s pollUntilReconciled
+    // window; reconcile fetch failed and queued; etc.). One POST per entry
+    // — entries that come back `reconciled:true` get dropped, the rest stay
+    // queued for next time. Pill-bump callback is whatever
+    // `setReconcilePillBump` was last set to (typically by ChatInterface
+    // on mount, but this fires before mount on first construction; the
+    // global is null, so non-BYOK or unrouted entries no-op). If a later
+    // mount registers the callback, the next drain (online / setAuthToken
+    // / stream-end) credits any further deltas correctly.
+    void drainPendingReconciles(this.authToken);
   }
 
   private static isNetworkError(error: Error): boolean {
@@ -787,40 +684,86 @@ class ChatService {
     let tLast = t0;
     const blockStartAt = new Map<number, number>();
 
-    // Running cost accumulators for onCostUpdate. Anthropic's message_delta.usage
-    // is cumulative (each delta carries the latest totals, not an increment), so
-    // Math.max is safe belt-and-suspenders against any out-of-order delivery.
-    const inputRate = MODEL_INPUT_RATES_USD_PER_MTOK[model] ?? 5;
-    const outputRate = MODEL_OUTPUT_RATES_USD_PER_MTOK[model] ?? 25;
-    let runningInput = 0;
-    let runningOutput = 0;
-    let runningCacheCreate = 0;
-    let runningCacheRead = 0;
-    let runningWebSearch = 0;
-    const computeRunningCost = () =>
-      (runningInput / 1_000_000) * inputRate +
-      (runningCacheCreate / 1_000_000) * inputRate * 1.25 +
-      (runningCacheRead / 1_000_000) * inputRate * 0.1 +
-      (runningOutput / 1_000_000) * outputRate +
-      runningWebSearch * WEB_SEARCH_USD_PER_USE;
-    const updateUsage = (u: Partial<AnthropicUsage>) => {
-      runningInput = Math.max(runningInput, u.input_tokens ?? 0);
-      runningOutput = Math.max(runningOutput, u.output_tokens ?? 0);
-      runningCacheCreate = Math.max(runningCacheCreate, u.cache_creation_input_tokens ?? 0);
-      runningCacheRead = Math.max(runningCacheRead, u.cache_read_input_tokens ?? 0);
-      runningWebSearch = Math.max(runningWebSearch, u.server_tool_use?.web_search_requests ?? 0);
-      callbacks.onCostUpdate?.(computeRunningCost());
+    // Per-stream cost tracker. Owns the running-locals (per-field MAX-merge
+    // so partial `message_delta.usage` events don't drop earlier counters),
+    // the character-derived output estimate on every `content_block_delta`,
+    // and the debounced /api/reconcile-cost POST cadence ($0.01 or 5s
+    // thresholds). Fires onCostUpdate on every strict cost increase so the
+    // BYOK pill updates in real time. Output-only fallback applies when no
+    // `running_cost` SSE frame has arrived yet — `runningInput`,
+    // `runningCacheCreate`, `runningCacheRead`, `runningWebSearch` stay at
+    // 0 and only the char-derived output estimate is contributed.
+    const loggingMessageIdForReconcile = extraHeaders?.['X-Logging-Message-Id'];
+
+    // Snapshot chart + BYOK key context at stream start. We capture both
+    // here so the retry-queue entry + the post-stream poll can credit the
+    // pill against the correct bucket if `cost_settled_micro_usd` advances
+    // after this stream ends — even on a fresh page load that drains stale
+    // queue entries with no live tracker. `keyLast4` is the last 4
+    // characters of the BYOK key in use (when one is in use); missing for
+    // free-tier streams. `chartId` mirrors `X-Chart-Id` so the per-chart
+    // bucket key matches what `useChartByokSpendUsd` reads.
+    const streamChartIdSnap = extraHeaders?.['X-Chart-Id'] ?? null;
+    const streamKeyLast4Snap = (() => {
+      const k = extraHeaders?.['X-User-Anthropic-Key'];
+      if (!k || k.length < 4) return null;
+      return k.slice(-4);
+    })();
+
+    // Wrap enqueuePendingReconcile so the chart/key context lands on the
+    // queue entry alongside the cost figure. This lets drain-after-reload
+    // credit the pill bump to the right bucket without needing a live
+    // tracker. Free-tier streams pass `null`s here — the drain code
+    // checks for both before crediting, so a free-tier no-op routes
+    // correctly.
+    const enqueueWithContext = (entry: { logging_message_id: string; cost_micro_usd: string }) => {
+      enqueuePendingReconcile({
+        ...entry,
+        chartId: streamChartIdSnap,
+        keyLast4: streamKeyLast4Snap,
+      });
     };
 
-    // Latest cost_micro_usd value seen on a running_cost SSE frame. The
-    // worker's streaming reconcile (ctx.waitUntil IIFE) is the primary
-    // path that writes this to logging_messages.cost_micro_usd, but it can
-    // be killed by Cloudflare's waitUntil time budget on streams whose
-    // tracked.done hangs (e.g. when the user's connection drops). When the
-    // stream ends here — for any reason — we POST this figure to
-    // /api/reconcile-cost as a fallback so the per-chart pill converges
-    // even if the streaming reconcile bailed.
-    let lastCostMicroUsd: bigint | null = null;
+    const tracker = new CostTracker({
+      model,
+      onCostUpdate: callbacks.onCostUpdate,
+      loggingMessageId: loggingMessageIdForReconcile,
+      authToken: this.authToken,
+      onFetchFailure: enqueueWithContext,
+    });
+
+    // Abort + page-hidden hooks for the unload-safe reconcile path. The
+    // `signal.abort` listener fires earliest (synchronously when the user
+    // hits Stop, before the in-flight `reader.read()` rejection has
+    // propagated to the catch block), and the `visibilitychange` listener
+    // covers tab-close / browser-quit / mobile-background scenarios where
+    // the catch/finally may never run. Both call the tracker with
+    // force=true and useBeacon=true so navigator.sendBeacon is preferred.
+    // Listeners are torn down in the finally block via cleanupTrackerListeners.
+    //
+    // AUTH-LINK COOKIE INVARIANT (W2 finding C):
+    // The /api/reconcile-cost POST on unload has no Authorization header —
+    // navigator.sendBeacon strips custom request headers, so the server-
+    // side authed-sub resolver can't read a JWT off the request. Instead
+    // it falls back to cookie-based identity via tocb_auth_link, the
+    // HMAC-signed auth-link cookie set on login that maps a browser to
+    // an Auth0 sub even without a live JWT. If a future cookie change
+    // drops, unsigns, or stops setting tocb_auth_link on auth, this
+    // unload-path reconcile silently routes to the anon user_api_usage
+    // row and the authed user's cap counter desyncs. See
+    // worker/_shared/anon-id.ts (tocb_auth_link encode/decode) and
+    // worker/api/reconcile-cost.ts (resolver fallback).
+    const onAbort = () => tracker.maybePostReconcile('force-beacon');
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') tracker.maybePostReconcile('force-beacon');
+    };
+    const hasDocument = typeof document !== 'undefined';
+    signal?.addEventListener('abort', onAbort);
+    if (hasDocument) document.addEventListener('visibilitychange', onVisibilityChange);
+    const cleanupTrackerListeners = () => {
+      signal?.removeEventListener('abort', onAbort);
+      if (hasDocument) document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
 
     try {
       while (true) {
@@ -847,9 +790,24 @@ class ChatService {
               continue;
             }
 
-            let event;
+            // SSE event payloads are typed as the shared `StreamEvent`
+            // discriminated union (shared/wire-shapes.ts). The runtime
+            // shape comes off the wire via JSON.parse and is fundamentally
+            // unknown at the type level; the cast below promises
+            // "JSON.parse returned an object whose discriminator field
+            // `type` matches one of the union arms". Wire-shape pinning
+            // here means any field rename in `ServerRunningCostFrame` or
+            // any mid-stream error type fails type-check at every branch
+            // below that reads those fields — symmetric with the worker
+            // emit side (anthropic-stream.ts uses the same type).
+            //
+            // Pass-through Anthropic events (content_block_start, etc.)
+            // use permissive shapes in the union; the loose
+            // `event.content_block?.type` reads still compile via the
+            // `Record<string, unknown>` index signatures.
+            let event: StreamEvent;
             try {
-              event = JSON.parse(data);
+              event = JSON.parse(data) as StreamEvent;
             } catch {
               continue; // partial SSE data, wait for more
             }
@@ -893,9 +851,17 @@ class ChatService {
                 const sinceStart = Math.round(now - t0);
                 const sinceLast = Math.round(now - tLast);
                 tLast = now;
-                blockStartAt.set(event.index, now);
+                // `index` is `number | undefined` on the union arm. The wire
+                // contract says it's always present for content_block_*
+                // events, but the wire-shape pinning carries an optional
+                // marker for forward-compat with Anthropic adding events
+                // that omit it. Default to -1 (the prior runtime behavior
+                // when `event.index` was `any` and could be undefined) so
+                // the Map still keys consistently.
+                const idx = typeof event.index === 'number' ? event.index : -1;
+                blockStartAt.set(idx, now);
                 console.log(
-                  `[ChatService] block_start idx=${event.index} type=${cb.type}` +
+                  `[ChatService] block_start idx=${idx} type=${cb.type}` +
                     (cb.name ? ` name=${cb.name}` : '') +
                     ` t+${sinceStart}ms Δ${sinceLast}ms`,
                 );
@@ -934,14 +900,15 @@ class ChatService {
               // to render visibly.
               if (event.type === 'content_block_stop') {
                 const now = performance.now();
-                const startedAt = blockStartAt.get(event.index);
+                // Mirror the narrowing in content_block_start above so the
+                // start/stop pair keys identically into blockStartAt.
+                const idx = typeof event.index === 'number' ? event.index : -1;
+                const startedAt = blockStartAt.get(idx);
                 const dur = startedAt !== undefined ? Math.round(now - startedAt) : -1;
                 const sinceLast = Math.round(now - tLast);
                 tLast = now;
-                blockStartAt.delete(event.index);
-                console.log(
-                  `[ChatService] block_stop  idx=${event.index} dur=${dur}ms Δ${sinceLast}ms`,
-                );
+                blockStartAt.delete(idx);
+                console.log(`[ChatService] block_stop  idx=${idx} dur=${dur}ms Δ${sinceLast}ms`);
                 // Snapshot the current blocks so the caller can keep a ref in
                 // sync; user-abort then has a synchronously-readable view of
                 // what streamed before the abort. Skip silently if no
@@ -989,10 +956,21 @@ class ChatService {
                 event.type === 'content_block_delta' &&
                 event.delta?.type === 'text_delta'
               ) {
-                const chunk = event.delta.text;
+                // `delta.text` is `unknown` on the wire-shape union
+                // (Anthropic pass-through events use a Record<string,
+                // unknown> for delta to avoid mirroring their full subtype
+                // matrix here). Narrow at runtime so a malformed frame
+                // can't crash the dispatch — if it's not a string, treat
+                // it as empty (the prior `any` typing would have silently
+                // string-concatenated whatever was there).
+                const chunk = typeof event.delta.text === 'string' ? event.delta.text : '';
                 fullContent += chunk;
                 const cleanContent = cleanResponseContent(fullContent);
                 callbacks.onContent?.(chunk, cleanContent);
+                // Per-delta output-cost estimate (via CostTracker):
+                // each text chunk advances the BYOK pill in real time and
+                // may trigger a debounced /api/reconcile-cost POST.
+                tracker.recordOutputChars(chunk.length);
               } else if (
                 event.type === 'content_block_delta' &&
                 event.delta?.type === 'thinking_delta'
@@ -1001,24 +979,38 @@ class ChatService {
                 if (chunk) {
                   fullThinking += chunk;
                   callbacks.onThinking?.(chunk, fullThinking);
+                  // Thinking deltas are billed as output tokens too.
+                  tracker.recordOutputChars(chunk.length);
                 }
               } else if (event.type === 'message_start' && event.message?.usage) {
                 usage = event.message.usage;
-                updateUsage(event.message.usage);
+                tracker.recordUsage(event.message.usage);
               } else if (event.type === 'message_delta' && event.usage) {
-                usage = { ...(usage ?? {}), ...event.usage } as AnthropicUsage;
-                updateUsage(event.usage);
+                // Build a new `usage` snapshot for the onComplete payload via
+                // MAX-merge against the running tracker locals so a partial
+                // message_delta (one that omits cache fields) doesn't drop
+                // the running figures (per-field MAX-merge rule; see
+                // `chatCostTracker.recordUsage`). Reading from the tracker
+                // keeps the audit-trail shape consistent with what the cost
+                // math saw.
+                tracker.recordUsage(event.usage);
+                usage = {
+                  ...(usage ?? {}),
+                  ...event.usage,
+                } as AnthropicUsage;
               } else if (event.type === 'running_cost' && typeof event.cost_usd === 'number') {
                 // Capture the µUSD figure for the post-stream reconcile POST.
                 // The string carries BigInt-precision (the cost is computed
                 // server-side as bigint and serialized as a string to avoid JS
                 // number precision loss); we keep it as bigint client-side so
                 // the round-trip to /api/reconcile-cost is byte-identical.
+                let handledByTracker = false;
                 if (typeof event.cost_micro_usd === 'string') {
                   try {
                     const parsed = BigInt(event.cost_micro_usd);
-                    if (parsed >= 0n && (lastCostMicroUsd === null || parsed >= lastCostMicroUsd)) {
-                      lastCostMicroUsd = parsed;
+                    if (parsed >= 0n) {
+                      tracker.recordServerCostMicroUsd(parsed);
+                      handledByTracker = true;
                     }
                   } catch {
                     // Bad string from server — ignore this frame; later frames
@@ -1049,7 +1041,14 @@ class ChatService {
                     ` cache_r=${num(event.cache_read_input_tokens)}` +
                     ` web_search=${num(event.web_search_requests)}`,
                 );
-                callbacks.onCostUpdate?.(event.cost_usd);
+                // Legacy fallback when no parseable cost_micro_usd accompanied
+                // the event (older worker, or wire-shape change): fire the
+                // direct float so the UI still moves. The tracker only fires
+                // onCostUpdate on a strict increase, so the two paths are
+                // mutually exclusive.
+                if (!handledByTracker) {
+                  callbacks.onCostUpdate?.(event.cost_usd);
+                }
               } else if (event.type === 'message_stop') {
                 ctx?.markComplete();
                 if (ctx) {
@@ -1124,130 +1123,84 @@ class ChatService {
         }
       }
     } catch (e) {
-      // Kill-time output cost estimate (closes the K2 gap: kills <5s after
-      // message_start, before the first count_tokens poll has fired and
-      // before any thinking-block signature has arrived, otherwise capture
-      // only the message_start placeholder of 8 output tokens).
-      //
-      // We have the streamed assistant content locally (fullContent +
-      // fullThinking). Tokens-from-chars is rough (≈4 chars/token in
-      // English; varies by tokenizer and content) but it's strictly better
-      // than the 8-token placeholder by orders of magnitude — a sub-5s
-      // kill that streamed 2,000 chars of thinking should credit ~500
-      // tokens of output, not 8.
-      //
-      // Bump runningOutput to max(current, char-estimate) and re-fire
-      // onCostUpdate so the BYOK pill catches up before the catch above
-      // tears down state. The delta-credit logic in the caller handles
-      // the addition idempotently. Skipped on non-abort errors — those
-      // paths show the user an error UI; cost capture isn't user-visible.
+      // Kill-time diagnostic log. The K2 gap (sub-5s kill after message_start,
+      // before the first count_tokens poll, leaving only the 8-token output
+      // placeholder) is now closed by `tracker.recordOutputChars` firing on
+      // every text/thinking delta — the running estimate is already current
+      // by the time we reach this catch. Keep the log for parity with the
+      // pre-Task-10 diagnostics so on-call can correlate kill-time char counts
+      // with the final reconcile value. Skipped on non-abort errors.
       const isAbort =
         (e instanceof DOMException && e.name === 'AbortError') || signal?.aborted === true;
       if (isAbort) {
-        try {
-          const totalChars = fullContent.length + fullThinking.length;
-          if (totalChars > 0) {
-            const estimatedOutputTokens = Math.ceil(totalChars / 4);
-            if (estimatedOutputTokens > runningOutput) {
-              runningOutput = estimatedOutputTokens;
-              const finalCost = computeRunningCost();
-              callbacks.onCostUpdate?.(finalCost);
-              console.log(
-                `[ChatService] kill-time output estimate: chars=${totalChars}` +
-                  ` estTokens=${estimatedOutputTokens} → finalCost=$${finalCost.toFixed(6)}`,
-              );
-            }
-          }
-        } catch (estErr) {
-          console.warn('[ChatService] kill-time cost estimate failed:', estErr);
+        const totalChars = fullContent.length + fullThinking.length;
+        if (totalChars > 0) {
+          console.log(
+            `[ChatService] kill-time output estimate: chars=${totalChars}` +
+              ` estTokens=${Math.ceil(totalChars / 4)}` +
+              ` lastCost=$${(Number(tracker.lastCostMicroUsd) / 1_000_000).toFixed(6)}`,
+          );
         }
       }
       throw e;
     } finally {
       reader.releaseLock();
 
-      // Client-side reconcile fallback. Fires for every stream end (success,
-      // user abort, connection drop, error) so that the per-chart pill
+      // Client-side reconcile fallback. Force-fires the tracker's reconcile
+      // POST (bypassing the $0.01 / 5s debounce) for every stream end
+      // (success, user abort, connection drop, error) so the per-chart pill
       // converges to the last-seen running_cost even if the worker's
-      // ctx.waitUntil IIFE bails on its time budget. Idempotent server-side
-      // (GREATEST(existing, value)), so a successful streaming reconcile
-      // followed by this POST is a no-op.
-      //
-      // Best-effort: failures here don't surface to the caller. We don't
-      // pass `signal` so a user-initiated abort of the stream doesn't also
-      // cancel this fallback.
-      const loggingMessageIdForReconcile = extraHeaders?.['X-Logging-Message-Id'];
-      if (loggingMessageIdForReconcile && lastCostMicroUsd !== null && lastCostMicroUsd > 0n) {
-        const reconcileHeaders: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-        if (this.authToken) {
-          reconcileHeaders['Authorization'] = `Bearer ${this.authToken}`;
-        }
-        const costMicroStr = lastCostMicroUsd.toString();
-        let directReconcileSucceeded = false;
-        try {
-          const resp = await fetch('/api/reconcile-cost', {
-            method: 'POST',
-            headers: reconcileHeaders,
-            body: JSON.stringify({
-              logging_message_id: loggingMessageIdForReconcile,
-              cost_micro_usd: costMicroStr,
-            }),
-            credentials: 'include',
-          });
-          let resultStr = 'no-body';
-          if (resp.ok) {
-            // Defer the success flag until after the JSON parse resolves.
-            // If the body comes back malformed we don't want the post-success
-            // drain to fire on what was a partially-broken response — better
-            // to leave the queue alone and let the next successful reconcile
-            // (or `online` event) drain it.
-            const result = await resp.json().catch(() => null);
-            resultStr = result ? JSON.stringify(result) : 'parse-error';
-            if (result !== null) {
-              directReconcileSucceeded = true;
-            }
-          } else {
-            resultStr = `error:${resp.status}`;
-            // 5xx → enqueue for retry. 4xx → drop (definitive reject).
-            if (resp.status >= 500) {
-              enqueuePendingReconcile({
-                logging_message_id: loggingMessageIdForReconcile,
-                cost_micro_usd: costMicroStr,
-              });
-            }
-          }
-          console.log(
-            `[ChatService] reconcile-cost: status=${resp.status}` +
-              ` sent=${costMicroStr}µUSD` +
-              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…` +
-              ` result=${resultStr}`,
-          );
-        } catch (reconcileErr) {
-          // Network error — the typical path for ERR_NETWORK_CHANGED /
-          // ERR_CONNECTION_RESET when the user's connection drops mid-stream.
-          // Stash for retry on the next `online` event or next successful
-          // reconcile.
-          enqueuePendingReconcile({
-            logging_message_id: loggingMessageIdForReconcile,
-            cost_micro_usd: costMicroStr,
-          });
-          console.warn(
-            `[ChatService] reconcile-cost POST failed, queued for retry (sent=${costMicroStr}µUSD,` +
-              ` msg=${loggingMessageIdForReconcile.slice(0, 8)}…):`,
-            reconcileErr,
-          );
-        }
+      // `ctx.waitUntil` IIFE bails on its time budget. `useBeacon=true`
+      // uses `navigator.sendBeacon` first, which survives an unloading
+      // page (tab close, browser quit); the tracker falls back to fetch
+      // when beacon is missing or refused. Idempotent server-side
+      // (GREATEST clamp + signed-delta + reconciled_at lock).
+      tracker.maybePostReconcile('force-beacon');
 
-        // Opportunistic drain after a successful direct reconcile. The
-        // network just proved it works, and the worker just woke up — replay
-        // anything queued from earlier failures. Best-effort: this fires
-        // even if the queue is empty (drainPendingReconciles bails fast).
-        if (directReconcileSucceeded) {
-          void drainPendingReconciles(this.authToken);
-        }
+      // Kick off the 30s × 1s `pollUntilReconciled` follow-up for this
+      // just-ended stream. The worker's post-stream IIFE
+      // (`anthropic-stream.ts ctx.waitUntil`) runs AFTER the SSE response
+      // closes and typically completes ~1-2s later, bumping
+      // `cost_settled_micro_usd` (e.g. via countOutputTokensOnce). Without
+      // this poll the BYOK pill stays at the pre-IIFE figure — empirically
+      // $0.49 vs $0.75 server-side for one test session. Polling stops on
+      // `reconciled:true` (server signal that the IIFE finished) or 30s
+      // (safety bound — IIFE may have died on a Cloudflare time budget).
+      //
+      // Pre-enqueue first so the poll's state survives a page reload
+      // mid-poll. If the tab closes during the 30s window, the next
+      // session's `drainPendingReconciles` (on chatService construction
+      // below) picks up the entry and POSTs once to converge.
+      //
+      // Fire-and-forget: streamFromApi has already returned its useful
+      // work by here; the poll runs out-of-band so it can't block the
+      // caller. `pollUntilReconciled` swallows its own errors.
+      const lmidForPoll = loggingMessageIdForReconcile;
+      const finalCost = tracker.lastCostMicroUsd;
+      if (lmidForPoll && finalCost > 0n) {
+        enqueueWithContext({
+          logging_message_id: lmidForPoll,
+          cost_micro_usd: finalCost.toString(),
+        });
+        void pollUntilReconciled({
+          logging_message_id: lmidForPoll,
+          cost_micro_usd: finalCost.toString(),
+          authToken: this.authToken,
+          chartId: streamChartIdSnap,
+          keyLast4: streamKeyLast4Snap,
+          onCostBump: onCostBumpFromReconcile ?? undefined,
+        });
       }
+
+      // Detach the abort + visibilitychange listeners registered at stream
+      // start. Drain the retry queue opportunistically — this used to fire
+      // only on a successful fetch reconcile, but with the beacon-first
+      // path we can't observe HTTP success synchronously. The `online`
+      // listener and `setAuthToken` drain remain primary; this is a cheap
+      // belt-and-suspenders ("we just finished a stream, network must be
+      // alive enough to have streamed bytes").
+      cleanupTrackerListeners();
+      void drainPendingReconciles(this.authToken);
     }
 
     // Stream ended without message_stop — treat as incomplete
@@ -1277,6 +1230,15 @@ class ChatService {
       editToken,
       loggingMessageId,
     } = options;
+
+    // New-message-send catch-up. Before this stream begins, drain the
+    // pending-reconcile queue. Any prior-stream unreconciled entry gets
+    // one POST attempt — entries that come back `reconciled:true` drop,
+    // the rest stay queued. This converges the pill for charts where the
+    // user reloaded mid-poll then immediately typed a new message
+    // (skipping the post-stream poll cleanup path). Fire-and-forget so
+    // it doesn't delay the new stream's first fetch.
+    void drainPendingReconciles(this.authToken);
 
     let ctx: StreamingContext | undefined;
     let requestBody: Record<string, unknown> = {};
