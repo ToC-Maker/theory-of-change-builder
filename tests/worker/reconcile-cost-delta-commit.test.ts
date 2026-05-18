@@ -97,6 +97,63 @@ async function endpointCall(
   return applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
 }
 
+// ---------------------------------------------------------------------------
+// Extended endpoint mirror: applyDeltaCommit + read-back SELECT + response
+// build. Mirrors the handler's full sequence so the new response fields
+// (`cost_settled_micro_usd` + `reconciled`) can be pinned in isolation.
+//
+// The handler reads the current row state AFTER applyDeltaCommit regardless
+// of `applied`, so a client polling the endpoint can observe the
+// post-stream IIFE's signed-delta updates by watching `reconciled:true`.
+// `applied=false` collapses three cases (row missing, foreign, already
+// reconciled) into a uniform shape from the helper; the SELECT
+// disambiguates them via `cost_settled_micro_usd` (any value) +
+// `reconciled` (true if reconciled_at IS NOT NULL).
+//
+// IF YOU CHANGE THIS WRAPPER, also change the post-applyDeltaCommit SELECT
+// + response build in `worker/api/reconcile-cost.ts` — the two must agree.
+// ---------------------------------------------------------------------------
+type ReconcileResponseJson = {
+  applied: boolean;
+  delta: string;
+  new_settled: string;
+  cost_settled_micro_usd: string;
+  reconciled: boolean;
+};
+
+async function endpointCallFull(
+  sql: NeonQueryFunction<false, false>,
+  loggingMessageId: string,
+  actorId: string,
+  clientCost: bigint,
+  isByok: boolean = false,
+): Promise<ReconcileResponseJson> {
+  const out = await applyDeltaCommit(sql, loggingMessageId, actorId, 0n, clientCost, isByok);
+  // SELECT the current state regardless of whether applyDeltaCommit
+  // mutated. Lets the client distinguish "row missing" / "already
+  // reconciled" / "applied" from a single response.
+  const stateRows = (await sql`
+    SELECT cost_settled_micro_usd, (reconciled_at IS NOT NULL) AS reconciled
+    FROM logging_messages
+    WHERE message_id = ${loggingMessageId} AND user_id = ${actorId}
+  `) as { cost_settled_micro_usd: bigint | string | null; reconciled: boolean }[];
+  const currentSettledRaw = stateRows.length > 0 ? stateRows[0].cost_settled_micro_usd : null;
+  const currentSettled =
+    currentSettledRaw === null || currentSettledRaw === undefined
+      ? 0n
+      : typeof currentSettledRaw === 'bigint'
+        ? currentSettledRaw
+        : BigInt(currentSettledRaw);
+  const reconciled = stateRows.length > 0 ? stateRows[0].reconciled : false;
+  return {
+    applied: out.applied,
+    delta: out.delta.toString(),
+    new_settled: out.new_settled.toString(),
+    cost_settled_micro_usd: currentSettled.toString(),
+    reconciled,
+  };
+}
+
 describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
   describe('argument shape', () => {
     it('passes projected = 0n so the baseline degenerates to cost_settled', async () => {
@@ -644,6 +701,264 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       expect(state.user_usage.cost_micro_usd).toBe(500n);
       // BYOK column unchanged.
       expect(state.user_usage.byok_cost_micro_usd).toBe(100n);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Polling-friendly response: cost_settled_micro_usd + reconciled
+  //
+  // The endpoint extends its response with two new fields so the client
+  // can poll until the post-stream IIFE has stamped `reconciled_at`. The
+  // helper's `new_settled` is `0n` when `applied=false` (the CTE's
+  // RETURNING is empty when `WHERE reconciled_at IS NULL` excludes the
+  // row), so the client previously couldn't distinguish "row missing"
+  // from "already reconciled" from the response. A second SELECT after
+  // the applyDeltaCommit call reads the actual current state:
+  //
+  //   - `cost_settled_micro_usd`: the live `cost_settled_micro_usd`
+  //     column value (post-IIFE if it ran, post-applyDeltaCommit
+  //     otherwise). Stringified bigint, matches the wire convention.
+  //   - `reconciled`: true iff `reconciled_at IS NOT NULL`. The client
+  //     polls until this flips to true, then reads
+  //     `cost_settled_micro_usd` for the final settled value.
+  //
+  // Edge cases collapse to a uniform shape:
+  //   - Row missing (SELECT returns no rows) → "0" + false → client
+  //     keeps polling because the row may land later.
+  //   - Ownership mismatch (SELECT's `AND user_id = ${actor}` excludes)
+  //     → "0" + false → same shape as row-missing. Idempotent-no-op
+  //     security model: the endpoint never distinguishes "yours and
+  //     not-found" from "not yours" (see the file-header rationale on
+  //     200 idempotent no-op for the u2-silent finding).
+  //   - applied=false + reconciled=true → final settled value already
+  //     in `cost_settled_micro_usd`; client should stop polling.
+  //
+  // Test seam: these tests use `endpointCallFull` (defined above), which
+  // mirrors the handler's exact post-applyDeltaCommit SELECT. The
+  // in-memory backend dispatches the SELECT pattern to a separate branch
+  // that reads `state.message` directly (no mutex needed — read-only,
+  // and the JS event loop already serialises with any concurrent
+  // applyDeltaCommit calls that share the same backend instance).
+  // ---------------------------------------------------------------------
+  describe('response includes cost_settled_micro_usd + reconciled (polling support)', () => {
+    it('applied=true: cost_settled_micro_usd matches new_settled, reconciled=false', async () => {
+      // Happy path — applyDeltaCommit advanced the row, the SELECT reads
+      // the updated value (because the in-memory backend's SELECT branch
+      // reads `state.message` post-mutation), and reconciled is still
+      // false (this endpoint never stamps reconciled_at — only the
+      // post-stream IIFE does).
+      const { sql } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 100n,
+          cost_settled_micro_usd: 100n,
+          reconciled_at: null,
+        },
+        user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
+      });
+      const out = await endpointCallFull(sql, 'msg_x', 'auth0|alice', 500n);
+      expect(out).toEqual({
+        applied: true,
+        delta: '400',
+        new_settled: '500',
+        cost_settled_micro_usd: '500',
+        reconciled: false,
+      });
+    });
+
+    it('applied=false + already-reconciled: SELECT exposes the IIFE-settled value with reconciled=true', async () => {
+      // The headline use case for the new fields. The post-stream IIFE
+      // has already stamped reconciled_at and committed the final settle
+      // (e.g. 1234µUSD). A late client retry pushes its running_cost
+      // (could be lower or higher than the IIFE value). applyDeltaCommit
+      // returns applied=false + new_settled=0 (the CTE's WHERE clause
+      // excluded the reconciled row), so without the SELECT the client
+      // would see "0" and never know the actual value. With the SELECT,
+      // the response carries cost_settled_micro_usd='1234' + reconciled=true,
+      // and the client can stop polling + render the final value.
+      const { sql } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 1234n,
+          cost_settled_micro_usd: 1234n,
+          reconciled_at: new Date('2026-05-18T12:00:00Z'),
+        },
+        user_usage: { user_id: 'auth0|alice', cost_micro_usd: 1234n },
+      });
+      const out = await endpointCallFull(sql, 'msg_x', 'auth0|alice', 999n);
+      expect(out.applied).toBe(false);
+      // Helper returned the CTE-empty shape, so these two are zero.
+      expect(out.new_settled).toBe('0');
+      expect(out.delta).toBe('0');
+      // The new fields disambiguate: the row IS reconciled, the actual
+      // settled value is 1234µUSD.
+      expect(out.cost_settled_micro_usd).toBe('1234');
+      expect(out.reconciled).toBe(true);
+    });
+
+    it('applied=false + row-missing: cost_settled_micro_usd="0", reconciled=false (client keeps polling)', async () => {
+      // The row hasn't been written yet (race with loggingService.saveMessage).
+      // The SELECT returns no rows; we map to cost_settled_micro_usd="0"
+      // + reconciled=false so the client keeps polling. Eventually the
+      // row lands and the client gets a real value.
+      const { sql } = makeBackend({
+        message: {
+          message_id: 'msg_other',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          cost_settled_micro_usd: 0n,
+          reconciled_at: null,
+        },
+        user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
+      });
+      const out = await endpointCallFull(sql, 'msg_missing', 'auth0|alice', 500n);
+      expect(out.applied).toBe(false);
+      expect(out.cost_settled_micro_usd).toBe('0');
+      expect(out.reconciled).toBe(false);
+    });
+
+    it('applied=false + ownership mismatch: same uniform "0" + false shape (no 403 leak)', async () => {
+      // Same response shape as row-missing — the SELECT's `AND user_id =
+      // ${actor}` excludes Bob's row from Alice's request. Idempotent
+      // no-op rather than 403; an attacker can't probe for valid
+      // logging_message_ids by toggling the response shape.
+      const { sql } = makeBackend({
+        message: {
+          message_id: 'msg_bobs',
+          user_id: 'auth0|bob',
+          cost_micro_usd: 100n,
+          cost_settled_micro_usd: 100n,
+          reconciled_at: null,
+        },
+        user_usage: { user_id: 'auth0|bob', cost_micro_usd: 0n },
+      });
+      const out = await endpointCallFull(sql, 'msg_bobs', 'auth0|alice', 500n);
+      expect(out.applied).toBe(false);
+      expect(out.cost_settled_micro_usd).toBe('0');
+      expect(out.reconciled).toBe(false);
+    });
+
+    it('applied=true + not-yet-reconciled: SELECT reads the freshly-bumped value', async () => {
+      // Sanity check that the SELECT runs AFTER applyDeltaCommit
+      // (otherwise it'd read the pre-mutation value). With initial
+      // settled=100 and a push of 800, the SELECT must report 800,
+      // not 100 — confirming the order-of-operations contract.
+      const { sql } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 100n,
+          cost_settled_micro_usd: 100n,
+          reconciled_at: null,
+        },
+        user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
+      });
+      const out = await endpointCallFull(sql, 'msg_x', 'auth0|alice', 800n);
+      expect(out.applied).toBe(true);
+      expect(out.cost_settled_micro_usd).toBe('800');
+      expect(out.reconciled).toBe(false);
+    });
+
+    it('response includes the existing applied + delta + new_settled fields (no regression)', async () => {
+      // Belt-and-braces: the new fields must not displace the existing
+      // ones. Pin the full key set so any future refactor that drops a
+      // legacy field fails loudly here.
+      const { sql } = makeBackend({
+        message: {
+          message_id: 'msg_x',
+          user_id: 'auth0|alice',
+          cost_micro_usd: 0n,
+          cost_settled_micro_usd: 0n,
+          reconciled_at: null,
+        },
+        user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
+      });
+      const out = await endpointCallFull(sql, 'msg_x', 'auth0|alice', 100n);
+      expect(Object.keys(out).sort()).toEqual([
+        'applied',
+        'cost_settled_micro_usd',
+        'delta',
+        'new_settled',
+        'reconciled',
+      ]);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Structural pins: production source has the new SELECT + response
+  // fields + diagnostic-metadata updates. Same approach as Finding C
+  // above — the production handler isn't easily testable without booting
+  // Workers (auth, anon cookie, DB binding), so we assert the production
+  // source contains the load-bearing tokens.
+  // ---------------------------------------------------------------------
+  describe('production source: SELECT after applyDeltaCommit + new response fields', () => {
+    it('source contains a SELECT reading cost_settled_micro_usd + reconciled_at IS NOT NULL', () => {
+      // The SELECT shape pins the contract: it reads the column we need
+      // for the pill display AND the reconciled flag. A regression that
+      // dropped the SELECT (e.g. someone "simplifying" the response build)
+      // would re-introduce the bug where the client can't observe the
+      // post-stream IIFE's settled value.
+      expect(reconcileCostSource).toMatch(/SELECT\s+cost_settled_micro_usd/);
+      expect(reconcileCostSource).toMatch(
+        /\(\s*reconciled_at\s+IS\s+NOT\s+NULL\s*\)\s+AS\s+reconciled/,
+      );
+    });
+
+    it('SELECT is scoped by user_id (IDOR-safe; uniform with the helper)', () => {
+      // The SELECT must NOT leak cost data for a foreign message_id —
+      // its WHERE clause includes `AND user_id = ${actorId}` (mirroring
+      // applyDeltaCommit's ownership guard). If the SELECT ever dropped
+      // the user_id filter, the endpoint would become a probing oracle.
+      const selectSlice =
+        /SELECT\s+cost_settled_micro_usd[\s\S]{0,500}?WHERE[\s\S]{0,500}?AND\s+user_id\s*=/.exec(
+          reconcileCostSource,
+        );
+      expect(selectSlice).not.toBeNull();
+    });
+
+    it('response body includes cost_settled_micro_usd + reconciled keys', () => {
+      // The final return Response.json(...) must carry both new keys.
+      // Regex anchors on `applied: out.applied` — the unique opener of
+      // the final response object — to disambiguate from earlier error
+      // returns (e.g. 503 auth_service_unavailable) that match the
+      // generic `return Response.json(` prefix.
+      const responseSlice =
+        /Response\.json\(\s*\{\s*applied:\s*out\.applied[\s\S]{0,800}?\}\s*\)/.exec(
+          reconcileCostSource,
+        );
+      expect(responseSlice).not.toBeNull();
+      const slice = responseSlice![0];
+      expect(slice).toMatch(/cost_settled_micro_usd:/);
+      expect(slice).toMatch(/reconciled[,:]/);
+    });
+
+    it('existing response fields (applied, delta, new_settled) remain in the body (no regression)', () => {
+      // Belt-and-braces against a refactor that replaced the legacy
+      // fields instead of adding alongside.
+      const responseSlice =
+        /Response\.json\(\s*\{\s*applied:\s*out\.applied[\s\S]{0,800}?\}\s*\)/.exec(
+          reconcileCostSource,
+        );
+      expect(responseSlice).not.toBeNull();
+      const slice = responseSlice![0];
+      expect(slice).toMatch(/applied:/);
+      expect(slice).toMatch(/delta:/);
+      expect(slice).toMatch(/new_settled:/);
+    });
+
+    it('DiagnosticReconcileEndpointHit metadata includes current_settled + reconciled (audit trail)', () => {
+      // The diagnostic row must capture the response audit trail —
+      // dashboards keying on `current_settled` + `reconciled` need them
+      // in `request_metadata` to track the post-stream IIFE convergence.
+      const diagSlice = /error_name:\s*['"]DiagnosticReconcileEndpointHit['"][\s\S]{0,2000}/.exec(
+        reconcileCostSource,
+      );
+      expect(diagSlice).not.toBeNull();
+      const slice = diagSlice![0];
+      expect(slice).toMatch(/current_settled/);
+      expect(slice).toMatch(/reconciled/);
     });
   });
 });

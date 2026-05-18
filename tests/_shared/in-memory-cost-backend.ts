@@ -94,6 +94,16 @@ export type Backend<TUserUsage extends UserApiUsageRow = UserApiUsageRow> = {
  *     fires when the helper-under-test writes a diagnostic; tests that
  *     don't exercise that path leave `diagnosticInserts` empty.
  *
+ *   - Sniffs for the post-applyDeltaCommit polling SELECT used by
+ *     `worker/api/reconcile-cost.ts` (recognized by the literal
+ *     `SELECT cost_settled_micro_usd` + `(reconciled_at IS NOT NULL)`
+ *     + `FROM logging_messages` tokens together). Returns
+ *     `[{cost_settled_micro_usd: string, reconciled: boolean}]` on
+ *     `(message_id, user_id)` match, `[]` otherwise. Read-only
+ *     branch — no mutex; the JS event loop already serialises against
+ *     any preceding applyDeltaCommit on the same backend. Used by
+ *     `reconcile-cost-delta-commit.test.ts`'s `endpointCallFull` helper.
+ *
  *   - Otherwise treats the call as an `applyDeltaCommit` CTE: looks up
  *     the locking row by `(message_id, user_id, reconciled_at IS NULL)`
  *     and either returns the CTE-empty shape (`applied=false`,
@@ -166,6 +176,44 @@ export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow
       const metadata = JSON.parse(metadataRaw) as Record<string, unknown>;
       diagnosticInserts.push({ error_name, metadata });
       return Promise.resolve([]);
+    }
+    // Polling-friendly SELECT used by `worker/api/reconcile-cost.ts`
+    // after `applyDeltaCommit`. The handler reads the current row state
+    // (regardless of whether the helper mutated) so the client can poll
+    // until `reconciled:true`. Recognized by the literal column tokens —
+    // distinct from the CTE which references `cost_settled_micro_usd`
+    // inside `UPDATE` / `RETURNING` clauses but not in a top-level
+    // `SELECT` projection. The string-projection check (`/^\s*SELECT\b/`-like)
+    // disambiguates against the CTE's interior SELECTs.
+    //
+    // Read-only branch: no mutex needed. The JS event loop already
+    // serialises the SELECT against any preceding applyDeltaCommit on
+    // the same backend (await chain in `endpointCallFull` / handler).
+    if (
+      joined.includes('SELECT cost_settled_micro_usd') &&
+      joined.includes('(reconciled_at IS NOT NULL)') &&
+      joined.includes('FROM logging_messages')
+    ) {
+      const messageId = String(values[0]);
+      const userId = String(values[1]);
+      const row = state.message;
+      // Mirror the production WHERE clause: `message_id = $ AND user_id = $`.
+      // No `reconciled_at IS NULL` here — the SELECT must surface the
+      // post-IIFE settled value even on reconciled rows (that's the
+      // whole point of adding it to the response).
+      const matches = row && row.message_id === messageId && row.user_id === userId;
+      if (!matches || !row) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([
+        {
+          // Stringify the bigint to mirror Neon's actual wire contract
+          // (numerics arrive as `bigint | number | string | null`).
+          // The production handler coerces via `toBigInt()` regardless.
+          cost_settled_micro_usd: row.cost_settled_micro_usd.toString(),
+          reconciled: row.reconciled_at !== null,
+        },
+      ]);
     }
     // applyDeltaCommit CTE: the helper interpolates messageId, userId,
     // projected (string), newCost (string), and isByok (boolean) — the

@@ -4,6 +4,7 @@ import { verifyToken, extractToken, JWKSFetchError } from '../_shared/auth';
 import { resolveAnonActor } from '../_shared/anon-id';
 import { writeDiagnostic } from '../_shared/diagnostics';
 import { applyDeltaCommit } from '../_shared/cost-commit';
+import { toBigInt } from '../_shared/bigint';
 import { parseLoggingMessageId, type ReconcileCostRequest } from '../../shared/wire-shapes';
 
 /**
@@ -271,6 +272,38 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'update_failed' }, { status: 500 });
   }
 
+  // Step 3.5: read the actual current row state, regardless of whether
+  // `applyDeltaCommit` mutated. The helper's `new_settled` is `0n` when
+  // `applied=false` (its WHERE clause excludes rows missing / foreign /
+  // already-reconciled), so without this read the client can't see the
+  // post-stream IIFE's final settled value once `reconciled_at` is stamped.
+  //
+  // Polling contract: the client posts to this endpoint after a stream
+  // ends and polls until `reconciled:true`. On each call:
+  //   - `applied=true` + `reconciled=false`  → this call advanced the row.
+  //   - `applied=false` + `reconciled=false` → row missing/foreign OR
+  //     pre-reconcile no-op (current value < client value); keep polling.
+  //   - `applied=false` + `reconciled=true`  → IIFE stamped; final value
+  //     is in `cost_settled_micro_usd`; client should stop polling.
+  //
+  // Idempotent-no-op security model: the SELECT's `AND user_id = $actorId`
+  // mirrors `applyDeltaCommit`'s ownership guard. A foreign or missing
+  // message_id yields zero rows; we return `"0"` + `false` rather than
+  // 403/404 so an attacker can't probe for valid IDs by toggling shapes.
+  //
+  // Late-arrival race (row not yet visible): when the client polls before
+  // `loggingService.saveMessage` has INSERTed the row, the SELECT returns
+  // zero rows. The "0" + false shape lets the client treat it identically
+  // to row-missing — keep polling until the row lands.
+  const stateRows = (await sql`
+    SELECT cost_settled_micro_usd, (reconciled_at IS NOT NULL) AS reconciled
+    FROM logging_messages
+    WHERE message_id = ${loggingMessageId} AND user_id = ${actorId}
+  `) as { cost_settled_micro_usd: bigint | number | string | null; reconciled: boolean }[];
+  const currentSettled =
+    stateRows.length > 0 ? toBigInt(stateRows[0].cost_settled_micro_usd ?? 0) : 0n;
+  const reconciled = stateRows.length > 0 ? stateRows[0].reconciled : false;
+
   // Telemetry log (PR-preview-friendly: this lands in `wrangler tail` if
   // attached, plus the diagnostic row below is queryable from the DB).
   console.log(
@@ -284,6 +317,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       new_settled_micro_usd: out.new_settled.toString(),
       delta_micro_usd: out.delta.toString(),
       applied: out.applied,
+      current_settled_micro_usd: currentSettled.toString(),
+      reconciled,
     }),
   );
 
@@ -294,9 +329,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // catching post-reconcile retries. No start_at_ms: this endpoint runs in
   // a fresh Worker invocation separate from the streaming lifecycle, so
   // there's no handlerStartedAtMs to anchor an elapsed measurement to.
+  //
+  // `current_settled` + `reconciled` are also captured here so the
+  // response audit trail lives in the DB — analytics can correlate
+  // poll cadence against the IIFE convergence (how many polls each
+  // client issues before `reconciled` flips to true).
   await writeDiagnostic(sql, {
     error_name: 'DiagnosticReconcileEndpointHit',
-    error_message: `client=${clientCost.toString()} new_settled=${out.new_settled.toString()} delta=${out.delta.toString()} µUSD applied=${out.applied} byok=${isByok}`,
+    error_message: `client=${clientCost.toString()} new_settled=${out.new_settled.toString()} delta=${out.delta.toString()} current_settled=${currentSettled.toString()} reconciled=${reconciled} µUSD applied=${out.applied} byok=${isByok}`,
     user_id: actorId,
     chart_id: null,
     request_metadata: {
@@ -307,6 +347,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       new_settled_micro_usd: out.new_settled.toString(),
       delta_micro_usd: out.delta.toString(),
       applied: out.applied,
+      current_settled: currentSettled.toString(),
+      reconciled,
     },
     deployment_host: url.hostname,
     fired_at_ms: Date.now(),
@@ -316,5 +358,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     applied: out.applied,
     delta: out.delta.toString(),
     new_settled: out.new_settled.toString(),
+    cost_settled_micro_usd: currentSettled.toString(),
+    reconciled,
   });
 }
