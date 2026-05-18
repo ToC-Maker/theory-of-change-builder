@@ -9,6 +9,7 @@ import {
   ChatMessage,
   type CostError,
   type StreamPhase,
+  setReconcilePillBump,
 } from '../services/chatService';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
@@ -1090,6 +1091,38 @@ export function ChatInterface({
       inputRef.current.focus();
     }
   }, [isCollapsed]);
+
+  // Register the BYOK pill-bump callback for post-stream
+  // `pollUntilReconciled` + queue drains. The reconcile-cost endpoint
+  // returns the server's `cost_settled_micro_usd` on every call; when it
+  // exceeds the entry's previously-credited baseline (the figure the
+  // tracker last posted), the polling/drain code fires this callback
+  // with the strictly-positive delta. We forward to `addByokSpend` so
+  // the per-chart + per-key BYOK pill catches up to the worker's
+  // post-stream `ctx.waitUntil` IIFE figure (~1-2s of bumped value the
+  // pre-fix client never saw).
+  //
+  // Identifiers come from the bump event (snapshotted at stream start
+  // in chatService.ts, stored on the queue entry, replayed on each
+  // bump). That means this effect runs once on mount and stays stable
+  // across re-renders; we don't need to depend on `params` or the
+  // BYOK key state. Cleanup on unmount drops the global registration
+  // so a navigation that unmounts ChatInterface doesn't leak a stale
+  // closure.
+  useEffect(() => {
+    setReconcilePillBump((event) => {
+      const usd = Number(event.deltaMicroUsd) / 1_000_000;
+      console.log(
+        `[BYOK reconcile-bump] +${event.deltaMicroUsd} µUSD ($${usd.toFixed(6)})` +
+          ` chart=${event.chartId} keyLast4=${event.keyLast4}` +
+          ` newSettled=${event.newSettledMicroUsd}`,
+      );
+      addByokSpend(event.chartId, event.keyLast4, usd);
+    });
+    return () => {
+      setReconcilePillBump(null);
+    };
+  }, []);
 
   // Auth header helper shared by /api/usage and file-upload callers. Returns
   // an empty object for anonymous visitors or when silent refresh fails;
