@@ -1650,69 +1650,6 @@ async function countOutputTokensOnce(teeCtx: SseTeeContext): Promise<number | nu
   }
 }
 
-/**
- * Best-effort estimate of cache_creation_input_tokens / cache_read_input_tokens
- * accrued across an agentic-loop's sub-iterations when `message_delta` never
- * arrived to give us the authoritative cumulative usage. See `mergeUsage`'s
- * doc for why this gap exists: Anthropic emits one `message_start` per
- * outermost SSE stream — not one per inner sub-inference — so the accumulator
- * only ever sees iteration-1's cache numbers. For non-agentic streams (no
- * tool_use blocks) this is a non-issue; for `code_execution` / `web_search`
- * loops it's the dominant under-billing.
- *
- * Returns zeros when no estimation is possible (no tool_use blocks present,
- * polling never armed, or initial input baseline missing). Callers should add
- * the returned values to the accumulator's existing cache fields before
- * computing cost — the accumulator already holds iteration-1's values.
- *
- * Heuristics:
- *   - cache_w: tool_result blocks are server-generated content that gets
- *     written to cache as part of the next sub-iteration's input. count_tokens
- *     refuses these blocks on the assistant turn (Anthropic's validator), so
- *     we fall back to a chars/4 estimate against the JSON-stringified content.
- *     Model-generated output (text + thinking + tool_use input) is already
- *     captured by reconciledOutput and gets billed at output rates, NOT
- *     cache_w — so we don't include it here to avoid double-counting.
- *   - cache_r: each sub-iteration after the first reads the cumulative prefix.
- *     A precise estimate would integrate over the growing prefix; we
- *     under-estimate by using the initial input size flat across N reads
- *     (sub-inference 1 has no cache_r since it IS the first inference; each
- *     of the N tool_use blocks triggers one additional sub-inference that
- *     does). The actual prefix grows, so this is a floor — better an
- *     under-estimate that closes ~70% of the gap than an over-estimate that
- *     could over-charge the user.
- *   - N: count of `server_tool_use` blocks. Each such block represents a
- *     point where the model handed control to the server tool and waited for
- *     a result, which triggered another inference — so N tool_uses ≈ N+1
- *     sub-inferences, with N additional cache_r reads beyond the first.
- */
-function estimateAgenticLoopCacheUsage(teeCtx: SseTeeContext): {
-  additionalCacheW: number;
-  additionalCacheR: number;
-  toolUseCount: number;
-} {
-  let toolUseCount = 0;
-  let toolResultChars = 0;
-  for (const block of teeCtx.streamingContent.blocks.values()) {
-    if (block.type === 'server_tool_use') {
-      toolUseCount++;
-    } else if (
-      block.type === 'web_search_tool_result' ||
-      block.type === 'code_execution_tool_result'
-    ) {
-      // block.content originated from JSON.parse of an SSE frame, so circular
-      // refs are impossible by construction — JSON.stringify cannot throw here.
-      toolResultChars += JSON.stringify(block.content).length;
-    }
-  }
-  if (toolUseCount === 0 || !teeCtx.polling.armed) {
-    return { additionalCacheW: 0, additionalCacheR: 0, toolUseCount };
-  }
-  const additionalCacheW = Math.ceil(toolResultChars / 4);
-  const additionalCacheR = toolUseCount * teeCtx.polling.initialInputTokens;
-  return { additionalCacheW, additionalCacheR, toolUseCount };
-}
-
 async function pollCostEstimate(teeCtx: SseTeeContext): Promise<void> {
   if (teeCtx.killed.v || teeCtx.pollingDisabled) return;
   if (teeCtx.streamDone.v) return;
@@ -3546,41 +3483,34 @@ export async function handler(
         }
       }
 
-      // Agentic-loop cache estimation: only applies when we missed
-      // message_delta AND the stream actually ran tool calls (the only case
-      // where Anthropic's hidden sub-inferences inflate cache_w/cache_r
-      // beyond what message_start reported). Pure text streams without
-      // tool_use blocks don't need this; their accumulator is already
-      // correct from message_start. See estimateAgenticLoopCacheUsage doc.
-      let cacheEstimate: ReturnType<typeof estimateAgenticLoopCacheUsage> = {
-        additionalCacheW: 0,
-        additionalCacheR: 0,
-        toolUseCount: 0,
-      };
-      if (!teeCtx.messageDeltaSeen) {
-        cacheEstimate = estimateAgenticLoopCacheUsage(teeCtx);
-      }
+      // We previously called estimateAgenticLoopCacheUsage(teeCtx) here to
+      // backfill cache_w/cache_r for hidden sub-inferences when message_delta
+      // never arrived (aborted streams). Empirically it over-estimated ~3×
+      // because its formula (additionalCacheR = toolUseCount ×
+      // initialInputTokens) treats each tool_use block as a separate billable
+      // sub-inference, but Anthropic actually bills one sub-inference per
+      // "model-output → wait-for-tools → continue" cycle. After the
+      // enable_request_signal compat flag (574fa59) made aborts propagate to
+      // Anthropic properly, the gap that needed estimating shrank, and
+      // removing the heuristic brings DB cost from 211% → ~92% of Anthropic
+      // actual. cache_creation_input_tokens and cache_read_input_tokens stay
+      // as captured by polls + message_start; no heuristic backfill.
 
       const reconciledAccumulator: UsageAccumulator = {
         ...accumulator,
         output_tokens: reconciledOutput,
         web_search_requests: reconciledWebSearch,
-        cache_creation_input_tokens:
-          accumulator.cache_creation_input_tokens + cacheEstimate.additionalCacheW,
-        cache_read_input_tokens:
-          accumulator.cache_read_input_tokens + cacheEstimate.additionalCacheR,
       };
 
       // Diagnostic phase 3: confirms we reached cost computation. If
       // `DiagnosticReconcilePhase2TrackedDone` is present but
       // `DiagnosticReconcilePhase3PreCostCompute` is missing, the IIFE was
       // killed between `await tracked.done` and `computeCostMicroUsd` — likely
-      // during `countOutputTokensOnce` (the count_tokens HTTP call) or
-      // `estimateAgenticLoopCacheUsage` (synchronous, fast, less likely culprit).
+      // during `countOutputTokensOnce` (the count_tokens HTTP call).
       if (loggingMessageId) {
         await writeDiagnostic(sql, {
           error_name: 'DiagnosticReconcilePhase3PreCostCompute',
-          error_message: `pre-computeCostMicroUsd; output_source=${reconcileOutputSource} tool_use_count=${cacheEstimate.toolUseCount}`,
+          error_message: `pre-computeCostMicroUsd; output_source=${reconcileOutputSource}`,
           user_id: actorId,
           chart_id: chartId ?? null,
           request_metadata: {
@@ -3590,9 +3520,6 @@ export async function handler(
             output_source: reconcileOutputSource,
             reconciled_output: reconciledOutput,
             reconciled_web_search: reconciledWebSearch,
-            tool_use_count: cacheEstimate.toolUseCount,
-            additional_cache_w: cacheEstimate.additionalCacheW,
-            additional_cache_r: cacheEstimate.additionalCacheR,
             reconciled_accumulator: reconciledAccumulator,
           },
           deployment_host: requestUrl.hostname,
@@ -3680,13 +3607,6 @@ export async function handler(
           cache_read_input_tokens: reconciledAccumulator.cache_read_input_tokens,
           web_search_requests: reconciledAccumulator.web_search_requests,
           output_source: reconcileOutputSource,
-          // Agentic-loop cache estimation: tracks how much cache_w/cache_r
-          // we PADDED onto the message_start floor at reconcile time, and
-          // why (tool_use count is the heuristic for sub-iter count). Zeros
-          // when message_delta arrived OR when no tool_use blocks ran.
-          cache_estimate_tool_use_count: cacheEstimate.toolUseCount,
-          cache_estimate_additional_cache_w: cacheEstimate.additionalCacheW,
-          cache_estimate_additional_cache_r: cacheEstimate.additionalCacheR,
         },
         deployment_host: requestUrl.hostname,
         fired_at_ms: Date.now(),
