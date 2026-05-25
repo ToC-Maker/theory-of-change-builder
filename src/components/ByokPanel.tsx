@@ -178,8 +178,18 @@ export function ByokPanel({
           <div className="relative">
             <input
               id={inputId}
+              // Suppress browser "save password?" offers. Chrome and Safari
+              // ignore `autoComplete="off"` on `type=password` inputs (they
+              // assume the developer is wrong and offer to save anyway).
+              // `autoComplete="one-time-code"` is the documented escape —
+              // browsers treat TOTPs as transient and skip the save prompt.
+              // The `data-*-ignore` attributes opt out 1Password and LastPass
+              // respectively. The key still masks when showKey=false because
+              // type remains "password".
               type={showKey ? 'text' : 'password'}
-              autoComplete="off"
+              autoComplete="one-time-code"
+              data-1p-ignore
+              data-lpignore="true"
               spellCheck={false}
               placeholder="sk-ant-..."
               value={rawKey}
