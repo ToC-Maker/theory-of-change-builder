@@ -342,6 +342,21 @@ export type StreamMessageOptions = {
   attachedFileIds?: string[];
   idempotencyKey?: string;
   userAnthropicKey?: string;
+  /**
+   * Last 4 characters of the BYOK key in use for this stream, sourced from
+   * the React-side ApiKeyContext (`useApiKey().keyLast4`). Passed through to
+   * `pollUntilReconciled` so the bump-on-strict-increase guard at
+   * `postReconcileOnce`'s `args.onCostBump && args.chartId && args.keyLast4`
+   * can route the pill bump to the right per-key bucket. CANNOT be derived
+   * from the `X-User-Anthropic-Key` request header for server-stored BYOK —
+   * the raw key is never retained client-side, so that header is unset and
+   * the polling guard would silently no-op (the bug fixed 2026-05-25:
+   * pollUntilReconciled snapshot received `keyLast4=null`, every bump call
+   * was a no-op, the pill stayed below DB cost_settled by the post-IIFE
+   * delta). Free-tier streams pass `undefined` here — that's the no-BYOK
+   * signal that correctly skips the bump.
+   */
+  keyLast4?: string | null;
   chartId?: string;
   /**
    * Anon-chart edit token. Required by the worker's file-ownership gate
@@ -550,6 +565,7 @@ class ChatService {
     messages: ChatMessage[] = [],
     webSearchEnabled: boolean = false,
     extendedThinkingEnabled: boolean = false,
+    keyLast4?: string | null,
   ): Promise<void> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -704,7 +720,16 @@ class ChatService {
     // free-tier streams. `chartId` mirrors `X-Chart-Id` so the per-chart
     // bucket key matches what `useChartByokSpendUsd` reads.
     const streamChartIdSnap = extraHeaders?.['X-Chart-Id'] ?? null;
+    // BYOK pill-bump routing: keyLast4 used to be derived from the
+    // X-User-Anthropic-Key header, but the modern server-stored BYOK path
+    // never sets that header (raw key isn't retained client-side). Result:
+    // streamKeyLast4Snap was always null for the common BYOK case, and the
+    // bump guard in postReconcileOnce (`args.onCostBump && args.chartId &&
+    // args.keyLast4`) silently no-op'd. Now sourced from the caller (which
+    // gets it from `useApiKey().keyLast4`); fall back to the header for
+    // legacy callers that still inline the key.
     const streamKeyLast4Snap = (() => {
+      if (typeof keyLast4 === 'string' && keyLast4.length >= 4) return keyLast4;
       const k = extraHeaders?.['X-User-Anthropic-Key'];
       if (!k || k.length < 4) return null;
       return k.slice(-4);
@@ -1226,6 +1251,7 @@ class ChatService {
       attachedFileIds = [],
       idempotencyKey,
       userAnthropicKey,
+      keyLast4,
       chartId,
       editToken,
       loggingMessageId,
@@ -1435,6 +1461,7 @@ class ChatService {
         messages,
         webSearchEnabled,
         extendedThinkingEnabled,
+        keyLast4,
       );
     } catch (caughtError: unknown) {
       // Narrow caughtError once. Non-Error throws (strings, plain objects) are

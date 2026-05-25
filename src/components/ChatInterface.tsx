@@ -2108,6 +2108,10 @@ export function ChatInterface({
         editToken: resolvedChart?.editToken,
         loggingMessageId: userMessageId,
         // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
+        // keyLast4 is passed separately so the post-stream pollUntilReconciled
+        // can route bump events to the correct per-key BYOK bucket (the bump
+        // guard requires non-null keyLast4 — without it bumps are dropped).
+        keyLast4: streamKeyLast4,
       });
     } catch (error) {
       const message =
@@ -2933,6 +2937,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         editToken: params.editToken ?? autosavedEditTokenRef.current ?? undefined,
         loggingMessageId: userMessageId,
         // userAnthropicKey: server-stored BYOK; raw key not held client-side.
+        // keyLast4 routes post-stream bump events to the per-key BYOK bucket;
+        // see chat-mode call site above for the full rationale.
+        keyLast4: streamKeyLast4,
       });
     } catch (error) {
       const message =
