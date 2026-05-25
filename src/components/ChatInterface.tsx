@@ -851,6 +851,16 @@ export function ChatInterface({
   const [byokPanelMode, setByokPanelMode] = useState<'request_cut_off' | 'global_budget' | null>(
     null,
   );
+  // Upstream Anthropic error message captured from the 402 `global_budget_exhausted`
+  // payload, when the server passed it through. Surfaced in the global_budget
+  // panel so the user can see WHY (e.g. "credit balance too low", "billing
+  // address invalid"). Anthropic's billing system occasionally returns 402
+  // spuriously even with credit remaining (billing-system desync) — the server
+  // retries once before surfacing, so a message reaching here means the issue
+  // persisted past the retry.
+  const [globalBudgetUpstreamMessage, setGlobalBudgetUpstreamMessage] = useState<string | null>(
+    null,
+  );
 
   // Files attached in Chat mode (separate from Generate-mode `files`). These
   // can be inline text (content in-memory) or Anthropic Files API uploads
@@ -1168,6 +1178,7 @@ export function ChatInterface({
     if (hasKey && verified && byokPanelMode) {
       setByokPanelMode(null);
       setCostErrorBanner(null);
+      setGlobalBudgetUpstreamMessage(null);
     }
   }, [hasKey, verified, byokPanelMode]);
 
@@ -1216,10 +1227,21 @@ export function ChatInterface({
           setCostErrorBanner(null);
           void refreshUsage();
           return;
-        case 'global_budget_exhausted':
+        case 'global_budget_exhausted': {
           setByokPanelMode('global_budget');
           setCostErrorBanner(null);
+          // Capture Anthropic's actual error message from the response (the
+          // server now passes it through after a single retry). Lets the user
+          // see WHY (e.g. invalid billing, credit_balance_too_low,
+          // organization_disabled) instead of just our generic envelope.
+          const data = error.data as { upstream_message?: unknown } | null | undefined;
+          const msg =
+            data && typeof data === 'object' && typeof data.upstream_message === 'string'
+              ? data.upstream_message
+              : null;
+          setGlobalBudgetUpstreamMessage(msg);
           return;
+        }
         case 'request_cost_ceiling_exceeded':
           // Mid-stream kill: the message already ran part-way, the reconcile
           // path is writing the actual cost to the DB right now. Surface the
@@ -3619,12 +3641,39 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </div>
                     ) : byokPanelMode === 'global_budget' ? (
                       <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                          We&apos;ve hit our shared monthly spend cap. Everyone on the free tier is
-                          paused until next month&apos;s reset.
+                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2 space-y-1">
+                          {/* Conditional headline:
+                              - BYOK user: their own key returned billing_error.
+                                Pointing them at "add an API key" is wrong (they
+                                already have one); the remediation is the
+                                Anthropic Console.
+                              - Free/anon user: our shared key hit the cap (or
+                                Anthropic billing desync). BYOK is the unblock. */}
+                          {hasKey ? (
+                            <div>
+                              Anthropic returned a billing error for your API key. This can be
+                              transient — try again in a minute. If it persists, check your
+                              Anthropic Console for cap, payment, or organization status.
+                            </div>
+                          ) : (
+                            <div>
+                              We hit our shared monthly spend cap, or Anthropic returned a transient
+                              billing error. Try again in a minute, or use your own Anthropic key to
+                              continue.
+                            </div>
+                          )}
+                          {globalBudgetUpstreamMessage && (
+                            <div className="text-xs text-red-700 italic">
+                              Anthropic says: &ldquo;{globalBudgetUpstreamMessage}&rdquo;
+                            </div>
+                          )}
                         </div>
-                        <AddApiKeyButton />
-                        <DonateCta />
+                        {/* Action affordances: AddApiKeyButton only helps if
+                            the user doesn't already have a key. DonateCta only
+                            helps the free-tier case (BYOK users are self-
+                            funded; donations don't unblock them). */}
+                        {!hasKey && <AddApiKeyButton />}
+                        {!hasKey && <DonateCta />}
                       </div>
                     ) : capAlreadyReached ? (
                       <div className="space-y-2">
