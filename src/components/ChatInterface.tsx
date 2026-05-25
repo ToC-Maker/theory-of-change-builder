@@ -3434,9 +3434,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     <div className="mb-2">
                       <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
                     </div>
-                    <p className="font-medium text-gray-700">
-                      Generate a full draft in one pass.
-                    </p>
+                    <p className="font-medium text-gray-700">Generate a full draft in one pass.</p>
                     <p className="mt-2 text-xs">
                       Attach <strong>Documents</strong> describing your organisation — strategic
                       plans, programme briefs, evaluations, anything that explains what you do and
