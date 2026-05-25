@@ -1088,13 +1088,18 @@ export function ChatInterface({
   }, [messages, getStorageKey]);
 
   useEffect(() => {
-    scrollToBottom();
-    // Keep focus on input if we're in chat mode and not loading
-    if (currentMode === 'chat' && !isCollapsed && inputRef.current && !isLoading) {
-      // Use setTimeout to ensure this happens after all DOM updates
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 50);
+    // Only auto-scroll in chat mode. Generate is a static form (no
+    // chronological message list), so scrolling to the bottom on tab
+    // switch hides the cost heads-up + upload area above the fold.
+    if (currentMode === 'chat') {
+      scrollToBottom();
+      // Keep focus on input if we're not loading
+      if (!isCollapsed && inputRef.current && !isLoading) {
+        // Use setTimeout to ensure this happens after all DOM updates
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 50);
+      }
     }
   }, [messages, currentMode, isCollapsed, isLoading]);
 
@@ -3232,29 +3237,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 </>
               ) : currentMode === 'generate' ? (
                 <div className="space-y-4">
-                  {/* Anon-tier Turnstile prompt. Inline at the top of the
-                    panel rather than gating the whole UI so the user can
-                    still see what Generate looks like and stage thoughts
-                    while solving. Upload + Generate are disabled below
-                    until hasTurnstileSession flips to true. Solving here
-                    flips the shared cookie so chat is also unblocked. */}
-                  {generateBlockedByTurnstile && (
-                    <div className="space-y-2">
-                      <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
-                        Solve the challenge below to verify you&apos;re human before uploading or
-                        generating.
-                      </div>
-                      <TurnstileWidget
-                        siteKey={TURNSTILE_SITE_KEY}
-                        onToken={handleTurnstileToken}
-                      />
-                      {turnstileError && (
-                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-                          {turnstileError}
-                        </div>
-                      )}
-                    </div>
-                  )}
                   {/* Cost heads-up. Generate concentrates spend (extended
                     thinking + web search + documents) into one one-shot
                     request, so flag this above the upload area. Server-side
@@ -3433,6 +3415,30 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         selected={selectedEffort}
                         onSelect={setSelectedEffort}
                       />
+                    </div>
+                  )}
+
+                  {/* Anon-tier Turnstile prompt. Placed next to the Generate
+                    button rather than at the top of the panel so it's
+                    visible alongside the action it gates; pairs with the
+                    disabled upload/Generate controls above. Solving flips
+                    the shared hasTurnstileSession cookie so chat is also
+                    unblocked. */}
+                  {generateBlockedByTurnstile && (
+                    <div className="space-y-2">
+                      <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                        Solve the challenge to verify you&apos;re human before uploading or
+                        generating.
+                      </div>
+                      <TurnstileWidget
+                        siteKey={TURNSTILE_SITE_KEY}
+                        onToken={handleTurnstileToken}
+                      />
+                      {turnstileError && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                          {turnstileError}
+                        </div>
+                      )}
                     </div>
                   )}
 
