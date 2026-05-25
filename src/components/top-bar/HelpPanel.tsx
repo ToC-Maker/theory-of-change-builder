@@ -9,6 +9,9 @@
 //   - Edit-mode tutorial — "Coming soon" placeholder (deferred to a
 //     later PR; covers the new hover affordances + connection handles
 //     introduced in PRs 5+7).
+//   - Contact — mailto link to the project inbox plus a GitHub-issues
+//     external link for power users who'd rather file directly on the
+//     repo. The mail client takes over for the mailto, so no hosted form.
 //   - External link to a Theory of Change explainer article.
 //
 // The previous EditToolbar's Help modal was a single dump of everything;
@@ -23,6 +26,8 @@ import {
 import { keyboardShortcutGroups } from '../../data/keyboardShortcuts';
 
 const TOC_EXPLAINER_URL = 'https://en.wikipedia.org/wiki/Theory_of_change';
+const CONTACT_EMAIL = 'theoryofchangebuilder@gmail.com';
+const GITHUB_ISSUES_URL = 'https://github.com/ToC-Maker/theory-of-change-builder/issues/new';
 
 export function HelpPanel() {
   const [open, setOpen] = useState(false);
@@ -124,6 +129,33 @@ export function HelpPanel() {
               </div>
             )}
             <div className="text-xs text-gray-500 px-1 py-1">Edit-mode tutorial — coming soon.</div>
+          </div>
+
+          {/* Contact */}
+          <div className="mb-4 pt-3 border-t border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Contact</h3>
+            <p className="text-xs text-gray-600 px-1 py-1 leading-relaxed">
+              Bug reports, feedback, or questions:{' '}
+              <a
+                href={`mailto:${CONTACT_EMAIL}`}
+                className="text-blue-700 hover:underline break-all"
+                role="menuitem"
+              >
+                {CONTACT_EMAIL}
+              </a>
+              . You can also{' '}
+              <a
+                href={GITHUB_ISSUES_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-700 hover:underline"
+                role="menuitem"
+              >
+                open a GitHub issue
+                <ArrowTopRightOnSquareIcon className="w-3 h-3" />
+              </a>{' '}
+              for bugs.
+            </p>
           </div>
 
           {/* External resources */}
