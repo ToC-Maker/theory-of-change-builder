@@ -1,15 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 interface JsonDropdownProps {
-  data: any;
+  data: unknown;
   title?: string;
   copyGraphJSON?: () => Promise<void>;
   resetToOriginal?: () => void;
-  onUploadJSON?: (jsonData: any) => void;
+  onUploadJSON?: (jsonData: unknown) => void;
   loading?: boolean;
 }
 
-export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON, resetToOriginal, onUploadJSON, loading }: JsonDropdownProps) {
+export function JsonDropdown({
+  data,
+  title = 'Current Graph JSON',
+  copyGraphJSON,
+  resetToOriginal,
+  onUploadJSON,
+  loading,
+}: JsonDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -70,17 +77,19 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
   };
 
   const handleDownloadClick = () => {
+    // data is typed as unknown (the AI/user supplied JSON); only spread when
+    // it's an object so we don't try to merge primitives.
     const graphData = {
-      ...data,
+      ...(data && typeof data === 'object' ? (data as Record<string, unknown>) : {}),
       _metadata: {
         exportedAt: new Date().toISOString(),
-      }
+      },
     };
-    
+
     const jsonString = JSON.stringify(graphData, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    
+
     const a = document.createElement('a');
     a.href = url;
     a.download = `toc-graph-${new Date().toISOString().split('T')[0]}.json`;
@@ -97,7 +106,7 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -111,7 +120,7 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
       }
     };
     reader.readAsText(file);
-    
+
     // Reset the input so the same file can be selected again
     event.target.value = '';
   };
@@ -155,8 +164,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                   className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Reset to the original graph and clear all saved progress"
                 >
-                  <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <svg
+                    className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
                   </svg>
                   <span className="hidden xs:inline">Reset</span>
                 </button>
@@ -168,8 +187,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                 className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200"
                 title="Download graph as JSON file"
               >
-                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                <svg
+                  className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
                 </svg>
                 <span className="hidden sm:inline">Download</span>
               </button>
@@ -181,8 +210,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                   className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-purple-50 hover:text-purple-600 hover:border-purple-200"
                   title="Upload graph from JSON file"
                 >
-                  <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  <svg
+                    className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                    />
                   </svg>
                   <span className="hidden sm:inline">Upload</span>
                 </button>
@@ -201,15 +240,35 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                 >
                   {showCopiedMessage ? (
                     <>
-                      <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      <svg
+                        className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M5 13l4 4L19 7"
+                        />
                       </svg>
                       <span className="hidden sm:inline">Copied!</span>
                     </>
                   ) : (
                     <>
-                      <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      <svg
+                        className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                        />
                       </svg>
                       <span className="hidden sm:inline">Copy</span>
                     </>
@@ -224,8 +283,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                   className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-yellow-50 hover:text-yellow-600 hover:border-yellow-200"
                   title="Edit JSON directly"
                 >
-                  <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  <svg
+                    className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                    />
                   </svg>
                   <span className="hidden sm:inline">Edit</span>
                 </button>
@@ -240,8 +309,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                 onClick={handleApplyEdit}
                 className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg transition-colors bg-green-500 text-white hover:bg-green-600"
               >
-                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                <svg
+                  className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M5 13l4 4L19 7"
+                  />
                 </svg>
                 <span>Apply</span>
               </button>
@@ -249,8 +328,18 @@ export function JsonDropdown({ data, title = "Current Graph JSON", copyGraphJSON
                 onClick={handleCancelEditing}
                 className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg transition-colors border border-gray-200 text-gray-700 hover:bg-gray-100"
               >
-                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <svg
+                  className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
                 <span>Cancel</span>
               </button>

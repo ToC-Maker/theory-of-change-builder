@@ -1,14 +1,14 @@
-import React, { useCallback, useEffect } from "react"
+import React, { useCallback, useEffect } from 'react';
 
 interface LegendProps {
-  legendPosition: { x: number; y: number }
-  setLegendPosition: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
-  isDraggingLegend: boolean
-  setIsDraggingLegend: React.Dispatch<React.SetStateAction<boolean>>
-  legendDragOffset: { x: number; y: number }
-  setLegendDragOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>
-  editMode?: boolean
-  fontFamily?: string
+  legendPosition: { x: number; y: number };
+  setLegendPosition: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>;
+  isDraggingLegend: boolean;
+  setIsDraggingLegend: React.Dispatch<React.SetStateAction<boolean>>;
+  legendDragOffset: { x: number; y: number };
+  setLegendDragOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>;
+  editMode?: boolean;
+  fontFamily?: string;
 }
 
 export function Legend({
@@ -21,38 +21,44 @@ export function Legend({
   editMode = true,
   fontFamily,
 }: LegendProps) {
-  const handleLegendMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!editMode) return // Don't allow dragging in view mode
-    setIsDraggingLegend(true)
-    setLegendDragOffset({
-      x: e.clientX - legendPosition.x,
-      y: e.clientY - legendPosition.y
-    })
-  }, [legendPosition, setIsDraggingLegend, setLegendDragOffset, editMode])
+  const handleLegendMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!editMode) return; // Don't allow dragging in view mode
+      setIsDraggingLegend(true);
+      setLegendDragOffset({
+        x: e.clientX - legendPosition.x,
+        y: e.clientY - legendPosition.y,
+      });
+    },
+    [legendPosition, setIsDraggingLegend, setLegendDragOffset, editMode],
+  );
 
-  const handleLegendMouseMove = useCallback((e: MouseEvent) => {
-    if (isDraggingLegend) {
-      setLegendPosition({
-        x: e.clientX - legendDragOffset.x,
-        y: e.clientY - legendDragOffset.y
-      })
-    }
-  }, [isDraggingLegend, legendDragOffset, setLegendPosition])
+  const handleLegendMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (isDraggingLegend) {
+        setLegendPosition({
+          x: e.clientX - legendDragOffset.x,
+          y: e.clientY - legendDragOffset.y,
+        });
+      }
+    },
+    [isDraggingLegend, legendDragOffset, setLegendPosition],
+  );
 
   const handleLegendMouseUp = useCallback(() => {
-    setIsDraggingLegend(false)
-  }, [setIsDraggingLegend])
+    setIsDraggingLegend(false);
+  }, [setIsDraggingLegend]);
 
   useEffect(() => {
     if (isDraggingLegend) {
-      document.addEventListener('mousemove', handleLegendMouseMove)
-      document.addEventListener('mouseup', handleLegendMouseUp)
+      document.addEventListener('mousemove', handleLegendMouseMove);
+      document.addEventListener('mouseup', handleLegendMouseUp);
       return () => {
-        document.removeEventListener('mousemove', handleLegendMouseMove)
-        document.removeEventListener('mouseup', handleLegendMouseUp)
-      }
+        document.removeEventListener('mousemove', handleLegendMouseMove);
+        document.removeEventListener('mouseup', handleLegendMouseUp);
+      };
     }
-  }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp])
+  }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp]);
 
   return (
     <div
@@ -61,31 +67,55 @@ export function Legend({
       }`}
       style={{
         left: `${legendPosition.x}px`,
-        top: `${legendPosition.y}px`
+        top: `${legendPosition.y}px`,
       }}
       onMouseDown={handleLegendMouseDown}
     >
-      <div className="text-xs font-medium text-gray-700 mb-2" style={{ fontFamily }}>Connection Confidence</div>
+      <div className="text-xs font-medium text-gray-700 mb-2" style={{ fontFamily }}>
+        Connection Confidence
+      </div>
       <div className="space-y-2">
         <div className="flex items-center gap-3">
           <svg width="24" height="2" className="flex-shrink-0">
             <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" />
           </svg>
-          <span className="text-xs text-gray-600" style={{ fontFamily }}>High</span>
+          <span className="text-xs text-gray-600" style={{ fontFamily }}>
+            High
+          </span>
         </div>
         <div className="flex items-center gap-3">
           <svg width="24" height="2" className="flex-shrink-0">
-            <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" strokeDasharray="8 4" />
+            <line
+              x1="0"
+              y1="1"
+              x2="24"
+              y2="1"
+              stroke="#000000"
+              strokeWidth="2"
+              strokeDasharray="8 4"
+            />
           </svg>
-          <span className="text-xs text-gray-600" style={{ fontFamily }}>Medium</span>
+          <span className="text-xs text-gray-600" style={{ fontFamily }}>
+            Medium
+          </span>
         </div>
         <div className="flex items-center gap-3">
           <svg width="24" height="2" className="flex-shrink-0">
-            <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" strokeDasharray="2 4" />
+            <line
+              x1="0"
+              y1="1"
+              x2="24"
+              y2="1"
+              stroke="#000000"
+              strokeWidth="2"
+              strokeDasharray="2 4"
+            />
           </svg>
-          <span className="text-xs text-gray-600" style={{ fontFamily }}>Low</span>
+          <span className="text-xs text-gray-600" style={{ fontFamily }}>
+            Low
+          </span>
         </div>
       </div>
     </div>
-  )
+  );
 }

@@ -33,10 +33,14 @@ export function useLoggingSession({
 }: UseLoggingSessionParams): UseLoggingSessionReturn {
   // Keep refs so cleanup callbacks always see the latest values
   const graphDataRef = useRef(graphData);
-  useEffect(() => { graphDataRef.current = graphData; }, [graphData]);
+  useEffect(() => {
+    graphDataRef.current = graphData;
+  }, [graphData]);
 
   const chartIdRef = useRef(chartId);
-  useEffect(() => { chartIdRef.current = chartId; }, [chartId]);
+  useEffect(() => {
+    chartIdRef.current = chartId;
+  }, [chartId]);
 
   // --- Session initialization ---
 
@@ -53,11 +57,14 @@ export function useLoggingSession({
     }
   }, []);
 
-  const handlePrivacyAccept = useCallback((loggingEnabled: boolean) => {
-    if (loggingEnabled && chartIdRef.current && graphDataRef.current) {
-      initializeLogging(chartIdRef.current, graphDataRef.current);
-    }
-  }, [initializeLogging]);
+  const handlePrivacyAccept = useCallback(
+    (loggingEnabled: boolean) => {
+      if (loggingEnabled && chartIdRef.current && graphDataRef.current) {
+        initializeLogging(chartIdRef.current, graphDataRef.current);
+      }
+    },
+    [initializeLogging],
+  );
 
   const handleLoggingEnabled = useCallback(() => {
     if (chartIdRef.current && graphDataRef.current) {
@@ -67,17 +74,20 @@ export function useLoggingSession({
 
   // --- Graph change logging ---
 
-  const logGraphChange = useCallback((gData: ToCData, editType: SaveSnapshotParams['edit_type']) => {
-    const sessionId = loggingService.getCurrentSessionId();
-    if (sessionId && chartIdRef.current && loggingService.isLoggingEnabled()) {
-      loggingService.saveSnapshotDebounced({
-        session_id: sessionId,
-        chart_id: chartIdRef.current,
-        graph_data: gData,
-        edit_type: editType,
-      });
-    }
-  }, []);
+  const logGraphChange = useCallback(
+    (gData: ToCData, editType: SaveSnapshotParams['edit_type']) => {
+      const sessionId = loggingService.getCurrentSessionId();
+      if (sessionId && chartIdRef.current && loggingService.isLoggingEnabled()) {
+        loggingService.saveSnapshotDebounced({
+          session_id: sessionId,
+          chart_id: chartIdRef.current,
+          graph_data: gData,
+          edit_type: editType,
+        });
+      }
+    },
+    [],
+  );
 
   // --- Page unload cleanup (sendBeacon) ---
 
