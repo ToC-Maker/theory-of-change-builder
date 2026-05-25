@@ -1027,6 +1027,14 @@ export function ChatInterface({
         justAutoCreatedRef.current = false;
         return;
       }
+
+      // Reset the composer blocker on real chartId/route transitions.
+      // Placed AFTER the auto-create early-return (so first-send-from-root
+      // doesn't lose the blocker mid-transition) and BEFORE the root-path
+      // branch (so navigating to `/` from a chart with a blocker also
+      // resets — fresh URL → fresh state). Closes failure mode J.
+      setComposerBlocker(null);
+
       // At the root path (new ToC), start with an empty in-memory chat but
       // DON'T touch localStorage. Previously this branch did a
       // `removeItem(chatHistory_root)`, which wiped the session of any user
