@@ -36,6 +36,7 @@ import {
   shouldBlockSend,
   clearOnSendStart,
 } from './chat/composerBlocker';
+import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
 import type { ToCData } from '../types';
 import {
   formatCostUsd,
@@ -808,6 +809,13 @@ export function ChatInterface({
   // See `src/components/chat/composerBlocker.ts` for the state machine and
   // `plans/composer-banner-unification.md` for the failure modes this closes.
   const [composerBlocker, setComposerBlocker] = useState<ComposerBlocker | null>(null);
+
+  // Generate-confirmation modal flag. True while the modal is open between
+  // startGeneration's confirm-check and the user's choice. Two-phase
+  // callback flow lives in startGeneration: setting this true returns early;
+  // the modal's onConfirm calls startGenerationInternal (the body after the
+  // confirm gate). See GenerateConfirmDialog.tsx for the modal.
+  const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
 
   // Loading flag so the composer can show a spinner while the debounced
   // fetch is in flight; avoids displaying a stale number that's about to
@@ -2691,11 +2699,32 @@ export function ChatInterface({
     // wipe their Chat history (setMessages([generationMessage]) below)
     // before the server rejected, with no banner to explain why.
     // Placed AFTER the three early-exits but BEFORE any state mutation
-    // (including the confirm dialog from Task 5).
+    // (including the confirm dialog).
     if (shouldBlockSend(renderedBlocker)) {
       return;
     }
 
+    // Destructive-action confirmation. startGenerationInternal will replace
+    // `messages` with the generation prompt, wiping any in-progress chat.
+    // Open the modal if there's something to lose; the modal's onConfirm
+    // closes it + calls startGenerationInternal. Pre-confirm: NO state
+    // mutations (no sendInFlightRef.current=true, no setIsLoading) — per
+    // FM-Crit-1, mutations must hoist above the dialog so cancel leaves
+    // the UI in a clean state (no stuck "thinking..." after cancel).
+    if (messages.length > 0) {
+      setShowGenerateConfirm(true);
+      return;
+    }
+
+    await startGenerationInternal();
+  };
+
+  // The body of startGeneration after the confirm gate. Extracted so the
+  // modal's onConfirm callback can call it directly without re-running the
+  // early-exit checks (which would race state changes that occurred while
+  // the modal was open). Two-phase callback pattern; see
+  // GenerateConfirmDialog.tsx for the modal that re-enters here.
+  const startGenerationInternal = async () => {
     sendInFlightRef.current = true;
     setIsLoading(true);
     setIsStreaming(true);
@@ -3923,6 +3952,23 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         Estimate from streaming events. Anthropic&apos;s console is the source of truth and may show
         more.
       </Tooltip>
+
+      {/* Generate destroys current Chat history — surface that explicitly
+          before mutating state. The two-phase flow lives in startGeneration
+          (open modal & early-return on first click; modal's onConfirm calls
+          startGenerationInternal). Cancel leaves UI clean (no mutations
+          had happened pre-confirm). */}
+      <GenerateConfirmDialog
+        open={showGenerateConfirm}
+        chatMessageCount={messages.length}
+        onConfirm={() => {
+          setShowGenerateConfirm(false);
+          void startGenerationInternal();
+        }}
+        onCancel={() => {
+          setShowGenerateConfirm(false);
+        }}
+      />
     </>
   );
 }
