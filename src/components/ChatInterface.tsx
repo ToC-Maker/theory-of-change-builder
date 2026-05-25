@@ -28,6 +28,14 @@ import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../ut
 import { getFreshIdToken } from '../utils/auth';
 import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
+import {
+  type ComposerBlocker,
+  type RenderedBlocker,
+  costErrorToBlocker,
+  selectBlocker,
+  shouldBlockSend,
+  clearOnSendStart,
+} from './chat/composerBlocker';
 import type { ToCData } from '../types';
 import {
   formatCostUsd,
@@ -677,7 +685,7 @@ export function ChatInterface({
   highlightedNodes = new Set(),
   onChartCreated,
 }: ChatInterfaceProps) {
-  const { hasKey, keyLast4, verified, keyVersion } = useApiKey();
+  const { hasKey, keyLast4, keyVersion } = useApiKey();
   const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
@@ -789,40 +797,38 @@ export function ChatInterface({
   const [composerUncountedFileIds, setComposerUncountedFileIds] = useState<string[]>([]);
   const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
 
-  // Derived cap-gate flags, computed from the cached usage snapshot +
-  // latest composer estimate. Declared AFTER composerEstimateUsd since
-  // wouldExceedCap reads it — moving these earlier would TDZ-error.
+  // Unified composer-blocker slot. Replaces three event-driven banner slots
+  // (costErrorBanner, byokPanelMode, globalBudgetUpstreamMessage) with a
+  // single discriminated union. The derived `would_exceed_cap` variant
+  // (computed from usage + draft estimate) is composed at render time via
+  // `selectBlocker` and lives in `renderedBlocker`, NOT this slot — keeping
+  // event-driven state separate from derived state lets the cap-class
+  // tier-flip filter work correctly when the user adds BYOK.
   //
-  //   capAlreadyReached: the user's prior cumulative usage is already at
-  //     or over the free-tier cap. Nothing they can send will succeed;
-  //     only BYOK unlocks new turns.
-  //
-  //   wouldExceedCap: prior usage is under the cap but the projected cost
-  //     of the in-flight draft would push it over. Sending this specific
-  //     message would fail the server's reservation; we block client-side
-  //     to avoid the round-trip (and the confusing Turnstile-before-cap
-  //     ordering on the server).
-  //
-  // BYOK tier skips both — they're self-funded.
-  const capped = usage != null && usage.tier !== 'byok';
-  const capAlreadyReached = capped && usage.used_usd >= usage.limit_usd;
-  const wouldExceedCap =
-    capped &&
-    !capAlreadyReached &&
-    composerEstimateUsd > 0 &&
-    usage.used_usd + composerEstimateUsd > usage.limit_usd;
+  // See `src/components/chat/composerBlocker.ts` for the state machine and
+  // `plans/composer-banner-unification.md` for the failure modes this closes.
+  const [composerBlocker, setComposerBlocker] = useState<ComposerBlocker | null>(null);
+
   // Loading flag so the composer can show a spinner while the debounced
   // fetch is in flight; avoids displaying a stale number that's about to
   // change, and signals to the user that the field is being updated.
   const [estimatingCost, setEstimatingCost] = useState<boolean>(false);
 
-  // Inline error banner shown under the last user message when the server
-  // rejects the request on cost/quota grounds (429/402). Persists the chat
-  // history (decision 8).
-  const [costErrorBanner, setCostErrorBanner] = useState<{
-    kind: CostErrorKind;
-    message: string;
-  } | null>(null);
+  // Active estimate: which mode's draft are we sizing right now? Determines
+  // whether `selectBlocker` derives `would_exceed_cap` from the Chat draft
+  // or the Generate draft. Without this branch, Generate-mode capped users
+  // would slip through the would_exceed_cap check (selector reads Chat's
+  // estimate, which is 0 in Generate mode → no derived block fires).
+  const activeEstimate = currentMode === 'generate' ? generateEstimateUsd : composerEstimateUsd;
+
+  // Render-time blocker: event blocker (composerBlocker) plus derived
+  // would_exceed_cap, with cap-class blockers filtered out when tier is
+  // byok. Pure function, called inline at render — cheap.
+  const renderedBlocker: RenderedBlocker = selectBlocker({
+    eventBlocker: composerBlocker,
+    usage,
+    composerEstimateUsd: activeEstimate,
+  });
 
   // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
   // succeeds; the Worker sets an httpOnly `tocb_anon` cookie that rides along
@@ -849,27 +855,6 @@ export function ChatInterface({
   // server-side Turnstile check.
   const generateBlockedByTurnstile =
     !isAuthenticated && Boolean(TURNSTILE_SITE_KEY) && !hasTurnstileSession;
-
-  // BYOK panel state for 402/kill recovery.
-  //
-  // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
-  // is handled by calling refreshUsage(), which flips the derived
-  // `capAlreadyReached` flag and shows the composer-side banner. A
-  // separate mode would double-render the panel. Voluntary key entry
-  // now lives in the profile-dropdown modal, not inline.
-  const [byokPanelMode, setByokPanelMode] = useState<'request_cut_off' | 'global_budget' | null>(
-    null,
-  );
-  // Upstream Anthropic error message captured from the 402 `global_budget_exhausted`
-  // payload, when the server passed it through. Surfaced in the global_budget
-  // panel so the user can see WHY (e.g. "credit balance too low", "billing
-  // address invalid"). Anthropic's billing system occasionally returns 402
-  // spuriously even with credit remaining (billing-system desync) — the server
-  // retries once before surfacing, so a message reaching here means the issue
-  // persisted past the retry.
-  const [globalBudgetUpstreamMessage, setGlobalBudgetUpstreamMessage] = useState<string | null>(
-    null,
-  );
 
   // Files attached in Chat mode (separate from Generate-mode `files`). These
   // can be inline text (content in-memory) or Anthropic Files API uploads
@@ -1228,19 +1213,12 @@ export function ChatInterface({
     void syncChartByokCostFromDb(chartIdForSync);
   }, [chartIdForSync, hasKey, keyVersion, syncChartByokCostFromDb]);
 
-  // When the user adds a verified key via the settings modal, dismiss any
-  // sticky cap banners that require explicit clearing. capAlreadyReached /
-  // wouldExceedCap self-clear through the tier flip when usage refetches
-  // (tier becomes 'byok', `capped` goes false), but `byokPanelMode` is
-  // server-event-driven and used to be cleared by ByokPanel.onSubmitted —
-  // with the inline panel gone, we reconcile here instead.
-  useEffect(() => {
-    if (hasKey && verified && byokPanelMode) {
-      setByokPanelMode(null);
-      setCostErrorBanner(null);
-      setGlobalBudgetUpstreamMessage(null);
-    }
-  }, [hasKey, verified, byokPanelMode]);
+  // BYOK-recovery effect deleted: the composer-blocker `selectBlocker`
+  // tier-flip filter is the single source of truth for clearing cap-class
+  // event blockers when the user adds BYOK. When refreshUsage resolves
+  // post-add and usage.tier flips to 'byok', selectBlocker returns null
+  // (filtered) on the next render — no sync effect needed, no race
+  // between the effect's clear and the async refresh's tier update.
 
   // Classify a streaming error string into a cost/quota category if it
   // matches one of U9's error payloads. Keyword-based detection covers the
@@ -1256,97 +1234,44 @@ export function ChatInterface({
     return null;
   }, []);
 
-  // Structured cost-error handler. Maps CostErrorType → UI state transition
-  // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
-  // under the last user message so BYOK retries can reuse the same messages
-  // array — preserves the user's prompt across cap-error recovery).
+  // Structured cost-error handler. Two-step dispatch:
+  //   1. Turnstile arms touch Turnstile session state, not the blocker slot
+  //      (the widget re-renders independently).
+  //   2. All other arms go through the pure `costErrorToBlocker` transition;
+  //      the returned variant (or undefined for no-op) flows into the
+  //      single composerBlocker slot.
+  //
+  // Chat history is NEVER touched here — 429/402/etc. show an inline banner
+  // (rendered via <ComposerBlockerBanner> in the composer area) so BYOK
+  // retries can reuse the same messages array.
   const handleCostError = useCallback(
     (error: CostError) => {
-      switch (error.type) {
-        case 'turnstile_required':
-          // Cookie expired or IP changed mid-flow. Bring the widget back so
-          // the user can re-solve, and clear any stale error copy.
-          setHasTurnstileSession(false);
-          setTurnstileError(null);
-          return;
-        case 'turnstile_failed':
-          // Siteverify rejected. Keep the widget visible, surface the error.
-          setHasTurnstileSession(false);
-          setTurnstileError('Challenge failed; please try again.');
-          return;
-        case 'idempotent_replay':
-          // Silent: the user double-clicked or the browser replayed. The
-          // original request is already in flight or completed on the server;
-          // surfacing an error would confuse them.
-          return;
-        case 'lifetime_cap_reached':
-          // Server rejected the preflight reservation — our local usage
-          // snapshot was stale. Refresh so `capAlreadyReached` flips and
-          // the composer-side cap banner + ByokPanel + DonateCta appear.
-          // No separate mode state: that would double-render the panel.
-          setCostErrorBanner(null);
-          void refreshUsage();
-          return;
-        case 'global_budget_exhausted': {
-          setByokPanelMode('global_budget');
-          setCostErrorBanner(null);
-          // Capture Anthropic's actual error message from the response (the
-          // server now passes it through after a single retry). Lets the user
-          // see WHY (e.g. invalid billing, credit_balance_too_low,
-          // organization_disabled) instead of just our generic envelope.
-          const data = error.data as { upstream_message?: unknown } | null | undefined;
-          const msg =
-            data && typeof data === 'object' && typeof data.upstream_message === 'string'
-              ? data.upstream_message
-              : null;
-          setGlobalBudgetUpstreamMessage(msg);
-          return;
-        }
-        case 'request_cost_ceiling_exceeded':
-          // Mid-stream kill: the message already ran part-way, the reconcile
-          // path is writing the actual cost to the DB right now. Surface the
-          // cut-off-specific ByokPanel header and refresh usage so the cap
-          // bar reflects reality — otherwise it stays at the pre-stream
-          // snapshot until manual reload.
-          setByokPanelMode('request_cut_off');
-          setCostErrorBanner(null);
-          void refreshUsage();
-          return;
-        case 'body_too_large':
-          setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
-          return;
-        case 'chart_deleted':
-          setCostErrorBanner({
-            kind: 'service_unavailable',
-            message: 'This chart was deleted in another tab. Reload the page to continue.',
-          });
-          return;
-        case 'file_unavailable':
-          setCostErrorBanner({
-            kind: 'service_unavailable',
-            message: 'A file referenced by this chat is no longer available. Remove it and retry.',
-          });
-          return;
-        default: {
-          // database_unavailable / estimation_unavailable /
-          // authentication_service_unavailable / invalid_token all fall
-          // through to a generic service banner. When the server included
-          // an upstream_message (e.g. Anthropic's count_tokens 429 reason,
-          // Neon timeout detail, Auth0 JWKS error), surface it so the user
-          // has something specific to try or report rather than just
-          // "something broke."
-          const data = error.data as
-            | { upstream_status?: number; upstream_message?: string }
-            | undefined;
-          const upstreamMessage =
-            typeof data?.upstream_message === 'string' ? data.upstream_message : null;
-          const upstreamStatus =
-            typeof data?.upstream_status === 'number' ? data.upstream_status : null;
-          const detail = upstreamMessage
-            ? `${COST_ERROR_COPY.service_unavailable} (${error.type}${upstreamStatus ? ` ${upstreamStatus}` : ''}: ${upstreamMessage})`
-            : `${COST_ERROR_COPY.service_unavailable} (${error.type})`;
-          setCostErrorBanner({ kind: 'service_unavailable', message: detail });
-        }
+      if (error.type === 'turnstile_required') {
+        // Cookie expired or IP changed mid-flow. Bring the widget back so
+        // the user can re-solve, and clear any stale error copy.
+        setHasTurnstileSession(false);
+        setTurnstileError(null);
+        return;
+      }
+      if (error.type === 'turnstile_failed') {
+        // Siteverify rejected. Keep the widget visible, surface the error.
+        setHasTurnstileSession(false);
+        setTurnstileError('Challenge failed; please try again.');
+        return;
+      }
+
+      // All other cost-class errors dispatch through the pure transition.
+      // `undefined` return means no-op (preserve existing blocker — used by
+      // idempotent_replay so a double-click on a capped state doesn't
+      // clobber the sticky banner).
+      const next = costErrorToBlocker(error);
+      if (next !== undefined) setComposerBlocker(next);
+
+      // Cap-class events refresh usage so the tier-flip filter in
+      // selectBlocker activates when BYOK has been added cross-tab. Refresh
+      // is fire-and-forget; selectBlocker re-derives on the next render.
+      if (error.type === 'lifetime_cap_reached' || error.type === 'request_cost_ceiling_exceeded') {
+        void refreshUsage();
       }
     },
     [refreshUsage],
@@ -1826,8 +1751,9 @@ export function ChatInterface({
     // avoids the Turnstile-checks-first race where the user sees a
     // Turnstile re-challenge instead of the BYOK path they actually need.
     // UI already renders a warning + BYOK panel in this state; the send
-    // button is also disabled, this is a defense-in-depth guard.
-    if (capAlreadyReached || wouldExceedCap) {
+    // button is also disabled, this is a defense-in-depth guard. Single
+    // predicate for both Chat and Generate paths — see composerBlocker.ts.
+    if (shouldBlockSend(renderedBlocker)) {
       sendInFlightRef.current = false;
       return;
     }
@@ -1893,7 +1819,10 @@ export function ChatInterface({
     setStreamingContent('');
     setStreamingThinking('');
     streamingContentBlocksRef.current = [];
-    setCostErrorBanner(null);
+    // Narrow send-start clear: cap-class blockers stay sticky (the cap gate
+    // above blocks the send anyway, so the banner MUST remain visible);
+    // advisory blockers clear so they don't linger across the next attempt.
+    setComposerBlocker(clearOnSendStart);
     // Assume user wants to see the response, so set near bottom to true
     setIsNearBottom(true);
 
@@ -2061,13 +1990,21 @@ export function ChatInterface({
             // Legacy keyword-based classifier for generic error strings. New
             // shapes (turnstile_required, idempotent_replay, body_too_large, …)
             // arrive via onCostError below with structured data; we don't rely
-            // on the error-string path for them.
+            // on the error-string path for them. classifyCostError is slated
+            // for deletion in Task 9 — per C6 analysis it's already
+            // unreachable in practice (chatService.ts:1487 swallows tagged
+            // cost errors before onError fires). For now we map the legacy
+            // kind to an advisory variant so the code compiles.
             const classified = classifyCostError(error);
             if (classified) {
               // Surface as inline banner, don't pollute chat history
               // (decision 8: preserve chat history on quota/cost failures so
               // BYOK-recovered retries re-use the same messages array).
-              setCostErrorBanner(classified);
+              setComposerBlocker({
+                type: 'advisory',
+                cost_error_type: 'database_unavailable', // legacy bucket
+                detail: classified.message,
+              });
             } else {
               // Preserve any partial that streamed before the error so the
               // user can read what they got + see the actual failure inline.
@@ -2185,9 +2122,15 @@ export function ChatInterface({
         error instanceof Error
           ? error.message
           : 'Sorry, there was an error processing your request.';
+      // Legacy classifier path; see comments at onError above. Slated for
+      // deletion in Task 9.
       const classified = classifyCostError(message);
       if (classified) {
-        setCostErrorBanner(classified);
+        setComposerBlocker({
+          type: 'advisory',
+          cost_error_type: 'database_unavailable',
+          detail: classified.message,
+        });
       } else {
         const errorMessage: ChatMessage = {
           id: assistantMessageId,
@@ -2215,7 +2158,7 @@ export function ChatInterface({
   const clearChat = () => {
     setMessages([]);
     setChatAttachedFiles([]);
-    setCostErrorBanner(null);
+    setComposerBlocker(null);
     // Clear chat history from localStorage
     try {
       const storageKey = getStorageKey();
@@ -2297,13 +2240,14 @@ export function ChatInterface({
         // Do NOT fall through to createChart — we already have an editToken
         // pointing at a real chart, creating a new one would strand the
         // user's existing chart under a different URL and they'd lose their
-        // work. Surface the error via the cost-error banner (reusing the
-        // service_unavailable kind since it's the same "try again" shape)
-        // and return null so the caller knows not to proceed.
+        // work. Surface the error via an advisory blocker (same "try again"
+        // shape as service_unavailable) and return null so the caller
+        // knows not to proceed.
         console.error('[ChatInterface] getChartByEditToken failed:', e);
-        setCostErrorBanner({
-          kind: 'service_unavailable',
-          message:
+        setComposerBlocker({
+          type: 'advisory',
+          cost_error_type: 'database_unavailable',
+          detail:
             "Couldn't load your chart. Check your connection and try again — " +
             "we won't create a duplicate while the existing chart is still around.",
         });
@@ -2920,7 +2864,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // round-trip into the next request after a transient failure.
             const classified = classifyCostError(error);
             if (classified) {
-              setCostErrorBanner(classified);
+              setComposerBlocker({
+                type: 'advisory',
+                cost_error_type: 'database_unavailable',
+                detail: classified.message,
+              });
             } else {
               const partial = streamingMessageRef.current;
               const partialBlocks = streamingContentBlocksRef.current;
@@ -3019,7 +2967,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           : 'Sorry, there was an error processing your request.';
       const classified = classifyCostError(message);
       if (classified) {
-        setCostErrorBanner(classified);
+        setComposerBlocker({
+          type: 'advisory',
+          cost_error_type: 'database_unavailable',
+          detail: classified.message,
+        });
       } else {
         const errorMessage: ChatMessage = {
           id: generationAssistantId,
@@ -3615,10 +3567,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     service-unavailable, etc.). Cap/quota errors go
                     straight to the inline ByokPanel below via
                     handleCostError. */}
-                  {costErrorBanner && (
+                  {composerBlocker?.type === 'advisory' && (
                     <div className="flex justify-start">
                       <div className="max-w-[85%] p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-900">
-                        {costErrorBanner.message}
+                        {composerBlocker.detail}
                       </div>
                     </div>
                   )}
@@ -3711,24 +3663,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                       </div>
                     ) : null}
-                    {/* Blocking cap warning. Two distinct cases:
-                        - capAlreadyReached: prior cumulative usage already at
-                          or over the cap; no sends possible without BYOK.
-                        - wouldExceedCap: under cap but this draft's estimate
-                          would push over. Message-specific framing so users
-                          understand "this one is too big" vs "you're out."
-                      Composer and send button stay visible but disabled; the
-                      inline BYOK panel is the unblock path. */}
-                    {/* Four cap/quota paths, all shown above the input so
-                      the user can read them next to the action. Priority
-                      from "most recent event" down:
-                        - request_cut_off: mid-stream kill just fired.
-                        - global_budget: Anthropic Console cap hit.
-                        - capAlreadyReached: prior cumulative at/over cap.
-                        - wouldExceedCap: draft's estimate would push over.
-                      DonateCta only on paths where donations are a valid
-                      alternative (capAlreadyReached, global_budget). */}
-                    {byokPanelMode === 'request_cut_off' ? (
+                    {/* Cap/cost banners, all unified through renderedBlocker
+                      (see src/components/chat/composerBlocker.ts).
+                      Variants:
+                        - cap_reached: server-confirmed lifetime cap hit
+                        - request_cut_off: mid-stream kill just fired
+                        - global_budget: Anthropic Console cap hit
+                        - would_exceed_cap: draft estimate would push over
+                        - advisory: soft warning (rendered in scroll area
+                          above; doesn't block sends)
+                      Task 7 collapses this chain into <ComposerBlockerBanner>;
+                      for now the existing JSX branches are rewired to read
+                      from renderedBlocker. DonateCta only on cap-reached
+                      and free-tier global-budget paths. */}
+                    {renderedBlocker?.type === 'request_cut_off' ? (
                       <div className="space-y-2">
                         <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
                           Message cut off — your last message used the rest of the free quota. Add
@@ -3736,7 +3684,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </div>
                         <AddApiKeyButton />
                       </div>
-                    ) : byokPanelMode === 'global_budget' ? (
+                    ) : renderedBlocker?.type === 'global_budget' ? (
                       <div className="space-y-2">
                         <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2 space-y-1">
                           {/* Conditional headline:
@@ -3759,9 +3707,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                               continue.
                             </div>
                           )}
-                          {globalBudgetUpstreamMessage && (
+                          {renderedBlocker.upstream_message && (
                             <div className="text-xs text-red-700 italic">
-                              Anthropic says: &ldquo;{globalBudgetUpstreamMessage}&rdquo;
+                              Anthropic says: &ldquo;{renderedBlocker.upstream_message}&rdquo;
                             </div>
                           )}
                         </div>
@@ -3772,7 +3720,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         {!hasKey && <AddApiKeyButton />}
                         {!hasKey && <DonateCta />}
                       </div>
-                    ) : capAlreadyReached ? (
+                    ) : renderedBlocker?.type === 'cap_reached' ? (
                       <div className="space-y-2">
                         <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
                           You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}. Add
@@ -3781,11 +3729,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         <AddApiKeyButton />
                         <DonateCta />
                       </div>
-                    ) : wouldExceedCap ? (
+                    ) : renderedBlocker?.type === 'would_exceed_cap' ? (
                       <div className="space-y-2">
                         <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                           Your next send (includes chat history and attached files) is estimated at{' '}
-                          <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but only{' '}
+                          <strong>{formatCostUsd(activeEstimate)}</strong>, but only{' '}
                           <strong>
                             {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}/
                             {formatCostUsd(usage!.limit_usd)}
@@ -3918,14 +3866,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             // paste, inputValue.trim() would allocate a full
                             // copy of the string on every render. Whitespace-
                             // only input still gets rejected at send-time.
-                            // capAlreadyReached / wouldExceedCap disable here
-                            // as a visual cue; handleSendMessage also early-
-                            // returns on both.
+                            // shouldBlockSend disables on cap_reached /
+                            // request_cut_off / global_budget / would_exceed_cap
+                            // (plus advisory='unknown' defensive over-block);
+                            // handleSendMessage also early-returns via the
+                            // same predicate.
                             disabled={
                               inputValue.length === 0 ||
                               isLoading ||
-                              capAlreadyReached ||
-                              wouldExceedCap ||
+                              shouldBlockSend(renderedBlocker) ||
                               // Block while any attached file is still uploading
                               // or has failed: send would either early-return
                               // server-side or silently drop the errored chip,
