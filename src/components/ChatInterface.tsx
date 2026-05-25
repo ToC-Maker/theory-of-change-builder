@@ -841,6 +841,15 @@ export function ChatInterface({
   // seeing a silent re-render.
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
+  // Generate-mode Turnstile gate. Mirrors the chat composer's condition
+  // (line ~3645) so the same anon-without-session state blocks Generate's
+  // upload + submit. `!hasTurnstileSession` is truthy for both null
+  // (probe in flight) and false (probe resolved unverified); both cases
+  // block actions so a click during the probe window can't race the
+  // server-side Turnstile check.
+  const generateBlockedByTurnstile =
+    !isAuthenticated && Boolean(TURNSTILE_SITE_KEY) && !hasTurnstileSession;
+
   // BYOK panel state for 402/kill recovery.
   //
   // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
@@ -3223,21 +3232,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 </>
               ) : currentMode === 'generate' ? (
                 <div className="space-y-4">
-                  {hasTurnstileSession === null ? (
-                    /* Probe in flight: same placeholder pattern as the chat
-                       composer's Turnstile gate so the panel doesn't flash
-                       the form for anon visitors who already hold a valid
-                       cookie. */
-                    <div className="h-24" aria-hidden />
-                  ) : !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
-                    /* Turnstile gate for anon users in Generate mode. Mirrors
-                       the chat composer gate so anon users who land directly
-                       in Generate still get a visible widget to solve. The
-                       shared hasTurnstileSession flag means solving here
-                       unblocks chat too. */
+                  {/* Anon-tier Turnstile prompt. Inline at the top of the
+                    panel rather than gating the whole UI so the user can
+                    still see what Generate looks like and stage thoughts
+                    while solving. Upload + Generate are disabled below
+                    until hasTurnstileSession flips to true. Solving here
+                    flips the shared cookie so chat is also unblocked. */}
+                  {generateBlockedByTurnstile && (
                     <div className="space-y-2">
                       <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
-                        Solve the challenge below to verify you&apos;re human before generating.
+                        Solve the challenge below to verify you&apos;re human before uploading or
+                        generating.
                       </div>
                       <TurnstileWidget
                         siteKey={TURNSTILE_SITE_KEY}
@@ -3249,214 +3254,217 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <>
-                      {/* Cost heads-up. Generate concentrates spend (extended
-                        thinking + web search + documents) into one one-shot
-                        request, so flag this above the upload area. Server-side
-                        reserveCost + the kill switch enforce the $5 lifetime cap
-                        for free/anon tiers; BYOK bypasses it. */}
-                      <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                        Generate runs a deep analysis of your documents. A single run typically
-                        costs a few dollars — more for large documents or heavy web searching. The
-                        running cost is shown as the answer is written, so you can stop it at any
-                        time if it starts to add up.
-                      </div>
-                      <div className="text-center text-gray-500 text-sm py-4">
-                        <div className="mb-2">
-                          <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
-                        </div>
-                        <p>Upload documents to generate a Theory of Change conversation</p>
-                      </div>
+                  )}
+                  {/* Cost heads-up. Generate concentrates spend (extended
+                    thinking + web search + documents) into one one-shot
+                    request, so flag this above the upload area. Server-side
+                    reserveCost + the kill switch enforce the $5 lifetime cap
+                    for free/anon tiers; BYOK bypasses it. */}
+                  <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    Generate runs a deep analysis of your documents. A single run typically costs a
+                    few dollars — more for large documents or heavy web searching. The running cost
+                    is shown as the answer is written, so you can stop it at any time if it starts
+                    to add up.
+                  </div>
+                  <div className="text-center text-gray-500 text-sm py-4">
+                    <div className="mb-2">
+                      <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
+                    </div>
+                    <p>Upload documents to generate a Theory of Change conversation</p>
+                  </div>
 
-                      {/* File Upload */}
-                      <div
-                        className="border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-gray-400 transition-colors"
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.currentTarget.classList.add('border-blue-400', 'bg-blue-50');
-                        }}
-                        onDragLeave={(e) => {
-                          e.preventDefault();
-                          e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                          const files = e.dataTransfer.files;
-                          if (files.length > 0) handleFileUpload(files);
-                        }}
-                      >
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          multiple
-                          accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
-                          onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
-                          className="hidden"
-                        />
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-                        >
-                          <CloudArrowUpIcon className="w-5 h-5" />
-                          Click to upload or drag & drop documents
-                        </button>
-                        <p className="text-xs text-gray-500 text-center mt-2">
-                          Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
-                        </p>
-                      </div>
+                  {/* File Upload */}
+                  <div
+                    className={`border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors ${
+                      generateBlockedByTurnstile ? 'opacity-50' : 'hover:border-gray-400'
+                    }`}
+                    onDragOver={(e) => {
+                      if (generateBlockedByTurnstile) return;
+                      e.preventDefault();
+                      e.currentTarget.classList.add('border-blue-400', 'bg-blue-50');
+                    }}
+                    onDragLeave={(e) => {
+                      if (generateBlockedByTurnstile) return;
+                      e.preventDefault();
+                      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+                    }}
+                    onDrop={(e) => {
+                      if (generateBlockedByTurnstile) return;
+                      e.preventDefault();
+                      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+                      const files = e.dataTransfer.files;
+                      if (files.length > 0) handleFileUpload(files);
+                    }}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
+                      onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={generateBlockedByTurnstile}
+                      className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 enabled:hover:text-gray-800 enabled:hover:bg-gray-50 disabled:cursor-not-allowed rounded transition-colors"
+                    >
+                      <CloudArrowUpIcon className="w-5 h-5" />
+                      Click to upload or drag & drop documents
+                    </button>
+                    <p className="text-xs text-gray-500 text-center mt-2">
+                      Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
+                    </p>
+                  </div>
 
-                      {/* Generate-mode PDF chips (Files API uploads). */}
-                      {generateAttachedChips.length > 0 && (
-                        <AttachedFilesBar
-                          files={generateAttachedChips}
-                          onRemove={handleGenerateFileRemove}
-                          onRetry={handleGenerateFileRetry}
-                        />
-                      )}
+                  {/* Generate-mode PDF chips (Files API uploads). */}
+                  {generateAttachedChips.length > 0 && (
+                    <AttachedFilesBar
+                      files={generateAttachedChips}
+                      onRemove={handleGenerateFileRemove}
+                      onRetry={handleGenerateFileRetry}
+                    />
+                  )}
 
-                      {/* Uploaded Files */}
-                      {files.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
-                          {files.map((file, index) => (
-                            <div key={index} className="p-2 bg-gray-50 rounded">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 flex-1">
-                                  <div
-                                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                                      file.status === 'ready'
-                                        ? 'bg-green-400'
-                                        : file.status === 'reading'
-                                          ? 'bg-yellow-400 animate-pulse'
-                                          : 'bg-red-400'
-                                    }`}
-                                  ></div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-sm text-gray-700 truncate">
-                                        {file.file.name}
-                                      </span>
-                                      <span className="text-xs text-gray-500">
-                                        ({getFileTypeDescription(file.file.name)})
-                                      </span>
-                                    </div>
-                                    {file.status === 'reading' && (
-                                      <span className="text-xs text-gray-500">Reading file...</span>
-                                    )}
-                                    {file.status === 'ready' && file.content && (
-                                      <span className="text-xs text-green-600">
-                                        {Math.round(file.content.length / 1000)}KB of text extracted
-                                      </span>
-                                    )}
-                                    {file.status === 'error' && (
-                                      <span className="text-xs text-red-600">
-                                        {file.errorMessage || 'Failed to read file'}
-                                      </span>
-                                    )}
-                                  </div>
+                  {/* Uploaded Files */}
+                  {files.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
+                      {files.map((file, index) => (
+                        <div key={index} className="p-2 bg-gray-50 rounded">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 flex-1">
+                              <div
+                                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  file.status === 'ready'
+                                    ? 'bg-green-400'
+                                    : file.status === 'reading'
+                                      ? 'bg-yellow-400 animate-pulse'
+                                      : 'bg-red-400'
+                                }`}
+                              ></div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-gray-700 truncate">
+                                    {file.file.name}
+                                  </span>
+                                  <span className="text-xs text-gray-500">
+                                    ({getFileTypeDescription(file.file.name)})
+                                  </span>
                                 </div>
-                                <button
-                                  onClick={() => removeFile(file.file)}
-                                  className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
-                                  title="Remove file"
-                                >
-                                  <XMarkIcon className="w-4 h-4" />
-                                </button>
+                                {file.status === 'reading' && (
+                                  <span className="text-xs text-gray-500">Reading file...</span>
+                                )}
+                                {file.status === 'ready' && file.content && (
+                                  <span className="text-xs text-green-600">
+                                    {Math.round(file.content.length / 1000)}KB of text extracted
+                                  </span>
+                                )}
+                                {file.status === 'error' && (
+                                  <span className="text-xs text-red-600">
+                                    {file.errorMessage || 'Failed to read file'}
+                                  </span>
+                                )}
                               </div>
                             </div>
-                          ))}
+                            <button
+                              onClick={() => removeFile(file.file)}
+                              className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
+                              title="Remove file"
+                            >
+                              <XMarkIcon className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                      )}
-
-                      {/* Additional Instructions */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Additional Instructions (Optional)
-                        </label>
-                        <textarea
-                          value={additionalInstructions}
-                          onChange={(e) => setAdditionalInstructions(e.target.value)}
-                          placeholder="Any specific focus areas or requirements for your Theory of Change..."
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
-                          rows={3}
-                        />
-                      </div>
-
-                      {(generateEstimateUsd > 0 || estimatingCost) && (
-                        <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
-                          {estimatingCost && (
-                            <span
-                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                              aria-label="Recalculating estimate"
-                            />
-                          )}
-                          {generateEstimateUsd > 0 ? (
-                            <span>
-                              Estimated input cost:{' '}
-                              <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is
-                              billed on top as the response streams; hit Stop to abort if it runs
-                              long.
-                            </span>
-                          ) : (
-                            <span className="text-gray-500">Estimating…</span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Model picker. Mirrors the chat composer's pattern;
-                    selectedModel is shared across modes so a user's choice
-                    in one carries to the other. */}
-                      <div className="flex items-center justify-between text-xs text-gray-600">
-                        <span>Model</span>
-                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
-                      </div>
-
-                      {/* Effort picker. Hidden when the model doesn't accept
-                          `output_config.effort`; rendered on the same row when
-                          it does so the controls stay visually grouped. */}
-                      {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
-                        <div className="flex items-center justify-between text-xs text-gray-600">
-                          <span>Effort</span>
-                          <EffortDropdown
-                            model={selectedModel}
-                            selected={selectedEffort}
-                            onSelect={setSelectedEffort}
-                          />
-                        </div>
-                      )}
-
-                      {/* Generate button. Available to all tiers; the $5 lifetime
-                        cap is enforced server-side via reserveCost and the
-                        kill switch. BYOK bypasses the cap. */}
-                      <button
-                        onClick={startGeneration}
-                        disabled={
-                          files.filter((f) => f.status === 'ready').length +
-                            generateAttachedFileIds.length ===
-                            0 ||
-                          generateAttachedChips.some(
-                            (f) => f.status === 'uploading' || f.status === 'error',
-                          ) ||
-                          isLoading
-                        }
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {isLoading ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                            Generating...
-                          </>
-                        ) : (
-                          <>
-                            <DocumentPlusIcon className="w-4 h-4" />
-                            Generate Theory of Change
-                          </>
-                        )}
-                      </button>
-                    </>
+                      ))}
+                    </div>
                   )}
+
+                  {/* Additional Instructions */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Additional Instructions (Optional)
+                    </label>
+                    <textarea
+                      value={additionalInstructions}
+                      onChange={(e) => setAdditionalInstructions(e.target.value)}
+                      placeholder="Any specific focus areas or requirements for your Theory of Change..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                      rows={3}
+                    />
+                  </div>
+
+                  {(generateEstimateUsd > 0 || estimatingCost) && (
+                    <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
+                      {estimatingCost && (
+                        <span
+                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                          aria-label="Recalculating estimate"
+                        />
+                      )}
+                      {generateEstimateUsd > 0 ? (
+                        <span>
+                          Estimated input cost:{' '}
+                          <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is billed on
+                          top as the response streams; hit Stop to abort if it runs long.
+                        </span>
+                      ) : (
+                        <span className="text-gray-500">Estimating…</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Model picker. Mirrors the chat composer's pattern;
+                selectedModel is shared across modes so a user's choice
+                in one carries to the other. */}
+                  <div className="flex items-center justify-between text-xs text-gray-600">
+                    <span>Model</span>
+                    <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                  </div>
+
+                  {/* Effort picker. Hidden when the model doesn't accept
+                      `output_config.effort`; rendered on the same row when
+                      it does so the controls stay visually grouped. */}
+                  {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
+                    <div className="flex items-center justify-between text-xs text-gray-600">
+                      <span>Effort</span>
+                      <EffortDropdown
+                        model={selectedModel}
+                        selected={selectedEffort}
+                        onSelect={setSelectedEffort}
+                      />
+                    </div>
+                  )}
+
+                  {/* Generate button. Available to all tiers; the $5 lifetime
+                    cap is enforced server-side via reserveCost and the
+                    kill switch. BYOK bypasses the cap. */}
+                  <button
+                    onClick={startGeneration}
+                    disabled={
+                      files.filter((f) => f.status === 'ready').length +
+                        generateAttachedFileIds.length ===
+                        0 ||
+                      generateAttachedChips.some(
+                        (f) => f.status === 'uploading' || f.status === 'error',
+                      ) ||
+                      isLoading ||
+                      generateBlockedByTurnstile
+                    }
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isLoading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <DocumentPlusIcon className="w-4 h-4" />
+                        Generate Theory of Change
+                      </>
+                    )}
+                  </button>
                 </div>
               ) : null}
 
