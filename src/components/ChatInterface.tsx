@@ -26,7 +26,6 @@ import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedG
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
-import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
   type ComposerBlocker,
@@ -37,6 +36,7 @@ import {
   clearOnSendStart,
 } from './chat/composerBlocker';
 import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
+import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import type { ToCData } from '../types';
 import {
   formatCostUsd,
@@ -62,7 +62,6 @@ import {
   StopIcon,
   SparklesIcon,
   PencilSquareIcon,
-  KeyIcon,
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
@@ -133,25 +132,9 @@ try {
   // localStorage unavailable (private browsing / SSR): nothing to clean up.
 }
 
-/**
- * Button that opens AuthButton's API-key settings modal. Dispatches a
- * window-level CustomEvent which AuthButton listens for (see its
- * useEffect). Used from cap banners and the Generate-mode key gate so
- * we don't render the full BYOK instructions inline anymore — they live
- * in the modal alongside the rest of the key management UI.
- */
-function AddApiKeyButton() {
-  return (
-    <button
-      type="button"
-      onClick={() => window.dispatchEvent(new CustomEvent('tocb:openApiKeyModal'))}
-      className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-    >
-      <KeyIcon className="w-4 h-4" aria-hidden />
-      Add your Anthropic API key
-    </button>
-  );
-}
+// AddApiKeyButton previously rendered inline cap banners here; with the
+// banner JSX consolidated into <ComposerBlockerBanner> (Task 7), the
+// button moved alongside the banner copy. Removed from this file.
 
 export type AIMode = 'chat' | 'generate';
 
@@ -3614,23 +3597,12 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   )}
 
-                  {/* Cost-error banner for non-cap errors that don't merit
-                    the full BYOK panel (body-too-large, chart-deleted,
-                    service-unavailable, etc.). Cap/quota errors go
-                    straight to the inline ByokPanel below via
-                    handleCostError. */}
-                  {composerBlocker?.type === 'advisory' && (
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%] p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-900">
-                        {composerBlocker.detail}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* mid-stream-kill (request_cut_off) and global-budget
-                    banners now render in the composer area (below) so they
-                    sit next to the input rather than scrolling away in the
-                    message history. See the composer-side render. */}
+                  {/* All cap/cost banners (including advisory) consolidated
+                    into <ComposerBlockerBanner> in the composer area below.
+                    Trade-off documented in the PR: advisory banners lose
+                    temporal pairing with the failed user message (they used
+                    to render here inline with chat history); consistent
+                    placement with the cap variants is the win. */}
 
                   {isLoading && !isStreaming && !streamPhase && (
                     <div className="flex justify-start">
@@ -3715,86 +3687,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                       </div>
                     ) : null}
-                    {/* Cap/cost banners, all unified through renderedBlocker
-                      (see src/components/chat/composerBlocker.ts).
-                      Variants:
-                        - cap_reached: server-confirmed lifetime cap hit
-                        - request_cut_off: mid-stream kill just fired
-                        - global_budget: Anthropic Console cap hit
-                        - would_exceed_cap: draft estimate would push over
-                        - advisory: soft warning (rendered in scroll area
-                          above; doesn't block sends)
-                      Task 7 collapses this chain into <ComposerBlockerBanner>;
-                      for now the existing JSX branches are rewired to read
-                      from renderedBlocker. DonateCta only on cap-reached
-                      and free-tier global-budget paths. */}
-                    {renderedBlocker?.type === 'request_cut_off' ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                          Message cut off — your last message used the rest of the free quota. Add
-                          your Anthropic API key to keep going.
-                        </div>
-                        <AddApiKeyButton />
-                      </div>
-                    ) : renderedBlocker?.type === 'global_budget' ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2 space-y-1">
-                          {/* Conditional headline:
-                              - BYOK user: their own key returned billing_error.
-                                Pointing them at "add an API key" is wrong (they
-                                already have one); the remediation is the
-                                Anthropic Console.
-                              - Free/anon user: our shared key hit the cap (or
-                                Anthropic billing desync). BYOK is the unblock. */}
-                          {hasKey ? (
-                            <div>
-                              Anthropic returned a billing error for your API key. This can be
-                              transient — try again in a minute. If it persists, check your
-                              Anthropic Console for cap, payment, or organization status.
-                            </div>
-                          ) : (
-                            <div>
-                              We hit our shared monthly spend cap, or Anthropic returned a transient
-                              billing error. Try again in a minute, or use your own Anthropic key to
-                              continue.
-                            </div>
-                          )}
-                          {renderedBlocker.upstream_message && (
-                            <div className="text-xs text-red-700 italic">
-                              Anthropic says: &ldquo;{renderedBlocker.upstream_message}&rdquo;
-                            </div>
-                          )}
-                        </div>
-                        {/* Action affordances: AddApiKeyButton only helps if
-                            the user doesn't already have a key. DonateCta only
-                            helps the free-tier case (BYOK users are self-
-                            funded; donations don't unblock them). */}
-                        {!hasKey && <AddApiKeyButton />}
-                        {!hasKey && <DonateCta />}
-                      </div>
-                    ) : renderedBlocker?.type === 'cap_reached' ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                          You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}. Add
-                          your Anthropic API key to keep going.
-                        </div>
-                        <AddApiKeyButton />
-                        <DonateCta />
-                      </div>
-                    ) : renderedBlocker?.type === 'would_exceed_cap' ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Your next send (includes chat history and attached files) is estimated at{' '}
-                          <strong>{formatCostUsd(activeEstimate)}</strong>, but only{' '}
-                          <strong>
-                            {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}/
-                            {formatCostUsd(usage!.limit_usd)}
-                          </strong>{' '}
-                          left. Add your Anthropic API key to continue.
-                        </div>
-                        <AddApiKeyButton />
-                      </div>
-                    ) : null}
+                    {/* Cap/cost/advisory banner. All variants unified into
+                      a single React.memo'd component reading from
+                      renderedBlocker (see src/components/chat/composerBlocker.ts).
+                      Variants: cap_reached, request_cut_off, global_budget,
+                      would_exceed_cap, advisory. */}
+                    <ComposerBlockerBanner
+                      blocker={renderedBlocker}
+                      usage={usage}
+                      hasKey={hasKey}
+                      composerEstimateUsd={activeEstimate}
+                    />
                     {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
                     <AttachedFilesBar
