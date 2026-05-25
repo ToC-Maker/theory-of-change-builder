@@ -2686,6 +2686,16 @@ export function ChatInterface({
       return;
     }
 
+    // Cap gate — same predicate as the Chat path. Generate had zero
+    // cap protection before this; a capped user clicking Generate would
+    // wipe their Chat history (setMessages([generationMessage]) below)
+    // before the server rejected, with no banner to explain why.
+    // Placed AFTER the three early-exits but BEFORE any state mutation
+    // (including the confirm dialog from Task 5).
+    if (shouldBlockSend(renderedBlocker)) {
+      return;
+    }
+
     sendInFlightRef.current = true;
     setIsLoading(true);
     setIsStreaming(true);
@@ -3396,7 +3406,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
 
                   {/* Generate button. Available to all tiers; the $5 lifetime
                     cap is enforced server-side via reserveCost and the
-                    kill switch. BYOK bypasses the cap. */}
+                    kill switch. BYOK bypasses the cap. shouldBlockSend
+                    matches the Chat path — same predicate, same source
+                    of truth. */}
                   <button
                     onClick={startGeneration}
                     disabled={
@@ -3407,7 +3419,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         (f) => f.status === 'uploading' || f.status === 'error',
                       ) ||
                       isLoading ||
-                      generateBlockedByTurnstile
+                      generateBlockedByTurnstile ||
+                      shouldBlockSend(renderedBlocker)
                     }
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
