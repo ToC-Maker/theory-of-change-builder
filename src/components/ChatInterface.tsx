@@ -3853,19 +3853,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         </div>
       </div>
 
-      {/* BYOK cost info tooltip. Discloses that our client-side tally can
-          under-count Anthropic's actual billing by a few percent on agentic
-          streams (web search, code execution) because some sub-inference
-          usage isn't emitted on SSE. See plans/byok-cost-stream-recovery. */}
+      {/* BYOK cost info tooltip — keep short. Just discloses that this
+          is an estimate and Anthropic's console is the source of truth. */}
       <Tooltip
         id="byok-cost-info"
         place="bottom"
-        className="!max-w-[260px] !text-xs !leading-snug"
+        className="!max-w-[240px] !text-xs !leading-snug"
         style={{ zIndex: 9999 }}
       >
-        Best-effort tally from streaming events. Anthropic&apos;s console may show slightly more
-        (typically a few percent on streams that use web search or code execution; near-exact for
-        simple chats), and is the source of truth for billing.
+        Estimate from streaming events. Anthropic&apos;s console is the source of truth and may show
+        more.
       </Tooltip>
     </>
   );
