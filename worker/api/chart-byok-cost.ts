@@ -61,12 +61,23 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     }
 
     // Sum cost_settled_micro_usd for this user's messages on this chart.
-    // COALESCE handles the no-rows case (foreign chart_id, fresh chart with
-    // no messages yet) — returns 0 instead of NULL.
+    // The `chartId` URL param can be EITHER the 12-char chart id OR the
+    // 36-char edit_token, because the client's BYOK pill is keyed by
+    // whichever the URL exposed (`/chart/<id>` vs `/edit/<token>`), and
+    // those are the keys it uses to round-trip pill values. The DB stores
+    // only the 12-char chart_id on logging_messages, so we resolve the
+    // edit_token form via charts in the same statement (one round trip)
+    // and treat both forms as equivalent. COALESCE handles the no-rows
+    // case (foreign id/token, fresh chart with no messages yet) — returns
+    // 0 instead of NULL.
     const rows = (await sql`
       SELECT COALESCE(SUM(cost_settled_micro_usd), 0) AS total
       FROM logging_messages
-      WHERE chart_id = ${chartId} AND user_id = ${userId}
+      WHERE user_id = ${userId}
+        AND (
+          chart_id = ${chartId}
+          OR chart_id = (SELECT id FROM charts WHERE edit_token = ${chartId})
+        )
     `) as { total: bigint | number | string | null }[];
     const total = rows.length > 0 ? toBigInt(rows[0].total) : 0n;
 
