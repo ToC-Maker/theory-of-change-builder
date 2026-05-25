@@ -1029,7 +1029,7 @@ export function isCostCapKill(killDiagnostic: KillDiagnostic | null): boolean {
  * passes its own value; operational queries against `logging_errors`
  * filter on `request_metadata->>'source'` to bucket by site.
  */
-export type PerUpdateCommitSource = 'poll' | 'message_start' | 'message_delta';
+export type PerUpdateCommitSource = 'poll' | 'message_start' | 'message_delta' | 'web_search_block';
 
 /**
  * Minimal slice of `SseTeeContext` that `firePerUpdateCommit` reads.
@@ -2129,6 +2129,49 @@ function createCostTrackingStream(
             // snapshot + the live web-search count; the accumulator's own
             // web_search_requests field stays 0 until message_delta.
             if (fireKillIfOverThreshold(controller)) return false;
+            // Emit a running_cost + per-update commit on each web_search
+            // observation. message_start/message_delta only fire at sub-
+            // inference boundaries, polls only fire on output-token
+            // deltas — and web_searches dispatched from code_execution
+            // can fire in rapid succession with no output tokens in
+            // between. Without this emit a Stop-button mid-burst loses
+            // each $0.01 search from the pill / DB even though we count
+            // them internally. See the 2026-05-25 production gap
+            // analysis (DB $0.35 vs Anthropic $0.50, web_search $0.12
+            // missing entirely from running_cost emits).
+            try {
+              const liveUsage: AnthropicUsage = {
+                ...accumulatorToUsage(teeCtx.accumulator),
+                output_tokens: teeCtx.lastPollOutputTokens,
+                server_tool_use: {
+                  web_search_requests: teeCtx.streamingContent.webSearchCount,
+                },
+              };
+              const webBlockMicro = computeCostMicroUsd(teeCtx.model, liveUsage);
+              const wsFrame: ServerRunningCostFrame = {
+                type: 'running_cost',
+                cost_usd: microToUsd(webBlockMicro),
+                output_tokens_est: teeCtx.lastPollOutputTokens,
+                source: 'poll',
+                cost_micro_usd: webBlockMicro.toString(),
+                input_tokens: teeCtx.accumulator.input_tokens,
+                cache_creation_input_tokens: teeCtx.accumulator.cache_creation_input_tokens,
+                cache_read_input_tokens: teeCtx.accumulator.cache_read_input_tokens,
+                web_search_requests: teeCtx.streamingContent.webSearchCount,
+              };
+              try {
+                controller.enqueue(
+                  encoder.encode(`event: running_cost\ndata: ${JSON.stringify(wsFrame)}\n\n`),
+                );
+              } catch (e) {
+                console.warn('web_search running_cost enqueue failed (controller closed):', e);
+              }
+              firePerUpdateCommit(teeCtx, webBlockMicro, 'web_search_block');
+            } catch (e) {
+              // Cost compute failure here is non-fatal — the message_delta
+              // emit + reconcile will still re-derive cumulative cost.
+              console.warn('web_search cost compute failed:', e);
+            }
           }
         } else if (cbType === 'web_search_tool_result' || cbType === 'code_execution_tool_result') {
           // Both tool_result types carry the resolved result inline on the
@@ -2250,6 +2293,18 @@ function createCostTrackingStream(
     if (eventType === 'message_start' || eventType === 'message_delta') {
       const merged = { ...teeCtx.accumulator };
       mergeUsage(merged, usageObj);
+      // Overlay the live web-search count. Anthropic's usage payload
+      // sometimes omits `server_tool_use.web_search_requests` entirely
+      // (observed in a 2026-05-25 production stream that fired 12 web
+      // searches but reported web_search_requests=0 on every
+      // message_start / message_delta usage). Without this overlay the
+      // last running_cost the client receives undercounts by $0.01 per
+      // search, even though the live counter is correct. Mirrors the
+      // reconcile path (line ~3515) and the poll path (line ~1769).
+      merged.web_search_requests = Math.max(
+        merged.web_search_requests,
+        teeCtx.streamingContent.webSearchCount,
+      );
       try {
         const finalMicro = computeCostMicroUsd(teeCtx.model, accumulatorToUsage(merged));
         // Embed the full accumulator snapshot in the SSE frame so the
