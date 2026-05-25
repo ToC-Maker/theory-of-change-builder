@@ -30,7 +30,7 @@
   "dependencies": {
     "@auth0/auth0-react": "^2.16.1",
     "@heroicons/react": "^2.2.0",
-    "@mdxeditor/editor": "^3.54.1",
+    "@mdxeditor/editor": "^4.0.0",
     "@neondatabase/serverless": "^1.0.2",
     "clsx": "^2.1.1",
     "prismjs": "^1.30.0",
