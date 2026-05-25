@@ -326,37 +326,12 @@ const TURNSTILE_SCRIPT_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
 
-// User-facing copy for each cost-error category. Reused by both the legacy
-// keyword classifier (classifyCostError) and the structured handler
-// (handleCostError), so copy stays consistent between the two paths.
-type CostErrorKind =
-  | 'lifetime_cap'
-  | 'global_budget'
-  | 'turnstile'
-  | 'body_too_large'
-  | 'service_unavailable';
-
-const COST_ERROR_COPY: Record<CostErrorKind, string> = {
-  lifetime_cap:
-    "You've reached the free quota. Bring your own Anthropic key to keep going, or donate to help us keep the free tier available for others.",
-  global_budget:
-    "We've hit our shared monthly AI spend cap. Bring your own Anthropic key to keep going, or donate to help us raise the cap and keep this tool sustainable.",
-  turnstile: 'Please complete the challenge before sending.',
-  body_too_large: 'Your message is too large. Try a shorter message or fewer attachments.',
-  service_unavailable: 'Service temporarily unavailable. Please try again shortly.',
-};
-
-// Keyword table for classifyCostError(). Order matters: first match wins.
-const COST_ERROR_CATEGORIES: ReadonlyArray<readonly [CostErrorKind, readonly string[]]> = [
-  ['lifetime_cap', ['lifetime_cap_reached', 'free quota']],
-  ['global_budget', ['global_budget_exhausted', 'shared budget']],
-  ['turnstile', ['turnstile_required', 'turnstile_failed']],
-  ['body_too_large', ['body_too_large', 'payload too large']],
-  [
-    'service_unavailable',
-    ['database_unavailable', 'estimation_unavailable', 'authentication_service_unavailable'],
-  ],
-];
+// Legacy CostErrorKind type, COST_ERROR_COPY map, COST_ERROR_CATEGORIES
+// keyword table, and classifyCostError function deleted. They mapped
+// streaming error strings to cost-error categories — but per C6 analysis
+// chatService.ts:1487 swallows tagged cost errors before they reach
+// onError, so the keyword path was unreachable in practice. Structured
+// cost errors now flow through src/components/chat/composerBlocker.ts.
 
 // Global reference to Cloudflare's injected helper. We attach it via the
 // raw <script> element because we don't ship @marsidev/react-turnstile in
@@ -1219,19 +1194,11 @@ export function ChatInterface({
   // (filtered) on the next render — no sync effect needed, no race
   // between the effect's clear and the async refresh's tier update.
 
-  // Classify a streaming error string into a cost/quota category if it
-  // matches one of U9's error payloads. Keyword-based detection covers the
-  // legacy error-string path; structured errors from `onCostError` skip this
-  // classifier and go through `handleCostError` below.
-  const classifyCostError = useCallback((message: string) => {
-    const lower = message.toLowerCase();
-    for (const [kind, keywords] of COST_ERROR_CATEGORIES) {
-      if (keywords.some((k) => lower.includes(k))) {
-        return { kind, message: COST_ERROR_COPY[kind] };
-      }
-    }
-    return null;
-  }, []);
+  // classifyCostError + the COST_ERROR_COPY/CATEGORIES tables deleted —
+  // structured cost errors now flow exclusively through `handleCostError`
+  // below (which dispatches via the pure costErrorToBlocker transition).
+  // chatService.ts:1487 swallows tagged cost errors before onError fires,
+  // so the legacy keyword path was unreachable in practice (per C6).
 
   // Structured cost-error handler. Two-step dispatch:
   //   1. Turnstile arms touch Turnstile session state, not the blocker slot
@@ -1986,63 +1953,46 @@ export function ChatInterface({
             }
           },
           onError: (error: string) => {
-            // Legacy keyword-based classifier for generic error strings. New
-            // shapes (turnstile_required, idempotent_replay, body_too_large, …)
-            // arrive via onCostError below with structured data; we don't rely
-            // on the error-string path for them. classifyCostError is slated
-            // for deletion in Task 9 — per C6 analysis it's already
-            // unreachable in practice (chatService.ts:1487 swallows tagged
-            // cost errors before onError fires). For now we map the legacy
-            // kind to an advisory variant so the code compiles.
-            const classified = classifyCostError(error);
-            if (classified) {
-              // Surface as inline banner, don't pollute chat history
-              // (decision 8: preserve chat history on quota/cost failures so
-              // BYOK-recovered retries re-use the same messages array).
-              setComposerBlocker({
-                type: 'advisory',
-                cost_error_type: 'database_unavailable', // legacy bucket
-                detail: classified.message,
-              });
+            // Structured cost errors arrive via onCostError below with
+            // typed data; this onError path is for transport-level failures
+            // (network blips, parse errors, etc.). Preserve any partial
+            // that streamed before the error so the user can read what
+            // they got + see the actual failure inline. Without this the
+            // partial vanishes and the user has no signal beyond the chat
+            // resetting. Mirror the `aborted` and `cap_exceeded` paths:
+            // capture content_blocks too so the half-built turn (text +
+            // signed thinking + paired tool blocks) round-trips into the
+            // next request. `isReplayableAssistantBlock` strips unsigned
+            // thinking and orphan tool blocks, and
+            // `fixupAssistantBlocksForReplay` handles trailing-shape edge
+            // cases — worst case Anthropic 400s on retry, best case the
+            // user recovers from a network blip without losing context.
+            const partial = streamingMessageRef.current;
+            const partialBlocks = streamingContentBlocksRef.current;
+            const hasBlocks = partialBlocks.length > 0;
+            const hasText = !!partial && partial.content.length > 0;
+            if (partial && (hasText || hasBlocks)) {
+              const stamped: ChatMessage = {
+                ...partial,
+                was_killed: true,
+                kill_reason: 'error',
+                kill_message: error,
+                content: hasText
+                  ? partial.content
+                  : '_(Assistant errored before writing a visible response.)_',
+                content_blocks: hasBlocks ? partialBlocks : undefined,
+              };
+              setMessages((prev) => [...prev, stamped]);
             } else {
-              // Preserve any partial that streamed before the error so the
-              // user can read what they got + see the actual failure inline.
-              // Without this the partial vanishes and the user has no signal
-              // beyond the chat resetting. Mirror the `aborted` and
-              // `cap_exceeded` paths: capture content_blocks too so the
-              // half-built turn (text + signed thinking + paired tool blocks)
-              // round-trips into the next request. `isReplayableAssistantBlock`
-              // strips unsigned thinking and orphan tool blocks, and
-              // `fixupAssistantBlocksForReplay` handles trailing-shape edge
-              // cases — worst case Anthropic 400s on retry, best case the user
-              // recovers from a network blip without losing context.
-              const partial = streamingMessageRef.current;
-              const partialBlocks = streamingContentBlocksRef.current;
-              const hasBlocks = partialBlocks.length > 0;
-              const hasText = !!partial && partial.content.length > 0;
-              if (partial && (hasText || hasBlocks)) {
-                const stamped: ChatMessage = {
-                  ...partial,
-                  was_killed: true,
-                  kill_reason: 'error',
-                  kill_message: error,
-                  content: hasText
-                    ? partial.content
-                    : '_(Assistant errored before writing a visible response.)_',
-                  content_blocks: hasBlocks ? partialBlocks : undefined,
-                };
-                setMessages((prev) => [...prev, stamped]);
-              } else {
-                // No visible partial — surface the error as a fresh assistant
-                // turn so the user still sees what went wrong.
-                const errorMessage: ChatMessage = {
-                  id: assistantMessageId,
-                  role: 'assistant',
-                  content: `Error: ${error}`,
-                  timestamp: new Date(),
-                };
-                setMessages((prev) => [...prev, errorMessage]);
-              }
+              // No visible partial — surface the error as a fresh assistant
+              // turn so the user still sees what went wrong.
+              const errorMessage: ChatMessage = {
+                id: assistantMessageId,
+                role: 'assistant',
+                content: `Error: ${error}`,
+                timestamp: new Date(),
+              };
+              setMessages((prev) => [...prev, errorMessage]);
             }
             resetStreamUiState();
           },
@@ -2117,28 +2067,19 @@ export function ChatInterface({
         keyLast4: streamKeyLast4,
       });
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Sorry, there was an error processing your request.';
-      // Legacy classifier path; see comments at onError above. Slated for
-      // deletion in Task 9.
-      const classified = classifyCostError(message);
-      if (classified) {
-        setComposerBlocker({
-          type: 'advisory',
-          cost_error_type: 'database_unavailable',
-          detail: classified.message,
-        });
-      } else {
-        const errorMessage: ChatMessage = {
-          id: assistantMessageId,
-          role: 'assistant',
-          content: 'Sorry, there was an error processing your request.',
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, errorMessage]);
-      }
+      // Transport-level failures (network blip, parse error, etc.).
+      // Cost errors were swallowed earlier in chatService.ts:1487 and
+      // routed via onCostError, so anything here is a generic transport
+      // problem. Surface as a fresh assistant turn so the user sees what
+      // went wrong.
+      void error; // referenced via message below
+      const errorMessage: ChatMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your request.',
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
       resetStreamUiState();
     } finally {
       setIsLoading(false);
@@ -2897,44 +2838,35 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             }
           },
           onError: (error: string) => {
-            // See chat-site commentary: keyword classifier is the legacy
-            // fallback for generic error strings; structured shapes arrive via
-            // onCostError below. Mirror the Chat-site error path: preserve
-            // partial content_blocks so signed thinking + paired tool blocks
-            // round-trip into the next request after a transient failure.
-            const classified = classifyCostError(error);
-            if (classified) {
-              setComposerBlocker({
-                type: 'advisory',
-                cost_error_type: 'database_unavailable',
-                detail: classified.message,
-              });
+            // Transport-level failures. Cost errors were swallowed in
+            // chatService.ts:1487 and routed via onCostError. Mirror the
+            // Chat-site error path: preserve partial content_blocks so
+            // signed thinking + paired tool blocks round-trip into the
+            // next request after a transient failure.
+            const partial = streamingMessageRef.current;
+            const partialBlocks = streamingContentBlocksRef.current;
+            const hasBlocks = partialBlocks.length > 0;
+            const hasText = !!partial && partial.content.length > 0;
+            if (partial && (hasText || hasBlocks)) {
+              const stamped: ChatMessage = {
+                ...partial,
+                was_killed: true,
+                kill_reason: 'error',
+                kill_message: error,
+                content: hasText
+                  ? partial.content
+                  : '_(Assistant errored before writing a visible response.)_',
+                content_blocks: hasBlocks ? partialBlocks : undefined,
+              };
+              setMessages((prev) => [...prev, stamped]);
             } else {
-              const partial = streamingMessageRef.current;
-              const partialBlocks = streamingContentBlocksRef.current;
-              const hasBlocks = partialBlocks.length > 0;
-              const hasText = !!partial && partial.content.length > 0;
-              if (partial && (hasText || hasBlocks)) {
-                const stamped: ChatMessage = {
-                  ...partial,
-                  was_killed: true,
-                  kill_reason: 'error',
-                  kill_message: error,
-                  content: hasText
-                    ? partial.content
-                    : '_(Assistant errored before writing a visible response.)_',
-                  content_blocks: hasBlocks ? partialBlocks : undefined,
-                };
-                setMessages((prev) => [...prev, stamped]);
-              } else {
-                const errorMessage: ChatMessage = {
-                  id: generationAssistantId,
-                  role: 'assistant',
-                  content: `Error: ${error}`,
-                  timestamp: new Date(),
-                };
-                setMessages((prev) => [...prev, errorMessage]);
-              }
+              const errorMessage: ChatMessage = {
+                id: generationAssistantId,
+                role: 'assistant',
+                content: `Error: ${error}`,
+                timestamp: new Date(),
+              };
+              setMessages((prev) => [...prev, errorMessage]);
             }
             resetStreamUiState();
           },
@@ -3001,26 +2933,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         keyLast4: streamKeyLast4,
       });
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Sorry, there was an error processing your request.';
-      const classified = classifyCostError(message);
-      if (classified) {
-        setComposerBlocker({
-          type: 'advisory',
-          cost_error_type: 'database_unavailable',
-          detail: classified.message,
-        });
-      } else {
-        const errorMessage: ChatMessage = {
-          id: generationAssistantId,
-          role: 'assistant',
-          content: 'Sorry, there was an error processing your request.',
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, errorMessage]);
-      }
+      // Transport-level failures (see Chat-site commentary at L2069).
+      void error;
+      const errorMessage: ChatMessage = {
+        id: generationAssistantId,
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your request.',
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
       resetStreamUiState();
     } finally {
       setIsLoading(false);
