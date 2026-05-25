@@ -3037,9 +3037,8 @@ export async function handler(
       /* ignore */
     }
   });
-  let upstream: Response;
-  try {
-    upstream = await fetch(ANTHROPIC_API_URL, {
+  const doUpstreamFetch = () =>
+    fetch(ANTHROPIC_API_URL, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -3050,6 +3049,9 @@ export async function handler(
       body: JSON.stringify(body),
       signal: abortController.signal,
     });
+  let upstream: Response;
+  try {
+    upstream = await doUpstreamFetch();
   } catch (e) {
     console.error('Upstream fetch failed:', e);
     if (isCapped(tier)) {
@@ -3064,6 +3066,48 @@ export async function handler(
       502,
       altSvcHeaders,
     );
+  }
+
+  // Transient billing-error retry. Anthropic occasionally returns a spurious
+  // 402 `billing_error` (billing-system desync) even on accounts with
+  // remaining credit and budget below cap — multiple GitHub issues confirm
+  // this exists in the wild (claude-code #867, #5300, #34522, #54839 et al.).
+  // A single retry after ~1.5s clears most of these. We peek at the body via
+  // `clone()` so the original response stays consumable if we don't retry.
+  if (upstream.status === 402) {
+    let peekParsed: unknown = null;
+    try {
+      const peekText = await upstream.clone().text();
+      peekParsed = JSON.parse(peekText);
+    } catch {
+      /* unparseable / clone consumed — fall through to normal error handling */
+    }
+    if (looksLikeBillingError(402, peekParsed)) {
+      console.warn(
+        '[anthropic-stream] 402 billing_error from upstream; retrying once after 1500ms',
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        upstream = await doUpstreamFetch();
+      } catch (e) {
+        console.error('Upstream retry fetch failed:', e);
+        if (isCapped(tier)) {
+          revertReservation(ctx, sql, actorId, projected, {
+            model,
+            chartId,
+            deploymentHost: requestUrl.hostname,
+          });
+        }
+        return jsonError(
+          {
+            error: 'upstream_unavailable',
+            details: e instanceof Error ? e.message : 'Unknown error',
+          },
+          502,
+          altSvcHeaders,
+        );
+      }
+    }
   }
 
   if (!upstream.ok) {
@@ -3084,12 +3128,29 @@ export async function handler(
     } catch {
       /* non-JSON body */
     }
+    // Extract Anthropic's error.type / error.message so the client's
+    // `[ChatService] API Error Response:` console.error includes the
+    // real upstream cause. PR previews don't have Wrangler tail, so
+    // the browser console is the only debugging surface; the previous
+    // shape stripped these and made 402s opaque to the user.
+    let upstreamMessage: string | undefined;
+    let upstreamErrorType: string | undefined;
+    if (parsedError && typeof parsedError === 'object') {
+      const e = (parsedError as { error?: unknown }).error;
+      if (e && typeof e === 'object') {
+        const err = e as { type?: unknown; message?: unknown };
+        if (typeof err.message === 'string') upstreamMessage = err.message.slice(0, 500);
+        if (typeof err.type === 'string') upstreamErrorType = err.type;
+      }
+    }
     if (looksLikeBillingError(upstream.status, parsedError)) {
       return jsonError(
         {
           error: 'global_budget_exhausted',
           resets_at: firstOfNextMonthUtcIso(),
           remedies: ['byok', 'donate'],
+          upstream_message: upstreamMessage,
+          upstream_error_type: upstreamErrorType,
         },
         402,
         altSvcHeaders,
