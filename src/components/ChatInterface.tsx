@@ -24,7 +24,7 @@ import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
-import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
+import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
 import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
@@ -1168,6 +1168,52 @@ export function ChatInterface({
     void refreshUsage();
   }, [refreshUsage, keyVersion]);
 
+  // Fetch the chart's authoritative BYOK cost from the server and apply
+  // it (max-monotone) to the per-chart pill. Closes the post-stream-poll
+  // gap where the client's local total ran behind the DB's cost_settled
+  // sum: the polling-window bumps can be missed if the tab was
+  // backgrounded, the polling never observed the final IIFE delta, or a
+  // different tab handled the bump. Called on chart load and right before
+  // each new stream send. Only runs when the user has BYOK (the endpoint
+  // is BYOK-scoped; anon callers get 0 and free-tier users don't show the
+  // chart pill anyway).
+  const syncChartByokCostFromDb = useCallback(
+    async (chartId: string | null | undefined): Promise<void> => {
+      if (!chartId) return;
+      if (!hasKey) return;
+      try {
+        const headers = await getAuthHeaders();
+        const resp = await fetch(`/api/chart-byok-cost?chartId=${encodeURIComponent(chartId)}`, {
+          headers,
+          credentials: 'include',
+        });
+        if (!resp.ok) return; // transient: keep local state
+        const data = (await resp.json()) as { cost_settled_micro_usd?: string };
+        const microStr = data.cost_settled_micro_usd;
+        if (!microStr) return;
+        const micro = Number(microStr);
+        if (!Number.isFinite(micro) || micro <= 0) return;
+        setChartSpendIfHigher(chartId, micro / 1_000_000);
+      } catch (err) {
+        console.warn('[ChatInterface] syncChartByokCostFromDb failed:', err);
+      }
+    },
+    [getAuthHeaders, hasKey],
+  );
+
+  // Chart-load sync. Run once the chart route is resolved (and again when
+  // the user adds/removes a BYOK key — going from free-tier to BYOK
+  // should pull the server's authoritative total). Cross-tab convergence
+  // path: a sibling tab's stream-end poll may have already updated the
+  // DB beyond what this tab's localStorage has; this brings the pill up
+  // to parity. Doesn't block render (fire-and-forget).
+  const chartIdForSync = params.chartId ?? params.editToken ?? null;
+  useEffect(() => {
+    if (!chartIdForSync) return;
+    if (!hasKey) return;
+    void syncChartByokCostFromDb(chartIdForSync);
+  }, [chartIdForSync, hasKey, keyVersion, syncChartByokCostFromDb]);
+
   // When the user adds a verified key via the settings modal, dismiss any
   // sticky cap banners that require explicit clearing. capAlreadyReached /
   // wouldExceedCap self-clear through the tier flip when usage refetches
@@ -1782,6 +1828,13 @@ export function ChatInterface({
     // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
     const resolvedChart = await ensureChartExists();
     const resolvedChartId = resolvedChart?.chartId;
+
+    // Pre-send pill sync. Pull the chart's authoritative BYOK cost from
+    // the server before kicking off the next stream. Catches any pill
+    // drift that survived the previous turn's post-stream poll (closed
+    // tab, missed bump, cross-tab stream). Fire-and-forget — we don't
+    // want to block the send on this sync.
+    void syncChartByokCostFromDb(resolvedChart?.editToken ?? resolvedChartId ?? null);
 
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
@@ -2748,6 +2801,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     const streamKeyLast4 = keyLast4;
     const streamUsesByok = hasKey;
     turnLastAppliedMicroRef.current = 0;
+
+    // Pre-send pill sync; see chat-mode call site for full rationale.
+    void syncChartByokCostFromDb(streamChartId);
 
     try {
       await chatService.streamMessage({

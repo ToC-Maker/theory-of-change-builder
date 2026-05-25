@@ -101,6 +101,35 @@ export function addByokSpend(
   emitSpendChanged();
 }
 
+/**
+ * Set the per-chart counter to the max of its current value and the supplied
+ * server-authoritative figure. Used by chart-load and pre-stream-send hooks
+ * to converge the locally-tracked pill on the DB's `cost_settled_micro_usd`
+ * sum without ever regressing the displayed value (an in-flight stream may
+ * have added local deltas the server hasn't observed yet; the user shouldn't
+ * see the pill bounce down). No-op when the server figure is ≤ the local
+ * value, or when chartId is null/empty. Skips the per-key counter entirely —
+ * `chart-byok-cost` doesn't return per-key breakdowns (logging_messages
+ * doesn't track which key was used per message), and per-key totals are a
+ * secondary affordance.
+ */
+export function setChartSpendIfHigher(chartId: string | null, costUsd: number): void {
+  if (!chartId) return;
+  if (!Number.isFinite(costUsd) || costUsd <= 0) return;
+  const newMicro = Math.round(costUsd * 1_000_000);
+  const storageKey = CHART_PREFIX + chartId;
+  const currentMicro = safeReadMicroUsd(storageKey);
+  if (newMicro <= currentMicro) {
+    return;
+  }
+  safeWriteMicroUsd(storageKey, newMicro);
+  console.log(
+    `[BYOK chart-sync] chart[${chartId}]: ${currentMicro}→${newMicro} µUSD ` +
+      `(server authoritative: $${costUsd.toFixed(6)})`,
+  );
+  emitSpendChanged();
+}
+
 export function clearChartSpend(chartId: string): void {
   try {
     localStorage.removeItem(CHART_PREFIX + chartId);
