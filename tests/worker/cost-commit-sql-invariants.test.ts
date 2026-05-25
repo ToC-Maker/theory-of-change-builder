@@ -42,26 +42,35 @@
 // Add landmarks if a regression survives the current set; do NOT replace
 // with a snapshot test.
 //
-// TDD verification (recorded 2026-05-17):
+// TDD verification (recorded 2026-05-17, updated 2026-05-25 for the
+// FOR UPDATE → UPDATE..FROM pattern fix):
 //
 // Each landmark was confirmed to fail loudly when the corresponding
 // production-side invariant was temporarily mutated. Specific
 // verifications (revert all before committing):
 //
-//   - Removing `FOR UPDATE` from the locked CTE failed the "locks the
-//     row" assertion.
+//   - Dropping the `FOR NO KEY UPDATE` from the FROM subquery failed
+//     the "locks the row before computing OLD" assertion (concurrent
+//     writers could read stale old_cs and double-credit).
 //   - Removing `AND reconciled_at IS NULL` from the msg_upd UPDATE
 //     failed the "late-retry lock baked into both" assertion (count
 //     drops from 2 to 1).
-//   - Swapping `GREATEST(cost_micro_usd, …)` for plain `=` in the
-//     msg_upd UPDATE failed the "monotone cost_micro_usd" assertion.
+//   - Swapping `GREATEST(m.cost_micro_usd, …)` for plain `=` failed
+//     the "monotone cost_micro_usd" assertion.
 //   - Swapping the CASE-WHEN arms on `byok_cost_micro_usd` failed the
-//     "byok arm routes signed_delta when isByok=true" assertion.
+//     "byok arm routes delta when isByok=true" assertion.
 //   - Splitting the CTE into two `sql\`` invocations failed the
 //     "single tagged-template call" assertion.
 //
 // All five mutations were reverted before commit; the test file in its
 // current form passes against the current production source.
+//
+// SHAPE NOTE: this file was updated 2026-05-25 to pin the new
+// `UPDATE m FROM (SELECT ... FOR NO KEY UPDATE) AS old` pattern. The
+// previous shape used a `locked AS (SELECT FOR UPDATE)` sibling CTE,
+// which silently returned zero rows on PG 17 due to the LockRows
+// EvalPlanQual quirk with same-statement UPDATEs. See cost-commit.ts
+// inline comment for the PG-quirk diagnosis.
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error - Vite/vitest resolve `?raw` at build time to a string.
 // The worker tsconfig does not include `vite/client` types (which declares
@@ -133,119 +142,115 @@ describe('applyDeltaCommit SQL structural invariants — pins production CTE sha
   });
 
   // -------------------------------------------------------------------------
-  // Lock semantics. The `SELECT ... FOR UPDATE` inside the locked CTE
-  // acquires a row-level exclusive lock for the duration of the
-  // statement. Dropping `FOR UPDATE` permits two concurrent writers to
-  // race past the SELECT, both compute deltas against the same stale
-  // `cost_settled_micro_usd`, and both credit `user_api_usage` (the
-  // double-counting failure mode pinned in the sibling concurrency
-  // simulation's algebra). The lock is meaningless if it isn't there.
+  // Lock semantics (UPDATE..FROM pattern, 2026-05-25 PG-quirk fix).
+  // The `SELECT cost_settled_micro_usd ... FOR NO KEY UPDATE` lives
+  // inside the UPDATE's FROM subquery — NOT in a sibling `locked` CTE
+  // (which on PG 17 causes LockRows to silently filter the row via
+  // EvalPlanQual against the same-statement msg_upd UPDATE). The lock
+  // strength is FOR NO KEY UPDATE (matches what UPDATE takes
+  // implicitly so there's no upgrade-then-recheck conflict). Dropping
+  // the lock permits two concurrent writers to both read stale
+  // `old_cs` and double-credit. The subquery also names its captured
+  // column `AS old_cs` so RETURNING can reference it.
   // -------------------------------------------------------------------------
-  it('acquires a SELECT ... FOR UPDATE row-level lock in the locked CTE', () => {
+  it('acquires FOR NO KEY UPDATE on cost_settled_micro_usd in the FROM subquery', () => {
     const body = extractApplyDeltaCommit();
-    expect(body).toContain('FOR UPDATE');
-    expect(body).toMatch(/WITH locked AS \(/);
+    expect(body).toMatch(/FROM \(/);
+    expect(body).toMatch(/SELECT cost_settled_micro_usd AS old_cs\s+FROM logging_messages/);
+    expect(body).toContain('FOR NO KEY UPDATE');
   });
 
   // -------------------------------------------------------------------------
-  // Late-retry lock: `reconciled_at IS NULL` must be in BOTH the locked
-  // SELECT and the msg_upd UPDATE. Reasoning:
+  // Late-retry lock: `reconciled_at IS NULL` must be in BOTH the FROM
+  // subquery (lock-side) and the msg_upd UPDATE (write-side guard).
+  // Reasoning:
   //
-  //   - The locked SELECT's `reconciled_at IS NULL` filter is the
-  //     fast-path bail (returns an empty CTE row, which the helper
-  //     translates into `{applied: false}`).
+  //   - The FROM subquery's `reconciled_at IS NULL` filter is the
+  //     fast-path bail (returns an empty row, which makes the outer
+  //     UPDATE match zero rows, which makes the helper translate to
+  //     `{applied: false}`).
   //   - The msg_upd UPDATE's `reconciled_at IS NULL` is the actual
   //     write-side guard. Without it, a row that just got reconciled
   //     by /api/reconcile-cost could still be updated by a racing
-  //     in-stream commit — the SELECT FOR UPDATE in the same statement
-  //     would catch it, but only if the predicate is on both sides.
+  //     in-stream commit.
   //
   // Dropping either copy collapses the lock against late-retry races.
   // -------------------------------------------------------------------------
-  it('filters on reconciled_at IS NULL in BOTH the locked SELECT and the msg_upd UPDATE', () => {
+  it('filters on reconciled_at IS NULL in BOTH the FROM subquery and the msg_upd UPDATE', () => {
     const body = extractApplyDeltaCommit();
     const reconciledNullCount = (body.match(/reconciled_at IS NULL/g) ?? []).length;
     expect(reconciledNullCount).toBeGreaterThanOrEqual(2);
   });
 
   // -------------------------------------------------------------------------
-  // Ownership pin: the `AND user_id = ${userId}` filter must also be in
-  // BOTH the locked SELECT and the msg_upd UPDATE. Baking ownership
+  // Ownership pin: the `AND user_id = ${userId}` filter must be in
+  // BOTH the FROM subquery and the msg_upd UPDATE. Baking ownership
   // into the SQL (rather than relying on a JS-side `if (row.user_id ===
   // userId)`) is the IDOR guard — even if a logged-in user crafts a
   // request with a stolen message_id, the row UPDATE refuses to match.
-  // The msg_upd UPDATE's ownership filter is independent of the locked
-  // SELECT's (Postgres won't carry the predicate forward); dropping
-  // either copy opens an IDOR vector.
+  // The msg_upd UPDATE's ownership filter is independent of the FROM
+  // subquery's; dropping either copy opens an IDOR vector.
   // -------------------------------------------------------------------------
-  it('bakes ownership (AND user_id = …) into BOTH the locked SELECT and the msg_upd UPDATE', () => {
+  it('bakes ownership (AND user_id = …) into BOTH the FROM subquery and the msg_upd UPDATE', () => {
     const body = extractApplyDeltaCommit();
-    const userIdFilterCount = (body.match(/AND user_id = \$\{userId\}/g) ?? []).length;
+    const userIdFilterCount = (body.match(/user_id = \$\{userId\}/g) ?? []).length;
     expect(userIdFilterCount).toBeGreaterThanOrEqual(2);
   });
 
   // -------------------------------------------------------------------------
-  // Baseline algebra: `GREATEST(projStr::bigint, cost_settled_micro_usd)`.
-  // This is "the higher of the reservation projection and any earlier
-  // in-stream settlement" — the floor below which a delta cannot count
-  // as new spend. Replacing it with `cost_settled_micro_usd` alone (no
-  // GREATEST) would let a stream that arrives mid-reservation
-  // double-credit the projection; replacing with `projStr` alone would
-  // discard earlier per-update settlements.
+  // Delta algebra (computed inline in RETURNING after the 2026-05-25
+  // shape change). Two invariants compress into one expression:
+  //
+  //   - Baseline = GREATEST(projStr, old.old_cs) — "the higher of the
+  //     reservation projection and any earlier in-stream settlement";
+  //     the floor below which a delta cannot count as new spend.
+  //   - Non-negative clamp via GREATEST(0::bigint, newStr - baseline)
+  //     — this helper NEVER decreases user_api_usage (refunds flow
+  //     through the separate /api/reconcile-cost signed-delta path).
+  //
+  // Both wrapped together in RETURNING's `AS delta` expression so the
+  // user_upd CTE consumes a non-negative number that respects the
+  // reservation floor. Dropping either GREATEST corrupts cap-check
+  // semantics in `reserveCost`.
   // -------------------------------------------------------------------------
-  it('uses GREATEST(projStr, cost_settled_micro_usd) as the baseline in the baseline CTE', () => {
+  it('computes delta = GREATEST(0, newStr - GREATEST(projStr, old.old_cs)) in RETURNING', () => {
     const body = extractApplyDeltaCommit();
-    expect(body).toMatch(/baseline AS \(/);
+    expect(body).toMatch(/RETURNING/);
     expect(body).toMatch(
-      /GREATEST\(\s*\$\{projStr\}::bigint\s*,\s*cost_settled_micro_usd\s*\)\s*AS bl FROM locked/,
-    );
-  });
-
-  // -------------------------------------------------------------------------
-  // Non-negative delta clamp: `GREATEST(0::bigint, newCost - baseline)`.
-  // This helper NEVER decreases `user_api_usage` (refunds flow through
-  // the separate `/api/reconcile-cost` signed-delta path — see the
-  // sibling `reconcile-sql-invariants.test.ts`). Dropping the
-  // `GREATEST(0, …)` clamp here would silently let an in-stream commit
-  // with `newCost < baseline` push the user's running spend NEGATIVE
-  // (or, more subtly, decrement on a high-water mark that should be
-  // sticky), corrupting the cap-check semantics in `reserveCost`.
-  // -------------------------------------------------------------------------
-  it('clamps the computed delta to non-negative via GREATEST(0::bigint, …) in the computed CTE', () => {
-    const body = extractApplyDeltaCommit();
-    expect(body).toMatch(/computed AS \(/);
-    expect(body).toMatch(
-      /GREATEST\(\s*0::bigint\s*,\s*\$\{newStr\}::bigint\s*-\s*\(SELECT bl FROM baseline\)\s*\)\s*AS delta/,
+      /GREATEST\(\s*0::bigint\s*,\s*\$\{newStr\}::bigint\s*-\s*GREATEST\(\s*\$\{projStr\}::bigint\s*,\s*old\.old_cs\s*\)\s*\)\s*AS delta/,
     );
   });
 
   // -------------------------------------------------------------------------
   // High-water-mark (HWM) monotonicity on `logging_messages.cost_micro_usd`
   // AND `cost_settled_micro_usd`. Both columns must be wrapped in
-  // `GREATEST(<col>, newStr::bigint)` so that a slow / out-of-order
+  // `GREATEST(m.<col>, newStr::bigint)` so that a slow / out-of-order
   // commit cannot regress an already-settled row. Plain `=` (without
   // GREATEST) would let a stale callback overwrite the truth with a
-  // lower value.
+  // lower value. The `m.` alias prefix is mandatory in UPDATE..FROM
+  // because both `logging_messages m` and the FROM subquery `old` are
+  // in scope.
   // -------------------------------------------------------------------------
-  it('updates BOTH cost_micro_usd and cost_settled_micro_usd with GREATEST(…) in msg_upd', () => {
+  it('updates BOTH cost_micro_usd and cost_settled_micro_usd with GREATEST(m.…) in msg_upd', () => {
     const body = extractApplyDeltaCommit();
     expect(body).toMatch(/msg_upd AS \(/);
-    expect(body).toMatch(/UPDATE logging_messages/);
-    expect(body).toMatch(/cost_micro_usd = GREATEST\(cost_micro_usd,\s*\$\{newStr\}::bigint\)/);
+    expect(body).toMatch(/UPDATE logging_messages m/);
+    expect(body).toMatch(/cost_micro_usd = GREATEST\(m\.cost_micro_usd,\s*\$\{newStr\}::bigint\)/);
     expect(body).toMatch(
-      /cost_settled_micro_usd = GREATEST\(cost_settled_micro_usd,\s*\$\{newStr\}::bigint\)/,
+      /cost_settled_micro_usd = GREATEST\(m\.cost_settled_micro_usd,\s*\$\{newStr\}::bigint\)/,
     );
-    expect(body).toMatch(/RETURNING cost_settled_micro_usd AS new_settled/);
+    expect(body).toMatch(/RETURNING\s+m\.cost_settled_micro_usd AS new_settled/);
   });
 
   // -------------------------------------------------------------------------
-  // BYOK routing (split-column fix, 2026-05-17): the delta lands in
-  // exactly one of `cost_micro_usd` (free cap, applies when `isByok=false`)
-  // or `byok_cost_micro_usd` (BYOK, applies when `isByok=true`). The two
+  // BYOK routing (split-column fix, 2026-05-17; CASE-WHEN now references
+  // msg_upd.delta after the 2026-05-25 shape change): the delta lands
+  // in exactly one of `cost_micro_usd` (free cap, when `isByok=false`)
+  // or `byok_cost_micro_usd` (BYOK, when `isByok=true`). The two
   // CASE-WHEN arms must be mirror images:
   //
-  //   free arm: ... THEN 0::bigint ELSE (SELECT delta FROM computed) END
-  //   byok arm: ... THEN (SELECT delta FROM computed) ELSE 0::bigint END
+  //   free arm: ... THEN 0::bigint ELSE (SELECT delta FROM msg_upd) END
+  //   byok arm: ... THEN (SELECT delta FROM msg_upd) ELSE 0::bigint END
   //
   // A regression that swapped the THEN/ELSE on either column would
   // silently couple BYOK spend back into the free cap (the original
@@ -256,30 +261,28 @@ describe('applyDeltaCommit SQL structural invariants — pins production CTE sha
     const body = extractApplyDeltaCommit();
     expect(body).toMatch(/user_upd AS \(/);
     expect(body).toMatch(/UPDATE user_api_usage/);
-    // Free arm: free-tier writes signed delta to cost_micro_usd;
-    // BYOK contributes 0.
+    // Free arm: free-tier writes delta to cost_micro_usd; BYOK contributes 0.
     expect(body).toMatch(
-      /cost_micro_usd = cost_micro_usd \+ CASE WHEN \$\{isByok\}::bool THEN 0::bigint ELSE \(SELECT delta FROM computed\) END/,
+      /cost_micro_usd = cost_micro_usd \+ CASE WHEN \$\{isByok\}::bool THEN 0::bigint ELSE \(SELECT delta FROM msg_upd\) END/,
     );
-    // BYOK arm: BYOK writes signed delta to byok_cost_micro_usd;
-    // free-tier contributes 0.
+    // BYOK arm: BYOK writes delta to byok_cost_micro_usd; free-tier contributes 0.
     expect(body).toMatch(
-      /byok_cost_micro_usd = byok_cost_micro_usd \+ CASE WHEN \$\{isByok\}::bool THEN \(SELECT delta FROM computed\) ELSE 0::bigint END/,
+      /byok_cost_micro_usd = byok_cost_micro_usd \+ CASE WHEN \$\{isByok\}::bool THEN \(SELECT delta FROM msg_upd\) ELSE 0::bigint END/,
     );
   });
 
   // -------------------------------------------------------------------------
-  // No-op gate on user_upd: `(SELECT delta FROM computed) > 0`. When
+  // No-op gate on user_upd: `(SELECT delta FROM msg_upd) > 0`. When
   // the delta clamps to zero (newCost ≤ baseline), the user_api_usage
   // UPDATE must skip entirely — not even touch the row. This pairs
-  // with the GREATEST(0, …) clamp in the computed CTE; dropping the
-  // `> 0` predicate would cause every commit to issue an UPDATE that
-  // adds zero, which is wasteful but more importantly would record a
-  // `RETURNING` row even when nothing changed.
+  // with the GREATEST(0, …) clamp in the RETURNING expression;
+  // dropping the `> 0` predicate would cause every commit to issue an
+  // UPDATE that adds zero, which is wasteful but more importantly
+  // would record a `RETURNING` row even when nothing changed.
   // -------------------------------------------------------------------------
-  it('gates the user_api_usage UPDATE on (SELECT delta FROM computed) > 0', () => {
+  it('gates the user_api_usage UPDATE on (SELECT delta FROM msg_upd) > 0', () => {
     const body = extractApplyDeltaCommit();
-    expect(body).toMatch(/WHERE user_id = \$\{userId\} AND \(SELECT delta FROM computed\) > 0/);
+    expect(body).toMatch(/WHERE user_id = \$\{userId\} AND \(SELECT delta FROM msg_upd\) > 0/);
   });
 
   // -------------------------------------------------------------------------

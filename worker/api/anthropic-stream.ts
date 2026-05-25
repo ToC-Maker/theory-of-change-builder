@@ -3676,29 +3676,38 @@ export async function handler(
           //      `length === 0` so the no-op is visible from `logging_errors`
           //      (previously only `DiagnosticReconcileFailed` — i.e. SQL
           //      exception — was queryable).
+          // PG-quirk fix (mirrors applyDeltaCommit in cost-commit.ts):
+          //
+          // The prior shape used `locked AS (SELECT ... FOR UPDATE)` sibling
+          // to `msg_upd AS (UPDATE logging_messages ...)`. PG 17's EvalPlanQual
+          // filtered the row out of `locked` ("already-updated-by-self" from
+          // the sibling msg_upd UPDATE), so `signed_delta.d` evaluated to NULL.
+          // Then `byok_cost_micro_usd + NULL = NULL`, `GREATEST(0, NULL) = 0`,
+          // and the BYOK column was RESET to 0 every reconcile — latent here
+          // because the per-update BYOK writes were also broken (see
+          // cost-commit.ts comment), so byok started at 0 and the reset was
+          // invisible. Same fix: capture OLD via `UPDATE m FROM (SELECT ...
+          // FOR NO KEY UPDATE) AS old`, compute signed_delta in RETURNING.
           const reconcileRows = (await sql`
-            WITH locked AS (
-              SELECT cost_settled_micro_usd FROM logging_messages
-              WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
-              FOR UPDATE
-            ),
-            baseline AS (
-              SELECT GREATEST(${projStr}::bigint, cost_settled_micro_usd) AS bl FROM locked
-            ),
-            signed_delta AS (
-              SELECT ${actualStr}::bigint - (SELECT bl FROM baseline) AS d FROM locked
-            ),
-            msg_upd AS (
-              UPDATE logging_messages
-              SET cost_micro_usd = GREATEST(cost_micro_usd, ${actualStr}::bigint),
+            WITH msg_upd AS (
+              UPDATE logging_messages m
+              SET cost_micro_usd = GREATEST(m.cost_micro_usd, ${actualStr}::bigint),
                   cost_settled_micro_usd = ${actualStr}::bigint,
                   reconciled_at = NOW()
-              WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
-              RETURNING cost_settled_micro_usd
+              FROM (
+                SELECT cost_settled_micro_usd AS old_cs
+                FROM logging_messages
+                WHERE message_id = ${loggingMessageId} AND user_id = ${actorId} AND reconciled_at IS NULL
+                FOR NO KEY UPDATE
+              ) AS old
+              WHERE m.message_id = ${loggingMessageId} AND m.user_id = ${actorId} AND m.reconciled_at IS NULL
+              RETURNING
+                m.cost_settled_micro_usd,
+                ${actualStr}::bigint - GREATEST(${projStr}::bigint, old.old_cs) AS signed_d
             )
             UPDATE user_api_usage
-            SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN 0::bigint ELSE (SELECT d FROM signed_delta) END),
-                byok_cost_micro_usd = GREATEST(0::bigint, byok_cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN (SELECT d FROM signed_delta) ELSE 0::bigint END),
+            SET cost_micro_usd = GREATEST(0::bigint, cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN 0::bigint ELSE (SELECT signed_d FROM msg_upd) END),
+                byok_cost_micro_usd = GREATEST(0::bigint, byok_cost_micro_usd + CASE WHEN ${tierIsByok}::bool THEN (SELECT signed_d FROM msg_upd) ELSE 0::bigint END),
                 input_tokens = input_tokens + ${reconciledAccumulator.input_tokens},
                 output_tokens = output_tokens + ${reconciledAccumulator.output_tokens},
                 cache_create_tokens = cache_create_tokens + ${reconciledAccumulator.cache_creation_input_tokens},
@@ -3706,7 +3715,7 @@ export async function handler(
                 web_search_uses = web_search_uses + ${reconciledAccumulator.web_search_requests},
                 last_activity_at = NOW()
             WHERE user_id = ${actorId} AND EXISTS(SELECT 1 FROM msg_upd)
-            RETURNING cost_micro_usd, (SELECT d FROM signed_delta) AS applied_signed_delta
+            RETURNING cost_micro_usd, (SELECT signed_d FROM msg_upd) AS applied_signed_delta
           `) as {
             cost_micro_usd: bigint | number | string | null;
             applied_signed_delta: bigint | number | string | null;

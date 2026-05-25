@@ -216,20 +216,60 @@ export function makeBackend<TUserUsage extends UserApiUsageRow = UserApiUsageRow
       ]);
     }
     // applyDeltaCommit CTE: the helper interpolates messageId, userId,
-    // projected (string), newCost (string), and isByok (boolean) — the
-    // CTE references them in the WHERE / UPDATE / CASE clauses, so the
-    // captured `values` array has repeated occurrences. We extract the
-    // distinct values by name: messageId/userId/projected/newCost are
-    // strings; isByok is the only boolean and appears once per CASE arm.
-    const messageId = String(values[0]);
-    const userId = String(values[1]);
-    const projected = BigInt(String(values[2]));
-    const newCost = BigInt(String(values[3]));
-    // isByok is interpolated as a JS boolean; `Boolean(v) === v` only when
-    // v is already true/false. Find the first such value (the CASE
-    // expressions interpolate it twice). Default to `false` if absent —
-    // pre-fix tests that don't pass isByok still work.
+    // projected (string), newCost (string), and isByok (boolean). The
+    // SQL pattern was restructured 2026-05-25 (FOR UPDATE → UPDATE..FROM
+    // with FOR NO KEY UPDATE in subquery — see PG-quirk note in
+    // cost-commit.ts), which changed positional interpolation order. We
+    // parse by content/type rather than position so the mock stays
+    // resilient to future SQL restructurings:
+    //   - isByok: the only boolean (appears twice in CASE arms).
+    //   - messageId, userId: non-numeric strings (UUIDs / auth0|... etc).
+    //     Their relative order is stable because WHERE clauses interpolate
+    //     them in the source order `message_id = ${messageId} AND user_id
+    //     = ${userId}`, which is the same in both old and new SQL.
+    //   - projected, newCost: bigint-as-string. Distinguished by
+    //     interpolation order — newCost (newStr) appears before projected
+    //     (projStr) in the new shape's RETURNING but the opposite in the
+    //     old shape's baseline CTE. We resolve by collecting all numeric
+    //     values and pairing them with the inferred role by matching the
+    //     SQL fragment that named them: `${projStr}` is wrapped in
+    //     `GREATEST(...::bigint, ...old_cs)` (new) or as baseline (old);
+    //     `${newStr}` is wrapped in `GREATEST(..., ...::bigint)` for the
+    //     msg_upd SET cost columns. Practically: in the new shape the
+    //     first numeric value is newStr (used twice for SET), then projStr
+    //     once. In the old shape the first is projStr, then newStr ×3.
+    //     We detect by the SQL fragment containing `old.old_cs` (new) vs
+    //     `(SELECT bl FROM baseline)` (old).
     const isByok = values.find((v) => typeof v === 'boolean') === true;
+    const stringValues = values.filter((v): v is string => typeof v === 'string');
+    const numericStrings = stringValues.filter((s) => /^-?\d+$/.test(s));
+    const nonNumericStrings = stringValues.filter((s) => !/^-?\d+$/.test(s));
+    // messageId comes before userId in interpolation order (preserved
+    // across the SQL refactor).
+    const messageId = String(nonNumericStrings[0] ?? '');
+    const userId = String(nonNumericStrings[1] ?? '');
+    // New-shape detection: the UPDATE..FROM pattern uses `old.old_cs` in
+    // the RETURNING delta expression. Old shape used baseline CTE.
+    const isNewShape = joined.includes('old.old_cs');
+    // In new shape, newStr appears first (msg_upd SET cost_micro_usd,
+    // cost_settled_micro_usd, RETURNING delta = newStr - ...). projStr
+    // appears later in the RETURNING expression. We need the FIRST
+    // distinct numeric value as newCost, and the LAST distinct as
+    // projected. (Distinct because the same value is interpolated
+    // multiple times in either shape.)
+    // In old shape, projStr appears first (baseline), then newStr.
+    const dedupNumericStrings = Array.from(new Set(numericStrings));
+    let projected: bigint;
+    let newCost: bigint;
+    if (isNewShape) {
+      // First distinct numeric = newCost, last = projected
+      newCost = BigInt(String(dedupNumericStrings[0] ?? '0'));
+      projected = BigInt(String(dedupNumericStrings[dedupNumericStrings.length - 1] ?? '0'));
+    } else {
+      // Old shape: first distinct = projected, last = newCost
+      projected = BigInt(String(dedupNumericStrings[0] ?? '0'));
+      newCost = BigInt(String(dedupNumericStrings[dedupNumericStrings.length - 1] ?? '0'));
+    }
 
     return withRowLock(messageId, async () => {
       // Yield a microtask so concurrent callers race for the lock as

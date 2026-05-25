@@ -139,36 +139,54 @@ export async function applyDeltaCommit(
   // path (see `worker/_shared/bigint.ts` for the read-side dual).
   const projStr = projectedMicroUsd.toString();
   const newStr = newCostMicroUsd.toString();
+  // PG-quirk note (verified on PG 17.10 / Neon, 2026-05-25):
+  //
+  // The previous shape used a `locked AS (SELECT ... FOR UPDATE)` CTE
+  // sibling to `msg_upd AS (UPDATE logging_messages ...)`. In PG 17,
+  // when a `SELECT ... FOR UPDATE` CTE and a data-modifying CTE in the
+  // same statement both target the same row, the LockRows node's
+  // EvalPlanQual recheck filters the row out as "already-updated-by-
+  // self", and the CTE silently returns zero rows. `computed.delta`
+  // then evaluated to NULL, the `WHERE (SELECT delta FROM computed)
+  // > 0` predicate on `user_upd` evaluated `NULL > 0 = NULL = false`,
+  // and the user_api_usage write was silently skipped — so BYOK spend
+  // never landed in `byok_cost_micro_usd` (Critical regression caught
+  // in PR #23 post-merge investigation; DB chart 'mRQxAgMT' showed
+  // byok_cost_micro_usd=0 across 4 reconciled BYOK streams).
+  //
+  // The fix uses `UPDATE m FROM (SELECT ... FOR NO KEY UPDATE) AS old`
+  // instead. The FOR-NO-KEY-UPDATE subquery in the UPDATE's FROM clause
+  // serialises concurrent writers (matches the lock strength `UPDATE`
+  // takes implicitly so there's no upgrade-then-recheck conflict) AND
+  // captures the OLD cost_settled value (snapshot pre-UPDATE), which
+  // RETURNING then uses to compute `delta` without the LockRows quirk.
+  // Refs: Tom Lane on pgsql-bugs re: EvalPlanQual + data-modifying CTE.
   const result = (await sql`
-    WITH locked AS (
-      SELECT cost_settled_micro_usd, reconciled_at
-      FROM logging_messages
-      WHERE message_id = ${messageId} AND user_id = ${userId} AND reconciled_at IS NULL
-      FOR UPDATE
-    ),
-    baseline AS (
-      SELECT GREATEST(${projStr}::bigint, cost_settled_micro_usd) AS bl FROM locked
-    ),
-    computed AS (
-      SELECT GREATEST(0::bigint, ${newStr}::bigint - (SELECT bl FROM baseline)) AS delta FROM locked
-    ),
-    msg_upd AS (
-      UPDATE logging_messages
-      SET cost_micro_usd = GREATEST(cost_micro_usd, ${newStr}::bigint),
-          cost_settled_micro_usd = GREATEST(cost_settled_micro_usd, ${newStr}::bigint)
-      WHERE message_id = ${messageId} AND user_id = ${userId} AND reconciled_at IS NULL
-      RETURNING cost_settled_micro_usd AS new_settled
+    WITH msg_upd AS (
+      UPDATE logging_messages m
+      SET cost_micro_usd = GREATEST(m.cost_micro_usd, ${newStr}::bigint),
+          cost_settled_micro_usd = GREATEST(m.cost_settled_micro_usd, ${newStr}::bigint)
+      FROM (
+        SELECT cost_settled_micro_usd AS old_cs
+        FROM logging_messages
+        WHERE message_id = ${messageId} AND user_id = ${userId} AND reconciled_at IS NULL
+        FOR NO KEY UPDATE
+      ) AS old
+      WHERE m.message_id = ${messageId} AND m.user_id = ${userId} AND m.reconciled_at IS NULL
+      RETURNING
+        m.cost_settled_micro_usd AS new_settled,
+        GREATEST(0::bigint, ${newStr}::bigint - GREATEST(${projStr}::bigint, old.old_cs)) AS delta
     ),
     user_upd AS (
       UPDATE user_api_usage
-      SET cost_micro_usd = cost_micro_usd + CASE WHEN ${isByok}::bool THEN 0::bigint ELSE (SELECT delta FROM computed) END,
-          byok_cost_micro_usd = byok_cost_micro_usd + CASE WHEN ${isByok}::bool THEN (SELECT delta FROM computed) ELSE 0::bigint END
-      WHERE user_id = ${userId} AND (SELECT delta FROM computed) > 0
+      SET cost_micro_usd = cost_micro_usd + CASE WHEN ${isByok}::bool THEN 0::bigint ELSE (SELECT delta FROM msg_upd) END,
+          byok_cost_micro_usd = byok_cost_micro_usd + CASE WHEN ${isByok}::bool THEN (SELECT delta FROM msg_upd) ELSE 0::bigint END
+      WHERE user_id = ${userId} AND (SELECT delta FROM msg_upd) > 0
       RETURNING cost_micro_usd
     )
     SELECT
       (SELECT new_settled FROM msg_upd) AS new_settled,
-      (SELECT delta FROM computed) AS delta,
+      (SELECT delta FROM msg_upd) AS delta,
       EXISTS(SELECT 1 FROM msg_upd) AS applied
   `) as {
     new_settled: bigint | number | string | null;

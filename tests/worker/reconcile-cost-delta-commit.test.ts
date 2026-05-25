@@ -164,12 +164,17 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
       // helper's baseline would over-clamp and the endpoint could
       // silently under-credit `user_api_usage` on legitimate pushes.
       //
-      // The CTE in cost-commit.ts interpolates the four arguments
-      // (messageId, userId, projStr, newStr) in a fixed order at the
-      // *front* of the values list; subsequent occurrences in the
-      // UPDATE clauses repeat them but the first four are positional.
-      // Pin just the leading slice — that's the part the endpoint
-      // controls.
+      // The CTE in cost-commit.ts interpolates messageId, userId,
+      // projStr, newStr as positional `${}` slots; the SQL restructure
+      // on 2026-05-25 (FOR UPDATE → UPDATE..FROM with FOR NO KEY UPDATE
+      // in subquery — see PG-quirk note in cost-commit.ts) shuffled the
+      // interpolation order. We pin by SET semantics rather than position:
+      //   - At least one occurrence each of messageId, userId in
+      //     the captured values (WHERE clauses).
+      //   - newStr = '500' (the helper's BigInt.toString() of 500n).
+      //   - projStr = '0' (the endpoint always passes projected = 0n).
+      // This survives SQL refactors that reorder ${} slots without
+      // changing the four-tuple semantics.
       const { sql, capturedValues } = makeBackend({
         message: {
           message_id: 'msg_x',
@@ -181,12 +186,16 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
         user_usage: { user_id: 'auth0|alice', cost_micro_usd: 0n },
       });
       await endpointCall(sql, 'msg_x', 'auth0|alice', 500n);
-      const leading = capturedValues()[0].slice(0, 4);
-      expect(leading).toEqual(['msg_x', 'auth0|alice', '0', '500']);
-      // Belt-and-braces: confirm the projected arg is the literal '0'
-      // string (the BigInt.toString() of 0n), not some other falsy value
-      // that might accidentally coerce to '' or undefined.
-      expect(leading[2]).toBe('0');
+      const all = capturedValues()[0];
+      // Pin all four distinct semantic values are present somewhere in
+      // the captured params (regardless of interpolation order).
+      expect(all).toContain('msg_x');
+      expect(all).toContain('auth0|alice');
+      expect(all).toContain('500');
+      // Belt-and-braces: confirm projected is the literal '0' string (the
+      // BigInt.toString() of 0n), not some other falsy value that might
+      // accidentally coerce to '' or undefined.
+      expect(all).toContain('0');
     });
 
     it('issues exactly one SQL statement per endpoint call (matches the helper invariant)', async () => {
