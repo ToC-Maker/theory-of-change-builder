@@ -132,10 +132,6 @@ try {
   // localStorage unavailable (private browsing / SSR): nothing to clean up.
 }
 
-// AddApiKeyButton previously rendered inline cap banners here; with the
-// banner JSX consolidated into <ComposerBlockerBanner> (Task 7), the
-// button moved alongside the banner copy. Removed from this file.
-
 export type AIMode = 'chat' | 'generate';
 
 interface UploadedFile {
@@ -325,13 +321,6 @@ const TURNSTILE_SITE_KEY: string =
 const TURNSTILE_SCRIPT_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
-
-// Legacy CostErrorKind type, COST_ERROR_COPY map, COST_ERROR_CATEGORIES
-// keyword table, and classifyCostError function deleted. They mapped
-// streaming error strings to cost-error categories — but per C6 analysis
-// chatService.ts:1487 swallows tagged cost errors before they reach
-// onError, so the keyword path was unreachable in practice. Structured
-// cost errors now flow through src/components/chat/composerBlocker.ts.
 
 // Global reference to Cloudflare's injected helper. We attach it via the
 // raw <script> element because we don't ship @marsidev/react-turnstile in
@@ -1187,19 +1176,6 @@ export function ChatInterface({
     void syncChartByokCostFromDb(chartIdForSync);
   }, [chartIdForSync, hasKey, keyVersion, syncChartByokCostFromDb]);
 
-  // BYOK-recovery effect deleted: the composer-blocker `selectBlocker`
-  // tier-flip filter is the single source of truth for clearing cap-class
-  // event blockers when the user adds BYOK. When refreshUsage resolves
-  // post-add and usage.tier flips to 'byok', selectBlocker returns null
-  // (filtered) on the next render — no sync effect needed, no race
-  // between the effect's clear and the async refresh's tier update.
-
-  // classifyCostError + the COST_ERROR_COPY/CATEGORIES tables deleted —
-  // structured cost errors now flow exclusively through `handleCostError`
-  // below (which dispatches via the pure costErrorToBlocker transition).
-  // chatService.ts:1487 swallows tagged cost errors before onError fires,
-  // so the legacy keyword path was unreachable in practice (per C6).
-
   // Structured cost-error handler. Two-step dispatch:
   //   1. Turnstile arms touch Turnstile session state, not the blocker slot
   //      (the widget re-renders independently).
@@ -1301,8 +1277,9 @@ export function ChatInterface({
           setTurnstileError(null);
           // Actor identity may have changed at the same time (IP flip or
           // cookie renewal), which would mean a different row in
-          // user_api_usage. Refresh so the UI's usage bar + wouldExceedCap
-          // gate reflect the current identity, not the stale one.
+          // user_api_usage. Refresh so the UI's usage bar + the derived
+          // would_exceed_cap blocker reflect the current identity, not
+          // the stale one.
           void refreshUsage();
           return;
         }
@@ -2071,8 +2048,8 @@ export function ChatInterface({
       // Cost errors were swallowed earlier in chatService.ts:1487 and
       // routed via onCostError, so anything here is a generic transport
       // problem. Surface as a fresh assistant turn so the user sees what
-      // went wrong.
-      void error; // referenced via message below
+      // went wrong; console.error keeps a DevTools handle for debugging.
+      console.error('[ChatInterface] handleSendMessage transport error:', error);
       const errorMessage: ChatMessage = {
         id: assistantMessageId,
         role: 'assistant',
@@ -2933,8 +2910,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         keyLast4: streamKeyLast4,
       });
     } catch (error) {
-      // Transport-level failures (see Chat-site commentary at L2069).
-      void error;
+      // Transport-level failures (see Chat-site commentary in
+      // handleSendMessage). Cost errors are routed via onCostError.
+      console.error('[ChatInterface] startGeneration transport error:', error);
       const errorMessage: ChatMessage = {
         id: generationAssistantId,
         role: 'assistant',

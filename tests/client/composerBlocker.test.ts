@@ -174,14 +174,11 @@ describe('costErrorToBlocker — specials', () => {
     expect(result).toEqual({ type: 'cap_reached' });
   });
 
-  it('idempotent_replay regardless of prior → undefined (C1 regression)', () => {
-    // The function is stateless w.r.t. prior — loop documents that
-    // invariant (regression catch if someone re-introduces prior-dep).
-    for (const _prior of PRIOR_STATES) {
-      void _prior;
-      const result = costErrorToBlocker(makeError('idempotent_replay'));
-      expect(result).toBeUndefined();
-    }
+  it('idempotent_replay → undefined (C1 regression: caller preserves blocker)', () => {
+    // The function is stateless w.r.t. prior. The full (event × prior)
+    // matrix above already runs idempotent_replay against every prior
+    // state; this is the regression marker for C1 specifically.
+    expect(costErrorToBlocker(makeError('idempotent_replay'))).toBeUndefined();
   });
 
   it('turnstile_required → undefined (no-op preserves blocker)', () => {
