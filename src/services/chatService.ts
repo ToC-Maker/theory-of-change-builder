@@ -15,6 +15,11 @@ import { buildOutgoingMessages } from './outgoingMessages';
 import { CostTracker } from './chatCostTracker';
 import type { AnthropicUsage } from '../../shared/cost';
 import type { StreamEvent } from '../../shared/wire-shapes';
+// Co-located with the composer-blocker discriminated union so adding a new
+// service-class CostErrorType only needs one edit. The asymmetric logging
+// discipline below (instrument service errors; skip cap/quota events that
+// are expected operational states) relies on this set being authoritative.
+import { SERVICE_ERROR_TYPES } from '../components/chat/composerBlocker';
 
 /**
  * Re-export the shared `AnthropicUsage` shape so existing callers
@@ -617,11 +622,8 @@ class ChatService {
         // errors are expected operational states, not diagnostic noise —
         // skip those. We rely on the worker to have put the upstream
         // cause in errorData.upstream_message / upstream_status.
-        const SERVICE_ERROR_TYPES = new Set<CostErrorType>([
-          'database_unavailable',
-          'estimation_unavailable',
-          'authentication_service_unavailable',
-        ]);
+        // SERVICE_ERROR_TYPES is imported from components/chat/composerBlocker
+        // (single source of truth, kept in sync with the blocker DU).
         if (SERVICE_ERROR_TYPES.has(errorType as CostErrorType)) {
           const upstream = errorData as
             | {
