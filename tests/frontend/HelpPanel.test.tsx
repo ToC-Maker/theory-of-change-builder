@@ -50,6 +50,36 @@ describe('HelpPanel — Replay the view-mode walkthrough', () => {
     expect(reloadMock).toHaveBeenCalledTimes(1);
   });
 
+  it('renders the contact email as a mailto link', async () => {
+    // Users need a low-friction way to send bug reports, feedback, or
+    // questions; surface a mailto link with the canonical inbox so the
+    // user's mail client takes over and we don't have to host a form.
+    const user = userEvent.setup();
+    render(<HelpPanel />);
+    await user.click(screen.getByRole('button', { name: /help/i }));
+
+    const emailLink = screen.getByRole('menuitem', {
+      name: /theoryofchangebuilder@gmail\.com/i,
+    });
+    expect(emailLink).toHaveAttribute('href', 'mailto:theoryofchangebuilder@gmail.com');
+  });
+
+  it('renders the GitHub issues link as an external link', async () => {
+    // Power users prefer filing bugs directly on the repo; render as an
+    // external link with safe `target="_blank"` semantics.
+    const user = userEvent.setup();
+    render(<HelpPanel />);
+    await user.click(screen.getByRole('button', { name: /help/i }));
+
+    const githubLink = screen.getByRole('menuitem', { name: /github issue/i });
+    expect(githubLink).toHaveAttribute(
+      'href',
+      'https://github.com/ToC-Maker/theory-of-change-builder/issues/new',
+    );
+    expect(githubLink).toHaveAttribute('target', '_blank');
+    expect(githubLink).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
   it('surfaces inline error and skips reload when localStorage throws', async () => {
     // Private-mode / disabled-storage scenario: removeItem throws.
     // The previous behaviour swallowed the error and reloaded anyway,
