@@ -2164,6 +2164,16 @@ export function ChatInterface({
   };
 
   const clearChat = () => {
+    // Cancel any in-flight stream so it doesn't stamp a leftover assistant
+    // message into the cleared chat. chatService.ts:1487 silently swallows
+    // AbortError before any client callback fires, but the streaming
+    // callbacks ALSO read these refs to decide whether to stamp a partial
+    // turn (see the onError/onCostError "stamp if there's partial content"
+    // branches); null them so those branches naturally no-op.
+    abortControllerRef.current?.abort();
+    streamingMessageRef.current = null;
+    streamingContentBlocksRef.current = [];
+
     setMessages([]);
     setChatAttachedFiles([]);
     setComposerBlocker(null);
