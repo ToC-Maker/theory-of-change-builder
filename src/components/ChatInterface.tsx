@@ -2785,9 +2785,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
-    // See chat-path comment above; Generate is always BYOK (hasKey required
-    // to render the panel) but still snapshot for parity and to survive the
-    // unlikely case of a key swap mid-stream.
+    // See chat-path comment above; snapshot the BYOK state at submit time
+    // to survive a key swap mid-stream and bind the BYOK pill update to
+    // the right key. For free/anon users hasKey is false here and the
+    // server enforces the $5 lifetime cap via reserveCost + kill switch.
     //
     // Generate doesn't go through ensureChartExists (PDFs were uploaded
     // earlier in the flow, which auto-created the chart and populated the
@@ -3222,26 +3223,45 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 </>
               ) : currentMode === 'generate' ? (
                 <div className="space-y-4">
-                  {/* Generate-mode BYOK gate. Generation concentrates cost
-                    (extended thinking + web search + documents) into a
-                    single one-shot request, so we require BYOK up front
-                    before showing any input UI. Once the user submits a
-                    verified key, hasKey flips and the full panel renders
-                    below. */}
-                  {!hasKey || !verified ? (
-                    <div className="space-y-3">
-                      {/* Generate-specific cost heads-up — separate card so
-                        the key affordance stays context-free. */}
+                  {hasTurnstileSession === null ? (
+                    /* Probe in flight: same placeholder pattern as the chat
+                       composer's Turnstile gate so the panel doesn't flash
+                       the form for anon visitors who already hold a valid
+                       cookie. */
+                    <div className="h-24" aria-hidden />
+                  ) : !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
+                    /* Turnstile gate for anon users in Generate mode. Mirrors
+                       the chat composer gate so anon users who land directly
+                       in Generate still get a visible widget to solve. The
+                       shared hasTurnstileSession flag means solving here
+                       unblocks chat too. */
+                    <div className="space-y-2">
+                      <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                        Solve the challenge below to verify you&apos;re human before generating.
+                      </div>
+                      <TurnstileWidget
+                        siteKey={TURNSTILE_SITE_KEY}
+                        onToken={handleTurnstileToken}
+                      />
+                      {turnstileError && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                          {turnstileError}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Cost heads-up. Generate concentrates spend (extended
+                        thinking + web search + documents) into one one-shot
+                        request, so flag this above the upload area. Server-side
+                        reserveCost + the kill switch enforce the $5 lifetime cap
+                        for free/anon tiers; BYOK bypasses it. */}
                       <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                         Generate runs a deep analysis of your documents. A single run typically
                         costs a few dollars — more for large documents or heavy web searching. The
                         running cost is shown as the answer is written, so you can stop it at any
                         time if it starts to add up.
                       </div>
-                      <AddApiKeyButton />
-                    </div>
-                  ) : (
-                    <>
                       <div className="text-center text-gray-500 text-sm py-4">
                         <div className="mb-2">
                           <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
@@ -3407,9 +3427,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         </div>
                       )}
 
-                      {/* Generate button. The BYOK gate is enforced upstream:
-                    this render path is reached only when hasKey && verified,
-                    so we don't need a fallback branch for the unkeyed case. */}
+                      {/* Generate button. Available to all tiers; the $5 lifetime
+                        cap is enforced server-side via reserveCost and the
+                        kill switch. BYOK bypasses the cap. */}
                       <button
                         onClick={startGeneration}
                         disabled={
