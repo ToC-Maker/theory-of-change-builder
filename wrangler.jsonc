@@ -4,7 +4,16 @@
   "account_id": "1264d0222f12a9d8073f6fd606aee8b9",
   "main": "worker/index.ts",
   "compatibility_date": "2026-04-10",
-  "compatibility_flags": ["nodejs_compat"],
+  // enable_request_signal: opt-in flag required for request.signal to fire on
+  // client disconnect (closed SSE stream, navigated away, Stop button). Without
+  // it, request.signal.aborted stays false forever and the abort listeners
+  // wired to client-disconnect propagation never run. Cloudflare made this
+  // opt-in on 2025-05-22 to avoid breaking deferred-proxy semantics; we run
+  // JS in the middle of every stream (cost tracking, kill switch, reconcile)
+  // so deferred-proxy doesn't apply and we get the abort signal as expected.
+  // Docs: https://developers.cloudflare.com/changelog/2025-05-22-handle-request-cancellation/
+  // Issue: https://github.com/cloudflare/workerd/issues/3033
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   "workers_dev": true,
   "preview_urls": true,
   "assets": {

@@ -22,6 +22,7 @@ import { handler as verifyTurnstile } from './api/verify-turnstile';
 import { handler as countTokensEstimate } from './api/count-tokens-estimate';
 import { handler as deleteMyData } from './api/delete-my-data';
 import { handler as reconcileCost } from './api/reconcile-cost';
+import { handler as chartByokCost } from './api/chart-byok-cost';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
 type Handler = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
@@ -55,6 +56,7 @@ const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/count-tokens-estimate', countTokensEstimate],
   ['DELETE', '/api/my-data', deleteMyData],
   ['POST', '/api/reconcile-cost', reconcileCost],
+  ['GET', '/api/chart-byok-cost', chartByokCost],
 ];
 
 function routeMatches(routePath: string, pathname: string): boolean {

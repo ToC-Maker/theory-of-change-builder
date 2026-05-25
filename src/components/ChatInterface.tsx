@@ -3,11 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
+import { Tooltip } from 'react-tooltip';
 import {
   chatService,
   ChatMessage,
   type CostError,
   type StreamPhase,
+  setReconcilePillBump,
 } from '../services/chatService';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
@@ -22,7 +24,7 @@ import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
-import { addByokSpend, useChartByokSpendUsd } from '../utils/byokSpend';
+import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
 import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
@@ -52,6 +54,7 @@ import {
   SparklesIcon,
   PencilSquareIcon,
   KeyIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -838,6 +841,15 @@ export function ChatInterface({
   // seeing a silent re-render.
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
+  // Generate-mode Turnstile gate. Mirrors the chat composer's condition
+  // (line ~3645) so the same anon-without-session state blocks Generate's
+  // upload + submit. `!hasTurnstileSession` is truthy for both null
+  // (probe in flight) and false (probe resolved unverified); both cases
+  // block actions so a click during the probe window can't race the
+  // server-side Turnstile check.
+  const generateBlockedByTurnstile =
+    !isAuthenticated && Boolean(TURNSTILE_SITE_KEY) && !hasTurnstileSession;
+
   // BYOK panel state for 402/kill recovery.
   //
   // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
@@ -846,6 +858,16 @@ export function ChatInterface({
   // separate mode would double-render the panel. Voluntary key entry
   // now lives in the profile-dropdown modal, not inline.
   const [byokPanelMode, setByokPanelMode] = useState<'request_cut_off' | 'global_budget' | null>(
+    null,
+  );
+  // Upstream Anthropic error message captured from the 402 `global_budget_exhausted`
+  // payload, when the server passed it through. Surfaced in the global_budget
+  // panel so the user can see WHY (e.g. "credit balance too low", "billing
+  // address invalid"). Anthropic's billing system occasionally returns 402
+  // spuriously even with credit remaining (billing-system desync) — the server
+  // retries once before surfacing, so a message reaching here means the issue
+  // persisted past the retry.
+  const [globalBudgetUpstreamMessage, setGlobalBudgetUpstreamMessage] = useState<string | null>(
     null,
   );
 
@@ -1066,13 +1088,18 @@ export function ChatInterface({
   }, [messages, getStorageKey]);
 
   useEffect(() => {
-    scrollToBottom();
-    // Keep focus on input if we're in chat mode and not loading
-    if (currentMode === 'chat' && !isCollapsed && inputRef.current && !isLoading) {
-      // Use setTimeout to ensure this happens after all DOM updates
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 50);
+    // Only auto-scroll in chat mode. Generate is a static form (no
+    // chronological message list), so scrolling to the bottom on tab
+    // switch hides the cost heads-up + upload area above the fold.
+    if (currentMode === 'chat') {
+      scrollToBottom();
+      // Keep focus on input if we're not loading
+      if (!isCollapsed && inputRef.current && !isLoading) {
+        // Use setTimeout to ensure this happens after all DOM updates
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 50);
+      }
     }
   }, [messages, currentMode, isCollapsed, isLoading]);
 
@@ -1088,6 +1115,38 @@ export function ChatInterface({
       inputRef.current.focus();
     }
   }, [isCollapsed]);
+
+  // Register the BYOK pill-bump callback for post-stream
+  // `pollUntilReconciled` + queue drains. The reconcile-cost endpoint
+  // returns the server's `cost_settled_micro_usd` on every call; when it
+  // exceeds the entry's previously-credited baseline (the figure the
+  // tracker last posted), the polling/drain code fires this callback
+  // with the strictly-positive delta. We forward to `addByokSpend` so
+  // the per-chart + per-key BYOK pill catches up to the worker's
+  // post-stream `ctx.waitUntil` IIFE figure (~1-2s of bumped value the
+  // pre-fix client never saw).
+  //
+  // Identifiers come from the bump event (snapshotted at stream start
+  // in chatService.ts, stored on the queue entry, replayed on each
+  // bump). That means this effect runs once on mount and stays stable
+  // across re-renders; we don't need to depend on `params` or the
+  // BYOK key state. Cleanup on unmount drops the global registration
+  // so a navigation that unmounts ChatInterface doesn't leak a stale
+  // closure.
+  useEffect(() => {
+    setReconcilePillBump((event) => {
+      const usd = Number(event.deltaMicroUsd) / 1_000_000;
+      console.log(
+        `[BYOK reconcile-bump] +${event.deltaMicroUsd} µUSD ($${usd.toFixed(6)})` +
+          ` chart=${event.chartId} keyLast4=${event.keyLast4}` +
+          ` newSettled=${event.newSettledMicroUsd}`,
+      );
+      addByokSpend(event.chartId, event.keyLast4, usd);
+    });
+    return () => {
+      setReconcilePillBump(null);
+    };
+  }, []);
 
   // Auth header helper shared by /api/usage and file-upload callers. Returns
   // an empty object for anonymous visitors or when silent refresh fails;
@@ -1123,6 +1182,52 @@ export function ChatInterface({
     void refreshUsage();
   }, [refreshUsage, keyVersion]);
 
+  // Fetch the chart's authoritative BYOK cost from the server and apply
+  // it (max-monotone) to the per-chart pill. Closes the post-stream-poll
+  // gap where the client's local total ran behind the DB's cost_settled
+  // sum: the polling-window bumps can be missed if the tab was
+  // backgrounded, the polling never observed the final IIFE delta, or a
+  // different tab handled the bump. Called on chart load and right before
+  // each new stream send. Only runs when the user has BYOK (the endpoint
+  // is BYOK-scoped; anon callers get 0 and free-tier users don't show the
+  // chart pill anyway).
+  const syncChartByokCostFromDb = useCallback(
+    async (chartId: string | null | undefined): Promise<void> => {
+      if (!chartId) return;
+      if (!hasKey) return;
+      try {
+        const headers = await getAuthHeaders();
+        const resp = await fetch(`/api/chart-byok-cost?chartId=${encodeURIComponent(chartId)}`, {
+          headers,
+          credentials: 'include',
+        });
+        if (!resp.ok) return; // transient: keep local state
+        const data = (await resp.json()) as { cost_settled_micro_usd?: string };
+        const microStr = data.cost_settled_micro_usd;
+        if (!microStr) return;
+        const micro = Number(microStr);
+        if (!Number.isFinite(micro) || micro <= 0) return;
+        setChartSpendIfHigher(chartId, micro / 1_000_000);
+      } catch (err) {
+        console.warn('[ChatInterface] syncChartByokCostFromDb failed:', err);
+      }
+    },
+    [getAuthHeaders, hasKey],
+  );
+
+  // Chart-load sync. Run once the chart route is resolved (and again when
+  // the user adds/removes a BYOK key — going from free-tier to BYOK
+  // should pull the server's authoritative total). Cross-tab convergence
+  // path: a sibling tab's stream-end poll may have already updated the
+  // DB beyond what this tab's localStorage has; this brings the pill up
+  // to parity. Doesn't block render (fire-and-forget).
+  const chartIdForSync = params.chartId ?? params.editToken ?? null;
+  useEffect(() => {
+    if (!chartIdForSync) return;
+    if (!hasKey) return;
+    void syncChartByokCostFromDb(chartIdForSync);
+  }, [chartIdForSync, hasKey, keyVersion, syncChartByokCostFromDb]);
+
   // When the user adds a verified key via the settings modal, dismiss any
   // sticky cap banners that require explicit clearing. capAlreadyReached /
   // wouldExceedCap self-clear through the tier flip when usage refetches
@@ -1133,6 +1238,7 @@ export function ChatInterface({
     if (hasKey && verified && byokPanelMode) {
       setByokPanelMode(null);
       setCostErrorBanner(null);
+      setGlobalBudgetUpstreamMessage(null);
     }
   }, [hasKey, verified, byokPanelMode]);
 
@@ -1153,7 +1259,7 @@ export function ChatInterface({
   // Structured cost-error handler. Maps CostErrorType → UI state transition
   // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
   // under the last user message so BYOK retries can reuse the same messages
-  // array — plan v2 decision 8).
+  // array — preserves the user's prompt across cap-error recovery).
   const handleCostError = useCallback(
     (error: CostError) => {
       switch (error.type) {
@@ -1181,10 +1287,21 @@ export function ChatInterface({
           setCostErrorBanner(null);
           void refreshUsage();
           return;
-        case 'global_budget_exhausted':
+        case 'global_budget_exhausted': {
           setByokPanelMode('global_budget');
           setCostErrorBanner(null);
+          // Capture Anthropic's actual error message from the response (the
+          // server now passes it through after a single retry). Lets the user
+          // see WHY (e.g. invalid billing, credit_balance_too_low,
+          // organization_disabled) instead of just our generic envelope.
+          const data = error.data as { upstream_message?: unknown } | null | undefined;
+          const msg =
+            data && typeof data === 'object' && typeof data.upstream_message === 'string'
+              ? data.upstream_message
+              : null;
+          setGlobalBudgetUpstreamMessage(msg);
           return;
+        }
         case 'request_cost_ceiling_exceeded':
           // Mid-stream kill: the message already ran part-way, the reconcile
           // path is writing the actual cost to the DB right now. Surface the
@@ -1726,6 +1843,13 @@ export function ChatInterface({
     const resolvedChart = await ensureChartExists();
     const resolvedChartId = resolvedChart?.chartId;
 
+    // Pre-send pill sync. Pull the chart's authoritative BYOK cost from
+    // the server before kicking off the next stream. Catches any pill
+    // drift that survived the previous turn's post-stream poll (closed
+    // tab, missed bump, cross-tab stream). Fire-and-forget — we don't
+    // want to block the send on this sync.
+    void syncChartByokCostFromDb(resolvedChart?.editToken ?? resolvedChartId ?? null);
+
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
     // Idempotency key binds the user-perceived turn to a specific worker
@@ -2051,6 +2175,10 @@ export function ChatInterface({
         editToken: resolvedChart?.editToken,
         loggingMessageId: userMessageId,
         // userAnthropicKey: server-stored BYOK; the raw key is never retained client-side.
+        // keyLast4 is passed separately so the post-stream pollUntilReconciled
+        // can route bump events to the correct per-key BYOK bucket (the bump
+        // guard requires non-null keyLast4 — without it bumps are dropped).
+        keyLast4: streamKeyLast4,
       });
     } catch (error) {
       const message =
@@ -2671,9 +2799,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     // Create a new abort controller for this request
     abortControllerRef.current = new AbortController();
 
-    // See chat-path comment above; Generate is always BYOK (hasKey required
-    // to render the panel) but still snapshot for parity and to survive the
-    // unlikely case of a key swap mid-stream.
+    // See chat-path comment above; snapshot the BYOK state at submit time
+    // to survive a key swap mid-stream and bind the BYOK pill update to
+    // the right key. For free/anon users hasKey is false here and the
+    // server enforces the $5 lifetime cap via reserveCost + kill switch.
     //
     // Generate doesn't go through ensureChartExists (PDFs were uploaded
     // earlier in the flow, which auto-created the chart and populated the
@@ -2687,6 +2816,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     const streamKeyLast4 = keyLast4;
     const streamUsesByok = hasKey;
     turnLastAppliedMicroRef.current = 0;
+
+    // Pre-send pill sync; see chat-mode call site for full rationale.
+    void syncChartByokCostFromDb(streamChartId);
 
     try {
       await chatService.streamMessage({
@@ -2876,6 +3008,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         editToken: params.editToken ?? autosavedEditTokenRef.current ?? undefined,
         loggingMessageId: userMessageId,
         // userAnthropicKey: server-stored BYOK; raw key not held client-side.
+        // keyLast4 routes post-stream bump events to the per-key BYOK bucket;
+        // see chat-mode call site above for the full rationale.
+        keyLast4: streamKeyLast4,
       });
     } catch (error) {
       const message =
@@ -3021,6 +3156,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <> &middot; {formatCostUsd(chartByokSpendUsd)} this chart</>
                           )}
                         </span>
+                        <button
+                          type="button"
+                          data-tooltip-id="byok-cost-info"
+                          aria-label="About this cost estimate"
+                          className="inline-flex items-center text-gray-400 hover:text-gray-600 focus:text-gray-600 focus:outline-none"
+                        >
+                          <InformationCircleIcon className="w-3.5 h-3.5" />
+                        </button>
                       </span>
                     ) : (
                       <div>
@@ -3094,221 +3237,240 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 </>
               ) : currentMode === 'generate' ? (
                 <div className="space-y-4">
-                  {/* Generate-mode BYOK gate. Generation concentrates cost
-                    (extended thinking + web search + documents) into a
-                    single one-shot request, so we require BYOK up front
-                    before showing any input UI. Once the user submits a
-                    verified key, hasKey flips and the full panel renders
-                    below. */}
-                  {!hasKey || !verified ? (
-                    <div className="space-y-3">
-                      {/* Generate-specific cost heads-up — separate card so
-                        the key affordance stays context-free. */}
-                      <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                        Generate runs a deep analysis of your documents. A single run typically
-                        costs a few dollars — more for large documents or heavy web searching. The
-                        running cost is shown as the answer is written, so you can stop it at any
-                        time if it starts to add up.
-                      </div>
-                      <AddApiKeyButton />
+                  {/* Cost heads-up. Generate concentrates spend (extended
+                    thinking + web search + documents) into one one-shot
+                    request, so flag this above the upload area. Server-side
+                    reserveCost + the kill switch enforce the $5 lifetime cap
+                    for free/anon tiers; BYOK bypasses it. */}
+                  <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    Generate runs a deep analysis of your documents. A single run typically costs a
+                    few dollars — more for large documents or heavy web searching. The running cost
+                    is shown as the answer is written, so you can stop it at any time if it starts
+                    to add up.
+                  </div>
+                  <div className="text-center text-gray-500 text-sm py-4">
+                    <div className="mb-2">
+                      <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
                     </div>
-                  ) : (
-                    <>
-                      <div className="text-center text-gray-500 text-sm py-4">
-                        <div className="mb-2">
-                          <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
-                        </div>
-                        <p>Upload documents to generate a Theory of Change conversation</p>
-                      </div>
+                    <p>Upload documents to generate a Theory of Change conversation</p>
+                  </div>
 
-                      {/* File Upload */}
-                      <div
-                        className="border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-gray-400 transition-colors"
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.currentTarget.classList.add('border-blue-400', 'bg-blue-50');
-                        }}
-                        onDragLeave={(e) => {
-                          e.preventDefault();
-                          e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                          const files = e.dataTransfer.files;
-                          if (files.length > 0) handleFileUpload(files);
-                        }}
-                      >
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          multiple
-                          accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
-                          onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
-                          className="hidden"
-                        />
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-                        >
-                          <CloudArrowUpIcon className="w-5 h-5" />
-                          Click to upload or drag & drop documents
-                        </button>
-                        <p className="text-xs text-gray-500 text-center mt-2">
-                          Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
-                        </p>
-                      </div>
+                  {/* File Upload */}
+                  <div
+                    className={`border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors ${
+                      generateBlockedByTurnstile ? 'opacity-50' : 'hover:border-gray-400'
+                    }`}
+                    onDragOver={(e) => {
+                      if (generateBlockedByTurnstile) return;
+                      e.preventDefault();
+                      e.currentTarget.classList.add('border-blue-400', 'bg-blue-50');
+                    }}
+                    onDragLeave={(e) => {
+                      if (generateBlockedByTurnstile) return;
+                      e.preventDefault();
+                      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+                    }}
+                    onDrop={(e) => {
+                      if (generateBlockedByTurnstile) return;
+                      e.preventDefault();
+                      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
+                      const files = e.dataTransfer.files;
+                      if (files.length > 0) handleFileUpload(files);
+                    }}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
+                      onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={generateBlockedByTurnstile}
+                      className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 enabled:hover:text-gray-800 enabled:hover:bg-gray-50 disabled:cursor-not-allowed rounded transition-colors"
+                    >
+                      <CloudArrowUpIcon className="w-5 h-5" />
+                      Click to upload or drag & drop documents
+                    </button>
+                    <p className="text-xs text-gray-500 text-center mt-2">
+                      Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
+                    </p>
+                  </div>
 
-                      {/* Generate-mode PDF chips (Files API uploads). */}
-                      {generateAttachedChips.length > 0 && (
-                        <AttachedFilesBar
-                          files={generateAttachedChips}
-                          onRemove={handleGenerateFileRemove}
-                          onRetry={handleGenerateFileRetry}
-                        />
-                      )}
+                  {/* Generate-mode PDF chips (Files API uploads). */}
+                  {generateAttachedChips.length > 0 && (
+                    <AttachedFilesBar
+                      files={generateAttachedChips}
+                      onRemove={handleGenerateFileRemove}
+                      onRetry={handleGenerateFileRetry}
+                    />
+                  )}
 
-                      {/* Uploaded Files */}
-                      {files.length > 0 && (
-                        <div className="space-y-2">
-                          <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
-                          {files.map((file, index) => (
-                            <div key={index} className="p-2 bg-gray-50 rounded">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 flex-1">
-                                  <div
-                                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                                      file.status === 'ready'
-                                        ? 'bg-green-400'
-                                        : file.status === 'reading'
-                                          ? 'bg-yellow-400 animate-pulse'
-                                          : 'bg-red-400'
-                                    }`}
-                                  ></div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-sm text-gray-700 truncate">
-                                        {file.file.name}
-                                      </span>
-                                      <span className="text-xs text-gray-500">
-                                        ({getFileTypeDescription(file.file.name)})
-                                      </span>
-                                    </div>
-                                    {file.status === 'reading' && (
-                                      <span className="text-xs text-gray-500">Reading file...</span>
-                                    )}
-                                    {file.status === 'ready' && file.content && (
-                                      <span className="text-xs text-green-600">
-                                        {Math.round(file.content.length / 1000)}KB of text extracted
-                                      </span>
-                                    )}
-                                    {file.status === 'error' && (
-                                      <span className="text-xs text-red-600">
-                                        {file.errorMessage || 'Failed to read file'}
-                                      </span>
-                                    )}
-                                  </div>
+                  {/* Uploaded Files */}
+                  {files.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
+                      {files.map((file, index) => (
+                        <div key={index} className="p-2 bg-gray-50 rounded">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 flex-1">
+                              <div
+                                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                  file.status === 'ready'
+                                    ? 'bg-green-400'
+                                    : file.status === 'reading'
+                                      ? 'bg-yellow-400 animate-pulse'
+                                      : 'bg-red-400'
+                                }`}
+                              ></div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-gray-700 truncate">
+                                    {file.file.name}
+                                  </span>
+                                  <span className="text-xs text-gray-500">
+                                    ({getFileTypeDescription(file.file.name)})
+                                  </span>
                                 </div>
-                                <button
-                                  onClick={() => removeFile(file.file)}
-                                  className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
-                                  title="Remove file"
-                                >
-                                  <XMarkIcon className="w-4 h-4" />
-                                </button>
+                                {file.status === 'reading' && (
+                                  <span className="text-xs text-gray-500">Reading file...</span>
+                                )}
+                                {file.status === 'ready' && file.content && (
+                                  <span className="text-xs text-green-600">
+                                    {Math.round(file.content.length / 1000)}KB of text extracted
+                                  </span>
+                                )}
+                                {file.status === 'error' && (
+                                  <span className="text-xs text-red-600">
+                                    {file.errorMessage || 'Failed to read file'}
+                                  </span>
+                                )}
                               </div>
                             </div>
-                          ))}
+                            <button
+                              onClick={() => removeFile(file.file)}
+                              className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
+                              title="Remove file"
+                            >
+                              <XMarkIcon className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                      )}
-
-                      {/* Additional Instructions */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Additional Instructions (Optional)
-                        </label>
-                        <textarea
-                          value={additionalInstructions}
-                          onChange={(e) => setAdditionalInstructions(e.target.value)}
-                          placeholder="Any specific focus areas or requirements for your Theory of Change..."
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
-                          rows={3}
-                        />
-                      </div>
-
-                      {(generateEstimateUsd > 0 || estimatingCost) && (
-                        <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
-                          {estimatingCost && (
-                            <span
-                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                              aria-label="Recalculating estimate"
-                            />
-                          )}
-                          {generateEstimateUsd > 0 ? (
-                            <span>
-                              Estimated input cost:{' '}
-                              <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is
-                              billed on top as the response streams; hit Stop to abort if it runs
-                              long.
-                            </span>
-                          ) : (
-                            <span className="text-gray-500">Estimating…</span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Model picker. Mirrors the chat composer's pattern;
-                    selectedModel is shared across modes so a user's choice
-                    in one carries to the other. */}
-                      <div className="flex items-center justify-between text-xs text-gray-600">
-                        <span>Model</span>
-                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
-                      </div>
-
-                      {/* Effort picker. Hidden when the model doesn't accept
-                          `output_config.effort`; rendered on the same row when
-                          it does so the controls stay visually grouped. */}
-                      {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
-                        <div className="flex items-center justify-between text-xs text-gray-600">
-                          <span>Effort</span>
-                          <EffortDropdown
-                            model={selectedModel}
-                            selected={selectedEffort}
-                            onSelect={setSelectedEffort}
-                          />
-                        </div>
-                      )}
-
-                      {/* Generate button. The BYOK gate is enforced upstream:
-                    this render path is reached only when hasKey && verified,
-                    so we don't need a fallback branch for the unkeyed case. */}
-                      <button
-                        onClick={startGeneration}
-                        disabled={
-                          files.filter((f) => f.status === 'ready').length +
-                            generateAttachedFileIds.length ===
-                            0 ||
-                          generateAttachedChips.some(
-                            (f) => f.status === 'uploading' || f.status === 'error',
-                          ) ||
-                          isLoading
-                        }
-                        className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {isLoading ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                            Generating...
-                          </>
-                        ) : (
-                          <>
-                            <DocumentPlusIcon className="w-4 h-4" />
-                            Generate Theory of Change
-                          </>
-                        )}
-                      </button>
-                    </>
+                      ))}
+                    </div>
                   )}
+
+                  {/* Additional Instructions */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Additional Instructions (Optional)
+                    </label>
+                    <textarea
+                      value={additionalInstructions}
+                      onChange={(e) => setAdditionalInstructions(e.target.value)}
+                      placeholder="Any specific focus areas or requirements for your Theory of Change..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                      rows={3}
+                    />
+                  </div>
+
+                  {(generateEstimateUsd > 0 || estimatingCost) && (
+                    <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
+                      {estimatingCost && (
+                        <span
+                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                          aria-label="Recalculating estimate"
+                        />
+                      )}
+                      {generateEstimateUsd > 0 ? (
+                        <span>
+                          Estimated input cost:{' '}
+                          <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is billed on
+                          top as the response streams; hit Stop to abort if it runs long.
+                        </span>
+                      ) : (
+                        <span className="text-gray-500">Estimating…</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Model picker. Mirrors the chat composer's pattern;
+                selectedModel is shared across modes so a user's choice
+                in one carries to the other. */}
+                  <div className="flex items-center justify-between text-xs text-gray-600">
+                    <span>Model</span>
+                    <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                  </div>
+
+                  {/* Effort picker. Hidden when the model doesn't accept
+                      `output_config.effort`; rendered on the same row when
+                      it does so the controls stay visually grouped. */}
+                  {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
+                    <div className="flex items-center justify-between text-xs text-gray-600">
+                      <span>Effort</span>
+                      <EffortDropdown
+                        model={selectedModel}
+                        selected={selectedEffort}
+                        onSelect={setSelectedEffort}
+                      />
+                    </div>
+                  )}
+
+                  {/* Anon-tier Turnstile prompt. Placed next to the Generate
+                    button rather than at the top of the panel so it's
+                    visible alongside the action it gates; pairs with the
+                    disabled upload/Generate controls above. Solving flips
+                    the shared hasTurnstileSession cookie so chat is also
+                    unblocked. */}
+                  {generateBlockedByTurnstile && (
+                    <div className="space-y-2">
+                      <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                        Solve the challenge to verify you&apos;re human before uploading or
+                        generating.
+                      </div>
+                      <TurnstileWidget
+                        siteKey={TURNSTILE_SITE_KEY}
+                        onToken={handleTurnstileToken}
+                      />
+                      {turnstileError && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                          {turnstileError}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Generate button. Available to all tiers; the $5 lifetime
+                    cap is enforced server-side via reserveCost and the
+                    kill switch. BYOK bypasses the cap. */}
+                  <button
+                    onClick={startGeneration}
+                    disabled={
+                      files.filter((f) => f.status === 'ready').length +
+                        generateAttachedFileIds.length ===
+                        0 ||
+                      generateAttachedChips.some(
+                        (f) => f.status === 'uploading' || f.status === 'error',
+                      ) ||
+                      isLoading ||
+                      generateBlockedByTurnstile
+                    }
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isLoading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <DocumentPlusIcon className="w-4 h-4" />
+                        Generate Theory of Change
+                      </>
+                    )}
+                  </button>
                 </div>
               ) : null}
 
@@ -3576,12 +3738,39 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </div>
                     ) : byokPanelMode === 'global_budget' ? (
                       <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                          We&apos;ve hit our shared monthly spend cap. Everyone on the free tier is
-                          paused until next month&apos;s reset.
+                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2 space-y-1">
+                          {/* Conditional headline:
+                              - BYOK user: their own key returned billing_error.
+                                Pointing them at "add an API key" is wrong (they
+                                already have one); the remediation is the
+                                Anthropic Console.
+                              - Free/anon user: our shared key hit the cap (or
+                                Anthropic billing desync). BYOK is the unblock. */}
+                          {hasKey ? (
+                            <div>
+                              Anthropic returned a billing error for your API key. This can be
+                              transient — try again in a minute. If it persists, check your
+                              Anthropic Console for cap, payment, or organization status.
+                            </div>
+                          ) : (
+                            <div>
+                              We hit our shared monthly spend cap, or Anthropic returned a transient
+                              billing error. Try again in a minute, or use your own Anthropic key to
+                              continue.
+                            </div>
+                          )}
+                          {globalBudgetUpstreamMessage && (
+                            <div className="text-xs text-red-700 italic">
+                              Anthropic says: &ldquo;{globalBudgetUpstreamMessage}&rdquo;
+                            </div>
+                          )}
                         </div>
-                        <AddApiKeyButton />
-                        <DonateCta />
+                        {/* Action affordances: AddApiKeyButton only helps if
+                            the user doesn't already have a key. DonateCta only
+                            helps the free-tier case (BYOK users are self-
+                            funded; donations don't unblock them). */}
+                        {!hasKey && <AddApiKeyButton />}
+                        {!hasKey && <DonateCta />}
                       </div>
                     ) : capAlreadyReached ? (
                       <div className="space-y-2">
@@ -3760,6 +3949,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           </div>
         </div>
       </div>
+
+      {/* BYOK cost info tooltip — keep short. Just discloses that this
+          is an estimate and Anthropic's console is the source of truth. */}
+      <Tooltip
+        id="byok-cost-info"
+        place="bottom"
+        className="!max-w-[240px] !text-xs !leading-snug"
+        style={{ zIndex: 9999 }}
+      >
+        Estimate from streaming events. Anthropic&apos;s console is the source of truth and may show
+        more.
+      </Tooltip>
     </>
   );
 }
