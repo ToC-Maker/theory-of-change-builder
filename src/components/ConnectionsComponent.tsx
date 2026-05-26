@@ -608,7 +608,11 @@ export function ConnectionsComponent({
               {/* PR 7: waypoint + midpoint handles for direct
                   manipulation. Rendered above the visible path so the
                   handles always sit on top; visibility = hovered OR
-                  selected OR currently being dragged. */}
+                  selected OR currently being dragged.
+                  `dragInProgress` mirrors `isThisConnectionBeingDragged`
+                  (the parent-owned waypointDragState) so midpoint
+                  handles disappear while the user drags a waypoint —
+                  PR 7 feedback item 17. */}
               {bindWaypoint && bindMidpoint && (
                 <ConnectionWaypointHandles
                   sourceNodeId={connection.sourceId}
@@ -616,6 +620,7 @@ export function ConnectionsComponent({
                   anchors={waypointAnchors}
                   waypointCount={waypointCount}
                   visible={handlesVisible}
+                  dragInProgress={isThisConnectionBeingDragged}
                   bindWaypoint={bindWaypoint}
                   bindMidpoint={bindMidpoint}
                 />

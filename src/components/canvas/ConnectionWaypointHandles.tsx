@@ -21,6 +21,17 @@
 // Midpoint visibility: connections with zero waypoints show ONE
 // midpoint handle (the user's entry point for adding waypoints). Each
 // waypoint added increases the number of midpoint handles by one.
+// **PR 7 feedback (17)**: midpoint handles are HIDDEN whenever a
+// waypoint drag is in flight on this connection. The previous behavior
+// (a fresh insert-from-midpoint immediately surfaced TWO new midpoints
+// on either side of the dragged waypoint) was deeply confusing — the
+// reviewer described the two new dots as "extra transparent circles"
+// influencing the curve. They actually had no effect on the curve
+// math, but they SAT ON the curve as the user dragged the new
+// waypoint, and the curve was simultaneously deforming weirdly under
+// the old bezier algorithm. Hiding them during drag removes the
+// distraction; they reappear on pointerup so the user can continue
+// adding more waypoints.
 //
 // Geometry: midpoint coords use the STRAIGHT-LINE midpoint of the
 // chord between consecutive anchors (not the bezier midpoint at
@@ -53,6 +64,13 @@ export interface ConnectionWaypointHandlesProps {
   waypointCount: number;
   /** True when the connection is hovered or selected. */
   visible: boolean;
+  /**
+   * True when a waypoint drag is currently in flight on THIS connection.
+   * Midpoint handles are hidden during drag (PR 7 feedback item 17) so
+   * the user doesn't see two extra translucent circles spawn on either
+   * side of the waypoint they're dragging.
+   */
+  dragInProgress?: boolean;
   bindWaypoint: (sourceNodeId: string, targetNodeId: string, waypointIndex: number) => BindResult;
   bindMidpoint: (sourceNodeId: string, targetNodeId: string, segmentIndex: number) => BindResult;
 }
@@ -63,6 +81,7 @@ export function ConnectionWaypointHandles({
   anchors,
   waypointCount,
   visible,
+  dragInProgress,
   bindWaypoint,
   bindMidpoint,
 }: ConnectionWaypointHandlesProps) {
@@ -77,23 +96,29 @@ export function ConnectionWaypointHandles({
   }
 
   // Segment midpoints: between each consecutive pair of anchors. There
-  // are anchors.length - 1 segments (== waypointCount + 1).
+  // are anchors.length - 1 segments (== waypointCount + 1). Skipped
+  // entirely while a drag is in flight on this connection (PR 7
+  // feedback item 17): the user dragging a waypoint shouldn't see two
+  // new translucent dots spawn next to it.
   const midpoints: Array<{ x: number; y: number; segmentIndex: number }> = [];
-  for (let i = 0; i < anchors.length - 1; i++) {
-    const a = anchors[i];
-    const b = anchors[i + 1];
-    midpoints.push({
-      x: (a.x + b.x) / 2,
-      y: (a.y + b.y) / 2,
-      segmentIndex: i,
-    });
+  if (!dragInProgress) {
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a = anchors[i];
+      const b = anchors[i + 1];
+      midpoints.push({
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2,
+        segmentIndex: i,
+      });
+    }
   }
 
   return (
     <g data-tocb-waypoint-handles={`${sourceNodeId}->${targetNodeId}`}>
       {/* Midpoint handles: smaller, translucent. Render UNDER waypoint
           handles so a waypoint's filled circle wins click priority if
-          they happen to overlap (rare; happens on a 0-length segment). */}
+          they happen to overlap (rare; happens on a 0-length segment).
+          Skipped entirely during an in-flight drag — see `dragInProgress`. */}
       {midpoints.map(({ x, y, segmentIndex }) => {
         const bound = bindMidpoint(sourceNodeId, targetNodeId, segmentIndex);
         return (
