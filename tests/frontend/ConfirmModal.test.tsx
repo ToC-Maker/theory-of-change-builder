@@ -116,6 +116,37 @@ describe('ConfirmModal', () => {
     expect(btn.className).not.toContain('bg-red-600');
   });
 
+  it('confirmVariant=purple uses purple instead of red (GenerateConfirmDialog unification)', () => {
+    render(
+      <ConfirmModal
+        open={true}
+        title="T"
+        body="B"
+        confirmVariant="purple"
+        onConfirm={noop}
+        onCancel={noop}
+      />,
+    );
+    const btn = screen.getByTestId('confirm-modal-confirm');
+    expect(btn.className).toContain('bg-purple-600');
+    expect(btn.className).not.toContain('bg-red-600');
+    expect(btn.className).not.toContain('bg-indigo-600');
+  });
+
+  it('renders supplied icon node above the title when provided', () => {
+    render(
+      <ConfirmModal
+        open={true}
+        title="T"
+        body="B"
+        icon={<span data-testid="confirm-modal-icon-fixture">icon</span>}
+        onConfirm={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(screen.getByTestId('confirm-modal-icon-fixture')).toBeInTheDocument();
+  });
+
   it('shows custom confirmLabel and cancelLabel when supplied', () => {
     render(
       <ConfirmModal
