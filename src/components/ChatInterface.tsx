@@ -1256,16 +1256,26 @@ export function ChatInterface({
 
   // Auto-clear `last_send_exceeded` when the user edits anything that would
   // change the next send's projected cost. The variant is past-tense ("your
-  // last send would have exceeded") — once they edit the draft or attached
-  // files, the rejection is moot and the user is signaling retry intent.
-  // The setComposerBlocker callback is idempotent when prev isn't this
-  // variant, so firing on every keystroke is a no-op for any other state.
-  // Covers both Chat (inputValue, chatAttachedFiles) and Generate
-  // (additionalInstructions, files, generateAttachedFileIds) inputs; the
-  // server-rejected event could come from either mode.
+  // last send would have exceeded") — once they edit the draft, attached
+  // files, OR swap to a cheaper model, the rejection is moot and the user
+  // is signaling retry intent. The setComposerBlocker callback is
+  // idempotent when prev isn't this variant, so firing on every keystroke
+  // is a no-op for any other state. Covers both Chat (inputValue,
+  // chatAttachedFiles) and Generate (additionalInstructions, files,
+  // generateAttachedFileIds) inputs; the server-rejected event could come
+  // from either mode. `selectedModel` is included because Opus→Sonnet
+  // (~5× cheaper) on the same draft is a legitimate "past rejection is
+  // moot" signal that doesn't involve touching the text.
   useEffect(() => {
     setComposerBlocker((prev) => (prev?.type === 'last_send_exceeded' ? null : prev));
-  }, [inputValue, chatAttachedFiles, additionalInstructions, files, generateAttachedFileIds]);
+  }, [
+    inputValue,
+    chatAttachedFiles,
+    additionalInstructions,
+    files,
+    generateAttachedFileIds,
+    selectedModel,
+  ]);
 
   // Page-load probe: ask the worker whether an existing tocb_anon cookie is
   // still valid for this caller. The cookie is httpOnly so the client can't

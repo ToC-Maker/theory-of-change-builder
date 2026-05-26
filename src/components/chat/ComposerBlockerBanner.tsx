@@ -142,6 +142,11 @@ function ComposerBlockerBannerImpl({
       // to a smaller draft may let it through. Non-blocking amber
       // banner; auto-clears on input/files edit (via useEffect in
       // ChatInterface that nulls the blocker when this variant is set).
+      //
+      // Intentionally no DonateCta here (cap_reached has both):
+      // donating doesn't unblock the immediate "this draft was too big
+      // for remaining quota" problem since the user is under cap.
+      // Editing or BYOK are the actionable recovery paths.
       return (
         <div className="space-y-2">
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">

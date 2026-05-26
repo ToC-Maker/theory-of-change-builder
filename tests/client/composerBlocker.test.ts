@@ -331,6 +331,21 @@ describe('selectBlocker', () => {
     expect(result).toBeNull();
   });
 
+  it('last_send_exceeded + tier flips to byok → null (BYOK-clear predicate includes this)', () => {
+    // selectBlocker INLINES a wider BYOK-clear predicate than
+    // isCapClassBlocker — the inlined version includes last_send_exceeded
+    // (past free-tier rejection becomes irrelevant once BYOK active).
+    // This test pins the divergence so a future refactor that re-uses
+    // isCapClassBlocker for the selectBlocker filter doesn't silently
+    // break the clear.
+    const result = selectBlocker({
+      eventBlocker: { type: 'last_send_exceeded' },
+      usage: { used_usd: 4.5, limit_usd: 5, tier: 'byok' },
+      composerEstimateUsd: 0,
+    });
+    expect(result).toBeNull();
+  });
+
   it('global_budget + tier flips to byok → preserved (N1 regression — not cap-class)', () => {
     const result = selectBlocker({
       eventBlocker: { type: 'global_budget', upstream_message: 'billing error' },
