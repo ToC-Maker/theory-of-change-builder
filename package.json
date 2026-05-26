@@ -9,7 +9,7 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "vite build && wrangler dev",
+    "dev": "vite build --mode development && wrangler dev",
     "dev:vite": "vite",
     "build": "vite build",
     "preview": "vite build && wrangler dev",

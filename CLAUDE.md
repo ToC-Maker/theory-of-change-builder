@@ -129,6 +129,15 @@ There are three distinct "where it's needed" categories. Some variables are need
 
 For local development, copy `.dev.vars.example` to `.dev.vars` (gitignored) and fill in values. Wrangler's `wrangler dev` reads `.dev.vars`; Vite reads `.env.local` or `.env.development` — create those too if you need frontend-side vars for local Vite builds.
 
+### Turnstile testkeys in dev
+
+Cloudflare publishes [always-pass testkeys for Turnstile](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) so dev sessions (human or headless) can complete the widget without a real challenge. They are wired into this repo:
+
+- **Site key** (`1x00000000000000000000AA`): committed in `.env.development`. Loaded by Vite when building in development mode. `npm run dev` passes `--mode development` to `vite build` so the testkey is inlined into the dev bundle; `npm run dev:vite` (the HMR dev server) loads it automatically because Vite defaults to development mode there.
+- **Secret key** (`1x0000000000000000000000000000000AA`): present in `.dev.vars.example`. Copy that to `.dev.vars` (gitignored) and `wrangler dev` reads it. The Worker's `/api/verify-turnstile` and the anon Turnstile gate in `/api/anthropic-stream` accept any token the widget emits when this secret is configured.
+
+Production keeps real Turnstile keys: site key in `.env.production` + `wrangler.jsonc` `vars`, secret in the Cloudflare dashboard. Nothing in the code path differs — dev exercises the full Turnstile round-trip, just against the always-pass keypair.
+
 ## Database Schema
 
 See `database/schema.sql` for full schema. Key tables:
