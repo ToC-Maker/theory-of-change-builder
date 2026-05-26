@@ -142,22 +142,71 @@ function computeControlPointOffset(
 // N-waypoint multi-segment bezier
 // ---------------------------------------------------------------------------
 //
-// Strategy:
+// Strategy (rewritten for PR 7 feedback item 17 — small drags must
+// produce small curve deformations, no S-shapes near endpoints):
+//
 //   1. Collect anchors = [source, ...waypoints, target] (length N+2).
-//   2. For each interior anchor i (1 ≤ i ≤ N), pick an "incoming control
-//      direction" parallel to the local segment chord (anchors[i+1] -
-//      anchors[i-1]). This gives a smooth tangent through the waypoint.
-//   3. Place the incoming control at (anchor[i] - dir * incomingMag) and
-//      the outgoing control at (anchor[i] + dir * outgoingMag). Both
-//      live ON the same tangent line, so they are reflections across
-//      the anchor and the path is C1-continuous.
-//   4. Source side: the outgoing control of source is horizontally
-//      offset toward waypoints[0] by the same |Δx|/2 * (0.1 + curvature*1.9)
-//      formula (matching the 0-waypoint shape's source-side tangent).
-//   5. Target side: the incoming control of target is horizontally
-//      offset away from waypoints[last] by the same formula (so the
-//      arrowhead tangent stays horizontal, matching the 0-waypoint
-//      behaviour and keeping the visual feel consistent).
+//
+//   2. For each interior anchor i (1 ≤ i ≤ N), pick a tangent direction
+//      parallel to the chord between its neighbors:
+//        tangent_i = unit(anchors[i+1] - anchors[i-1])
+//      This is the Catmull-Rom-like direction. It guarantees a smooth
+//      visual flow through the waypoint.
+//
+//   3. **One magnitude per WAYPOINT (not per segment)**, used for BOTH
+//      sides of the waypoint:
+//        mag_i = factor(curvature) * min(|W_i - A|, |W_i - B|)
+//      where A, B are the neighboring anchors. Using the SHORTER
+//      neighbor chord clamps each control arm to within the segment
+//      envelope, preventing the c2-overshoots-c1 S-shape that the
+//      previous formula produced when one neighbor was much closer
+//      than the other (the typical case during a fresh waypoint drag:
+//      a new waypoint inserted at the midpoint then dragged slightly,
+//      with source and target still roughly equidistant — but as the
+//      user drags the waypoint near one node, that side's segment
+//      shrinks and the OLD per-segment magnitude let the other side's
+//      magnitude grow with the larger segment, producing the loop).
+//
+//      Because both sides of the waypoint use the same magnitude, the
+//      incoming and outgoing controls are reflections across the
+//      waypoint → C1 continuity → the dash pattern stays smooth across
+//      the waypoint (the dash-phase test invariant from PR 7 Task 7.1).
+//
+//   4. Source-side outgoing control: along the first segment's chord
+//      direction (source → first waypoint), magnitude = factor *
+//      |source → firstWp|. Symmetric for target side. This replaces
+//      the previous "always horizontal" tangent at the endpoints,
+//      which was the SECOND source of S-shapes: a horizontal source
+//      tangent reaching 34px right + an interior tangent reaching
+//      back 42px to the left would cross each other.
+//
+//      The trade-off: the arrowhead no longer enters target strictly
+//      horizontally when there are waypoints. In practice this looks
+//      MORE natural — the curve smoothly flows toward the arrowhead
+//      from the last waypoint's direction, rather than making a hard
+//      90° turn to enter horizontally. The 0-waypoint case is
+//      unchanged (byte-identical) and that's what most connections
+//      look like, so the new behavior only surfaces when the user has
+//      explicitly added a waypoint.
+//
+//   5. Scale `factor(curvature)` so that:
+//        - At curvature=0: factor=0 (straight polyline segments).
+//        - At curvature=0.5 (default): factor≈0.4 (gentle curves).
+//        - At curvature=1.0: factor≈0.55 (pronounced curves).
+//      The previous `(chord/2) * (0.1 + 1.9*curv)` peaked at half the
+//      chord per side, which is geometrically the maximum sensible
+//      magnitude before control arms invert. Using a smaller factor
+//      (peaking at ~0.55 of the SHORTER chord) keeps the path within
+//      the polyline envelope across the whole curvature slider range.
+//
+// Backward-compat:
+//   The 0-waypoint shape goes through `buildZeroWaypointPath`, which is
+//   unchanged. The byte-identical fallback test pins it. The 1+ -waypoint
+//   shape changes intentionally — the previous shape was buggy under
+//   small drags. The "single Move + N+1 Curves" structural test still
+//   passes because we still emit one Move + (anchors.length-1) Curves.
+//   The C1 reflection test passes because we now use the SAME magnitude
+//   for both control points around an interior waypoint.
 
 function buildMultiWaypointPath(
   source: Point,
@@ -169,71 +218,95 @@ function buildMultiWaypointPath(
   // Anchors include source and target at the ends.
   const anchors: Point[] = [source, ...waypoints, target];
 
-  // Per-segment magnitude: half the segment's chord length, scaled by
-  // curvature (using the same formula as the 0-waypoint case so the
-  // visual feel is consistent at curvature=0 and curvature=1).
-  //
-  // For curvature=0 the magnitude is 0 (anchors collapse to a polyline
-  // of straight cubic-segments where both control points sit on the
-  // endpoints — still a valid bezier, still a single path string).
-  const segMagnitude = (a: Point, b: Point): number => {
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const chord = Math.hypot(dx, dy);
-    return curvature === 0 ? 0 : (chord / 2) * (0.1 + curvature * 1.9);
-  };
+  // Curvature → magnitude scale. Zero at curvature=0 (straight
+  // segments), ~0.4 at the default 0.5, ~0.55 at curvature=1.
+  // Keeping the scale below 0.6 prevents control-arm-inversion S-shapes
+  // even when the user drags a waypoint very close to a neighbor.
+  const factor = curvature === 0 ? 0 : 0.25 + curvature * 0.3;
 
-  // For each interior anchor i, compute the unit tangent along
-  // (anchors[i+1] - anchors[i-1]) — i.e., the chord between its
-  // neighbors. This is the "Catmull-Rom-like" tangent direction. The
-  // magnitude on each side scales by the local segment's chord length.
-  const interiorTangents: Array<{ ux: number; uy: number }> = [];
+  // Helper: chord length between two points.
+  const chord = (a: Point, b: Point): number => Math.hypot(b.x - a.x, b.y - a.y);
+
+  // For each interior anchor i (waypoint), compute:
+  //   - unit tangent along (anchors[i+1] - anchors[i-1])
+  //   - magnitude = factor * min(|W - prev|, |W - next|)  (one per WAYPOINT)
+  // The single-magnitude-per-waypoint choice is what makes the path
+  // C1-continuous across that waypoint (incoming and outgoing controls
+  // become reflections of each other across W).
+  const interior: Array<{
+    ux: number;
+    uy: number;
+    mag: number;
+  }> = [];
   for (let i = 1; i < anchors.length - 1; i++) {
     const prev = anchors[i - 1];
+    const here = anchors[i];
     const next = anchors[i + 1];
     const dx = next.x - prev.x;
     const dy = next.y - prev.y;
-    const len = Math.hypot(dx, dy);
-    // Guard against degenerate zero-length tangent (source==target with
-    // waypoints folded onto the same point). Default to horizontal
-    // pointing in the direction's natural sense.
-    if (len === 0) {
+    const tangentLen = Math.hypot(dx, dy);
+    let ux: number, uy: number;
+    if (tangentLen === 0) {
+      // Degenerate: source==target with waypoints collapsed. Default to
+      // horizontal in the direction's natural sense so the renderer
+      // still produces a finite path.
       const sign = direction === 'backward' ? -1 : 1;
-      interiorTangents.push({ ux: sign, uy: 0 });
+      ux = sign;
+      uy = 0;
     } else {
-      interiorTangents.push({ ux: dx / len, uy: dy / len });
+      ux = dx / tangentLen;
+      uy = dy / tangentLen;
     }
+    const segIn = chord(prev, here);
+    const segOut = chord(here, next);
+    const mag = factor * Math.min(segIn, segOut);
+    interior.push({ ux, uy, mag });
   }
 
-  // Source-side outgoing control: horizontal offset matching the
-  // 0-waypoint source-side shape (so the connection's first segment
-  // leaves the source with the same tangent style).
+  // Source-side outgoing control: along (source → firstWaypoint)
+  // direction, magnitude = factor * |source → firstWaypoint|. Falls
+  // back to a horizontal degenerate when source == firstWaypoint.
   const firstWp = anchors[1];
-  const sourceOffset = computeControlPointOffset(source.x, firstWp.x, curvature, direction);
-  const sourceOutX = direction === 'backward' ? source.x - sourceOffset : source.x + sourceOffset;
-  const sourceOutY = source.y;
+  const sdx = firstWp.x - source.x;
+  const sdy = firstWp.y - source.y;
+  const sourceSegLen = Math.hypot(sdx, sdy);
+  let sourceOutX: number, sourceOutY: number;
+  if (sourceSegLen === 0 || factor === 0) {
+    sourceOutX = source.x;
+    sourceOutY = source.y;
+  } else {
+    const sMag = factor * sourceSegLen;
+    sourceOutX = source.x + (sdx / sourceSegLen) * sMag;
+    sourceOutY = source.y + (sdy / sourceSegLen) * sMag;
+  }
 
-  // Target-side incoming control: horizontal offset matching the
-  // 0-waypoint target-side shape (so the arrowhead tangent stays
-  // horizontal at the target).
+  // Target-side incoming control: along (lastWaypoint → target),
+  // magnitude = factor * |lastWaypoint → target|. Same degenerate
+  // handling.
   const lastWp = anchors[anchors.length - 2];
-  const targetOffset = computeControlPointOffset(lastWp.x, target.x, curvature, direction);
-  // The target-side control offset SIGN mirrors the 0-waypoint shape:
-  // forward sits left of target (`-offset`); backward / vertical sit on
-  // or right of it (`+offset`; vertical is a no-op since offset=0).
-  const targetInX = direction === 'forward' ? target.x - targetOffset : target.x + targetOffset;
-  const targetInY = target.y;
+  const tdx = target.x - lastWp.x;
+  const tdy = target.y - lastWp.y;
+  const targetSegLen = Math.hypot(tdx, tdy);
+  let targetInX: number, targetInY: number;
+  if (targetSegLen === 0 || factor === 0) {
+    targetInX = target.x;
+    targetInY = target.y;
+  } else {
+    const tMag = factor * targetSegLen;
+    // Control points sit BEFORE the target along the segment direction.
+    targetInX = target.x - (tdx / targetSegLen) * tMag;
+    targetInY = target.y - (tdy / targetSegLen) * tMag;
+  }
 
   // Build segments. For each segment i from anchors[i] to anchors[i+1]:
   //   - c1 (leaving anchor[i]) and c2 (arriving anchor[i+1]).
-  // Endpoints: source's c1 = sourceOut (computed above); target's c2 =
-  // targetIn (computed above). Interior endpoints place controls along
-  // their tangent at +/- segMagnitude from the anchor.
+  // Source's c1 = sourceOut; target's c2 = targetIn. Interior endpoints
+  // place controls along their tangent at +/- mag from the anchor, with
+  // the SAME mag for both sides of any given waypoint (C1 invariant).
   const segments: string[] = [];
   for (let i = 0; i < anchors.length - 1; i++) {
     const a = anchors[i];
     const b = anchors[i + 1];
-    const mag = segMagnitude(a, b);
 
     // c1: leaving anchor a.
     let c1x: number, c1y: number;
@@ -241,9 +314,10 @@ function buildMultiWaypointPath(
       c1x = sourceOutX;
       c1y = sourceOutY;
     } else {
-      const t = interiorTangents[i - 1];
-      c1x = a.x + t.ux * mag;
-      c1y = a.y + t.uy * mag;
+      // anchors[i] is interior waypoint with index i-1 in `interior`.
+      const t = interior[i - 1];
+      c1x = a.x + t.ux * t.mag;
+      c1y = a.y + t.uy * t.mag;
     }
 
     // c2: arriving anchor b.
@@ -252,11 +326,10 @@ function buildMultiWaypointPath(
       c2x = targetInX;
       c2y = targetInY;
     } else {
-      // anchors[i+1] is an interior waypoint; use the tangent at index
-      // i (0-based interior tangents array).
-      const t = interiorTangents[i];
-      c2x = b.x - t.ux * mag;
-      c2y = b.y - t.uy * mag;
+      // anchors[i+1] is interior waypoint with index i in `interior`.
+      const t = interior[i];
+      c2x = b.x - t.ux * t.mag;
+      c2y = b.y - t.uy * t.mag;
     }
 
     segments.push(`C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`);
