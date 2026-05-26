@@ -1073,14 +1073,27 @@ export function ToC({
                   setEditingTitle(false);
                 }
               }}
-              className="text-4xl font-bold text-center text-gray-800 tracking-wider w-full bg-transparent border-b-2 border-gray-400 outline-none focus:border-indigo-500"
-              style={{ fontFamily: fontFamily }}
+              // `text-4xl` (2.25rem) replaced by an inline
+              // `fontSize: textSize * 2.25rem` so the chart title scales
+              // with the Format menu's text-size multiplier alongside
+              // section + node titles. Each layer keeps its own base
+              // size (chart 2.25rem > section 1.875rem > node 1.125rem)
+              // so the visual hierarchy is preserved; textSize is a
+              // global multiplier on top.
+              className="font-bold text-center text-gray-800 tracking-wider w-full bg-transparent border-b-2 border-gray-400 outline-none focus:border-indigo-500"
+              style={{
+                fontFamily: fontFamily,
+                fontSize: `${textSize * 2.25}rem`,
+              }}
               autoFocus
             />
           ) : (
             <h1
-              className={`text-4xl font-bold text-center text-gray-800 tracking-wider ${editMode ? 'cursor-pointer hover:text-indigo-600 transition-colors' : ''}`}
-              style={{ fontFamily: fontFamily }}
+              className={`font-bold text-center text-gray-800 tracking-wider ${editMode ? 'cursor-pointer hover:text-indigo-600 transition-colors' : ''}`}
+              style={{
+                fontFamily: fontFamily,
+                fontSize: `${textSize * 2.25}rem`,
+              }}
               onClick={() => editMode && setEditingTitle(true)}
               title={editMode ? 'Click to edit title' : ''}
             >
@@ -1264,8 +1277,17 @@ export function ToC({
                           //     h2 below carries `border-b-2
                           //     border-transparent` so the swap is
                           //     vertically identical (no height jump).
-                          className="w-full text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
-                          style={{ fontFamily: fontFamily }}
+                          // PR 7 task 13: `text-3xl` (1.875rem) replaced
+                          // by inline `fontSize: textSize * 1.875rem` so
+                          // section titles scale with the Format menu's
+                          // text-size setting (Tailwind text-* classes win
+                          // over inline style, so the static class has to
+                          // come off).
+                          className="w-full font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
+                          style={{
+                            fontFamily: fontFamily,
+                            fontSize: `${textSize * 1.875}rem`,
+                          }}
                           autoFocus
                         />
                       ) : (
@@ -1274,8 +1296,13 @@ export function ToC({
                           // border matches the input's `border-b-2`
                           // underline, so swapping between view and
                           // edit doesn't change the title row's height.
-                          className={`block w-full text-3xl font-bold text-center text-white uppercase border-b-2 border-transparent ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
-                          style={{ fontFamily: fontFamily }}
+                          // PR 7 task 13: inline `fontSize` (see input
+                          // comment above) so section titles scale.
+                          className={`block w-full font-bold text-center text-white uppercase border-b-2 border-transparent ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                          style={{
+                            fontFamily: fontFamily,
+                            fontSize: `${textSize * 1.875}rem`,
+                          }}
                           onClick={() => editMode && setEditingSectionIndex(sectionIndex)}
                           title={editMode ? 'Click to edit section label' : ''}
                         >
