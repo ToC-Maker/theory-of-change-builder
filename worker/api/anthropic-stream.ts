@@ -21,6 +21,7 @@ import {
 } from '../_shared/cost';
 import {
   LIFETIME_CAP_USD,
+  LIFETIME_CAP_MICRO_USD,
   EFFECTIVE_LIFETIME_CAP_MICRO_USD,
   BODY_SIZE_LIMIT_BYTES,
   tierFor,
@@ -719,10 +720,17 @@ async function reserveCost(
   altSvcHeaders: Record<string, string>,
 ): Promise<ReserveResult> {
   const projStr = projected.toString();
-  // EFFECTIVE_LIFETIME_CAP_MICRO_USD (= LIFETIME_CAP_MICRO_USD * 1.05) so a
-  // user near the cap can still get a reasonable next send through. The 429
-  // response below still reports the displayed cap (LIFETIME_CAP_USD).
-  const capStr = EFFECTIVE_LIFETIME_CAP_MICRO_USD.toString();
+  // Two-condition gate. The kill switch's overspend tolerance lets streams
+  // land a few cents past LIFETIME_CAP_MICRO_USD without truncation; once
+  // that's happened the user is "done" and any further send must be
+  // blocked. The buffer ONLY helps users still under the displayed cap
+  // (the iteration-trap escape).
+  //
+  // The 429 response below reports the displayed cap (LIFETIME_CAP_USD),
+  // not the effective cap — clients classify cap_reached vs
+  // last_send_exceeded against the displayed value.
+  const strictCapStr = LIFETIME_CAP_MICRO_USD.toString();
+  const effectiveCapStr = EFFECTIVE_LIFETIME_CAP_MICRO_USD.toString();
 
   let updateRows: { cost_micro_usd: bigint | number | string }[];
   try {
@@ -731,7 +739,8 @@ async function reserveCost(
       SET cost_micro_usd = cost_micro_usd + ${projStr}::bigint,
           last_activity_at = NOW()
       WHERE user_id = ${userId}
-        AND cost_micro_usd + ${projStr}::bigint <= ${capStr}::bigint
+        AND cost_micro_usd < ${strictCapStr}::bigint
+        AND cost_micro_usd + ${projStr}::bigint <= ${effectiveCapStr}::bigint
       RETURNING cost_micro_usd
     `) as { cost_micro_usd: bigint | number | string }[];
   } catch (e) {
@@ -3251,12 +3260,11 @@ export async function handler(
   const accumulator = newAccumulator();
   const killed = { v: false };
 
-  // Kill threshold: cumulative actual cost must not exceed remaining_cap measured
-  // BEFORE this request's reservation was deducted. Since the reservation has
-  // already been debited, that's EFFECTIVE_CAP - (post_reservation - projected).
-  // EFFECTIVE_CAP includes a small overspend tolerance (see tiers.ts) used
-  // symmetrically by composer + reserveCost + this kill switch.
-  // For BYOK the cap doesn't apply — null disables the check in the tee.
+  // Kill threshold: cumulative actual cost must not exceed remaining_cap
+  // measured BEFORE this request's reservation was deducted. Since the
+  // reservation has already been debited, that's
+  // EFFECTIVE_CAP - (post_reservation - projected). For BYOK the cap
+  // doesn't apply — null disables the check in the tee.
   const killThresholdMicro: bigint | null = isCapped(tier)
     ? EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected)
     : null;

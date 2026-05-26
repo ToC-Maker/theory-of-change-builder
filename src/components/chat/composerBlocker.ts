@@ -259,6 +259,17 @@ export function selectBlocker(params: {
 
   if (filteredEvent) return filteredEvent;
 
+  // Derived cap_reached: user is already at-or-over the displayed cap.
+  // Mirrors the server's `cost_micro_usd < LIFETIME_CAP_MICRO_USD` gate in
+  // reserveCost. The kill switch's overspend tolerance lets streams land a
+  // few cents past the displayed cap without truncation (e.g. used = $5.10);
+  // once that's happened, the user is "done" and any further send must be
+  // blocked — the tolerance is for in-flight mercy, not for handing out
+  // extra sends after the cap is crossed.
+  if (usage != null && usage.tier !== 'byok' && usage.used_usd >= usage.limit_usd) {
+    return { type: 'cap_reached' };
+  }
+
   // Derived would_exceed_cap. Only when no event blocker, on a capped tier,
   // and the in-flight draft estimate would push cumulative usage past the
   // EFFECTIVE cap (limit * (1 + tolerance)). Mirrors the server's

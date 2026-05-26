@@ -22,6 +22,14 @@ import {
   preserveCapClassOnly,
   SERVICE_ERROR_TYPES,
 } from '../../src/components/chat/composerBlocker';
+import { LIFETIME_CAP_USD, EFFECTIVE_LIFETIME_CAP_USD } from '../../worker/_shared/tiers';
+
+// Boundary helpers — derived so a tolerance change updates tests automatically.
+// Tests want fixtures that sit a hair above the effective cap (would_exceed_cap
+// should fire) or a hair below (would NOT fire). 0.01 USD is the minimum
+// distinguishable gap at our formatCostUsd grain.
+const JUST_OVER_EFFECTIVE = (used: number) => EFFECTIVE_LIFETIME_CAP_USD - used + 0.01;
+const JUST_UNDER_EFFECTIVE = (used: number) => EFFECTIVE_LIFETIME_CAP_USD - used - 0.01;
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -278,34 +286,32 @@ describe('costErrorToBlocker — specials', () => {
 
 describe('selectBlocker', () => {
   it('event blocker wins over derived would_exceed_cap', () => {
-    // Fixture chosen to trigger derived would_exceed_cap (4.99 + 0.27 =
-    // 5.26 > effective cap 5.25); event still wins over derived.
+    // Fixture pushes total just over the effective cap so the derived
+    // would_exceed_cap WOULD fire; the test confirms event wins anyway.
     const result = selectBlocker({
       eventBlocker: { type: 'cap_reached' },
-      usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.27,
+      usage: { used_usd: 4.99, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: JUST_OVER_EFFECTIVE(4.99),
     });
     expect(result).toEqual({ type: 'cap_reached' });
   });
 
   it('no event, capped, estimate over effective cap → would_exceed_cap', () => {
-    // Effective cap = limit * 1.05 = 5.25. Estimate pushes total to 5.26.
     const result = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.27,
+      usage: { used_usd: 4.99, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: JUST_OVER_EFFECTIVE(4.99),
     });
     expect(result).toEqual({ type: 'would_exceed_cap' });
   });
 
   it('no event, capped, estimate over strict cap but within buffer → null', () => {
-    // 4.99 + 0.10 = 5.09. Strict cap = 5.00 (over). Effective cap = 5.25
-    // (under). Buffer lets this send through. Documents the buffer is
-    // active in the derivation.
+    // Documents the buffer: total goes over strict (5.00) but stays under
+    // effective (5.25), so the send is allowed and no derived banner fires.
     const result = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.1,
+      usage: { used_usd: 4.99, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: JUST_UNDER_EFFECTIVE(4.99),
     });
     expect(result).toBeNull();
   });
@@ -572,12 +578,12 @@ describe('preserveCapClassOnly', () => {
 
 describe('Mode A regression: silent post-send on cap rejection', () => {
   it('case (a): would_exceed_cap → cap_reached event → cap_reached wins', () => {
-    // Initial: under cap, draft would exceed effective cap (5.25); user
-    // sees would_exceed_cap. 4.99 + 0.27 = 5.26 > 5.25.
+    // Initial: under cap, draft would exceed effective cap; user sees
+    // would_exceed_cap.
     const initial = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.27,
+      usage: { used_usd: 4.99, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: JUST_OVER_EFFECTIVE(4.99),
     });
     expect(initial).toEqual({ type: 'would_exceed_cap' });
 
@@ -604,12 +610,11 @@ describe('Mode A regression: silent post-send on cap rejection', () => {
   });
 
   it('case (b): would_exceed_cap → last_send_exceeded event → event wins, banner shows', () => {
-    // Initial: under cap, draft would exceed effective cap (5.25). 4.5 +
-    // 0.76 = 5.26 > 5.25.
+    // Initial: well under cap, draft would exceed effective cap.
     const initial = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 4.5, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.76,
+      usage: { used_usd: 4.5, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: JUST_OVER_EFFECTIVE(4.5),
     });
     expect(initial).toEqual({ type: 'would_exceed_cap' });
 
@@ -664,35 +669,69 @@ describe('BYOK add tier flip', () => {
 });
 
 describe('BYOK removal — tier flips back to free', () => {
-  it('no event + tier byok→free + capped → re-derive would_exceed_cap or null', () => {
-    // BYOK active, no draft, no event
+  it('no event + tier byok→free + used >= cap → derived cap_reached fires', () => {
+    // BYOK active, no draft, no event — even at 100 over cap, BYOK
+    // bypasses every derived check.
     const before = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 100, limit_usd: 5, tier: 'byok' },
+      usage: { used_usd: 100, limit_usd: LIFETIME_CAP_USD, tier: 'byok' },
       composerEstimateUsd: 0,
     });
     expect(before).toBeNull();
 
-    // BYOK removed: tier flips back to free, used >= limit
+    // BYOK removed: tier flips back to free, used >= cap. Selector
+    // proactively derives cap_reached (no server event needed) — without
+    // this the user could land on a fresh chart past the cap and see no
+    // blocker until they hit Send.
     const after = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 5, limit_usd: 5, tier: 'free' },
+      usage: { used_usd: LIFETIME_CAP_USD, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
       composerEstimateUsd: 0,
     });
-    // No draft, so no would_exceed_cap; capAlreadyReached is now a separate
-    // concern handled by the banner copy reading from usage directly. The
-    // selector returns null when there's no event AND no draft estimate to
-    // derive from.
-    expect(after).toBeNull();
+    expect(after).toEqual({ type: 'cap_reached' });
+  });
+});
 
-    // With a draft over the buffer threshold (5 + 0.26 = 5.26 > 5.25
-    // effective cap), would_exceed_cap should fire.
-    const withDraft = selectBlocker({
+describe('Derived cap_reached (no event, used >= displayed cap)', () => {
+  it('used exactly at limit → cap_reached', () => {
+    const result = selectBlocker({
       eventBlocker: null,
-      usage: { used_usd: 5, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.26,
+      usage: { used_usd: LIFETIME_CAP_USD, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: 0,
     });
-    expect(withDraft).toEqual({ type: 'would_exceed_cap' });
+    expect(result).toEqual({ type: 'cap_reached' });
+  });
+
+  it('used past limit (kill-switch overshoot landed user in buffer zone) → cap_reached', () => {
+    // Concrete repro of the case where a prior stream's kill-switch tolerance
+    // let it finish at $5.10. Without this derivation, a subsequent small
+    // send would slide past the effective-cap gate (5.10 + 0.10 < 5.25),
+    // letting the user trickle in extra sends after they've nominally
+    // exhausted the cap.
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 5.1, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: 0.1,
+    });
+    expect(result).toEqual({ type: 'cap_reached' });
+  });
+
+  it('used past limit on BYOK tier → null (cap does not apply)', () => {
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 100, limit_usd: LIFETIME_CAP_USD, tier: 'byok' },
+      composerEstimateUsd: 0.1,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('used just under limit + no draft → null (no proactive cap)', () => {
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 4.99, limit_usd: LIFETIME_CAP_USD, tier: 'free' },
+      composerEstimateUsd: 0,
+    });
+    expect(result).toBeNull();
   });
 });
 

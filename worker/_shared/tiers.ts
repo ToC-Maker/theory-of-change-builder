@@ -29,23 +29,26 @@ const usdToMicro = (usd: number): bigint => BigInt(Math.round(usd * 1_000_000));
 export const LIFETIME_CAP_USD = 5;
 export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 
-// Overspend tolerance applied to ALL cap comparisons: client composer
-// would_exceed_cap derivation, server reserveCost preflight, and the
-// mid-stream kill switch. The displayed cap (LIFETIME_CAP_USD) stays the
-// number we show users; the effective cap is what we actually compare
-// against. Symmetric so a user near the cap can get one more reasonable
-// send through (preventing the "iterate the draft down forever and never
-// fit" UX trap) and so a mid-stream cost overshoot of a few cents lets the
-// response finish cleanly instead of being truncated.
+// EFFECTIVE_LIFETIME_CAP_MICRO_USD is what every cap-enforcement site
+// actually compares against (composer would_exceed_cap derivation,
+// reserveCost preflight, mid-stream kill switch). The displayed cap
+// (LIFETIME_CAP_USD) is what UI shows to users; the difference is
+// "internal mercy" — a near-cap send can still complete, and a stream
+// that lands a few cents over isn't truncated mid-sentence.
 //
-// Number round-trip is safe here: LIFETIME_CAP_MICRO_USD is bounded by the
-// displayed cap (a small-integer µUSD value), so Number(cap) is exact and the
-// tolerance multiplication stays well inside Number.MAX_SAFE_INTEGER. Math.round
-// handles any float residue before converting back to BigInt.
+// Number round-trip is safe: LIFETIME_CAP_MICRO_USD is bounded by the
+// displayed cap (a small-integer µUSD value), so Number(cap) is exact
+// and the tolerance multiplication stays inside Number.MAX_SAFE_INTEGER.
+// Math.round handles any float residue before converting back to BigInt.
 const CAP_TOLERANCE_MICRO_USD = BigInt(
   Math.round(Number(LIFETIME_CAP_MICRO_USD) * CAP_OVERSPEND_TOLERANCE_FRACTION),
 );
 export const EFFECTIVE_LIFETIME_CAP_MICRO_USD = LIFETIME_CAP_MICRO_USD + CAP_TOLERANCE_MICRO_USD;
+
+// USD float sibling of EFFECTIVE_LIFETIME_CAP_MICRO_USD. Lets client-side
+// code (and tests) reason about the effective cap without doing the µUSD
+// conversion. Runtime cap enforcement still uses the BigInt µUSD form.
+export const EFFECTIVE_LIFETIME_CAP_USD = LIFETIME_CAP_USD * (1 + CAP_OVERSPEND_TOLERANCE_FRACTION);
 
 // Re-export the Anthropic-imposed request/file ceilings under the names
 // existing callers use. Single source of truth is shared/anthropic-limits.ts.
