@@ -3319,38 +3319,50 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </span>
                     ) : (
                       <div>
-                        <div
-                          className="w-full h-1 bg-gray-200 rounded overflow-hidden"
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={usage.limit_usd}
-                          aria-valuenow={usage.used_usd}
-                          aria-label={`AI budget usage: ${formatCostUsd(usage.used_usd)} of ${formatCostUsd(usage.limit_usd)}`}
-                        >
-                          <div
-                            className={`h-full rounded transition-all ${
-                              usage.used_usd >= usage.limit_usd
-                                ? 'bg-red-500'
-                                : usage.used_usd / Math.max(usage.limit_usd, 0.01) > 0.75
-                                  ? 'bg-amber-500'
-                                  : 'bg-blue-500'
-                            }`}
-                            style={{
-                              width: `${Math.min(100, (usage.used_usd / Math.max(usage.limit_usd, 0.01)) * 100)}%`,
-                            }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
-                          <span>
-                            Used {formatCostUsd(usage.used_usd)} of {formatCostUsd(usage.limit_usd)}
-                          </span>
-                          {hasKey && (
-                            <span className="inline-flex items-center gap-0.5 text-gray-600">
-                              <span aria-hidden>🔑</span>
-                              <span>Key ready</span>
-                            </span>
-                          )}
-                        </div>
+                        {/* Clamp the displayed used to the limit so the
+                            kill-switch + preflight buffer (effective cap
+                            = limit * 1.05) never surfaces a literal
+                            contradiction like "$5.10 of $5.00 used". */}
+                        {(() => {
+                          const displayedUsed = Math.min(usage.used_usd, usage.limit_usd);
+                          return (
+                            <>
+                              <div
+                                className="w-full h-1 bg-gray-200 rounded overflow-hidden"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={usage.limit_usd}
+                                aria-valuenow={displayedUsed}
+                                aria-label={`AI budget usage: ${formatCostUsd(displayedUsed)} of ${formatCostUsd(usage.limit_usd)}`}
+                              >
+                                <div
+                                  className={`h-full rounded transition-all ${
+                                    usage.used_usd >= usage.limit_usd
+                                      ? 'bg-red-500'
+                                      : usage.used_usd / Math.max(usage.limit_usd, 0.01) > 0.75
+                                        ? 'bg-amber-500'
+                                        : 'bg-blue-500'
+                                  }`}
+                                  style={{
+                                    width: `${Math.min(100, (usage.used_usd / Math.max(usage.limit_usd, 0.01)) * 100)}%`,
+                                  }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
+                                <span>
+                                  Used {formatCostUsd(displayedUsed)} of{' '}
+                                  {formatCostUsd(usage.limit_usd)}
+                                </span>
+                                {hasKey && (
+                                  <span className="inline-flex items-center gap-0.5 text-gray-600">
+                                    <span aria-hidden>🔑</span>
+                                    <span>Key ready</span>
+                                  </span>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>

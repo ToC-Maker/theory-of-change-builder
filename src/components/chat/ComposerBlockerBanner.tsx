@@ -1,23 +1,13 @@
 // Unified composer-area banner for all cap/cost blocker variants.
 //
-// Renders correct copy + CTAs per RenderedBlocker variant, matching the
-// JSX that previously lived inline in ChatInterface.tsx. Wrapped in
+// Renders the right copy + CTAs per RenderedBlocker variant. Wrapped in
 // React.memo so it doesn't re-render on every parent state change — the
 // blocker (event-driven) and usage snapshot change at a much lower
 // frequency than the rest of ChatInterface state.
 //
-// Variants handled:
-//   - cap_reached: red, "you've used $X/$Z of the free-tier limit"
-//   - last_send_exceeded: amber, "your last send would have exceeded the limit ($Y/$Z left)"
-//   - request_cut_off: red, "message cut off, your last message used the rest"
-//   - global_budget: red, conditional copy by hasKey
-//   - would_exceed_cap: amber, "your next send is estimated at $X but only $Y/$Z left"
-//   - advisory: amber, soft warning with detail text from the blocker
-//   - null: renders nothing
-//
 // The component reads `usage.limit_usd` and `usage.used_usd` at render
-// time (no payload trust on the cap_reached variant — single source of
-// truth for limit values is the live usage snapshot).
+// time — single source of truth for limit values is the live usage
+// snapshot rather than the (potentially stale) event payload.
 import React from 'react';
 import { KeyIcon } from '@heroicons/react/24/outline';
 import { DonateCta } from '../ByokPanel';
@@ -118,25 +108,27 @@ function ComposerBlockerBannerImpl({
         </div>
       );
 
-    case 'cap_reached': {
+    case 'cap_reached':
       // Server-confirmed preflight rejection AND user genuinely at-or-over
       // the lifetime cap (used >= limit). Sticky red blocking banner —
       // editing the draft can't help because any send would still fail.
       // Only clears on BYOK / chart-change / clearChat.
-      const usedText = usage
-        ? `${formatCostUsd(usage.used_usd)}/${formatCostUsd(usage.limit_usd)}`
-        : '$5.00/$5.00';
+      //
+      // Copy intentionally shows only the displayed limit, not the actual
+      // used figure: thanks to the kill-switch + preflight buffer, used
+      // can sit slightly above limit (e.g. $5.10 of $5.00), and rendering
+      // both would read as a literal contradiction.
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            You&apos;ve used <strong>{usedText}</strong> of the free-tier limit. Add an Anthropic
-            API key to keep going.
+            You&apos;ve reached the free-tier limit of{' '}
+            {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Add an Anthropic API key to keep
+            going.
           </div>
           <AddApiKeyButton />
           <DonateCta />
         </div>
       );
-    }
 
     case 'last_send_exceeded': {
       // Server-confirmed preflight rejection BUT user is under the cap
@@ -196,8 +188,7 @@ function ComposerBlockerBannerImpl({
     case 'advisory':
       // Soft warning — composer stays usable (shouldBlockSend returns
       // false except for cost_error_type='unknown' defensive sentinel).
-      // Single amber pill with the detail text from the blocker. The
-      // legacy in-scroll banner is consolidated here in Task 7.
+      // Single amber pill with the detail text from the blocker.
       return (
         <div className="text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2">
           {blocker.detail}
