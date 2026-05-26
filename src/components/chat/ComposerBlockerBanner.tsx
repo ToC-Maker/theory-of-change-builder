@@ -35,7 +35,7 @@ function AddApiKeyButton() {
       className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
     >
       <KeyIcon className="w-4 h-4" aria-hidden />
-      Add your Anthropic API key
+      Add an Anthropic API key
     </button>
   );
 }
@@ -71,7 +71,7 @@ function ComposerBlockerBannerImpl({
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            Message cut off — your last message used the rest of the free quota. Add your Anthropic
+            Message cut off — your last message used the rest of the free quota. Add an Anthropic
             API key to keep going.
           </div>
           <AddApiKeyButton />
@@ -125,7 +125,7 @@ function ComposerBlockerBannerImpl({
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
             You&apos;ve used the free quota of {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}.
-            Add your Anthropic API key to keep going.
+            Add an Anthropic API key to keep going.
           </div>
           <AddApiKeyButton />
           <DonateCta />
@@ -136,7 +136,8 @@ function ComposerBlockerBannerImpl({
       // Derived: user's draft estimate would push them past the cap on
       // send. Amber (not red) because they can still trim the draft.
       // Renders the remaining quota so users see what they have to work
-      // with.
+      // with. Both unblock affordances (add key OR donate) — same shape
+      // as cap_reached since the user's options are identical in both.
       return (
         <div className="space-y-2">
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
@@ -147,9 +148,10 @@ function ComposerBlockerBannerImpl({
                 ? `${formatCostUsd(Math.max(0, usage.limit_usd - usage.used_usd))}/${formatCostUsd(usage.limit_usd)}`
                 : ''}
             </strong>{' '}
-            left. Add your Anthropic API key to continue.
+            left. Add an Anthropic API key to continue.
           </div>
           <AddApiKeyButton />
+          <DonateCta />
         </div>
       );
 
