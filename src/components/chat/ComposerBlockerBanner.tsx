@@ -7,11 +7,11 @@
 // frequency than the rest of ChatInterface state.
 //
 // Variants handled:
-//   - cap_reached: red, "you've reached the free-tier limit"
-//   - last_send_exceeded: amber, "your last send would have exceeded the limit"
+//   - cap_reached: red, "you've used $X/$Z of the free-tier limit"
+//   - last_send_exceeded: amber, "your last send would have exceeded the limit ($Y/$Z left)"
 //   - request_cut_off: red, "message cut off, your last message used the rest"
 //   - global_budget: red, conditional copy by hasKey
-//   - would_exceed_cap: amber, "your next send is estimated at $X but only $Y left"
+//   - would_exceed_cap: amber, "your next send is estimated at $X but only $Y/$Z left"
 //   - advisory: amber, soft warning with detail text from the blocker
 //   - null: renders nothing
 //
@@ -118,24 +118,27 @@ function ComposerBlockerBannerImpl({
         </div>
       );
 
-    case 'cap_reached':
+    case 'cap_reached': {
       // Server-confirmed preflight rejection AND user genuinely at-or-over
       // the lifetime cap (used >= limit). Sticky red blocking banner —
       // editing the draft can't help because any send would still fail.
       // Only clears on BYOK / chart-change / clearChat.
+      const usedText = usage
+        ? `${formatCostUsd(usage.used_usd)}/${formatCostUsd(usage.limit_usd)}`
+        : '$5.00/$5.00';
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            You&apos;ve reached the free-tier limit of{' '}
-            {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Add an Anthropic API key to keep
-            going.
+            You&apos;ve used <strong>{usedText}</strong> of the free-tier limit. Add an Anthropic
+            API key to keep going.
           </div>
           <AddApiKeyButton />
           <DonateCta />
         </div>
       );
+    }
 
-    case 'last_send_exceeded':
+    case 'last_send_exceeded': {
       // Server-confirmed preflight rejection BUT user is under the cap
       // (used < limit). The rejection was about THIS send's projected
       // cost being too large for the remaining quota — editing down
@@ -147,16 +150,25 @@ function ComposerBlockerBannerImpl({
       // donating doesn't unblock the immediate "this draft was too big
       // for remaining quota" problem since the user is under cap.
       // Editing or BYOK are the actionable recovery paths.
+      const remainingText = usage
+        ? `${formatCostUsd(Math.max(0, usage.limit_usd - usage.used_usd))}/${formatCostUsd(usage.limit_usd)}`
+        : null;
       return (
         <div className="space-y-2">
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            Your last send would have exceeded the free-tier limit of{' '}
-            {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Edit and try again, or add an
-            Anthropic API key to continue.
+            Your last send would have exceeded the free-tier limit
+            {remainingText && (
+              <>
+                {' '}
+                (<strong>{remainingText}</strong> left)
+              </>
+            )}
+            . Edit to fit, or add an Anthropic API key to continue.
           </div>
           <AddApiKeyButton />
         </div>
       );
+    }
 
     case 'would_exceed_cap':
       // Derived: user's draft estimate would push them past the cap on
