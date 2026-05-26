@@ -118,7 +118,12 @@ export function FormatMenu({
           {/* Text size */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Text size</label>
-            <div className="flex items-center gap-2">
+            {/* `justify-center` centers the stepper cluster in the menu
+              column (the other rows use `flex-1` sliders that fill the
+              width; the stepper has no flex-grow child, so without
+              `justify-center` the buttons + input sit left-aligned and
+              look off-axis). */}
+            <div className="flex items-center justify-center gap-2">
               <button
                 type="button"
                 onClick={() => setTextSize(Math.max(9, currentPx - 1) / 18)}
