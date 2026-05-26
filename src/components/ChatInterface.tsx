@@ -882,6 +882,16 @@ export function ChatInterface({
   // signed thinking + tool blocks (otherwise they only have plain text and
   // the next "continue" turn loses Opus 4.7's reasoning continuity).
   const streamingContentBlocksRef = useRef<AssistantBlock[]>([]);
+  // Flips true inside the `onAccepted` callback (server's preflight
+  // reservation accepted, SSE about to begin). Read by handleStopStreaming
+  // and the per-handler onCostError/onError branches to gate the
+  // "stamp a partial assistant turn" logic: if the user clicked Stop or a
+  // cost-error landed BEFORE the preflight accepted, nothing actually
+  // streamed and there's no user message in chat to pair an assistant
+  // bubble with — stamping a phantom would be confusing. Reset to false
+  // by handleStopStreaming, resetStreamUiState, and at the head of every
+  // new send attempt.
+  const acceptedRef = useRef(false);
   // Synchronous guard against double-send for both handleSendMessage and
   // startGeneration. handleSendMessage awaits ensureChartExists() before
   // flipping isStreaming/isLoading, so a second Enter racing in during that
@@ -933,6 +943,11 @@ export function ChatInterface({
     setStreamPhase(null);
     setRunningCostUsd(null);
     streamingMessageRef.current = null;
+    // Clear the accepted flag too — the next send attempt re-arms it via
+    // its onAccepted callback. Without this, a Stop click on a fresh send
+    // would inherit the previous turn's acceptedRef=true and stamp a
+    // phantom assistant turn into the wrong place.
+    acceptedRef.current = false;
   }, []);
 
   // Delta-credit the per-chart and per-key BYOK buckets during a stream so
@@ -1655,23 +1670,32 @@ export function ChatInterface({
     // committed block yet (hasText=false, hasBlocks=false), the user
     // needs visible feedback that their action took effect. Without this
     // the bubble vanishes silently and looks like a no-op.
-    const partialBlocks = streamingContentBlocksRef.current;
-    const hasBlocks = partialBlocks.length > 0;
-    const hasText = streamingContent.length > 0;
-    if (streamingMessageRef.current) {
-      const finalMessage: ChatMessage = {
-        ...streamingMessageRef.current,
-        content: hasText
-          ? streamingContent
-          : '_(Assistant was stopped before writing a visible response.)_',
-        was_killed: true,
-        kill_reason: 'aborted',
-        content_blocks: hasBlocks ? partialBlocks : undefined,
-      };
-      setMessages((prev) => [...prev, finalMessage]);
-      streamingMessageRef.current = null;
+    //
+    // Gate on acceptedRef so a Stop click during the preflight window
+    // (server hasn't accepted yet → no user message in chat, no streaming
+    // started) doesn't stamp a phantom assistant bubble. The deferred-add
+    // pattern intentionally suppresses chat-history mutations until the
+    // server says OK; Stop must mirror that contract.
+    if (acceptedRef.current) {
+      const partialBlocks = streamingContentBlocksRef.current;
+      const hasBlocks = partialBlocks.length > 0;
+      const hasText = streamingContent.length > 0;
+      if (streamingMessageRef.current) {
+        const finalMessage: ChatMessage = {
+          ...streamingMessageRef.current,
+          content: hasText
+            ? streamingContent
+            : '_(Assistant was stopped before writing a visible response.)_',
+          was_killed: true,
+          kill_reason: 'aborted',
+          content_blocks: hasBlocks ? partialBlocks : undefined,
+        };
+        setMessages((prev) => [...prev, finalMessage]);
+      }
     }
+    streamingMessageRef.current = null;
     streamingContentBlocksRef.current = [];
+    acceptedRef.current = false;
   };
 
   const handleSendMessage = async () => {
@@ -1692,19 +1716,31 @@ export function ChatInterface({
       return;
     }
 
-    // Block client-side when we already know the send will fail the
-    // server's reservation. Avoids the round-trip, and more importantly
-    // avoids the Turnstile-checks-first race where the user sees a
-    // Turnstile re-challenge instead of the BYOK path they actually need.
-    // UI already renders a warning + BYOK panel in this state; the send
-    // button is also disabled, this is a defense-in-depth guard. Single
-    // predicate for both Chat and Generate paths — see composerBlocker.ts.
+    // Defense-in-depth gate: if the user typed under-cap then immediately
+    // hit Send before the debounced estimate updated, the would_exceed_cap
+    // banner won't have rendered yet — but the server's reserveCost
+    // preflight is the authoritative gate and will reject (429
+    // lifetime_cap_reached). We rely on that path for the actual
+    // enforcement; this branch only short-circuits cases where the banner
+    // IS already visible, sparing the round-trip + Turnstile-race window.
     if (shouldBlockSend(renderedBlocker)) {
       sendInFlightRef.current = false;
       return;
     }
 
-    // Persist the chart NOW, before we log the user message. Without this,
+    // Spinner ON (S1: `isLoading && !isStreaming` is the preflight signal,
+    // shown via spinner icon on the Send button). Set sync, BEFORE the
+    // ensureChartExists await, so a slow chart-create round-trip still
+    // surfaces the spinner immediately.
+    setIsLoading(true);
+    // Narrow send-start clear: cap-class blockers stay sticky (the cap gate
+    // above blocks the send anyway, so the banner MUST remain visible);
+    // advisory blockers clear so they don't linger across the next attempt.
+    // (Stays sync per Q5: clearing stale advisory banners on a fresh send
+    // attempt is the correct UX regardless of preflight outcome.)
+    setComposerBlocker(clearOnSendStart);
+
+    // Persist the chart NOW, before the streamMessage call. Without this,
     // a first send on the `/` root URL has no chart_id → loggingService's
     // session can't init → logUserMessage silently drops the message, and
     // the worker's X-Logging-Message-Id is never sent, so the reconcile
@@ -1713,14 +1749,25 @@ export function ChatInterface({
     // so the stream headers downstream use the 12-char id and not the
     // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
     const resolvedChart = await ensureChartExists();
-    const resolvedChartId = resolvedChart?.chartId;
+    // Q1: explicit null-check. ensureChartExists returns null on the
+    // "couldn't load your chart" path (it already set an advisory
+    // composer blocker in that branch). Bail cleanly — without the
+    // check, we'd proceed with undefined chartId, optimistically commit
+    // the user message later, then either silently desync or surface
+    // a generic worker error.
+    if (!resolvedChart) {
+      sendInFlightRef.current = false;
+      setIsLoading(false);
+      return;
+    }
+    const resolvedChartId = resolvedChart.chartId;
 
     // Pre-send pill sync. Pull the chart's authoritative BYOK cost from
     // the server before kicking off the next stream. Catches any pill
     // drift that survived the previous turn's post-stream poll (closed
     // tab, missed bump, cross-tab stream). Fire-and-forget — we don't
     // want to block the send on this sync.
-    void syncChartByokCostFromDb(resolvedChart?.editToken ?? resolvedChartId ?? null);
+    void syncChartByokCostFromDb(resolvedChart.editToken ?? resolvedChartId ?? null);
 
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
@@ -1756,34 +1803,16 @@ export function ChatInterface({
       attachedFileIds: attachedFileIds.length > 0 ? attachedFileIds : undefined,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInputValue('');
-    // Clear the chip tray now that the files are in-flight with the message.
-    setChatAttachedFiles([]);
-    setIsLoading(true);
-    setIsStreaming(true);
+    // Defensive resets: don't render leftover content from a prior stream
+    // if React happens to commit before onAccepted lands.
     setStreamingContent('');
     setStreamingThinking('');
     streamingContentBlocksRef.current = [];
-    // Narrow send-start clear: cap-class blockers stay sticky (the cap gate
-    // above blocks the send anyway, so the banner MUST remain visible);
-    // advisory blockers clear so they don't linger across the next attempt.
-    setComposerBlocker(clearOnSendStart);
-    // Assume user wants to see the response, so set near bottom to true
-    setIsNearBottom(true);
 
-    // Extended thinking is always on; seed the phase as 'thinking' until the
-    // first content_block_start arrives (which will overwrite it anyway).
-    // This covers the pre-stream/connection window where no blocks have
-    // reached the client yet.
-    setStreamPhase('thinking');
-
-    // Log user message (fire and forget)
-    loggingService.logUserMessage({
-      messageId: userMessageId,
-      role: 'user',
-      content: userMessage.content,
-    });
+    // Pre-arm the accepted flag (will flip true in onAccepted). Keeps
+    // handleStopStreaming's "is there a partial worth stamping" check
+    // honest across the preflight window.
+    acceptedRef.current = false;
 
     streamingMessageRef.current = {
       id: assistantMessageId,
@@ -1821,6 +1850,43 @@ export function ChatInterface({
         currentGraphData: graphData,
         mode: 'chat',
         callbacks: {
+          // Deferred-add commit point. Fires after the server's reserveCost
+          // preflight accepts the request and BEFORE SSE delivery begins.
+          // Everything that's destructive to the composer / chat history
+          // happens here so a preflight rejection (429/413/etc.) leaves
+          // the UI untouched: draft preserved, chips preserved, no orphan
+          // user message in chat. Per-handler closure flag (acceptedRef)
+          // lets handleStopStreaming + onCostError/onError gate their
+          // stamping logic on whether streaming actually started.
+          onAccepted: () => {
+            acceptedRef.current = true;
+            setMessages((prev) => [...prev, userMessage]);
+            setInputValue('');
+            // Clear the chip tray now that the files are committed to the
+            // assistant turn. Survives a preflight rejection (chips stay
+            // attached so the user can retry without re-uploading). Per
+            // C6/Q6.
+            setChatAttachedFiles([]);
+            // Streaming UI takes over the chat scroll area; surface the
+            // bouncing-dots placeholder + thinking chip until the first
+            // SSE block arrives. Per Q4 these only render after the
+            // server accepted.
+            setIsStreaming(true);
+            setIsNearBottom(true);
+            // Extended thinking is always on; seed the phase as 'thinking'
+            // until the first content_block_start arrives (which will
+            // overwrite it anyway). Covers the post-accept/pre-first-block
+            // window.
+            setStreamPhase('thinking');
+            // Log the user message only after the server accepted — per
+            // S2 there's no telemetry value in logging rejected sends
+            // (they didn't produce a cost-bearing event).
+            loggingService.logUserMessage({
+              messageId: userMessageId,
+              role: 'user',
+              content: userMessage.content,
+            });
+          },
           onStreamPhase: (phase) => {
             setStreamPhase(phase);
           },
@@ -1947,32 +2013,39 @@ export function ChatInterface({
             // `fixupAssistantBlocksForReplay` handles trailing-shape edge
             // cases — worst case Anthropic 400s on retry, best case the
             // user recovers from a network blip without losing context.
-            const partial = streamingMessageRef.current;
-            const partialBlocks = streamingContentBlocksRef.current;
-            const hasBlocks = partialBlocks.length > 0;
-            const hasText = !!partial && partial.content.length > 0;
-            if (partial && (hasText || hasBlocks)) {
-              const stamped: ChatMessage = {
-                ...partial,
-                was_killed: true,
-                kill_reason: 'error',
-                kill_message: error,
-                content: hasText
-                  ? partial.content
-                  : '_(Assistant errored before writing a visible response.)_',
-                content_blocks: hasBlocks ? partialBlocks : undefined,
-              };
-              setMessages((prev) => [...prev, stamped]);
-            } else {
-              // No visible partial — surface the error as a fresh assistant
-              // turn so the user still sees what went wrong.
-              const errorMessage: ChatMessage = {
-                id: assistantMessageId,
-                role: 'assistant',
-                content: `Error: ${error}`,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, errorMessage]);
+            //
+            // acceptedRef gate: if the preflight hadn't accepted yet, no
+            // user message was committed to chat — stamping anything here
+            // would orphan into the wrong conversation slot. Just reset
+            // and let the outer catch surface a banner.
+            if (acceptedRef.current) {
+              const partial = streamingMessageRef.current;
+              const partialBlocks = streamingContentBlocksRef.current;
+              const hasBlocks = partialBlocks.length > 0;
+              const hasText = !!partial && partial.content.length > 0;
+              if (partial && (hasText || hasBlocks)) {
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'error',
+                  kill_message: error,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant errored before writing a visible response.)_',
+                  content_blocks: hasBlocks ? partialBlocks : undefined,
+                };
+                setMessages((prev) => [...prev, stamped]);
+              } else {
+                // No visible partial — surface the error as a fresh assistant
+                // turn so the user still sees what went wrong.
+                const errorMessage: ChatMessage = {
+                  id: assistantMessageId,
+                  role: 'assistant',
+                  content: `Error: ${error}`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
             }
             resetStreamUiState();
           },
@@ -2000,27 +2073,36 @@ export function ChatInterface({
             // would vanish from the chat window on a mid-stream cap hit. Even
             // when no visible text arrived (model was still thinking), keep a
             // placeholder so the conversation history shows the turn happened.
-            const partial = streamingMessageRef.current;
-            if (partial) {
-              const hasText = partial.content.length > 0;
-              // Stamp the partial assistant turn with was_killed=true so the
-              // bubble shows an "interrupted" indicator. Capture the partial
-              // content_blocks too: when the user follows up with "continue",
-              // the next request ships the half-built turn (text + signed
-              // thinking + paired tool blocks) so Anthropic resumes from
-              // where the kill landed.
-              const partialBlocks = error.partialContentBlocks;
-              const stamped: ChatMessage = {
-                ...partial,
-                was_killed: true,
-                kill_reason: 'cap_exceeded',
-                content_blocks:
-                  partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
-                content: hasText
-                  ? partial.content
-                  : '_(Assistant was cut off before writing a visible response.)_',
-              };
-              setMessages((prev) => [...prev, stamped]);
+            //
+            // acceptedRef gate: a preflight rejection (429/413/402/etc.) fires
+            // BEFORE onAccepted lands, so there's no user message in chat and
+            // streamingMessageRef is just a placeholder we set sync. Stamping
+            // it as a "cut off" assistant turn would conjure a phantom into
+            // the wrong slot. Only stamp on mid-stream kills (request_cost_
+            // ceiling_exceeded, etc.), which by definition fire AFTER accept.
+            if (acceptedRef.current) {
+              const partial = streamingMessageRef.current;
+              if (partial) {
+                const hasText = partial.content.length > 0;
+                // Stamp the partial assistant turn with was_killed=true so the
+                // bubble shows an "interrupted" indicator. Capture the partial
+                // content_blocks too: when the user follows up with "continue",
+                // the next request ships the half-built turn (text + signed
+                // thinking + paired tool blocks) so Anthropic resumes from
+                // where the kill landed.
+                const partialBlocks = error.partialContentBlocks;
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'cap_exceeded',
+                  content_blocks:
+                    partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant was cut off before writing a visible response.)_',
+                };
+                setMessages((prev) => [...prev, stamped]);
+              }
             }
             handleCostError(error);
             resetStreamUiState();
@@ -2050,16 +2132,25 @@ export function ChatInterface({
       // Transport-level failures (network blip, parse error, etc.).
       // Cost errors were swallowed earlier in chatService.ts:1487 and
       // routed via onCostError, so anything here is a generic transport
-      // problem. Surface as a fresh assistant turn so the user sees what
-      // went wrong; console.error keeps a DevTools handle for debugging.
+      // problem.
+      //
+      // acceptedRef gate: a pre-preflight throw (DNS, CORS preflight,
+      // etc.) fires before onAccepted, so there's no user message in
+      // chat — surfacing a "Sorry, there was an error" assistant bubble
+      // would orphan into the wrong slot. Reset state and let the user
+      // retry; the actual transport error is logged to console for
+      // debugging. Post-accept transport errors keep the existing UX
+      // (visible apology bubble paired with the user's message).
       console.error('[ChatInterface] handleSendMessage transport error:', error);
-      const errorMessage: ChatMessage = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your request.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      if (acceptedRef.current) {
+        const errorMessage: ChatMessage = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your request.',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      }
       resetStreamUiState();
     } finally {
       setIsLoading(false);
@@ -3525,7 +3616,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     to render here inline with chat history); consistent
                     placement with the cap variants is the win. */}
 
-                  {isLoading && !isStreaming && !streamPhase && (
+                  {/* Bouncing-dots placeholder for the post-accept window
+                      before the first streamPhase signal arrives. Gated on
+                      isStreaming (not isLoading) so it stays hidden during
+                      the preflight reservation window — per Q4 the only
+                      preflight signal is the Send button's spinner icon
+                      swap, no other UI changes. */}
+                  {isStreaming && !streamPhase && (
                     <div className="flex justify-start">
                       <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
                         <div className="flex items-center gap-1">
@@ -3735,6 +3832,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           >
                             <StopIcon className="w-5 h-5" />
                           </button>
+                        ) : isLoading ? (
+                          // Preflight window (server's reserveCost reservation
+                          // in flight). Per Q4/S1 the ONLY visual signal is
+                          // the spinner icon swap on the Send button position;
+                          // no other UI changes. Clickable so the user can
+                          // abort — handleStopStreaming aborts the fetch and
+                          // gates its stamping on acceptedRef so no phantom
+                          // assistant turn lands in chat.
+                          <button
+                            onClick={handleStopStreaming}
+                            className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                            title="Cancel"
+                          >
+                            <div
+                              className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"
+                              aria-label="Waiting for server"
+                            />
+                          </button>
                         ) : (
                           <button
                             onClick={handleSendMessage}
@@ -3749,7 +3864,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             // same predicate.
                             disabled={
                               inputValue.length === 0 ||
-                              isLoading ||
                               shouldBlockSend(renderedBlocker) ||
                               // Block while any attached file is still uploading
                               // or has failed: send would either early-return
