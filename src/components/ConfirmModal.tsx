@@ -1,9 +1,10 @@
 // `ConfirmModal` — reusable React confirm dialog.
 //
-// Replaces `window.confirm()` in two callsites:
-//
-//   - FileMenu "Delete chart" (PR 1; previously used `window.confirm`).
-//   - PR 5 Task 5.3 column/section hover-× delete affordance.
+// Replaces `window.confirm()` and bespoke modal implementations across
+// the app: FileMenu "Delete chart", PR 5 column/section hover-× delete,
+// GeneralAccessSelector "restricted" toggle, ChatInterface "Clear chat"
+// and "Replace your Chat?" (Generate flow), PrivacyPolicyPopup
+// (singleAction + extras slot).
 //
 // Closes the red-team L4 "confirm() blocks event loop" Important
 // finding from plans/figma-redesign.md:200. `window.confirm()` halts
@@ -16,14 +17,14 @@
 //   - The modal is uncontrolled-by-default: parent passes `open`,
 //     `onConfirm`, `onCancel`. No internal lifecycle bookkeeping
 //     beyond keyboard handlers.
-//   - Backdrop click and Escape cancel.
+//   - Backdrop click and Escape cancel (unless `singleAction` is set,
+//     in which case the modal is non-dismissable and the user must
+//     click the confirm button to proceed).
 //   - Enter (when not in a textarea) confirms.
 //   - Focus is auto-moved to the confirm button on open so keyboard
 //     users land in a sensible default.
-//   - `confirmVariant` controls the confirm button color: `danger`
-//     (red, for destructive ops) vs `primary` (indigo, for non-
-//     destructive). Defaults to `danger` since both current
-//     callsites are destructive.
+//   - `confirmVariant` controls the confirm button color (danger /
+//     primary / purple / blue); see the prop docstring.
 
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -46,8 +47,9 @@ export interface ConfirmModalProps {
    * - "danger" — destructive ops (delete chart, clear chat, etc.)
    * - "primary" — non-destructive default action (indigo)
    * - "purple" — Generate-flow framing (replace Chat with a Generate run)
+   * - "blue" — privacy/info framing (PrivacyPolicyPopup)
    */
-  confirmVariant?: 'danger' | 'primary' | 'purple';
+  confirmVariant?: 'danger' | 'primary' | 'purple' | 'blue';
   /**
    * Optional icon rendered above the title. When provided, the layout
    * switches to a centered presentation (title + body centered, buttons
@@ -57,6 +59,21 @@ export interface ConfirmModalProps {
    * confirmation (purple + DocumentPlusIcon).
    */
   icon?: React.ReactNode;
+  /**
+   * Optional supplemental content rendered between the body and the
+   * action buttons. Used for the PrivacyPolicyPopup's "Help improve AI"
+   * checkbox + policy link row. Kept as a generic slot so other callers
+   * can drop in inline form controls or footnotes without forcing a new
+   * prop per use-case.
+   */
+  extras?: React.ReactNode;
+  /**
+   * Single-action mode: hide the cancel button and treat the modal as
+   * non-dismissable. Backdrop clicks and Escape become no-ops; the user
+   * must click the confirm button to proceed. Used by PrivacyPolicyPopup
+   * where the privacy acknowledgment is a hard gate. Enter still confirms.
+   */
+  singleAction?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -69,6 +86,8 @@ export function ConfirmModal({
   cancelLabel = 'Cancel',
   confirmVariant = 'danger',
   icon,
+  extras,
+  singleAction = false,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -94,6 +113,7 @@ export function ConfirmModal({
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (singleAction) return;
         e.preventDefault();
         onCancel();
       } else if (e.key === 'Enter') {
@@ -110,7 +130,7 @@ export function ConfirmModal({
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [open, onCancel, onConfirm]);
+  }, [open, onCancel, onConfirm, singleAction]);
 
   if (!open) return null;
 
@@ -119,7 +139,9 @@ export function ConfirmModal({
       ? 'bg-red-600 hover:bg-red-700 focus:ring-red-400'
       : confirmVariant === 'purple'
         ? 'bg-purple-600 hover:bg-purple-700 focus:ring-purple-400'
-        : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400';
+        : confirmVariant === 'blue'
+          ? 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-400'
+          : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400';
 
   // Icon presence drives a centered, slightly wider panel layout —
   // matches the original GenerateConfirmDialog's visual treatment. The
@@ -143,10 +165,10 @@ export function ConfirmModal({
       className="fixed inset-0 z-[100] flex items-center justify-center"
       data-testid="confirm-modal"
     >
-      {/* Backdrop */}
+      {/* Backdrop — inert in singleAction mode (non-dismissable). */}
       <div
         className="absolute inset-0 bg-black/40"
-        onClick={onCancel}
+        onClick={singleAction ? undefined : onCancel}
         aria-hidden="true"
         data-testid="confirm-modal-backdrop"
       />
@@ -162,15 +184,18 @@ export function ConfirmModal({
         <div className={`text-sm text-gray-700 mb-5 ${bodyAlign}`}>
           {typeof body === 'string' ? <p>{body}</p> : body}
         </div>
+        {extras && <div className="mb-5">{extras}</div>}
         <div className={actionsLayout}>
-          <button
-            type="button"
-            onClick={onCancel}
-            className={`${buttonSizing} text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300`}
-            data-testid="confirm-modal-cancel"
-          >
-            {cancelLabel}
-          </button>
+          {!singleAction && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className={`${buttonSizing} text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300`}
+              data-testid="confirm-modal-cancel"
+            >
+              {cancelLabel}
+            </button>
+          )}
           <button
             type="button"
             ref={confirmBtnRef}
