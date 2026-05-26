@@ -3277,9 +3277,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       )}
                       {generateEstimateUsd > 0 ? (
                         <span>
-                          Estimated input cost:{' '}
-                          <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is billed on
-                          top as the response streams; hit Stop to abort if it runs long.
+                          Estimated input cost: {formatCostUsd(generateEstimateUsd)}; output shown
+                          live during streaming.
                         </span>
                       ) : (
                         <span className="text-gray-500">Estimating…</span>
@@ -3332,6 +3331,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       )}
                     </div>
                   )}
+
+                  {/* Cap/cost blocker banner. Same component the Chat
+                    composer renders; same source-of-truth state. Without
+                    this mount, Generate-mode users hitting would_exceed_cap
+                    (estimate over remaining quota) saw only a disabled
+                    Generate button with no copy explaining why. */}
+                  <ComposerBlockerBanner
+                    blocker={renderedBlocker}
+                    usage={usage}
+                    hasKey={hasKey}
+                    composerEstimateUsd={activeEstimate}
+                  />
 
                   {/* Generate button. Available to all tiers; the $5 lifetime
                     cap is enforced server-side via reserveCost and the
