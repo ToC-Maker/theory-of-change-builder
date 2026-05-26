@@ -813,8 +813,13 @@ export function ToC({
     zoomScale,
     nodeHeights,
     onDrop: handleDrop,
-    onDragStart: () => {
-      // Notify the anchored NodeEditor to dismiss (if mounted).
+    onDragStart: (_nodeId, modifiers) => {
+      // Notify the anchored NodeEditor to dismiss (if mounted). Skip
+      // the dismiss when a multi-select modifier is held — the click is
+      // a selection-extension gesture, not a real drag, and dismissing
+      // here would clear `highlightedNodes` before React's onClick can
+      // call `toggleHighlight('multi')` to extend the selection.
+      if (modifiers.metaKey || modifiers.ctrlKey) return;
       nodeEditorDragStartRef.current?.();
     },
   });

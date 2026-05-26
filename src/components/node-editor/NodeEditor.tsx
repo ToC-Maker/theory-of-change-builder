@@ -78,7 +78,7 @@
 // closes even from a focused input inside our container. Our hook's
 // `onDismiss` is `setHighlightedNodes(new Set())` (idempotent), so the
 // overlap is benign.
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TrashIcon } from '@heroicons/react/24/outline';
 import type { SetStateAction } from 'react';
@@ -87,6 +87,7 @@ import { useNodeProperties } from './useNodeProperties';
 import { useAnchorPosition } from './useAnchorPosition';
 import { DetailsEditor } from './DetailsEditor';
 import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
+import { NODE_DOM_ATTR } from '../NodeComponent';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
@@ -184,10 +185,32 @@ export function NodeEditor(props: NodeEditorProps) {
   // `useMemo` keeps the safe-refs array reference-stable across renders
   // so the hook's effect deps don't churn.
   const safeRefs = useMemo(() => [anchorRef] as const, [anchorRef]);
+
+  // Bypass the mousedown dismissal when the user is Cmd/Ctrl+clicking on
+  // another node. The shared hook listens on document `mousedown`, which
+  // fires before React's onClick — so without this bypass, the
+  // dismissal would clear `highlightedNodes` before NodeComponent's
+  // `toggleHighlight(..., 'multi')` could extend the set, eating the
+  // multi-select gesture.
+  //
+  // Constrained tightly:
+  //   - Only when a multi-select modifier is held (metaKey or ctrlKey).
+  //   - Only when the click target is inside a node element (closest
+  //     ancestor with `[data-tocb-node]`).
+  // The plain "click another node to switch anchor" flow keeps working
+  // (no modifier → dismiss → React's onClick selects the new node).
+  // Escape is intentionally NOT gated by this predicate.
+  const shouldSkipDismiss = useCallback((event: MouseEvent) => {
+    if (!event.metaKey && !event.ctrlKey) return false;
+    const target = event.target as Element | null;
+    return Boolean(target?.closest?.(`[${NODE_DOM_ATTR}]`));
+  }, []);
+
   useDismissOnOutsideEvent({
     containerRef,
     onDismiss: onRequestClose,
     extraSafeRefs: safeRefs,
+    shouldSkipDismiss,
   });
 
   if (selectedNodeIds.length === 0) return null;

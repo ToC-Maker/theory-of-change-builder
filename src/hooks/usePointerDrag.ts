@@ -111,8 +111,15 @@ export interface UsePointerDragArgs {
     draggedNodeId: string,
     pointerOffset: { x: number; y: number },
   ) => void;
-  /** Fired once at drag-start. NodeEditor uses this to dismiss itself. */
-  onDragStart?: (nodeId: string) => void;
+  /**
+   * Fired once at drag-start (pointerdown). NodeEditor uses this to
+   * dismiss itself when the user starts dragging the currently-anchored
+   * node. The second argument carries the multi-select modifier state
+   * so callers can skip the dismiss on a modifier-held click (Cmd/Ctrl
+   * click extends multi-selection — clearing the editor before React's
+   * click-handler runs would defeat the multi-extend).
+   */
+  onDragStart?: (nodeId: string, modifiers: { metaKey: boolean; ctrlKey: boolean }) => void;
   /**
    * Fired when a drop is aborted because the dragged node id is no
    * longer present in `data` (cross-tab delete race). Consumer can
@@ -451,7 +458,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       activePointerIdRef.current = e.pointerId;
       startPosRef.current = { x: e.clientX, y: e.clientY };
       setCanvasGestureActive(true);
-      onDragStartRef.current?.(nodeId);
+      onDragStartRef.current?.(nodeId, { metaKey: e.metaKey, ctrlKey: e.ctrlKey });
 
       const nodeEl = e.currentTarget as HTMLElement;
       const containerRect = container.getBoundingClientRect();

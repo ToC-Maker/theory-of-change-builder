@@ -16,6 +16,15 @@
 // clicks on the connection midpoint don't dismiss the editor that's
 // anchored to it).
 //
+// `shouldSkipDismiss` is an optional caller-supplied predicate that gates
+// the mousedown dismissal. Used by NodeEditor to keep Cmd/Ctrl+click
+// multi-select on a sibling node from clearing the current selection:
+// the document-level mousedown handler here fires BEFORE React's onClick,
+// so without the bypass the dismissal would clear `highlightedNodes`
+// before `toggleHighlight('multi')` could extend it. Keyboard dismissal
+// (Escape) is intentionally NOT gated by this predicate — Escape should
+// always close the editor regardless of modifier state.
+//
 // Edge cases:
 //   - Clicks on the container itself (e.target === el) are treated as
 //     inside via `Element.contains` (which returns `true` for self).
@@ -39,12 +48,23 @@ interface UseDismissOnOutsideEventArgs {
    * affordance doesn't dismiss the editor it just opened.
    */
   extraSafeRefs?: ReadonlyArray<RefObject<HTMLElement | null>>;
+  /**
+   * Optional gate on the mousedown dismissal. When this returns `true`,
+   * the handler skips `onDismiss` even though the click is outside the
+   * safe region. Use cases: letting Cmd/Ctrl+click on a sibling node
+   * extend a multi-selection without first dismissing the editor (the
+   * document mousedown fires before React's onClick, so an unconditional
+   * dismiss would clear the selection mid-gesture). Does NOT gate the
+   * Escape handler.
+   */
+  shouldSkipDismiss?: (event: MouseEvent) => boolean;
 }
 
 export function useDismissOnOutsideEvent({
   containerRef,
   onDismiss,
   extraSafeRefs,
+  shouldSkipDismiss,
 }: UseDismissOnOutsideEventArgs): void {
   useEffect(() => {
     const isInsideSafeRegion = (target: EventTarget | null): boolean => {
@@ -62,6 +82,7 @@ export function useDismissOnOutsideEvent({
 
     const handleMouseDown = (e: MouseEvent) => {
       if (isInsideSafeRegion(e.target)) return;
+      if (shouldSkipDismiss && shouldSkipDismiss(e)) return;
       onDismiss();
     };
 
@@ -91,5 +112,5 @@ export function useDismissOnOutsideEvent({
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [containerRef, onDismiss, extraSafeRefs]);
+  }, [containerRef, onDismiss, extraSafeRefs, shouldSkipDismiss]);
 }
