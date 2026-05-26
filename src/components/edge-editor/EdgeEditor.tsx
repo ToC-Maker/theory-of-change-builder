@@ -19,13 +19,25 @@
 //
 // Unmount cleanup flushes buffered evidence + assumptions writes via
 // commit(). The pattern mirrors NodeEditor.
-import { useEffect, useRef } from 'react';
+//
+// ---------------------------------------------------------------------------
+// Dismissal
+// ---------------------------------------------------------------------------
+//
+// Outside-click + Escape dismissal live in the shared
+// `useDismissOnOutsideEvent` hook. EdgeEditor's `selectedEdge` state in
+// `ConnectionsComponent` is independent of `highlightedNodes`, so unlike
+// NodeEditor it can't rely on `useKeyboardShortcuts.clearSelections` to
+// dismiss on Escape — the shared hook is the single owner of both
+// dismissal triggers for this editor.
+import { useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TrashIcon } from '@heroicons/react/24/outline';
 import type { SetStateAction } from 'react';
 import type { ToCData } from '../../types';
 import { useEdgeProperties } from './useEdgeProperties';
 import { useAnchorPosition } from '../node-editor/useAnchorPosition';
+import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
@@ -95,19 +107,20 @@ export function EdgeEditor(props: EdgeEditorProps) {
     };
   }, []);
 
-  // Outside-click dismissal — same pattern as NodeEditor.
-  useEffect(() => {
-    const handle = (e: MouseEvent) => {
-      const el = containerRef.current;
-      if (!el) return;
-      if (e.target instanceof Node && el.contains(e.target)) return;
-      const anchor = anchorRef.current;
-      if (anchor && e.target instanceof Node && anchor.contains(e.target)) return;
-      onRequestClose();
-    };
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [anchorRef, onRequestClose]);
+  // Outside-click + Escape dismissal via the shared hook. The anchor
+  // (the invisible 1×1 div at the connection midpoint) is in the
+  // "safe" set so a click on the source affordance — the connection
+  // path being clickable lives elsewhere; this is for the anchor div
+  // itself — doesn't dismiss the editor.
+  //
+  // `useMemo` keeps the safe-refs array reference-stable across
+  // renders, so the hook's effect deps don't churn.
+  const safeRefs = useMemo(() => [anchorRef] as const, [anchorRef]);
+  useDismissOnOutsideEvent({
+    containerRef,
+    onDismiss: onRequestClose,
+    extraSafeRefs: safeRefs,
+  });
 
   const handleDelete = () => {
     props_.deleteConnection();
