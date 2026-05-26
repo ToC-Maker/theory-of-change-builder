@@ -173,7 +173,7 @@ function PrivacyModal({
       {/* Close button */}
       <button
         onClick={onClose}
-        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+        className="absolute top-3 right-3 p-1 text-gray-400 hover:text-gray-500 hover:bg-gray-100 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
         aria-label="Close"
       >
         <XMarkIcon className="w-5 h-5" />
@@ -269,7 +269,7 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
     >
       <button
         onClick={onClose}
-        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+        className="absolute top-3 right-3 p-1 text-gray-400 hover:text-gray-500 hover:bg-gray-100 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
         aria-label="Close"
       >
         <XMarkIcon className="w-5 h-5" />

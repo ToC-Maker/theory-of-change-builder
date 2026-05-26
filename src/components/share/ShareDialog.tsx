@@ -339,7 +339,7 @@ export function ShareDialog({
             type="button"
             onClick={onClose}
             aria-label="Close share dialog"
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="p-1 -m-1 text-gray-400 hover:text-gray-500 hover:bg-gray-100 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
           >
             <XMarkIcon className="w-5 h-5" />
           </button>
