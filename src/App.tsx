@@ -697,13 +697,25 @@ function ToCViewer() {
   // Important: "PR 4 pointer-capture during cross-tab delete race".
   const isDragInFlightRef = useRef(false);
 
-  // Calculate viewport offset based on sidebar state
+  // Calculate viewport offset based on sidebar state.
+  //
+  // Each side reserves the space its sibling chrome consumes, *plus* a
+  // 24px breathing-room pad so the auto-fit zoom never butts the canvas
+  // against the viewport edge. PR 1 removed the JsonDropdown and dropped
+  // `bottom` from 80 → 0; that, combined with `right: 0`, made the
+  // limiting dimension for the auto-fit min(scaleX, scaleY) flip from
+  // vertical to horizontal for typical chart shapes, so the canvas
+  // scaled up to fill the full available width and rendered flush
+  // against the right edge (and the legend got clipped). Symmetric 24px
+  // pads on right/bottom restore the centered look reported as "not
+  // centered as it should be anymore — top, left, and bottom borders;
+  // right border looks correct" by the reviewer.
   const viewportOffset = useMemo(
     () => ({
-      left: isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25),
-      top: 64, // Toolbar height
-      right: 0,
-      bottom: 0,
+      left: (isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25)) + 24,
+      top: 64 + 24, // Toolbar height + breathing room
+      right: 24,
+      bottom: 24,
     }),
     [isLeftPanelCollapsed],
   );
