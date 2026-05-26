@@ -720,6 +720,58 @@ export function ToC({
         yPosition: adjustedYPosition,
       });
 
+      // PR 7 feedback (25): when a node moves, translate the waypoints
+      // of all connections touching that node so the curve's middle
+      // segment "follows" the move instead of leaving the waypoints
+      // pinned at their old container-local coordinates. Same-column
+      // moves get the full treatment (only `y` changes; we know the
+      // delta synchronously). Cross-column / new-column moves change
+      // the node's `x` too, but that new `x` is determined by the
+      // post-layout column geometry which isn't available at this
+      // point — for those structural rearrangements the user is
+      // already expecting the layout to reshuffle, so we leave
+      // waypoints alone rather than guessing.
+      //
+      // The translation magnitude is HALF the node's delta. Rationale:
+      //   - If only the source (or only the target) moved, the
+      //     waypoint moves halfway along — preserving its relative
+      //     position to BOTH endpoints rather than locking to one.
+      //   - If both endpoints moved by the same delta (rigid drag),
+      //     the waypoint would move by that full delta — but in the
+      //     single-drop case we have here, only one node moves per
+      //     event, so half-delta is the correct contribution.
+      //   - This matches the reviewer's recommended design verbatim.
+      const isSameColumnMove =
+        !isNewColumn &&
+        sourceLocation.sectionIndex === targetSectionIndex &&
+        sourceLocation.columnIndex === targetColumnIndex;
+
+      // Snapshot the node's pre-drop CENTER y in CONTAINER-LOCAL coords.
+      // Reading from `data` is the source of truth — the renderer
+      // computes the same `centerY = node.yPosition ?? nodeIndex*180 +
+      // 30 + height/2` formula at line ~460, and `adjustedYPosition`
+      // is in that same space. DOM `offsetTop` is relative to the
+      // immediate offsetParent (a `relative z-10` wrapper one level
+      // up from the absolutely-positioned slot), so it can't be
+      // compared against `adjustedYPosition` directly.
+      let preDropYCenter: number | null = null;
+      if (isSameColumnMove) {
+        const sourceColumn =
+          data.sections[sourceLocation.sectionIndex]?.columns[sourceLocation.columnIndex];
+        const sourceNodeIndex = sourceColumn?.nodes.findIndex((n) => n.id === draggedNodeId) ?? -1;
+        const sourceNodeFromData =
+          sourceNodeIndex >= 0 ? sourceColumn!.nodes[sourceNodeIndex] : null;
+        if (sourceNodeFromData) {
+          const actualHeight = nodeHeights[draggedNodeId] || 76;
+          preDropYCenter =
+            sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + actualHeight / 2;
+        }
+      }
+      const dy =
+        isSameColumnMove && preDropYCenter !== null ? adjustedYPosition - preDropYCenter : 0;
+      const shouldTranslateWaypoints = isSameColumnMove && dy !== 0;
+      const waypointShiftY = dy / 2; // half-delta — see comment above
+
       setDataAndNotify((prevData) => {
         // Locate the source node fresh inside the updater so we don't
         // leak `findNodeLocation`'s closed-over data snapshot.
@@ -736,34 +788,75 @@ export function ToC({
         }
         if (!sourceNode) return prevData;
 
+        // Helper: shift every waypoint on every connection touching
+        // draggedNodeId (as source OR target). Pure, returns a new
+        // sections array, allocations gated on actual change.
+        const shiftWaypointsForNode = (
+          sections: ToCData['sections'],
+          nodeId: string,
+          shift: { x: number; y: number },
+        ): ToCData['sections'] => {
+          let changed = false;
+          const next = sections.map((section) => ({
+            ...section,
+            columns: section.columns.map((column) => ({
+              ...column,
+              nodes: column.nodes.map((node) => {
+                if (!node.connections || node.connections.length === 0) return node;
+                let nodeChanged = false;
+                const newConns = node.connections.map((conn) => {
+                  // Only touch connections where draggedNodeId is one
+                  // endpoint (node.id is the source side; targetId is
+                  // the target side).
+                  const isEndpoint = node.id === nodeId || conn.targetId === nodeId;
+                  if (!isEndpoint) return conn;
+                  if (!conn.waypoints || conn.waypoints.length === 0) return conn;
+                  nodeChanged = true;
+                  return {
+                    ...conn,
+                    waypoints: conn.waypoints.map((w) => ({
+                      x: w.x + shift.x,
+                      y: w.y + shift.y,
+                    })),
+                  };
+                });
+                if (!nodeChanged) return node;
+                changed = true;
+                return { ...node, connections: newConns };
+              }),
+            })),
+          }));
+          return changed ? next : sections;
+        };
+
         // Same-column move: in-place yPosition update only.
-        if (
-          !isNewColumn &&
-          sourceLocation.sectionIndex === targetSectionIndex &&
-          sourceLocation.columnIndex === targetColumnIndex
-        ) {
-          return {
-            ...prevData,
-            sections: prevData.sections.map((section, sIndex) =>
-              sIndex === targetSectionIndex
-                ? {
-                    ...section,
-                    columns: section.columns.map((column, cIndex) =>
-                      cIndex === targetColumnIndex
-                        ? {
-                            ...column,
-                            nodes: column.nodes.map((node) =>
-                              node.id === draggedNodeId
-                                ? { ...node, yPosition: adjustedYPosition }
-                                : node,
-                            ),
-                          }
-                        : column,
-                    ),
-                  }
-                : section,
-            ),
-          };
+        if (isSameColumnMove) {
+          const sectionsAfterMove = prevData.sections.map((section, sIndex) =>
+            sIndex === targetSectionIndex
+              ? {
+                  ...section,
+                  columns: section.columns.map((column, cIndex) =>
+                    cIndex === targetColumnIndex
+                      ? {
+                          ...column,
+                          nodes: column.nodes.map((node) =>
+                            node.id === draggedNodeId
+                              ? { ...node, yPosition: adjustedYPosition }
+                              : node,
+                          ),
+                        }
+                      : column,
+                  ),
+                }
+              : section,
+          );
+          const sectionsAfterWaypoints = shouldTranslateWaypoints
+            ? shiftWaypointsForNode(sectionsAfterMove, draggedNodeId, {
+                x: 0,
+                y: waypointShiftY,
+              })
+            : sectionsAfterMove;
+          return { ...prevData, sections: sectionsAfterWaypoints };
         }
 
         // Cross-column / cross-section move: remove from source, add to target.
@@ -790,7 +883,7 @@ export function ToC({
         return newData;
       });
     },
-    [findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
+    [data, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
   );
 
   // PR 4: `usePointerDrag` owns drag state. `onDrop` flows directly to
