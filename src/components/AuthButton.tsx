@@ -319,6 +319,15 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
   const [showDropdown, setShowDropdown] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  // `animate-pulse` on the avatar wrapper acts as a skeleton while the
+  // remote `user.picture` is in-flight. Without `onLoad` to clear it the
+  // wrapper pulses forever, which made the whole badge appear to "loop
+  // opacity on and off" once the image was visible (the pulse keyframe
+  // animates opacity 1→.5→1 on the wrapper, dragging the child img with
+  // it). Flip to `false` on load/error so the skeleton stops as soon as
+  // there's something real to show.
+  const [avatarLoaded, setAvatarLoaded] = useState(false);
+  const [dropdownAvatarLoaded, setDropdownAvatarLoaded] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -358,11 +367,17 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
           title={user.name || 'Account'}
         >
           {user.picture ? (
-            <div className="relative w-full h-full bg-gray-200 animate-pulse overflow-hidden">
+            <div
+              className={`relative w-full h-full bg-gray-200 overflow-hidden ${
+                avatarLoaded ? '' : 'animate-pulse'
+              }`}
+            >
               <img
                 src={user.picture}
                 alt={user.name || 'User'}
                 className="absolute inset-0 w-full h-full object-cover"
+                onLoad={() => setAvatarLoaded(true)}
+                onError={() => setAvatarLoaded(true)}
               />
             </div>
           ) : (
@@ -378,11 +393,17 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
             <div className="p-4 bg-gray-50 border-b border-gray-200">
               <div className="flex items-center gap-3">
                 {user.picture ? (
-                  <div className="relative w-12 h-12 rounded-full overflow-hidden bg-gray-200 animate-pulse">
+                  <div
+                    className={`relative w-12 h-12 rounded-full overflow-hidden bg-gray-200 ${
+                      dropdownAvatarLoaded ? '' : 'animate-pulse'
+                    }`}
+                  >
                     <img
                       src={user.picture}
                       alt={user.name || 'User'}
                       className="absolute inset-0 w-full h-full object-cover"
+                      onLoad={() => setDropdownAvatarLoaded(true)}
+                      onError={() => setDropdownAvatarLoaded(true)}
                     />
                   </div>
                 ) : (
@@ -457,16 +478,21 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
     );
   }
 
-  // Anonymous user - show dropdown with sign in and privacy settings
+  // Anonymous user - show dropdown with sign in and privacy settings.
+  // The badge intentionally mirrors the authenticated variant's
+  // footprint (36×36, items-center) so the TopBar row keeps a single
+  // baseline. The earlier flex-col + "Account" text label made this
+  // chip ~46px tall, which pushed it visibly off-center against the
+  // Share button (36px) and the round avatar in the auth state.
   return (
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setShowDropdown(!showDropdown)}
-        className="flex flex-col items-center gap-0.5 text-gray-600 hover:text-gray-900 transition-colors focus:outline-none"
+        className="w-9 h-9 rounded-full flex items-center justify-center text-gray-600 hover:text-gray-900 hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+        aria-label="Account"
         title="Account"
       >
         <UserCircleIcon className="w-7 h-7" />
-        <span className="text-xs">Account</span>
       </button>
 
       {showDropdown && (
