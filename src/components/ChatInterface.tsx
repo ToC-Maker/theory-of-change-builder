@@ -892,6 +892,20 @@ export function ChatInterface({
   // by handleStopStreaming, resetStreamUiState, and at the head of every
   // new send attempt.
   const acceptedRef = useRef(false);
+  // In-flight cancellation handles for the debounced count_tokens estimate
+  // effects (one pair per mode). Exposed via refs so handleSendMessage /
+  // startGenerationInternal can cancel a pending or in-flight estimate when
+  // the user clicks Send — the server's reserveCost preflight is the
+  // authoritative gate, so a debounce completing during the preflight
+  // window would just thrash banners (e.g. amber would_exceed_cap flickers
+  // in between the spinner appearing and the 429 lands → red cap_reached
+  // taking over). Each effect re-assigns these on every run; the cleanup
+  // closures still capture their own locals so the abort is idempotent
+  // when both fire.
+  const chatEstimateAbortRef = useRef<AbortController | null>(null);
+  const chatEstimateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const generateEstimateAbortRef = useRef<AbortController | null>(null);
+  const generateEstimateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Synchronous guard against double-send for both handleSendMessage and
   // startGeneration. handleSendMessage awaits ensureChartExists() before
   // flipping isStreaming/isLoading, so a second Enter racing in during that
@@ -1357,6 +1371,7 @@ export function ChatInterface({
   // we don't, so 5m it is).
   useEffect(() => {
     const controller = new AbortController();
+    chatEstimateAbortRef.current = controller;
     const timeout = setTimeout(() => {
       const attachedChars = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
@@ -1537,6 +1552,7 @@ export function ChatInterface({
         }
       })();
     }, 600);
+    chatEstimateTimeoutRef.current = timeout;
     return () => {
       clearTimeout(timeout);
       controller.abort();
@@ -1550,6 +1566,7 @@ export function ChatInterface({
   // estimate reflects what a single Generate click will cost.
   useEffect(() => {
     const controller = new AbortController();
+    generateEstimateAbortRef.current = controller;
     const timeout = setTimeout(() => {
       const readyTextFiles = files.filter((f) => f.status === 'ready');
       if (
@@ -1634,11 +1651,35 @@ export function ChatInterface({
         }
       })();
     }, 600);
+    generateEstimateTimeoutRef.current = timeout;
     return () => {
       clearTimeout(timeout);
       controller.abort();
     };
   }, [files, additionalInstructions, generateAttachedFileIds, selectedModel]);
+
+  // Cancel any pending/in-flight count_tokens estimate. Called from the
+  // send handlers on click so the debounced fetch (or its pending
+  // setTimeout) can't fire mid-preflight and update composerEstimateUsd /
+  // generateEstimateUsd, which would trigger a momentary would_exceed_cap
+  // amber banner just before the server's 429 (cap_reached, red) lands —
+  // banner thrash for the user.
+  const cancelChatEstimate = useCallback(() => {
+    if (chatEstimateTimeoutRef.current !== null) {
+      clearTimeout(chatEstimateTimeoutRef.current);
+      chatEstimateTimeoutRef.current = null;
+    }
+    chatEstimateAbortRef.current?.abort();
+    setEstimatingCost(false);
+  }, []);
+  const cancelGenerateEstimate = useCallback(() => {
+    if (generateEstimateTimeoutRef.current !== null) {
+      clearTimeout(generateEstimateTimeoutRef.current);
+      generateEstimateTimeoutRef.current = null;
+    }
+    generateEstimateAbortRef.current?.abort();
+    setEstimatingCost(false);
+  }, []);
 
   const handleStopStreaming = () => {
     // Don't gate the whole handler on abortControllerRef.current being
@@ -1726,6 +1767,14 @@ export function ChatInterface({
       sendInFlightRef.current = false;
       return;
     }
+
+    // Cancel any pending/in-flight debounced count_tokens estimate.
+    // Without this, an estimate completing mid-preflight would flip
+    // composerEstimateUsd, derive would_exceed_cap, and flash an amber
+    // banner just before the server's 429 (cap_reached, red) lands —
+    // banner thrash. Server preflight is authoritative; the debounced
+    // estimate is moot once Send is in flight.
+    cancelChatEstimate();
 
     // Spinner ON (S1: `isLoading && !isStreaming` is the preflight signal,
     // shown via spinner icon on the Send button). Set sync, BEFORE the
