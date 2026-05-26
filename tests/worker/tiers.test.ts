@@ -6,6 +6,8 @@ import {
   needTurnstile,
   LIFETIME_CAP_MICRO_USD,
   LIFETIME_CAP_USD,
+  EFFECTIVE_LIFETIME_CAP_MICRO_USD,
+  CAP_OVERSPEND_TOLERANCE_FRACTION,
 } from '../../worker/_shared/tiers';
 
 describe('tierFor', () => {
@@ -44,5 +46,12 @@ describe('tier predicates', () => {
 describe('lifetime cap constants', () => {
   it('USD and microUSD agree', () => {
     expect(LIFETIME_CAP_MICRO_USD).toBe(BigInt(LIFETIME_CAP_USD) * 1_000_000n);
+  });
+
+  it('effective cap = displayed cap * (1 + tolerance)', () => {
+    const expected = BigInt(
+      Math.round(Number(LIFETIME_CAP_MICRO_USD) * (1 + CAP_OVERSPEND_TOLERANCE_FRACTION)),
+    );
+    expect(EFFECTIVE_LIFETIME_CAP_MICRO_USD).toBe(expected);
   });
 });

@@ -12,6 +12,7 @@
 // modes this closes and the decision record.
 
 import type { CostError, CostErrorType } from '../../services/chatService';
+import { CAP_OVERSPEND_TOLERANCE_FRACTION } from '../../../shared/cap';
 
 // Inline shape of the /api/usage response, matching the literal at
 // ChatInterface.tsx (state.usage). Inlined here rather than extracted to
@@ -260,13 +261,15 @@ export function selectBlocker(params: {
 
   // Derived would_exceed_cap. Only when no event blocker, on a capped tier,
   // and the in-flight draft estimate would push cumulative usage past the
-  // cap. Strict `>` so an estimate that exactly hits the limit is allowed
-  // through (the server's reservation uses the same boundary).
+  // EFFECTIVE cap (limit * (1 + tolerance)). Mirrors the server's
+  // reserveCost gate so a banner that says "would exceed" actually
+  // corresponds to a send that would be rejected. Strict `>` so an estimate
+  // that exactly hits the effective cap is allowed through.
   if (
     usage != null &&
     usage.tier !== 'byok' &&
     composerEstimateUsd > 0 &&
-    usage.used_usd + composerEstimateUsd > usage.limit_usd
+    usage.used_usd + composerEstimateUsd > usage.limit_usd * (1 + CAP_OVERSPEND_TOLERANCE_FRACTION)
   ) {
     return { type: 'would_exceed_cap' };
   }

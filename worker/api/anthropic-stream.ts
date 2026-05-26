@@ -21,7 +21,6 @@ import {
 } from '../_shared/cost';
 import {
   LIFETIME_CAP_USD,
-  LIFETIME_CAP_MICRO_USD,
   EFFECTIVE_LIFETIME_CAP_MICRO_USD,
   BODY_SIZE_LIMIT_BYTES,
   tierFor,
@@ -720,7 +719,10 @@ async function reserveCost(
   altSvcHeaders: Record<string, string>,
 ): Promise<ReserveResult> {
   const projStr = projected.toString();
-  const capStr = LIFETIME_CAP_MICRO_USD.toString();
+  // EFFECTIVE_LIFETIME_CAP_MICRO_USD (= LIFETIME_CAP_MICRO_USD * 1.05) so a
+  // user near the cap can still get a reasonable next send through. The 429
+  // response below still reports the displayed cap (LIFETIME_CAP_USD).
+  const capStr = EFFECTIVE_LIFETIME_CAP_MICRO_USD.toString();
 
   let updateRows: { cost_micro_usd: bigint | number | string }[];
   try {
@@ -1050,7 +1052,7 @@ export interface PerUpdateCommitDeps {
    * BYOK routing flag for `applyDeltaCommit`. When true, the delta lands
    * in `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
    * When false, it lands in `cost_micro_usd` (the column reserveCost
-   * checks against `LIFETIME_CAP_MICRO_USD`). Plumbed from the
+   * checks against `EFFECTIVE_LIFETIME_CAP_MICRO_USD`). Plumbed from the
    * teeCtx so per-update + abort commits route correctly for the request's
    * tier. See the BYOK regression note in `cost-commit.ts` for context.
    */
@@ -1288,7 +1290,7 @@ type SseTeeContext = {
    * floor). When true, deltas land in `user_api_usage.byok_cost_micro_usd`
    * (independent of the free cap); when false, they land in
    * `cost_micro_usd` (the column reserveCost reads against
-   * `LIFETIME_CAP_MICRO_USD`). See the BYOK regression note in
+   * `EFFECTIVE_LIFETIME_CAP_MICRO_USD`). See the BYOK regression note in
    * `cost-commit.ts` for the full rationale.
    */
   isByok: boolean;
@@ -3252,9 +3254,8 @@ export async function handler(
   // Kill threshold: cumulative actual cost must not exceed remaining_cap measured
   // BEFORE this request's reservation was deducted. Since the reservation has
   // already been debited, that's EFFECTIVE_CAP - (post_reservation - projected).
-  // The effective cap includes a small overspend tolerance (see tiers.ts) so
-  // the kill doesn't cut large legitimate responses off mid-sentence for a few
-  // pennies of overshoot; preflight (composer + reserveCost) stays strict.
+  // EFFECTIVE_CAP includes a small overspend tolerance (see tiers.ts) used
+  // symmetrically by composer + reserveCost + this kill switch.
   // For BYOK the cap doesn't apply — null disables the check in the tee.
   const killThresholdMicro: bigint | null = isCapped(tier)
     ? EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected)
@@ -3412,7 +3413,7 @@ export async function handler(
   // past the Response being fully flushed so we still get the DB write.
   // Updates BOTH user_api_usage cost columns via the signed-delta CTE:
   //   - Free/anon writes land in cost_micro_usd (the column reserveCost
-  //     checks against LIFETIME_CAP_MICRO_USD).
+  //     checks against EFFECTIVE_LIFETIME_CAP_MICRO_USD).
   //   - BYOK writes land in byok_cost_micro_usd (independent of cap; visible
   //     in /api/usage as byok_used_usd).
   // global_monthly_usage stays observability-only (BYOK excluded; tracks

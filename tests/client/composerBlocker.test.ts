@@ -278,21 +278,36 @@ describe('costErrorToBlocker — specials', () => {
 
 describe('selectBlocker', () => {
   it('event blocker wins over derived would_exceed_cap', () => {
+    // Fixture chosen to trigger derived would_exceed_cap (4.99 + 0.27 =
+    // 5.26 > effective cap 5.25); event still wins over derived.
     const result = selectBlocker({
       eventBlocker: { type: 'cap_reached' },
       usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.02,
+      composerEstimateUsd: 0.27,
     });
     expect(result).toEqual({ type: 'cap_reached' });
   });
 
-  it('no event, capped, estimate over remaining → would_exceed_cap', () => {
+  it('no event, capped, estimate over effective cap → would_exceed_cap', () => {
+    // Effective cap = limit * 1.05 = 5.25. Estimate pushes total to 5.26.
     const result = selectBlocker({
       eventBlocker: null,
       usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.02,
+      composerEstimateUsd: 0.27,
     });
     expect(result).toEqual({ type: 'would_exceed_cap' });
+  });
+
+  it('no event, capped, estimate over strict cap but within buffer → null', () => {
+    // 4.99 + 0.10 = 5.09. Strict cap = 5.00 (over). Effective cap = 5.25
+    // (under). Buffer lets this send through. Documents the buffer is
+    // active in the derivation.
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
+      composerEstimateUsd: 0.1,
+    });
+    expect(result).toBeNull();
   });
 
   it('no event, capped, estimate under remaining → null', () => {
@@ -396,11 +411,12 @@ describe('selectBlocker', () => {
     expect(result).toBeNull();
   });
 
-  it('composerEstimateUsd > 0 but used+estimate <= limit → null', () => {
+  it('composerEstimateUsd > 0 but used+estimate <= effective cap → null', () => {
+    // 4 + 1 = 5 (at strict limit, well under effective cap of 5.25).
     const result = selectBlocker({
       eventBlocker: null,
       usage: { used_usd: 4, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 1, // exactly at limit, not over
+      composerEstimateUsd: 1,
     });
     expect(result).toBeNull();
   });
@@ -556,11 +572,12 @@ describe('preserveCapClassOnly', () => {
 
 describe('Mode A regression: silent post-send on cap rejection', () => {
   it('case (a): would_exceed_cap → cap_reached event → cap_reached wins', () => {
-    // Initial: under cap, draft would exceed; user sees would_exceed_cap
+    // Initial: under cap, draft would exceed effective cap (5.25); user
+    // sees would_exceed_cap. 4.99 + 0.27 = 5.26 > 5.25.
     const initial = selectBlocker({
       eventBlocker: null,
       usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.02,
+      composerEstimateUsd: 0.27,
     });
     expect(initial).toEqual({ type: 'would_exceed_cap' });
 
@@ -587,11 +604,12 @@ describe('Mode A regression: silent post-send on cap rejection', () => {
   });
 
   it('case (b): would_exceed_cap → last_send_exceeded event → event wins, banner shows', () => {
-    // Initial: under cap, draft would exceed; user sees would_exceed_cap
+    // Initial: under cap, draft would exceed effective cap (5.25). 4.5 +
+    // 0.76 = 5.26 > 5.25.
     const initial = selectBlocker({
       eventBlocker: null,
       usage: { used_usd: 4.5, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.6,
+      composerEstimateUsd: 0.76,
     });
     expect(initial).toEqual({ type: 'would_exceed_cap' });
 
@@ -667,11 +685,12 @@ describe('BYOK removal — tier flips back to free', () => {
     // derive from.
     expect(after).toBeNull();
 
-    // With a draft, would_exceed_cap should fire
+    // With a draft over the buffer threshold (5 + 0.26 = 5.26 > 5.25
+    // effective cap), would_exceed_cap should fire.
     const withDraft = selectBlocker({
       eventBlocker: null,
       usage: { used_usd: 5, limit_usd: 5, tier: 'free' },
-      composerEstimateUsd: 0.01,
+      composerEstimateUsd: 0.26,
     });
     expect(withDraft).toEqual({ type: 'would_exceed_cap' });
   });

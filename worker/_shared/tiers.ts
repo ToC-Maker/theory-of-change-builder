@@ -9,6 +9,10 @@ import {
   ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES,
   ANTHROPIC_FILE_UPLOAD_BYTES,
 } from '../../shared/anthropic-limits';
+import { CAP_OVERSPEND_TOLERANCE_FRACTION } from '../../shared/cap';
+
+// Re-export so worker code can keep importing the fraction from one place.
+export { CAP_OVERSPEND_TOLERANCE_FRACTION };
 
 // All caps are declared in USD as the single source of truth; the micro-USD
 // counterparts (used for BigInt arithmetic in cost accounting) are derived.
@@ -25,16 +29,15 @@ const usdToMicro = (usd: number): bigint => BigInt(Math.round(usd * 1_000_000));
 export const LIFETIME_CAP_USD = 5;
 export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 
-// Server-side overspend tolerance applied ONLY to the mid-stream kill switch.
-// Preflight (composer gating, reserveCost) stays strict at LIFETIME_CAP_USD so
-// users never knowingly start a request that would overrun budget. But the
-// kill switch can't cut mid-sentence cleanly, so a small slack lets large
-// legitimate responses finish rather than being truncated a few cents over.
-// Reconciled actual cost still writes through to user_api_usage, so the cap
-// bar can read e.g. $5.03 of $5.00 after a tolerant-kill stream; the client
-// then blocks further sends via the strict preflight gate.
-export const CAP_OVERSPEND_TOLERANCE_FRACTION = 0.05;
-
+// Overspend tolerance applied to ALL cap comparisons: client composer
+// would_exceed_cap derivation, server reserveCost preflight, and the
+// mid-stream kill switch. The displayed cap (LIFETIME_CAP_USD) stays the
+// number we show users; the effective cap is what we actually compare
+// against. Symmetric so a user near the cap can get one more reasonable
+// send through (preventing the "iterate the draft down forever and never
+// fit" UX trap) and so a mid-stream cost overshoot of a few cents lets the
+// response finish cleanly instead of being truncated.
+//
 // Number round-trip is safe here: LIFETIME_CAP_MICRO_USD is bounded by the
 // displayed cap (a small-integer µUSD value), so Number(cap) is exact and the
 // tolerance multiplication stays well inside Number.MAX_SAFE_INTEGER. Math.round
