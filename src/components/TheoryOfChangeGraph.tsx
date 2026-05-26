@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
+import { getContrastTextColor } from '../utils';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
@@ -1662,79 +1663,75 @@ export function ToC({
           />
         )}
 
-        {/* PR 4: drop-preview ghosts. While `dragState !== null` we render
-            up to two translucent silhouettes (spec § 4.5):
+        {/* PR 4 + PR 7 feedback (#3): single cursor-following ghost
+            that is a visual clone of the dragged node. Renders the
+            actual title/color/size/font so the user is looking at the
+            same thing they grabbed (with reduced opacity); previously
+            two abstract indigo silhouettes rendered side-by-side which
+            confused reviewers about which one represented the drop
+            target. The original node still renders at half opacity in
+            place via NodeComponent's `isDragging` prop above (visual
+            anchor for the source location). No separate drop-preview
+            silhouette: the column area's existing hover state already
+            signals "drop will land here". The ghost sits in the same
+            transform stack as the canvas so it translates with pan/zoom. */}
+        {dragState && dragState.hasMoved && graphContainerRef.current
+          ? (() => {
+              const draggedLoc = findNodeLocation(dragState.nodeId);
+              if (!draggedLoc) return null;
+              const draggedNode = draggedLoc.node;
 
-            1. A drop-location ghost anchored at `dragOverLocation`,
-               showing the user where the dropped node will settle. Only
-               rendered when the current region maps to a concrete slot
-               (node-slot / over-node / new-column).
-            2. A cursor-following ghost that tracks the finger / mouse
-               while the gesture is in flight.
-
-            The original node renders at half opacity via NodeComponent's
-            `isDragging` prop above (`dragState?.nodeId === node.id`).
-            Both ghosts sit in the same transform stack as the canvas,
-            so they translate with pan/zoom. */}
-        {dragState && dragState.hasMoved && graphContainerRef.current ? (
-          <>
-            {(() => {
-              const loc = dragState.dragOverLocation;
-              if (!loc || loc.kind === 'new-section') return null;
-              const snap = getSnapshot();
-              const rect = snap.columnRects[loc.sectionIndex]?.[loc.columnIndex];
-              if (!rect) return null;
-              const { width: ghostW, height: ghostH } = dragState.nodeSize;
-              // Centre the silhouette within the target column. For
-              // node-slot, use the cursor-derived yPosition minus half
-              // the node height to mirror handleDrop's math; for
-              // over-node / new-column we have no y signal, so place at
-              // the top of the column (offset by 12px for visual
-              // separation from the column header).
-              const left = (rect.left + rect.right) / 2 - ghostW / 2;
-              const top = loc.kind === 'node-slot' ? loc.yPosition - ghostH / 2 : rect.top + 12;
-              return (
-                <div
-                  className="pointer-events-none absolute z-[55]"
-                  style={{
-                    left: `${left}px`,
-                    top: `${top}px`,
-                    width: `${ghostW}px`,
-                    height: `${ghostH}px`,
-                  }}
-                  aria-hidden
-                >
-                  <div className="rounded-xl bg-indigo-50 border-2 border-dashed border-indigo-300 opacity-60 w-full h-full" />
-                </div>
-              );
-            })()}
-            {(() => {
               // Translate ghostPos (viewport coords) to container-local
               // so the absolute-positioned ghost lines up with the
               // canvas geometry. The cursor offset within the node is
-              // preserved (drag handle stays under the finger / mouse).
+              // preserved (the grab point stays under the finger / mouse).
               const containerRect = graphContainerRef.current.getBoundingClientRect();
               const localX = (dragState.ghostPos.x - containerRect.left) / zoomScale;
               const localY = (dragState.ghostPos.y - containerRect.top) / zoomScale;
               const offsetXLocal = dragState.pointerOffset.x / zoomScale;
               const offsetYLocal = dragState.pointerOffset.y / zoomScale;
+              const ghostWidth = dragState.nodeSize.width;
               return (
                 <div
-                  className="pointer-events-none absolute z-[60]"
+                  className="pointer-events-none absolute z-[60] opacity-50"
                   style={{
                     left: `${localX - offsetXLocal}px`,
                     top: `${localY - offsetYLocal}px`,
-                    width: `${dragState.nodeSize.width}px`,
-                    height: `${dragState.nodeSize.height}px`,
+                    width: `${ghostWidth}px`,
                   }}
                   aria-hidden
+                  data-testid="node-drag-ghost"
                 >
-                  <div className="rounded-xl bg-indigo-100 ring-2 ring-indigo-400 opacity-70 w-full h-full shadow-lg" />
+                  {/* Mirrors NodeComponent's visual chrome (sans
+                      interactive bits — no ring, no hover scale, no
+                      connection handles). The ghost is a pure visual
+                      duplicate so the user sees the exact node they're
+                      dragging, only translucent. */}
+                  <div
+                    className="flex flex-col border-0 rounded-xl shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] pt-3 px-3 pb-6 select-none"
+                    style={{
+                      backgroundColor: draggedNode.color || '#ffffff',
+                    }}
+                  >
+                    <div className="flex flex-col justify-center relative py-2">
+                      <div
+                        className="font-medium text-center leading-tight break-words"
+                        style={{
+                          fontSize: `${textSize * 1.125}rem`,
+                          fontFamily: fontFamily,
+                          color: draggedNode.color
+                            ? getContrastTextColor(draggedNode.color)
+                            : '#000000',
+                        }}
+                      >
+                        {draggedNode.title}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               );
-            })()}
-          </>
-        ) : null}
+            })()
+          : null}
 
         {/* PR 5 Task 5.2: drag-to-connect in-flight ghost line. Renders
             an SVG path from the source handle's node edge to the

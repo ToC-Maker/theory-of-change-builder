@@ -128,6 +128,14 @@ function NodeComponentInner({
         onPointerDown={editMode ? onPointerDown : undefined}
         className={clsx(
           'flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
+          // PR 7 feedback (#5): `select-none` so clicking on the node
+          // title (or anywhere on the node body) starts the drag instead
+          // of initiating a text selection. The title is read-only here
+          // and edited via `<NodeEditor>`; suppressing text selection on
+          // the node root costs nothing functional. INPUT/TEXTAREA inside
+          // <NodeEditor> are unaffected (they're not descendants of the
+          // node root, and have their own user-select handling).
+          'select-none',
           'touch-none',
           // Only apply default gradients if no custom color is set
           !node.color && 'bg-gradient-to-br from-white to-gray-50',
