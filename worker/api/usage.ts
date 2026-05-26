@@ -65,8 +65,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       // Two separate columns:
       //   - cost_micro_usd: free-tier counter. This is the column
       //     reserveCost (worker/api/anthropic-stream.ts) checks against
-      //     LIFETIME_CAP_MICRO_USD. Returned as `used_usd` so the cap-bar
-      //     UI shows free-only spend.
+      //     EFFECTIVE_LIFETIME_CAP_MICRO_USD. Returned as `used_usd` so
+      //     the cap-bar UI shows free-only spend.
       //   - byok_cost_micro_usd: BYOK counter, independent of the free
       //     cap. Returned as `byok_used_usd` so the BYOK pill shows
       //     self-funded spend. (See cost-commit.ts BYOK regression note

@@ -15,6 +15,11 @@ import { buildOutgoingMessages } from './outgoingMessages';
 import { CostTracker } from './chatCostTracker';
 import type { AnthropicUsage } from '../../shared/cost';
 import type { StreamEvent } from '../../shared/wire-shapes';
+// Co-located with the composer-blocker discriminated union so adding a new
+// service-class CostErrorType only needs one edit. The asymmetric logging
+// discipline below (instrument service errors; skip cap/quota events that
+// are expected operational states) relies on this set being authoritative.
+import { SERVICE_ERROR_TYPES } from '../components/chat/composerBlocker';
 
 /**
  * Re-export the shared `AnthropicUsage` shape so existing callers
@@ -71,8 +76,9 @@ export interface ChatMessage {
   was_killed?: boolean;
   /**
    * Why the turn was interrupted, used by the UI to render specific copy
-   * (cap-exceeded → "Cost limit reached…", aborted → "Stopped.", error
-   * → the upstream message). Always set together with `was_killed`.
+   * (cap-exceeded falls through to a generic "interrupted" indicator,
+   * aborted → "Stopped.", error → the upstream message). Always set
+   * together with `was_killed`.
    */
   kill_reason?: 'cap_exceeded' | 'aborted' | 'error';
   /**
@@ -309,6 +315,20 @@ export interface StreamCallbacks {
    * generic `onError` handler or the H3->H2 retry path.
    */
   onCostError?: (error: CostError) => void;
+  /**
+   * Fires after the server's preflight reservation accepts the request
+   * (HTTP 200 from /api/anthropic-stream, before SSE delivery begins) and
+   * BEFORE any stream content is processed. Callers (ChatInterface) use this
+   * as the "commit the user message to chat" trigger so a preflight rejection
+   * (429 cap, 413 body too large, etc.) doesn't leak an orphan user message
+   * into the chat history.
+   *
+   * Guaranteed at-most-once per `streamMessage` invocation, even across the
+   * H3->H2 fallback retry path: the wrapper layer holds an `acceptedFired`
+   * flag so a retry whose first attempt already accepted (then mid-streamed
+   * a network error) doesn't double-fire.
+   */
+  onAccepted?: () => void;
 }
 
 /**
@@ -617,11 +637,8 @@ class ChatService {
         // errors are expected operational states, not diagnostic noise —
         // skip those. We rely on the worker to have put the upstream
         // cause in errorData.upstream_message / upstream_status.
-        const SERVICE_ERROR_TYPES = new Set<CostErrorType>([
-          'database_unavailable',
-          'estimation_unavailable',
-          'authentication_service_unavailable',
-        ]);
+        // SERVICE_ERROR_TYPES is imported from components/chat/composerBlocker
+        // (single source of truth, kept in sync with the blocker DU).
         if (SERVICE_ERROR_TYPES.has(errorType as CostErrorType)) {
           const upstream = errorData as
             | {
@@ -669,6 +686,13 @@ class ChatService {
     }
 
     ctx?.markHeadersReceived();
+
+    // Server's preflight reservation accepted. Signal the caller BEFORE SSE
+    // delivery begins so the deferred-add path (ChatInterface) can commit the
+    // user message to chat, clear the composer, and switch modes. The wrapper
+    // (streamMessage) deduplicates this across the H3-fallback retry — see
+    // the at-most-once guard there.
+    callbacks.onAccepted?.();
 
     // Parse SSE stream
     const reader = response.body.getReader();
@@ -1241,7 +1265,7 @@ class ChatService {
       messages,
       currentGraphData,
       mode,
-      callbacks = {},
+      callbacks: rawCallbacks = {},
       signal,
       model = 'claude-opus-4-7',
       webSearchEnabled = false,
@@ -1256,6 +1280,24 @@ class ChatService {
       editToken,
       loggingMessageId,
     } = options;
+
+    // At-most-once guard around `onAccepted`. The wrapped callback is passed
+    // down to streamFromApi for both the primary attempt AND the H3->H2
+    // fallback retry (chatService.ts: catch block below). Without the guard,
+    // a retry whose first attempt's preflight already accepted (and then
+    // mid-streamed a network error) would double-fire onAccepted, and the
+    // ChatInterface would commit the same user message to chat twice.
+    let acceptedFired = false;
+    const callbacks: StreamCallbacks = {
+      ...rawCallbacks,
+      onAccepted: rawCallbacks.onAccepted
+        ? () => {
+            if (acceptedFired) return;
+            acceptedFired = true;
+            rawCallbacks.onAccepted?.();
+          }
+        : undefined,
+    };
 
     // New-message-send catch-up. Before this stream begins, drain the
     // pending-reconcile queue. Any prior-stream unreconciled entry gets
@@ -1551,6 +1593,7 @@ class ChatService {
               messages,
               webSearchEnabled,
               extendedThinkingEnabled,
+              keyLast4,
             );
             return; // Retry succeeded, callbacks already fired
           } catch (retryError: unknown) {

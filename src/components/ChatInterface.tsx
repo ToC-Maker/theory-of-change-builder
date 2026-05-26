@@ -26,8 +26,17 @@ import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedG
 import { parseFile, getFileTypeDescription } from '../utils/fileParser';
 import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
-import { DonateCta } from './ByokPanel';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
+import {
+  type ComposerBlocker,
+  type RenderedBlocker,
+  costErrorToBlocker,
+  selectBlocker,
+  shouldBlockSend,
+  preserveCapClassOnly,
+} from './chat/composerBlocker';
+import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
+import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import type { ToCData } from '../types';
 import {
   formatCostUsd,
@@ -53,7 +62,6 @@ import {
   StopIcon,
   SparklesIcon,
   PencilSquareIcon,
-  KeyIcon,
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
@@ -122,26 +130,6 @@ try {
   }
 } catch {
   // localStorage unavailable (private browsing / SSR): nothing to clean up.
-}
-
-/**
- * Button that opens AuthButton's API-key settings modal. Dispatches a
- * window-level CustomEvent which AuthButton listens for (see its
- * useEffect). Used from cap banners and the Generate-mode key gate so
- * we don't render the full BYOK instructions inline anymore — they live
- * in the modal alongside the rest of the key management UI.
- */
-function AddApiKeyButton() {
-  return (
-    <button
-      type="button"
-      onClick={() => window.dispatchEvent(new CustomEvent('tocb:openApiKeyModal'))}
-      className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-    >
-      <KeyIcon className="w-4 h-4" aria-hidden />
-      Add your Anthropic API key
-    </button>
-  );
 }
 
 export type AIMode = 'chat' | 'generate';
@@ -333,38 +321,6 @@ const TURNSTILE_SITE_KEY: string =
 const TURNSTILE_SCRIPT_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SCRIPT_ID = 'cf-turnstile-script';
-
-// User-facing copy for each cost-error category. Reused by both the legacy
-// keyword classifier (classifyCostError) and the structured handler
-// (handleCostError), so copy stays consistent between the two paths.
-type CostErrorKind =
-  | 'lifetime_cap'
-  | 'global_budget'
-  | 'turnstile'
-  | 'body_too_large'
-  | 'service_unavailable';
-
-const COST_ERROR_COPY: Record<CostErrorKind, string> = {
-  lifetime_cap:
-    "You've reached the free quota. Bring your own Anthropic key to keep going, or donate to help us keep the free tier available for others.",
-  global_budget:
-    "We've hit our shared monthly AI spend cap. Bring your own Anthropic key to keep going, or donate to help us raise the cap and keep this tool sustainable.",
-  turnstile: 'Please complete the challenge before sending.',
-  body_too_large: 'Your message is too large. Try a shorter message or fewer attachments.',
-  service_unavailable: 'Service temporarily unavailable. Please try again shortly.',
-};
-
-// Keyword table for classifyCostError(). Order matters: first match wins.
-const COST_ERROR_CATEGORIES: ReadonlyArray<readonly [CostErrorKind, readonly string[]]> = [
-  ['lifetime_cap', ['lifetime_cap_reached', 'free quota']],
-  ['global_budget', ['global_budget_exhausted', 'shared budget']],
-  ['turnstile', ['turnstile_required', 'turnstile_failed']],
-  ['body_too_large', ['body_too_large', 'payload too large']],
-  [
-    'service_unavailable',
-    ['database_unavailable', 'estimation_unavailable', 'authentication_service_unavailable'],
-  ],
-];
 
 // Global reference to Cloudflare's injected helper. We attach it via the
 // raw <script> element because we don't ship @marsidev/react-turnstile in
@@ -646,21 +602,22 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
             <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
           )}
         {message.was_killed && (
-          // Specific copy per kill_reason. cap_exceeded directs the user to
-          // the unblock path; aborted is a neutral "Stopped" so the bubble
-          // visually distinguishes from a complete response; error surfaces
-          // the actual upstream/network failure verbatim so the user can
-          // diagnose without opening devtools.
+          // Specific copy per kill_reason. aborted = neutral "Stopped" so the
+          // bubble visually distinguishes from a complete response; error =
+          // upstream/network failure verbatim so the user can diagnose without
+          // opening devtools. cap_exceeded falls through to the generic
+          // "interrupted" copy — the composer-area panel covers the cap-
+          // recovery affordances (Add an Anthropic API key, Donate), so an
+          // extra inline directive in the message bubble would just
+          // duplicate that.
           <div className="mt-1 inline-flex items-center gap-1 text-amber-700">
             <StopIcon className="w-3 h-3" aria-hidden />
             <span>
-              {message.kill_reason === 'cap_exceeded'
-                ? 'Cost limit reached — sign in or add an API key to continue.'
-                : message.kill_reason === 'aborted'
-                  ? 'Stopped.'
-                  : message.kill_reason === 'error'
-                    ? `Error: ${message.kill_message ?? 'Connection lost.'}`
-                    : 'Response was interrupted.'}
+              {message.kill_reason === 'aborted'
+                ? 'Stopped.'
+                : message.kill_reason === 'error'
+                  ? `Error: ${message.kill_message ?? 'Connection lost.'}`
+                  : 'Response was interrupted.'}
             </span>
           </div>
         )}
@@ -677,7 +634,7 @@ export function ChatInterface({
   highlightedNodes = new Set(),
   onChartCreated,
 }: ChatInterfaceProps) {
-  const { hasKey, keyLast4, verified, keyVersion } = useApiKey();
+  const { hasKey, keyLast4, keyVersion } = useApiKey();
   const { isAuthenticated, getIdTokenClaims, getAccessTokenSilently } = useAuth0();
   const [currentMode, setCurrentMode] = useState<AIMode>('chat');
   const [selectedModel, setSelectedModel] = useState<keyof typeof MODELS>('claude-opus-4-7');
@@ -789,40 +746,45 @@ export function ChatInterface({
   const [composerUncountedFileIds, setComposerUncountedFileIds] = useState<string[]>([]);
   const [generateEstimateUsd, setGenerateEstimateUsd] = useState<number>(0);
 
-  // Derived cap-gate flags, computed from the cached usage snapshot +
-  // latest composer estimate. Declared AFTER composerEstimateUsd since
-  // wouldExceedCap reads it — moving these earlier would TDZ-error.
+  // Unified composer-blocker slot. Replaces three event-driven banner slots
+  // (costErrorBanner, byokPanelMode, globalBudgetUpstreamMessage) with a
+  // single discriminated union. The derived `would_exceed_cap` variant
+  // (computed from usage + draft estimate) is composed at render time via
+  // `selectBlocker` and lives in `renderedBlocker`, NOT this slot — keeping
+  // event-driven state separate from derived state lets the cap-class
+  // tier-flip filter work correctly when the user adds BYOK.
   //
-  //   capAlreadyReached: the user's prior cumulative usage is already at
-  //     or over the free-tier cap. Nothing they can send will succeed;
-  //     only BYOK unlocks new turns.
-  //
-  //   wouldExceedCap: prior usage is under the cap but the projected cost
-  //     of the in-flight draft would push it over. Sending this specific
-  //     message would fail the server's reservation; we block client-side
-  //     to avoid the round-trip (and the confusing Turnstile-before-cap
-  //     ordering on the server).
-  //
-  // BYOK tier skips both — they're self-funded.
-  const capped = usage != null && usage.tier !== 'byok';
-  const capAlreadyReached = capped && usage.used_usd >= usage.limit_usd;
-  const wouldExceedCap =
-    capped &&
-    !capAlreadyReached &&
-    composerEstimateUsd > 0 &&
-    usage.used_usd + composerEstimateUsd > usage.limit_usd;
+  // See `src/components/chat/composerBlocker.ts` for the state machine and
+  // `plans/composer-banner-unification.md` for the failure modes this closes.
+  const [composerBlocker, setComposerBlocker] = useState<ComposerBlocker | null>(null);
+
+  // Generate-confirmation modal flag. True while the modal is open between
+  // startGeneration's confirm-check and the user's choice. Two-phase
+  // callback flow lives in startGeneration: setting this true returns early;
+  // the modal's onConfirm calls startGenerationInternal (the body after the
+  // confirm gate). See GenerateConfirmDialog.tsx for the modal.
+  const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
+
   // Loading flag so the composer can show a spinner while the debounced
   // fetch is in flight; avoids displaying a stale number that's about to
   // change, and signals to the user that the field is being updated.
   const [estimatingCost, setEstimatingCost] = useState<boolean>(false);
 
-  // Inline error banner shown under the last user message when the server
-  // rejects the request on cost/quota grounds (429/402). Persists the chat
-  // history (decision 8).
-  const [costErrorBanner, setCostErrorBanner] = useState<{
-    kind: CostErrorKind;
-    message: string;
-  } | null>(null);
+  // Active estimate: which mode's draft are we sizing right now? Determines
+  // whether `selectBlocker` derives `would_exceed_cap` from the Chat draft
+  // or the Generate draft. Without this branch, Generate-mode capped users
+  // would slip through the would_exceed_cap check (selector reads Chat's
+  // estimate, which is 0 in Generate mode → no derived block fires).
+  const activeEstimate = currentMode === 'generate' ? generateEstimateUsd : composerEstimateUsd;
+
+  // Render-time blocker: event blocker (composerBlocker) plus derived
+  // would_exceed_cap, with cap-class blockers filtered out when tier is
+  // byok. Pure function, called inline at render — cheap.
+  const renderedBlocker: RenderedBlocker = selectBlocker({
+    eventBlocker: composerBlocker,
+    usage,
+    composerEstimateUsd: activeEstimate,
+  });
 
   // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
   // succeeds; the Worker sets an httpOnly `tocb_anon` cookie that rides along
@@ -849,27 +811,6 @@ export function ChatInterface({
   // server-side Turnstile check.
   const generateBlockedByTurnstile =
     !isAuthenticated && Boolean(TURNSTILE_SITE_KEY) && !hasTurnstileSession;
-
-  // BYOK panel state for 402/kill recovery.
-  //
-  // Note there's no 'cap_reached' here: server 429 `lifetime_cap_reached`
-  // is handled by calling refreshUsage(), which flips the derived
-  // `capAlreadyReached` flag and shows the composer-side banner. A
-  // separate mode would double-render the panel. Voluntary key entry
-  // now lives in the profile-dropdown modal, not inline.
-  const [byokPanelMode, setByokPanelMode] = useState<'request_cut_off' | 'global_budget' | null>(
-    null,
-  );
-  // Upstream Anthropic error message captured from the 402 `global_budget_exhausted`
-  // payload, when the server passed it through. Surfaced in the global_budget
-  // panel so the user can see WHY (e.g. "credit balance too low", "billing
-  // address invalid"). Anthropic's billing system occasionally returns 402
-  // spuriously even with credit remaining (billing-system desync) — the server
-  // retries once before surfacing, so a message reaching here means the issue
-  // persisted past the retry.
-  const [globalBudgetUpstreamMessage, setGlobalBudgetUpstreamMessage] = useState<string | null>(
-    null,
-  );
 
   // Files attached in Chat mode (separate from Generate-mode `files`). These
   // can be inline text (content in-memory) or Anthropic Files API uploads
@@ -941,6 +882,30 @@ export function ChatInterface({
   // signed thinking + tool blocks (otherwise they only have plain text and
   // the next "continue" turn loses Opus 4.7's reasoning continuity).
   const streamingContentBlocksRef = useRef<AssistantBlock[]>([]);
+  // Flips true inside the `onAccepted` callback (server's preflight
+  // reservation accepted, SSE about to begin). Read by handleStopStreaming
+  // and the per-handler onCostError/onError branches to gate the
+  // "stamp a partial assistant turn" logic: if the user clicked Stop or a
+  // cost-error landed BEFORE the preflight accepted, nothing actually
+  // streamed and there's no user message in chat to pair an assistant
+  // bubble with — stamping a phantom would be confusing. Reset to false
+  // by handleStopStreaming, resetStreamUiState, and at the head of every
+  // new send attempt.
+  const acceptedRef = useRef(false);
+  // In-flight cancellation handles for the debounced count_tokens estimate
+  // effects (one pair per mode). Exposed via refs so handleSendMessage /
+  // startGenerationInternal can cancel a pending or in-flight estimate when
+  // the user clicks Send — the server's reserveCost preflight is the
+  // authoritative gate, so a debounce completing during the preflight
+  // window would just thrash banners (e.g. amber would_exceed_cap flickers
+  // in between the spinner appearing and the 429 lands → red cap_reached
+  // taking over). Each effect re-assigns these on every run; the cleanup
+  // closures still capture their own locals so the abort is idempotent
+  // when both fire.
+  const chatEstimateAbortRef = useRef<AbortController | null>(null);
+  const chatEstimateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const generateEstimateAbortRef = useRef<AbortController | null>(null);
+  const generateEstimateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Synchronous guard against double-send for both handleSendMessage and
   // startGeneration. handleSendMessage awaits ensureChartExists() before
   // flipping isStreaming/isLoading, so a second Enter racing in during that
@@ -992,6 +957,11 @@ export function ChatInterface({
     setStreamPhase(null);
     setRunningCostUsd(null);
     streamingMessageRef.current = null;
+    // Clear the accepted flag too — the next send attempt re-arms it via
+    // its onAccepted callback. Without this, a Stop click on a fresh send
+    // would inherit the previous turn's acceptedRef=true and stamp a
+    // phantom assistant turn into the wrong place.
+    acceptedRef.current = false;
   }, []);
 
   // Delta-credit the per-chart and per-key BYOK buckets during a stream so
@@ -1051,6 +1021,19 @@ export function ChatInterface({
         justAutoCreatedRef.current = false;
         return;
       }
+
+      // Reset per-context composer blockers on real chartId/route
+      // transitions, but PRESERVE cap-class blockers (cap_reached,
+      // request_cut_off) because those represent genuinely global user
+      // state — the cap lives in user_api_usage, not per-chart. Clearing
+      // them on navigation would briefly mislead the user into thinking
+      // they have quota in the new chart; their next send would fail and
+      // the banner would re-fire. `preserveCapClassOnly` filters by
+      // `isCapClassBlocker` — same logic, both "user changed context"
+      // signals. Closes failure mode J for per-context banners
+      // (advisory, last_send_exceeded); cap-class persists as before.
+      setComposerBlocker(preserveCapClassOnly);
+
       // At the root path (new ToC), start with an empty in-memory chat but
       // DON'T touch localStorage. Previously this branch did a
       // `removeItem(chatHistory_root)`, which wiped the session of any user
@@ -1228,129 +1211,90 @@ export function ChatInterface({
     void syncChartByokCostFromDb(chartIdForSync);
   }, [chartIdForSync, hasKey, keyVersion, syncChartByokCostFromDb]);
 
-  // When the user adds a verified key via the settings modal, dismiss any
-  // sticky cap banners that require explicit clearing. capAlreadyReached /
-  // wouldExceedCap self-clear through the tier flip when usage refetches
-  // (tier becomes 'byok', `capped` goes false), but `byokPanelMode` is
-  // server-event-driven and used to be cleared by ByokPanel.onSubmitted —
-  // with the inline panel gone, we reconcile here instead.
-  useEffect(() => {
-    if (hasKey && verified && byokPanelMode) {
-      setByokPanelMode(null);
-      setCostErrorBanner(null);
-      setGlobalBudgetUpstreamMessage(null);
-    }
-  }, [hasKey, verified, byokPanelMode]);
-
-  // Classify a streaming error string into a cost/quota category if it
-  // matches one of U9's error payloads. Keyword-based detection covers the
-  // legacy error-string path; structured errors from `onCostError` skip this
-  // classifier and go through `handleCostError` below.
-  const classifyCostError = useCallback((message: string) => {
-    const lower = message.toLowerCase();
-    for (const [kind, keywords] of COST_ERROR_CATEGORIES) {
-      if (keywords.some((k) => lower.includes(k))) {
-        return { kind, message: COST_ERROR_COPY[kind] };
-      }
-    }
-    return null;
-  }, []);
-
-  // Structured cost-error handler. Maps CostErrorType → UI state transition
-  // (CRITICAL: never clear chat history; 429/402/etc. show an inline banner
-  // under the last user message so BYOK retries can reuse the same messages
-  // array — preserves the user's prompt across cap-error recovery).
+  // Structured cost-error handler. Two-step dispatch:
+  //   1. Turnstile arms touch Turnstile session state, not the blocker slot
+  //      (the widget re-renders independently).
+  //   2. All other arms go through the pure `costErrorToBlocker` transition;
+  //      the returned variant (or undefined for no-op) flows into the
+  //      single composerBlocker slot.
+  //
+  // Chat history is NEVER touched here — 429/402/etc. show an inline banner
+  // (rendered via <ComposerBlockerBanner> in the composer area) so BYOK
+  // retries can reuse the same messages array.
   const handleCostError = useCallback(
     (error: CostError) => {
-      switch (error.type) {
-        case 'turnstile_required':
-          // Cookie expired or IP changed mid-flow. Bring the widget back so
-          // the user can re-solve, and clear any stale error copy.
-          setHasTurnstileSession(false);
-          setTurnstileError(null);
-          return;
-        case 'turnstile_failed':
-          // Siteverify rejected. Keep the widget visible, surface the error.
-          setHasTurnstileSession(false);
-          setTurnstileError('Challenge failed; please try again.');
-          return;
-        case 'idempotent_replay':
-          // Silent: the user double-clicked or the browser replayed. The
-          // original request is already in flight or completed on the server;
-          // surfacing an error would confuse them.
-          return;
-        case 'lifetime_cap_reached':
-          // Server rejected the preflight reservation — our local usage
-          // snapshot was stale. Refresh so `capAlreadyReached` flips and
-          // the composer-side cap banner + ByokPanel + DonateCta appear.
-          // No separate mode state: that would double-render the panel.
-          setCostErrorBanner(null);
-          void refreshUsage();
-          return;
-        case 'global_budget_exhausted': {
-          setByokPanelMode('global_budget');
-          setCostErrorBanner(null);
-          // Capture Anthropic's actual error message from the response (the
-          // server now passes it through after a single retry). Lets the user
-          // see WHY (e.g. invalid billing, credit_balance_too_low,
-          // organization_disabled) instead of just our generic envelope.
-          const data = error.data as { upstream_message?: unknown } | null | undefined;
-          const msg =
-            data && typeof data === 'object' && typeof data.upstream_message === 'string'
-              ? data.upstream_message
-              : null;
-          setGlobalBudgetUpstreamMessage(msg);
-          return;
-        }
-        case 'request_cost_ceiling_exceeded':
-          // Mid-stream kill: the message already ran part-way, the reconcile
-          // path is writing the actual cost to the DB right now. Surface the
-          // cut-off-specific ByokPanel header and refresh usage so the cap
-          // bar reflects reality — otherwise it stays at the pre-stream
-          // snapshot until manual reload.
-          setByokPanelMode('request_cut_off');
-          setCostErrorBanner(null);
-          void refreshUsage();
-          return;
-        case 'body_too_large':
-          setCostErrorBanner({ kind: 'body_too_large', message: COST_ERROR_COPY.body_too_large });
-          return;
-        case 'chart_deleted':
-          setCostErrorBanner({
-            kind: 'service_unavailable',
-            message: 'This chart was deleted in another tab. Reload the page to continue.',
-          });
-          return;
-        case 'file_unavailable':
-          setCostErrorBanner({
-            kind: 'service_unavailable',
-            message: 'A file referenced by this chat is no longer available. Remove it and retry.',
-          });
-          return;
-        default: {
-          // database_unavailable / estimation_unavailable /
-          // authentication_service_unavailable / invalid_token all fall
-          // through to a generic service banner. When the server included
-          // an upstream_message (e.g. Anthropic's count_tokens 429 reason,
-          // Neon timeout detail, Auth0 JWKS error), surface it so the user
-          // has something specific to try or report rather than just
-          // "something broke."
-          const data = error.data as
-            | { upstream_status?: number; upstream_message?: string }
-            | undefined;
-          const upstreamMessage =
-            typeof data?.upstream_message === 'string' ? data.upstream_message : null;
-          const upstreamStatus =
-            typeof data?.upstream_status === 'number' ? data.upstream_status : null;
-          const detail = upstreamMessage
-            ? `${COST_ERROR_COPY.service_unavailable} (${error.type}${upstreamStatus ? ` ${upstreamStatus}` : ''}: ${upstreamMessage})`
-            : `${COST_ERROR_COPY.service_unavailable} (${error.type})`;
-          setCostErrorBanner({ kind: 'service_unavailable', message: detail });
-        }
+      if (error.type === 'turnstile_required') {
+        // Cookie expired or IP changed mid-flow. Bring the widget back so
+        // the user can re-solve, and clear any stale error copy.
+        setHasTurnstileSession(false);
+        setTurnstileError(null);
+        return;
+      }
+      if (error.type === 'turnstile_failed') {
+        // Siteverify rejected. Keep the widget visible, surface the error.
+        setHasTurnstileSession(false);
+        setTurnstileError('Challenge failed; please try again.');
+        return;
+      }
+
+      // All other cost-class errors dispatch through the pure transition.
+      // `undefined` return means no-op (preserve existing blocker — used by
+      // idempotent_replay so a double-click on a capped state doesn't
+      // clobber the sticky banner).
+      const next = costErrorToBlocker(error);
+      if (next !== undefined) setComposerBlocker(next);
+
+      // Cap-class events refresh usage so the tier-flip filter in
+      // selectBlocker activates when BYOK has been added cross-tab. Refresh
+      // is fire-and-forget; selectBlocker re-derives on the next render.
+      if (error.type === 'lifetime_cap_reached' || error.type === 'request_cost_ceiling_exceeded') {
+        void refreshUsage();
       }
     },
     [refreshUsage],
   );
+
+  // Auto-clear `last_send_exceeded` when the user edits anything that would
+  // change the next send's projected cost. The variant is past-tense ("your
+  // last send would have exceeded") — once they edit the draft, attached
+  // files, OR swap to a cheaper model, the rejection is moot and the user
+  // is signaling retry intent. The setComposerBlocker callback is
+  // idempotent when prev isn't this variant, so firing on every keystroke
+  // is a no-op for any other state. Covers both Chat (inputValue,
+  // chatAttachedFiles) and Generate (additionalInstructions, files,
+  // generateAttachedFileIds) inputs; the server-rejected event could come
+  // from either mode. `selectedModel` is included because Opus→Sonnet
+  // (~5× cheaper) on the same draft is a legitimate "past rejection is
+  // moot" signal that doesn't involve touching the text.
+  //
+  // Also reset the live estimate(s) to 0 when last_send_exceeded clears so
+  // a stale composerEstimateUsd (from the previous draft, before the debounced
+  // estimate effect catches up on the new deferredInputValue) doesn't
+  // derive a false `would_exceed_cap` banner during the ~600ms debounce
+  // window. Trade-off: the cost-display row briefly shows $0 instead of
+  // the previous draft's stale figure — honest signal that the estimate
+  // is being recomputed.
+  useEffect(() => {
+    let cleared = false;
+    setComposerBlocker((prev) => {
+      if (prev?.type === 'last_send_exceeded') {
+        cleared = true;
+        return null;
+      }
+      return prev;
+    });
+    if (cleared) {
+      setComposerEstimateUsd(0);
+      setGenerateEstimateUsd(0);
+    }
+  }, [
+    inputValue,
+    chatAttachedFiles,
+    additionalInstructions,
+    files,
+    generateAttachedFileIds,
+    selectedModel,
+  ]);
 
   // Page-load probe: ask the worker whether an existing tocb_anon cookie is
   // still valid for this caller. The cookie is httpOnly so the client can't
@@ -1410,8 +1354,9 @@ export function ChatInterface({
           setTurnstileError(null);
           // Actor identity may have changed at the same time (IP flip or
           // cookie renewal), which would mean a different row in
-          // user_api_usage. Refresh so the UI's usage bar + wouldExceedCap
-          // gate reflect the current identity, not the stale one.
+          // user_api_usage. Refresh so the UI's usage bar + the derived
+          // would_exceed_cap blocker reflect the current identity, not
+          // the stale one.
           void refreshUsage();
           return;
         }
@@ -1473,6 +1418,7 @@ export function ChatInterface({
   // we don't, so 5m it is).
   useEffect(() => {
     const controller = new AbortController();
+    chatEstimateAbortRef.current = controller;
     const timeout = setTimeout(() => {
       const attachedChars = chatAttachedFiles
         .filter((f) => f.kind === 'text' && f.status === 'ready' && f.content)
@@ -1653,6 +1599,7 @@ export function ChatInterface({
         }
       })();
     }, 600);
+    chatEstimateTimeoutRef.current = timeout;
     return () => {
       clearTimeout(timeout);
       controller.abort();
@@ -1666,6 +1613,7 @@ export function ChatInterface({
   // estimate reflects what a single Generate click will cost.
   useEffect(() => {
     const controller = new AbortController();
+    generateEstimateAbortRef.current = controller;
     const timeout = setTimeout(() => {
       const readyTextFiles = files.filter((f) => f.status === 'ready');
       if (
@@ -1750,11 +1698,35 @@ export function ChatInterface({
         }
       })();
     }, 600);
+    generateEstimateTimeoutRef.current = timeout;
     return () => {
       clearTimeout(timeout);
       controller.abort();
     };
   }, [files, additionalInstructions, generateAttachedFileIds, selectedModel]);
+
+  // Cancel any pending/in-flight count_tokens estimate. Called from the
+  // send handlers on click so the debounced fetch (or its pending
+  // setTimeout) can't fire mid-preflight and update composerEstimateUsd /
+  // generateEstimateUsd, which would trigger a momentary would_exceed_cap
+  // amber banner just before the server's 429 (cap_reached, red) lands —
+  // banner thrash for the user.
+  const cancelChatEstimate = useCallback(() => {
+    if (chatEstimateTimeoutRef.current !== null) {
+      clearTimeout(chatEstimateTimeoutRef.current);
+      chatEstimateTimeoutRef.current = null;
+    }
+    chatEstimateAbortRef.current?.abort();
+    setEstimatingCost(false);
+  }, []);
+  const cancelGenerateEstimate = useCallback(() => {
+    if (generateEstimateTimeoutRef.current !== null) {
+      clearTimeout(generateEstimateTimeoutRef.current);
+      generateEstimateTimeoutRef.current = null;
+    }
+    generateEstimateAbortRef.current?.abort();
+    setEstimatingCost(false);
+  }, []);
 
   const handleStopStreaming = () => {
     // Don't gate the whole handler on abortControllerRef.current being
@@ -1778,29 +1750,39 @@ export function ChatInterface({
     setStreamingThinking('');
     setStreamPhase(null);
 
-    // Finalize a partial assistant turn when the user clicked Stop. Two
-    // signals to preserve: visible text (streamingContent) AND structured
-    // blocks (streamingContentBlocksRef, captured per content_block_stop
-    // via onContentBlocks). A turn that streamed only thinking + no text
-    // shows up as blocks-but-no-content; without the blocks check those
-    // would silently vanish.
-    const partialBlocks = streamingContentBlocksRef.current;
-    const hasBlocks = partialBlocks.length > 0;
-    const hasText = streamingContent.length > 0;
-    if (streamingMessageRef.current && (hasText || hasBlocks)) {
-      const finalMessage: ChatMessage = {
-        ...streamingMessageRef.current,
-        content: hasText
-          ? streamingContent
-          : '_(Assistant was stopped before writing a visible response.)_',
-        was_killed: true,
-        kill_reason: 'aborted',
-        content_blocks: hasBlocks ? partialBlocks : undefined,
-      };
-      setMessages((prev) => [...prev, finalMessage]);
-      streamingMessageRef.current = null;
+    // Finalize a partial assistant turn when the user clicked Stop during
+    // an accepted stream. Two signals to preserve: visible text
+    // (streamingContent) AND structured blocks (streamingContentBlocksRef,
+    // captured per content_block_stop via onContentBlocks). Stamp a
+    // placeholder even when Stop landed during thinking/tool use with no
+    // committed block yet — the user needs visible feedback that their
+    // action took effect.
+    //
+    // Gate on acceptedRef so a Stop click during the preflight window
+    // (server hasn't accepted yet → no user message in chat, no streaming
+    // started) doesn't stamp a phantom assistant bubble. The deferred-add
+    // pattern intentionally suppresses chat-history mutations until the
+    // server says OK; Stop must mirror that contract.
+    if (acceptedRef.current) {
+      const partialBlocks = streamingContentBlocksRef.current;
+      const hasBlocks = partialBlocks.length > 0;
+      const hasText = streamingContent.length > 0;
+      if (streamingMessageRef.current) {
+        const finalMessage: ChatMessage = {
+          ...streamingMessageRef.current,
+          content: hasText
+            ? streamingContent
+            : '_(Assistant was stopped before writing a visible response.)_',
+          was_killed: true,
+          kill_reason: 'aborted',
+          content_blocks: hasBlocks ? partialBlocks : undefined,
+        };
+        setMessages((prev) => [...prev, finalMessage]);
+      }
     }
+    streamingMessageRef.current = null;
     streamingContentBlocksRef.current = [];
+    acceptedRef.current = false;
   };
 
   const handleSendMessage = async () => {
@@ -1821,18 +1803,39 @@ export function ChatInterface({
       return;
     }
 
-    // Block client-side when we already know the send will fail the
-    // server's reservation. Avoids the round-trip, and more importantly
-    // avoids the Turnstile-checks-first race where the user sees a
-    // Turnstile re-challenge instead of the BYOK path they actually need.
-    // UI already renders a warning + BYOK panel in this state; the send
-    // button is also disabled, this is a defense-in-depth guard.
-    if (capAlreadyReached || wouldExceedCap) {
+    // Defense-in-depth gate: if the user typed under-cap then immediately
+    // hit Send before the debounced estimate updated, the would_exceed_cap
+    // banner won't have rendered yet — but the server's reserveCost
+    // preflight is the authoritative gate and will reject (429
+    // lifetime_cap_reached). We rely on that path for the actual
+    // enforcement; this branch only short-circuits cases where the banner
+    // IS already visible, sparing the round-trip + Turnstile-race window.
+    if (shouldBlockSend(renderedBlocker)) {
       sendInFlightRef.current = false;
       return;
     }
 
-    // Persist the chart NOW, before we log the user message. Without this,
+    // Cancel any pending/in-flight debounced count_tokens estimate.
+    // Without this, an estimate completing mid-preflight would flip
+    // composerEstimateUsd, derive would_exceed_cap, and flash an amber
+    // banner just before the server's 429 (cap_reached, red) lands —
+    // banner thrash. Server preflight is authoritative; the debounced
+    // estimate is moot once Send is in flight.
+    cancelChatEstimate();
+
+    // Spinner ON (S1: `isLoading && !isStreaming` is the preflight signal,
+    // shown via spinner icon on the Send button). Set sync, BEFORE the
+    // ensureChartExists await, so a slow chart-create round-trip still
+    // surfaces the spinner immediately.
+    setIsLoading(true);
+    // Narrow send-start clear: cap-class blockers stay sticky (the cap gate
+    // above blocks the send anyway, so the banner MUST remain visible);
+    // advisory blockers clear so they don't linger across the next attempt.
+    // (Stays sync per Q5: clearing stale advisory banners on a fresh send
+    // attempt is the correct UX regardless of preflight outcome.)
+    setComposerBlocker(preserveCapClassOnly);
+
+    // Persist the chart NOW, before the streamMessage call. Without this,
     // a first send on the `/` root URL has no chart_id → loggingService's
     // session can't init → logUserMessage silently drops the message, and
     // the worker's X-Logging-Message-Id is never sent, so the reconcile
@@ -1841,14 +1844,25 @@ export function ChatInterface({
     // so the stream headers downstream use the 12-char id and not the
     // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
     const resolvedChart = await ensureChartExists();
-    const resolvedChartId = resolvedChart?.chartId;
+    // Q1: explicit null-check. ensureChartExists returns null on the
+    // "couldn't load your chart" path (it already set an advisory
+    // composer blocker in that branch). Bail cleanly — without the
+    // check, we'd proceed with undefined chartId, optimistically commit
+    // the user message later, then either silently desync or surface
+    // a generic worker error.
+    if (!resolvedChart) {
+      sendInFlightRef.current = false;
+      setIsLoading(false);
+      return;
+    }
+    const resolvedChartId = resolvedChart.chartId;
 
     // Pre-send pill sync. Pull the chart's authoritative BYOK cost from
     // the server before kicking off the next stream. Catches any pill
     // drift that survived the previous turn's post-stream poll (closed
     // tab, missed bump, cross-tab stream). Fire-and-forget — we don't
     // want to block the send on this sync.
-    void syncChartByokCostFromDb(resolvedChart?.editToken ?? resolvedChartId ?? null);
+    void syncChartByokCostFromDb(resolvedChart.editToken ?? resolvedChartId ?? null);
 
     const userMessageId = crypto.randomUUID();
     const assistantMessageId = crypto.randomUUID();
@@ -1884,31 +1898,16 @@ export function ChatInterface({
       attachedFileIds: attachedFileIds.length > 0 ? attachedFileIds : undefined,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInputValue('');
-    // Clear the chip tray now that the files are in-flight with the message.
-    setChatAttachedFiles([]);
-    setIsLoading(true);
-    setIsStreaming(true);
+    // Defensive resets: don't render leftover content from a prior stream
+    // if React happens to commit before onAccepted lands.
     setStreamingContent('');
     setStreamingThinking('');
     streamingContentBlocksRef.current = [];
-    setCostErrorBanner(null);
-    // Assume user wants to see the response, so set near bottom to true
-    setIsNearBottom(true);
 
-    // Extended thinking is always on; seed the phase as 'thinking' until the
-    // first content_block_start arrives (which will overwrite it anyway).
-    // This covers the pre-stream/connection window where no blocks have
-    // reached the client yet.
-    setStreamPhase('thinking');
-
-    // Log user message (fire and forget)
-    loggingService.logUserMessage({
-      messageId: userMessageId,
-      role: 'user',
-      content: userMessage.content,
-    });
+    // Pre-arm the accepted flag (will flip true in onAccepted). Keeps
+    // handleStopStreaming's "is there a partial worth stamping" check
+    // honest across the preflight window.
+    acceptedRef.current = false;
 
     streamingMessageRef.current = {
       id: assistantMessageId,
@@ -1946,6 +1945,49 @@ export function ChatInterface({
         currentGraphData: graphData,
         mode: 'chat',
         callbacks: {
+          // Deferred-add commit point. Fires after the server's reserveCost
+          // preflight accepts the request and BEFORE SSE delivery begins.
+          // Everything that's destructive to the composer / chat history
+          // happens here so a preflight rejection (429/413/etc.) leaves
+          // the UI untouched: draft preserved, chips preserved, no orphan
+          // user message in chat. Per-handler closure flag (acceptedRef)
+          // lets handleStopStreaming + onCostError/onError gate their
+          // stamping logic on whether streaming actually started.
+          onAccepted: () => {
+            // Commit the user message first so the post-accept renders see
+            // the new state. acceptedRef flips LAST so any throw above
+            // leaves the gate closed (the outer error handlers fall back
+            // to the "no stamping" branch). React state setters don't
+            // throw, but logUserMessage is the only externally-callable
+            // function here — keep it after the visible commits.
+            setMessages((prev) => [...prev, userMessage]);
+            setInputValue('');
+            // Clear the chip tray now that the files are committed to the
+            // assistant turn. Survives a preflight rejection (chips stay
+            // attached so the user can retry without re-uploading). Per
+            // C6/Q6.
+            setChatAttachedFiles([]);
+            // Streaming UI takes over the chat scroll area; surface the
+            // bouncing-dots placeholder + thinking chip until the first
+            // SSE block arrives. Per Q4 these only render after the
+            // server accepted.
+            setIsStreaming(true);
+            setIsNearBottom(true);
+            // Extended thinking is always on; seed the phase as 'thinking'
+            // until the first content_block_start arrives (which will
+            // overwrite it anyway). Covers the post-accept/pre-first-block
+            // window.
+            setStreamPhase('thinking');
+            // Log the user message only after the server accepted — per
+            // S2 there's no telemetry value in logging rejected sends
+            // (they didn't produce a cost-bearing event).
+            loggingService.logUserMessage({
+              messageId: userMessageId,
+              role: 'user',
+              content: userMessage.content,
+            });
+            acceptedRef.current = true;
+          },
           onStreamPhase: (phase) => {
             setStreamPhase(phase);
           },
@@ -2058,28 +2100,26 @@ export function ChatInterface({
             }
           },
           onError: (error: string) => {
-            // Legacy keyword-based classifier for generic error strings. New
-            // shapes (turnstile_required, idempotent_replay, body_too_large, …)
-            // arrive via onCostError below with structured data; we don't rely
-            // on the error-string path for them.
-            const classified = classifyCostError(error);
-            if (classified) {
-              // Surface as inline banner, don't pollute chat history
-              // (decision 8: preserve chat history on quota/cost failures so
-              // BYOK-recovered retries re-use the same messages array).
-              setCostErrorBanner(classified);
-            } else {
-              // Preserve any partial that streamed before the error so the
-              // user can read what they got + see the actual failure inline.
-              // Without this the partial vanishes and the user has no signal
-              // beyond the chat resetting. Mirror the `aborted` and
-              // `cap_exceeded` paths: capture content_blocks too so the
-              // half-built turn (text + signed thinking + paired tool blocks)
-              // round-trips into the next request. `isReplayableAssistantBlock`
-              // strips unsigned thinking and orphan tool blocks, and
-              // `fixupAssistantBlocksForReplay` handles trailing-shape edge
-              // cases — worst case Anthropic 400s on retry, best case the user
-              // recovers from a network blip without losing context.
+            // Structured cost errors arrive via onCostError below with
+            // typed data; this onError path is for transport-level failures
+            // (network blips, parse errors, etc.). Preserve any partial
+            // that streamed before the error so the user can read what
+            // they got + see the actual failure inline. Without this the
+            // partial vanishes and the user has no signal beyond the chat
+            // resetting. Mirror the `aborted` and `cap_exceeded` paths:
+            // capture content_blocks too so the half-built turn (text +
+            // signed thinking + paired tool blocks) round-trips into the
+            // next request. `isReplayableAssistantBlock` strips unsigned
+            // thinking and orphan tool blocks, and
+            // `fixupAssistantBlocksForReplay` handles trailing-shape edge
+            // cases — worst case Anthropic 400s on retry, best case the
+            // user recovers from a network blip without losing context.
+            //
+            // acceptedRef gate: if the preflight hadn't accepted yet, no
+            // user message was committed to chat — stamping anything here
+            // would orphan into the wrong conversation slot. Just reset
+            // and let the outer catch surface a banner.
+            if (acceptedRef.current) {
               const partial = streamingMessageRef.current;
               const partialBlocks = streamingContentBlocksRef.current;
               const hasBlocks = partialBlocks.length > 0;
@@ -2134,27 +2174,36 @@ export function ChatInterface({
             // would vanish from the chat window on a mid-stream cap hit. Even
             // when no visible text arrived (model was still thinking), keep a
             // placeholder so the conversation history shows the turn happened.
-            const partial = streamingMessageRef.current;
-            if (partial) {
-              const hasText = partial.content.length > 0;
-              // Stamp the partial assistant turn with was_killed=true so the
-              // bubble shows an "interrupted" indicator. Capture the partial
-              // content_blocks too: when the user follows up with "continue",
-              // the next request ships the half-built turn (text + signed
-              // thinking + paired tool blocks) so Anthropic resumes from
-              // where the kill landed.
-              const partialBlocks = error.partialContentBlocks;
-              const stamped: ChatMessage = {
-                ...partial,
-                was_killed: true,
-                kill_reason: 'cap_exceeded',
-                content_blocks:
-                  partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
-                content: hasText
-                  ? partial.content
-                  : '_(Assistant was cut off before writing a visible response.)_',
-              };
-              setMessages((prev) => [...prev, stamped]);
+            //
+            // acceptedRef gate: a preflight rejection (429/413/402/etc.) fires
+            // BEFORE onAccepted lands, so there's no user message in chat and
+            // streamingMessageRef is just a placeholder we set sync. Stamping
+            // it as a "cut off" assistant turn would conjure a phantom into
+            // the wrong slot. Only stamp on mid-stream kills (request_cost_
+            // ceiling_exceeded, etc.), which by definition fire AFTER accept.
+            if (acceptedRef.current) {
+              const partial = streamingMessageRef.current;
+              if (partial) {
+                const hasText = partial.content.length > 0;
+                // Stamp the partial assistant turn with was_killed=true so the
+                // bubble shows an "interrupted" indicator. Capture the partial
+                // content_blocks too: when the user follows up with "continue",
+                // the next request ships the half-built turn (text + signed
+                // thinking + paired tool blocks) so Anthropic resumes from
+                // where the kill landed.
+                const partialBlocks = error.partialContentBlocks;
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'cap_exceeded',
+                  content_blocks:
+                    partialBlocks && partialBlocks.length > 0 ? partialBlocks : undefined,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant was cut off before writing a visible response.)_',
+                };
+                setMessages((prev) => [...prev, stamped]);
+              }
             }
             handleCostError(error);
             resetStreamUiState();
@@ -2181,14 +2230,20 @@ export function ChatInterface({
         keyLast4: streamKeyLast4,
       });
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Sorry, there was an error processing your request.';
-      const classified = classifyCostError(message);
-      if (classified) {
-        setCostErrorBanner(classified);
-      } else {
+      // Transport-level failures (network blip, parse error, etc.).
+      // Cost errors were swallowed earlier in chatService.ts:1487 and
+      // routed via onCostError, so anything here is a generic transport
+      // problem.
+      //
+      // acceptedRef gate: a pre-preflight throw (DNS, CORS preflight,
+      // etc.) fires before onAccepted, so there's no user message in
+      // chat — surfacing a "Sorry, there was an error" assistant bubble
+      // would orphan into the wrong slot. Reset state and let the user
+      // retry; the actual transport error is logged to console for
+      // debugging. Post-accept transport errors keep the existing UX
+      // (visible apology bubble paired with the user's message).
+      console.error('[ChatInterface] handleSendMessage transport error:', error);
+      if (acceptedRef.current) {
         const errorMessage: ChatMessage = {
           id: assistantMessageId,
           role: 'assistant',
@@ -2213,9 +2268,27 @@ export function ChatInterface({
   };
 
   const clearChat = () => {
+    // Cancel any in-flight stream so it doesn't stamp a leftover assistant
+    // message into the cleared chat. chatService.ts:1487 silently swallows
+    // AbortError before any client callback fires, but the streaming
+    // callbacks ALSO read these refs to decide whether to stamp a partial
+    // turn (see the onError/onCostError "stamp if there's partial content"
+    // branches); null them so those branches naturally no-op. Also reset
+    // acceptedRef so the partial-turn gate stays false if a stream-end
+    // callback somehow fires after the abort window.
+    abortControllerRef.current?.abort();
+    streamingMessageRef.current = null;
+    streamingContentBlocksRef.current = [];
+    acceptedRef.current = false;
+
     setMessages([]);
     setChatAttachedFiles([]);
-    setCostErrorBanner(null);
+    // Preserve cap-class blockers across clearChat — cap is global to the
+    // user (not per-chart), so wiping the banner on Clear Chat would
+    // briefly mislead them. Per-context blockers (advisory,
+    // last_send_exceeded) clear. Same predicate as the route-change
+    // effect — both are "user changed context, but global state stands".
+    setComposerBlocker(preserveCapClassOnly);
     // Clear chat history from localStorage
     try {
       const storageKey = getStorageKey();
@@ -2297,13 +2370,14 @@ export function ChatInterface({
         // Do NOT fall through to createChart — we already have an editToken
         // pointing at a real chart, creating a new one would strand the
         // user's existing chart under a different URL and they'd lose their
-        // work. Surface the error via the cost-error banner (reusing the
-        // service_unavailable kind since it's the same "try again" shape)
-        // and return null so the caller knows not to proceed.
+        // work. Surface the error via an advisory blocker (same "try again"
+        // shape as service_unavailable) and return null so the caller
+        // knows not to proceed.
         console.error('[ChatInterface] getChartByEditToken failed:', e);
-        setCostErrorBanner({
-          kind: 'service_unavailable',
-          message:
+        setComposerBlocker({
+          type: 'advisory',
+          cost_error_type: 'database_unavailable',
+          detail:
             "Couldn't load your chart. Check your connection and try again — " +
             "we won't create a duplicate while the existing chart is still around.",
         });
@@ -2742,15 +2816,62 @@ export function ChatInterface({
       return;
     }
 
+    // Cap gate — same predicate as the Chat path. Generate had zero
+    // cap protection before this; a capped user clicking Generate would
+    // wipe their Chat history (setMessages([generationMessage]) below)
+    // before the server rejected, with no banner to explain why.
+    // Placed AFTER the three early-exits but BEFORE any state mutation
+    // (including the confirm dialog).
+    if (shouldBlockSend(renderedBlocker)) {
+      return;
+    }
+
+    // Destructive-action confirmation. startGenerationInternal will replace
+    // `messages` with the generation prompt, wiping any in-progress chat.
+    // Open the modal if there's something to lose; the modal's onConfirm
+    // closes it + calls startGenerationInternal. Pre-confirm: NO state
+    // mutations (no sendInFlightRef.current=true, no setIsLoading) — per
+    // FM-Crit-1, mutations must hoist above the dialog so cancel leaves
+    // the UI in a clean state (no stuck "thinking..." after cancel).
+    if (messages.length > 0) {
+      // Note: cancelGenerateEstimate is intentionally NOT called here.
+      // The user is still looking at the Generate panel with the modal
+      // open over it; if they cancel, the live estimate (which may
+      // continue updating during the dialog) reflects the actual cost
+      // of what they'd be sending. cancelGenerateEstimate runs inside
+      // startGenerationInternal — only on confirmed proceed.
+      setShowGenerateConfirm(true);
+      return;
+    }
+
+    await startGenerationInternal();
+  };
+
+  // The body of startGeneration after the confirm gate. Extracted so the
+  // modal's onConfirm callback can call it directly without re-running the
+  // early-exit checks (which would race state changes that occurred while
+  // the modal was open). Two-phase callback pattern; see
+  // GenerateConfirmDialog.tsx for the modal that re-enters here.
+  const startGenerationInternal = async () => {
     sendInFlightRef.current = true;
+    // Cancel any pending/in-flight debounced count_tokens estimate (same
+    // banner-thrash mitigation as handleSendMessage). Server preflight
+    // is authoritative; the estimate is moot once Generate is in flight.
+    cancelGenerateEstimate();
+    // Spinner ON (S1: shown via spinner icon on the Generate button while
+    // isLoading && !isStreaming). Set sync, BEFORE the streamMessage call,
+    // so a slow preflight surfaces the spinner immediately.
     setIsLoading(true);
-    setIsStreaming(true);
+    // Defensive resets: hide leftover content if React commits before
+    // onAccepted lands. Streaming visibility (isStreaming) and mode swap
+    // (setCurrentMode('chat')) are deferred into onAccepted per C5/Q4 so
+    // a preflight rejection doesn't wipe the user's current Chat history.
     setStreamingContent('');
     setStreamingThinking('');
     streamingContentBlocksRef.current = [];
-
-    // Extended thinking is always on.
-    setStreamPhase('thinking');
+    // Pre-arm the accepted flag (set true in onAccepted). Gates
+    // handleStopStreaming's stamping logic across the preflight window.
+    acceptedRef.current = false;
 
     // Combine all file contents
     const documentContent = files
@@ -2785,9 +2906,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       timestamp: new Date(),
     };
 
-    // Switch to chat mode to show the generation
-    setCurrentMode('chat');
-    setMessages([generationMessage]);
+    // Mode swap (setCurrentMode) + destructive setMessages([generationMessage])
+    // both deferred into onAccepted below. Without this, a capped user who
+    // hit Generate would lose their Chat history before the server's 429
+    // landed.
 
     streamingMessageRef.current = {
       id: generationAssistantId,
@@ -2826,6 +2948,27 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         currentGraphData: graphData,
         mode: 'generate',
         callbacks: {
+          // Deferred-add commit point for Generate. Per C5/C6 we hold off
+          // on the destructive setMessages([generationMessage]) + the
+          // setCurrentMode('chat') flip until the server's preflight
+          // reservation accepts the request. A capped user who hit
+          // Generate would lose their Chat history pre-reservation
+          // without this gate.
+          onAccepted: () => {
+            // Switch to chat mode now that the generation is going to
+            // happen — JSX gating for streaming UI, banner placement,
+            // and the post-rejection banner area all key off currentMode.
+            setCurrentMode('chat');
+            setMessages([generationMessage]);
+            // Streaming UI takes over; the thinking placeholder chips
+            // and the bouncing-dots bubble both wait on isStreaming.
+            setIsStreaming(true);
+            // Extended thinking is always on; seed the phase.
+            setStreamPhase('thinking');
+            // acceptedRef flips LAST so any throw above leaves the gate
+            // closed and outer error handlers skip stamping.
+            acceptedRef.current = true;
+          },
           onStreamPhase: (phase) => {
             setStreamPhase(phase);
           },
@@ -2913,15 +3056,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             }
           },
           onError: (error: string) => {
-            // See chat-site commentary: keyword classifier is the legacy
-            // fallback for generic error strings; structured shapes arrive via
-            // onCostError below. Mirror the Chat-site error path: preserve
-            // partial content_blocks so signed thinking + paired tool blocks
-            // round-trip into the next request after a transient failure.
-            const classified = classifyCostError(error);
-            if (classified) {
-              setCostErrorBanner(classified);
-            } else {
+            // Transport-level failures. Cost errors were swallowed in
+            // chatService.ts:1487 and routed via onCostError. Mirror the
+            // Chat-site error path: preserve partial content_blocks so
+            // signed thinking + paired tool blocks round-trip into the
+            // next request after a transient failure.
+            //
+            // acceptedRef gate: a preflight rejection (server's reserveCost
+            // 429/413/etc.) fires BEFORE onAccepted, so no destructive
+            // setMessages has happened — preserving the user's existing
+            // Chat history. Surface the banner via handleCostError (which
+            // chatService routes separately) and just reset.
+            if (acceptedRef.current) {
               const partial = streamingMessageRef.current;
               const partialBlocks = streamingContentBlocksRef.current;
               const hasBlocks = partialBlocks.length > 0;
@@ -2972,18 +3118,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // Preserve the partial Generate turn (text/thinking streamed
             // before the kill) so it's still visible in the chat. Even with
             // no visible text (cut off mid-thinking), keep a placeholder.
-            const partial = streamingMessageRef.current;
-            if (partial) {
-              const hasText = partial.content.length > 0;
-              setMessages((prev) => [
-                ...prev,
-                hasText
-                  ? partial
-                  : {
-                      ...partial,
-                      content: '_(Assistant was cut off before writing a visible response.)_',
-                    },
-              ]);
+            //
+            // acceptedRef gate: preserves the existing Chat history when
+            // the preflight rejects (no destructive setMessages happened
+            // yet — onAccepted is gated on response.ok).
+            if (acceptedRef.current) {
+              const partial = streamingMessageRef.current;
+              if (partial) {
+                const hasText = partial.content.length > 0;
+                setMessages((prev) => [
+                  ...prev,
+                  hasText
+                    ? partial
+                    : {
+                        ...partial,
+                        content: '_(Assistant was cut off before writing a visible response.)_',
+                      },
+                ]);
+              }
             }
             handleCostError(error);
             resetStreamUiState();
@@ -3013,14 +3165,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         keyLast4: streamKeyLast4,
       });
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Sorry, there was an error processing your request.';
-      const classified = classifyCostError(message);
-      if (classified) {
-        setCostErrorBanner(classified);
-      } else {
+      // Transport-level failures (see Chat-site commentary in
+      // handleSendMessage). Cost errors are routed via onCostError.
+      // acceptedRef gate: pre-preflight throws (DNS, CORS) preserve the
+      // user's current Chat history; post-accept transport errors surface
+      // the apology bubble paired with the (already-committed) generation
+      // user turn.
+      console.error('[ChatInterface] startGeneration transport error:', error);
+      if (acceptedRef.current) {
         const errorMessage: ChatMessage = {
           id: generationAssistantId,
           role: 'assistant',
@@ -3167,38 +3319,50 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </span>
                     ) : (
                       <div>
-                        <div
-                          className="w-full h-1 bg-gray-200 rounded overflow-hidden"
-                          role="progressbar"
-                          aria-valuemin={0}
-                          aria-valuemax={usage.limit_usd}
-                          aria-valuenow={usage.used_usd}
-                          aria-label={`AI budget usage: ${formatCostUsd(usage.used_usd)} of ${formatCostUsd(usage.limit_usd)}`}
-                        >
-                          <div
-                            className={`h-full rounded transition-all ${
-                              usage.used_usd >= usage.limit_usd
-                                ? 'bg-red-500'
-                                : usage.used_usd / Math.max(usage.limit_usd, 0.01) > 0.75
-                                  ? 'bg-amber-500'
-                                  : 'bg-blue-500'
-                            }`}
-                            style={{
-                              width: `${Math.min(100, (usage.used_usd / Math.max(usage.limit_usd, 0.01)) * 100)}%`,
-                            }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
-                          <span>
-                            Used {formatCostUsd(usage.used_usd)} of {formatCostUsd(usage.limit_usd)}
-                          </span>
-                          {hasKey && (
-                            <span className="inline-flex items-center gap-0.5 text-gray-600">
-                              <span aria-hidden>🔑</span>
-                              <span>Key ready</span>
-                            </span>
-                          )}
-                        </div>
+                        {/* Clamp the displayed used to the limit so the
+                            kill-switch + preflight buffer (effective cap
+                            = limit * 1.05) never surfaces a literal
+                            contradiction like "$5.10 of $5.00 used". */}
+                        {(() => {
+                          const displayedUsed = Math.min(usage.used_usd, usage.limit_usd);
+                          return (
+                            <>
+                              <div
+                                className="w-full h-1 bg-gray-200 rounded overflow-hidden"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={usage.limit_usd}
+                                aria-valuenow={displayedUsed}
+                                aria-label={`AI budget usage: ${formatCostUsd(displayedUsed)} of ${formatCostUsd(usage.limit_usd)}`}
+                              >
+                                <div
+                                  className={`h-full rounded transition-all ${
+                                    usage.used_usd >= usage.limit_usd
+                                      ? 'bg-red-500'
+                                      : usage.used_usd / Math.max(usage.limit_usd, 0.01) > 0.75
+                                        ? 'bg-amber-500'
+                                        : 'bg-blue-500'
+                                  }`}
+                                  style={{
+                                    width: `${Math.min(100, (usage.used_usd / Math.max(usage.limit_usd, 0.01)) * 100)}%`,
+                                  }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-xs text-gray-500 mt-1">
+                                <span>
+                                  Used {formatCostUsd(displayedUsed)} of{' '}
+                                  {formatCostUsd(usage.limit_usd)}
+                                </span>
+                                {hasKey && (
+                                  <span className="inline-flex items-center gap-0.5 text-gray-600">
+                                    <span aria-hidden>🔑</span>
+                                    <span>Key ready</span>
+                                  </span>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
@@ -3386,9 +3550,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       )}
                       {generateEstimateUsd > 0 ? (
                         <span>
-                          Estimated input cost:{' '}
-                          <strong>{formatCostUsd(generateEstimateUsd)}</strong>. Output is billed on
-                          top as the response streams; hit Stop to abort if it runs long.
+                          Estimated input cost: {formatCostUsd(generateEstimateUsd)}; output shown
+                          live during streaming.
                         </span>
                       ) : (
                         <span className="text-gray-500">Estimating…</span>
@@ -3442,9 +3605,23 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   )}
 
+                  {/* Cap/cost blocker banner. Same component the Chat
+                    composer renders; same source-of-truth state. Without
+                    this mount, Generate-mode users hitting would_exceed_cap
+                    (estimate over remaining quota) saw only a disabled
+                    Generate button with no copy explaining why. */}
+                  <ComposerBlockerBanner
+                    blocker={renderedBlocker}
+                    usage={usage}
+                    hasKey={hasKey}
+                    composerEstimateUsd={activeEstimate}
+                  />
+
                   {/* Generate button. Available to all tiers; the $5 lifetime
                     cap is enforced server-side via reserveCost and the
-                    kill switch. BYOK bypasses the cap. */}
+                    kill switch. BYOK bypasses the cap. shouldBlockSend
+                    matches the Chat path — same predicate, same source
+                    of truth. */}
                   <button
                     onClick={startGeneration}
                     disabled={
@@ -3455,7 +3632,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         (f) => f.status === 'uploading' || f.status === 'error',
                       ) ||
                       isLoading ||
-                      generateBlockedByTurnstile
+                      generateBlockedByTurnstile ||
+                      shouldBlockSend(renderedBlocker)
                     }
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
@@ -3610,25 +3788,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   )}
 
-                  {/* Cost-error banner for non-cap errors that don't merit
-                    the full BYOK panel (body-too-large, chart-deleted,
-                    service-unavailable, etc.). Cap/quota errors go
-                    straight to the inline ByokPanel below via
-                    handleCostError. */}
-                  {costErrorBanner && (
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%] p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-900">
-                        {costErrorBanner.message}
-                      </div>
-                    </div>
-                  )}
+                  {/* All cap/cost banners (including advisory) consolidated
+                    into <ComposerBlockerBanner> in the composer area below.
+                    Trade-off documented in the PR: advisory banners lose
+                    temporal pairing with the failed user message (they used
+                    to render here inline with chat history); consistent
+                    placement with the cap variants is the win. */}
 
-                  {/* mid-stream-kill (request_cut_off) and global-budget
-                    banners now render in the composer area (below) so they
-                    sit next to the input rather than scrolling away in the
-                    message history. See the composer-side render. */}
-
-                  {isLoading && !isStreaming && !streamPhase && (
+                  {/* Bouncing-dots placeholder for the post-accept window
+                      before the first streamPhase signal arrives. Gated on
+                      isStreaming (not isLoading) so it stays hidden during
+                      the preflight reservation window — per Q4 the only
+                      preflight signal is the Send button's spinner icon
+                      swap, no other UI changes. */}
+                  {isStreaming && !streamPhase && (
                     <div className="flex justify-start">
                       <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-sm p-2 text-sm">
                         <div className="flex items-center gap-1">
@@ -3711,90 +3884,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
                       </div>
                     ) : null}
-                    {/* Blocking cap warning. Two distinct cases:
-                        - capAlreadyReached: prior cumulative usage already at
-                          or over the cap; no sends possible without BYOK.
-                        - wouldExceedCap: under cap but this draft's estimate
-                          would push over. Message-specific framing so users
-                          understand "this one is too big" vs "you're out."
-                      Composer and send button stay visible but disabled; the
-                      inline BYOK panel is the unblock path. */}
-                    {/* Four cap/quota paths, all shown above the input so
-                      the user can read them next to the action. Priority
-                      from "most recent event" down:
-                        - request_cut_off: mid-stream kill just fired.
-                        - global_budget: Anthropic Console cap hit.
-                        - capAlreadyReached: prior cumulative at/over cap.
-                        - wouldExceedCap: draft's estimate would push over.
-                      DonateCta only on paths where donations are a valid
-                      alternative (capAlreadyReached, global_budget). */}
-                    {byokPanelMode === 'request_cut_off' ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                          Message cut off — your last message used the rest of the free quota. Add
-                          your Anthropic API key to keep going.
-                        </div>
-                        <AddApiKeyButton />
-                      </div>
-                    ) : byokPanelMode === 'global_budget' ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2 space-y-1">
-                          {/* Conditional headline:
-                              - BYOK user: their own key returned billing_error.
-                                Pointing them at "add an API key" is wrong (they
-                                already have one); the remediation is the
-                                Anthropic Console.
-                              - Free/anon user: our shared key hit the cap (or
-                                Anthropic billing desync). BYOK is the unblock. */}
-                          {hasKey ? (
-                            <div>
-                              Anthropic returned a billing error for your API key. This can be
-                              transient — try again in a minute. If it persists, check your
-                              Anthropic Console for cap, payment, or organization status.
-                            </div>
-                          ) : (
-                            <div>
-                              We hit our shared monthly spend cap, or Anthropic returned a transient
-                              billing error. Try again in a minute, or use your own Anthropic key to
-                              continue.
-                            </div>
-                          )}
-                          {globalBudgetUpstreamMessage && (
-                            <div className="text-xs text-red-700 italic">
-                              Anthropic says: &ldquo;{globalBudgetUpstreamMessage}&rdquo;
-                            </div>
-                          )}
-                        </div>
-                        {/* Action affordances: AddApiKeyButton only helps if
-                            the user doesn't already have a key. DonateCta only
-                            helps the free-tier case (BYOK users are self-
-                            funded; donations don't unblock them). */}
-                        {!hasKey && <AddApiKeyButton />}
-                        {!hasKey && <DonateCta />}
-                      </div>
-                    ) : capAlreadyReached ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-                          You&apos;ve used the free quota of {formatCostUsd(usage!.limit_usd)}. Add
-                          your Anthropic API key to keep going.
-                        </div>
-                        <AddApiKeyButton />
-                        <DonateCta />
-                      </div>
-                    ) : wouldExceedCap ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Your next send (includes chat history and attached files) is estimated at{' '}
-                          <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but only{' '}
-                          <strong>
-                            {formatCostUsd(Math.max(0, usage!.limit_usd - usage!.used_usd))}/
-                            {formatCostUsd(usage!.limit_usd)}
-                          </strong>{' '}
-                          left. Add your Anthropic API key to continue.
-                        </div>
-                        <AddApiKeyButton />
-                      </div>
-                    ) : null}
+                    {/* Cap/cost/advisory banner. All variants unified into
+                      a single React.memo'd component reading from
+                      renderedBlocker (see src/components/chat/composerBlocker.ts).
+                      Variants: cap_reached, request_cut_off, global_budget,
+                      would_exceed_cap, advisory. */}
+                    <ComposerBlockerBanner
+                      blocker={renderedBlocker}
+                      usage={usage}
+                      hasKey={hasKey}
+                      composerEstimateUsd={activeEstimate}
+                    />
                     {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
                     <AttachedFilesBar
@@ -3911,6 +4011,27 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           >
                             <StopIcon className="w-5 h-5" />
                           </button>
+                        ) : isLoading ? (
+                          // Preflight window (server's reserveCost reservation
+                          // in flight). Per Q4 / user direction the ONLY
+                          // visual signal is the spinner icon swap on the
+                          // Send button position; no other UI changes,
+                          // including no click affordance. Disabled — the
+                          // preflight is fast (~100-300ms typically) and
+                          // exposing a "stop" semantic on a non-streaming
+                          // request adds complexity without a clear user
+                          // need (no spend has been committed yet anyway).
+                          <button
+                            type="button"
+                            disabled
+                            className="p-2 bg-blue-500 text-white rounded-lg opacity-60 cursor-not-allowed"
+                            title="Sending…"
+                          >
+                            <div
+                              className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"
+                              aria-label="Waiting for server"
+                            />
+                          </button>
                         ) : (
                           <button
                             onClick={handleSendMessage}
@@ -3918,14 +4039,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             // paste, inputValue.trim() would allocate a full
                             // copy of the string on every render. Whitespace-
                             // only input still gets rejected at send-time.
-                            // capAlreadyReached / wouldExceedCap disable here
-                            // as a visual cue; handleSendMessage also early-
-                            // returns on both.
+                            // shouldBlockSend disables on cap_reached /
+                            // request_cut_off / global_budget / would_exceed_cap
+                            // (plus advisory='unknown' defensive over-block);
+                            // handleSendMessage also early-returns via the
+                            // same predicate.
                             disabled={
                               inputValue.length === 0 ||
-                              isLoading ||
-                              capAlreadyReached ||
-                              wouldExceedCap ||
+                              shouldBlockSend(renderedBlocker) ||
                               // Block while any attached file is still uploading
                               // or has failed: send would either early-return
                               // server-side or silently drop the errored chip,
@@ -3961,6 +4082,23 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         Estimate from streaming events. Anthropic&apos;s console is the source of truth and may show
         more.
       </Tooltip>
+
+      {/* Generate destroys current Chat history — surface that explicitly
+          before mutating state. The two-phase flow lives in startGeneration
+          (open modal & early-return on first click; modal's onConfirm calls
+          startGenerationInternal). Cancel leaves UI clean (no mutations
+          had happened pre-confirm). */}
+      <GenerateConfirmDialog
+        open={showGenerateConfirm}
+        chatMessageCount={messages.length}
+        onConfirm={() => {
+          setShowGenerateConfirm(false);
+          void startGenerationInternal();
+        }}
+        onCancel={() => {
+          setShowGenerateConfirm(false);
+        }}
+      />
     </>
   );
 }

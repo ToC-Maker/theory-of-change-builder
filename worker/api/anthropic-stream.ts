@@ -720,7 +720,17 @@ async function reserveCost(
   altSvcHeaders: Record<string, string>,
 ): Promise<ReserveResult> {
   const projStr = projected.toString();
-  const capStr = LIFETIME_CAP_MICRO_USD.toString();
+  // Two-condition gate. The kill switch's overspend tolerance lets streams
+  // land a few cents past LIFETIME_CAP_MICRO_USD without truncation; once
+  // that's happened the user is "done" and any further send must be
+  // blocked. The buffer ONLY helps users still under the displayed cap
+  // (the iteration-trap escape).
+  //
+  // The 429 response below reports the displayed cap (LIFETIME_CAP_USD),
+  // not the effective cap — clients classify cap_reached vs
+  // last_send_exceeded against the displayed value.
+  const strictCapStr = LIFETIME_CAP_MICRO_USD.toString();
+  const effectiveCapStr = EFFECTIVE_LIFETIME_CAP_MICRO_USD.toString();
 
   let updateRows: { cost_micro_usd: bigint | number | string }[];
   try {
@@ -729,7 +739,8 @@ async function reserveCost(
       SET cost_micro_usd = cost_micro_usd + ${projStr}::bigint,
           last_activity_at = NOW()
       WHERE user_id = ${userId}
-        AND cost_micro_usd + ${projStr}::bigint <= ${capStr}::bigint
+        AND cost_micro_usd < ${strictCapStr}::bigint
+        AND cost_micro_usd + ${projStr}::bigint <= ${effectiveCapStr}::bigint
       RETURNING cost_micro_usd
     `) as { cost_micro_usd: bigint | number | string }[];
   } catch (e) {
@@ -1050,7 +1061,7 @@ export interface PerUpdateCommitDeps {
    * BYOK routing flag for `applyDeltaCommit`. When true, the delta lands
    * in `user_api_usage.byok_cost_micro_usd` (independent of the free cap).
    * When false, it lands in `cost_micro_usd` (the column reserveCost
-   * checks against `LIFETIME_CAP_MICRO_USD`). Plumbed from the
+   * checks against `EFFECTIVE_LIFETIME_CAP_MICRO_USD`). Plumbed from the
    * teeCtx so per-update + abort commits route correctly for the request's
    * tier. See the BYOK regression note in `cost-commit.ts` for context.
    */
@@ -1288,7 +1299,7 @@ type SseTeeContext = {
    * floor). When true, deltas land in `user_api_usage.byok_cost_micro_usd`
    * (independent of the free cap); when false, they land in
    * `cost_micro_usd` (the column reserveCost reads against
-   * `LIFETIME_CAP_MICRO_USD`). See the BYOK regression note in
+   * `EFFECTIVE_LIFETIME_CAP_MICRO_USD`). See the BYOK regression note in
    * `cost-commit.ts` for the full rationale.
    */
   isByok: boolean;
@@ -3249,13 +3260,11 @@ export async function handler(
   const accumulator = newAccumulator();
   const killed = { v: false };
 
-  // Kill threshold: cumulative actual cost must not exceed remaining_cap measured
-  // BEFORE this request's reservation was deducted. Since the reservation has
-  // already been debited, that's EFFECTIVE_CAP - (post_reservation - projected).
-  // The effective cap includes a small overspend tolerance (see tiers.ts) so
-  // the kill doesn't cut large legitimate responses off mid-sentence for a few
-  // pennies of overshoot; preflight (composer + reserveCost) stays strict.
-  // For BYOK the cap doesn't apply — null disables the check in the tee.
+  // Kill threshold: cumulative actual cost must not exceed remaining_cap
+  // measured BEFORE this request's reservation was deducted. Since the
+  // reservation has already been debited, that's
+  // EFFECTIVE_CAP - (post_reservation - projected). For BYOK the cap
+  // doesn't apply — null disables the check in the tee.
   const killThresholdMicro: bigint | null = isCapped(tier)
     ? EFFECTIVE_LIFETIME_CAP_MICRO_USD - (postReservationUsage - projected)
     : null;
@@ -3412,7 +3421,7 @@ export async function handler(
   // past the Response being fully flushed so we still get the DB write.
   // Updates BOTH user_api_usage cost columns via the signed-delta CTE:
   //   - Free/anon writes land in cost_micro_usd (the column reserveCost
-  //     checks against LIFETIME_CAP_MICRO_USD).
+  //     checks against EFFECTIVE_LIFETIME_CAP_MICRO_USD).
   //   - BYOK writes land in byok_cost_micro_usd (independent of cap; visible
   //     in /api/usage as byok_used_usd).
   // global_monthly_usage stays observability-only (BYOK excluded; tracks

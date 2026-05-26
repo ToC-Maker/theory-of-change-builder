@@ -9,6 +9,10 @@ import {
   ANTHROPIC_MESSAGES_REQUEST_BODY_BYTES,
   ANTHROPIC_FILE_UPLOAD_BYTES,
 } from '../../shared/anthropic-limits';
+import { CAP_OVERSPEND_TOLERANCE_FRACTION } from '../../shared/cap';
+
+// Re-export so worker code can keep importing the fraction from one place.
+export { CAP_OVERSPEND_TOLERANCE_FRACTION };
 
 // All caps are declared in USD as the single source of truth; the micro-USD
 // counterparts (used for BigInt arithmetic in cost accounting) are derived.
@@ -25,24 +29,26 @@ const usdToMicro = (usd: number): bigint => BigInt(Math.round(usd * 1_000_000));
 export const LIFETIME_CAP_USD = 5;
 export const LIFETIME_CAP_MICRO_USD = usdToMicro(LIFETIME_CAP_USD);
 
-// Server-side overspend tolerance applied ONLY to the mid-stream kill switch.
-// Preflight (composer gating, reserveCost) stays strict at LIFETIME_CAP_USD so
-// users never knowingly start a request that would overrun budget. But the
-// kill switch can't cut mid-sentence cleanly, so a small slack lets large
-// legitimate responses finish rather than being truncated a few cents over.
-// Reconciled actual cost still writes through to user_api_usage, so the cap
-// bar can read e.g. $5.03 of $5.00 after a tolerant-kill stream; the client
-// then blocks further sends via the strict preflight gate.
-export const CAP_OVERSPEND_TOLERANCE_FRACTION = 0.05;
-
-// Number round-trip is safe here: LIFETIME_CAP_MICRO_USD is bounded by the
-// displayed cap (a small-integer µUSD value), so Number(cap) is exact and the
-// tolerance multiplication stays well inside Number.MAX_SAFE_INTEGER. Math.round
-// handles any float residue before converting back to BigInt.
+// EFFECTIVE_LIFETIME_CAP_MICRO_USD is what every cap-enforcement site
+// actually compares against (composer would_exceed_cap derivation,
+// reserveCost preflight, mid-stream kill switch). The displayed cap
+// (LIFETIME_CAP_USD) is what UI shows to users; the difference is
+// "internal mercy" — a near-cap send can still complete, and a stream
+// that lands a few cents over isn't truncated mid-sentence.
+//
+// Number round-trip is safe: LIFETIME_CAP_MICRO_USD is bounded by the
+// displayed cap (a small-integer µUSD value), so Number(cap) is exact
+// and the tolerance multiplication stays inside Number.MAX_SAFE_INTEGER.
+// Math.round handles any float residue before converting back to BigInt.
 const CAP_TOLERANCE_MICRO_USD = BigInt(
   Math.round(Number(LIFETIME_CAP_MICRO_USD) * CAP_OVERSPEND_TOLERANCE_FRACTION),
 );
 export const EFFECTIVE_LIFETIME_CAP_MICRO_USD = LIFETIME_CAP_MICRO_USD + CAP_TOLERANCE_MICRO_USD;
+
+// USD float sibling of EFFECTIVE_LIFETIME_CAP_MICRO_USD. Lets client-side
+// code (and tests) reason about the effective cap without doing the µUSD
+// conversion. Runtime cap enforcement still uses the BigInt µUSD form.
+export const EFFECTIVE_LIFETIME_CAP_USD = LIFETIME_CAP_USD * (1 + CAP_OVERSPEND_TOLERANCE_FRACTION);
 
 // Re-export the Anthropic-imposed request/file ceilings under the names
 // existing callers use. Single source of truth is shared/anthropic-limits.ts.

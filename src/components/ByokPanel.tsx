@@ -113,7 +113,7 @@ export function ByokPanel({
   return (
     <section className={wrapperClass} aria-labelledby={`${inputId}-title`}>
       <h3 id={`${inputId}-title`} className="text-base font-semibold text-gray-900">
-        Add your Anthropic API key
+        Add an Anthropic API key
       </h3>
 
       {showConfirmation ? (
@@ -281,7 +281,7 @@ export function DonateCta({ donateUrl = '#donate' }: { donateUrl?: string }) {
       href={donateUrl}
       className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800 underline"
     >
-      Donate to help raise the cap
+      Donate to help us keep this tool free
     </a>
   );
 }
