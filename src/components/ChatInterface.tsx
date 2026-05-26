@@ -35,7 +35,6 @@ import {
   shouldBlockSend,
   preserveCapClassOnly,
 } from './chat/composerBlocker';
-import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import { ConfirmModal } from './ConfirmModal';
 import type { ToCData } from '../types';
@@ -782,7 +781,8 @@ export function ChatInterface({
   // startGeneration's confirm-check and the user's choice. Two-phase
   // callback flow lives in startGeneration: setting this true returns early;
   // the modal's onConfirm calls startGenerationInternal (the body after the
-  // confirm gate). See GenerateConfirmDialog.tsx for the modal.
+  // confirm gate). See the <ConfirmModal> render at the bottom of this file
+  // (icon + purple variant for the "Replace your Chat?" framing).
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
 
   // Loading flag so the composer can show a spinner while the debounced
@@ -2870,8 +2870,9 @@ export function ChatInterface({
   // The body of startGeneration after the confirm gate. Extracted so the
   // modal's onConfirm callback can call it directly without re-running the
   // early-exit checks (which would race state changes that occurred while
-  // the modal was open). Two-phase callback pattern; see
-  // GenerateConfirmDialog.tsx for the modal that re-enters here.
+  // the modal was open). Two-phase callback pattern; see the
+  // "Replace your Chat?" <ConfirmModal> below for the modal that re-enters
+  // here.
   const startGenerationInternal = async () => {
     sendInFlightRef.current = true;
     // Cancel any pending/in-flight debounced count_tokens estimate (same
@@ -4156,10 +4157,26 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           before mutating state. The two-phase flow lives in startGeneration
           (open modal & early-return on first click; modal's onConfirm calls
           startGenerationInternal). Cancel leaves UI clean (no mutations
-          had happened pre-confirm). */}
-      <GenerateConfirmDialog
+          had happened pre-confirm). Uses the shared ConfirmModal primitive
+          with the purple variant + DocumentPlusIcon for Generate-flow
+          framing. */}
+      <ConfirmModal
         open={showGenerateConfirm}
-        chatMessageCount={messages.length}
+        title="Replace your Chat?"
+        body={
+          <p>
+            Generating a new Theory of Change will replace your current Chat (
+            {messages.length === 1 ? '1 message' : `${messages.length} messages`}) with a fresh
+            generation conversation. Your existing chart isn&apos;t affected.
+          </p>
+        }
+        confirmLabel="Generate"
+        confirmVariant="purple"
+        icon={
+          <div className="p-3 bg-purple-100 rounded-full">
+            <DocumentPlusIcon className="w-8 h-8 text-purple-600" />
+          </div>
+        }
         onConfirm={() => {
           setShowGenerateConfirm(false);
           void startGenerationInternal();
@@ -4170,9 +4187,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       />
 
       {/* Clear-chat confirmation (PR 5 red-team L4 closure). Distinct from
-          GenerateConfirmDialog above: this is user-initiated deletion of
-          the entire chat (including uploaded files), not the implicit
-          Generate-overwrites-history confirmation. Uses the shared
+          the "Replace your Chat?" modal above: this is user-initiated
+          deletion of the entire chat (including uploaded files), not the
+          implicit Generate-overwrites-history confirmation. Uses the shared
           ConfirmModal primitive for consistency with FileMenu's
           delete-chart and GeneralAccessSelector. */}
       <ConfirmModal

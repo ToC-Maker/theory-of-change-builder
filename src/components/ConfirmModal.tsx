@@ -41,8 +41,22 @@ export interface ConfirmModalProps {
   confirmLabel?: string;
   /** Defaults to "Cancel". */
   cancelLabel?: string;
-  /** Defaults to "danger" (red button). */
-  confirmVariant?: 'danger' | 'primary';
+  /**
+   * Confirm button color. Defaults to "danger" (red).
+   * - "danger" — destructive ops (delete chart, clear chat, etc.)
+   * - "primary" — non-destructive default action (indigo)
+   * - "purple" — Generate-flow framing (replace Chat with a Generate run)
+   */
+  confirmVariant?: 'danger' | 'primary' | 'purple';
+  /**
+   * Optional icon rendered above the title. When provided, the layout
+   * switches to a centered presentation (title + body centered, buttons
+   * become equal-width). Without an icon, the layout stays left-aligned
+   * with right-aligned actions (the original PR 5 layout). This dual
+   * mode supports both delete-style confirms and the Generate-flow
+   * confirmation (purple + DocumentPlusIcon).
+   */
+  icon?: React.ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -54,6 +68,7 @@ export function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   confirmVariant = 'danger',
+  icon,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -102,7 +117,21 @@ export function ConfirmModal({
   const confirmClass =
     confirmVariant === 'danger'
       ? 'bg-red-600 hover:bg-red-700 focus:ring-red-400'
-      : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400';
+      : confirmVariant === 'purple'
+        ? 'bg-purple-600 hover:bg-purple-700 focus:ring-purple-400'
+        : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-400';
+
+  // Icon presence drives a centered, slightly wider panel layout —
+  // matches the original GenerateConfirmDialog's visual treatment. The
+  // standard (no-icon) path preserves the original PR 5 layout so the
+  // existing FileMenu / ColumnDeleteAffordance / GeneralAccessSelector
+  // callsites don't visually shift.
+  const hasIcon = icon !== undefined && icon !== null;
+  const panelWidth = hasIcon ? 'max-w-md' : 'max-w-sm';
+  const titleAlign = hasIcon ? 'text-center' : '';
+  const bodyAlign = hasIcon ? 'text-center' : '';
+  const actionsLayout = hasIcon ? 'flex gap-3' : 'flex justify-end gap-2';
+  const buttonSizing = hasIcon ? 'flex-1 px-4 py-2.5' : 'px-3 py-1.5';
 
   // The modal is portaled into document.body so it sits above the
   // canvas's transform stack and isn't clipped by zoom/pan.
@@ -122,18 +151,22 @@ export function ConfirmModal({
         data-testid="confirm-modal-backdrop"
       />
       {/* Panel */}
-      <div className="relative z-10 max-w-sm w-full mx-4 rounded-lg bg-white shadow-xl p-6">
-        <h2 id="confirm-modal-title" className="text-lg font-semibold text-gray-900 mb-3">
+      <div className={`relative z-10 ${panelWidth} w-full mx-4 rounded-lg bg-white shadow-xl p-6`}>
+        {hasIcon && <div className="flex justify-center mb-4">{icon}</div>}
+        <h2
+          id="confirm-modal-title"
+          className={`text-lg font-semibold text-gray-900 mb-3 ${titleAlign}`}
+        >
           {title}
         </h2>
-        <div className="text-sm text-gray-700 mb-5">
+        <div className={`text-sm text-gray-700 mb-5 ${bodyAlign}`}>
           {typeof body === 'string' ? <p>{body}</p> : body}
         </div>
-        <div className="flex justify-end gap-2">
+        <div className={actionsLayout}>
           <button
             type="button"
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300"
+            className={`${buttonSizing} text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300`}
             data-testid="confirm-modal-cancel"
           >
             {cancelLabel}
@@ -142,7 +175,7 @@ export function ConfirmModal({
             type="button"
             ref={confirmBtnRef}
             onClick={onConfirm}
-            className={`px-3 py-1.5 text-sm font-medium text-white rounded focus:outline-none focus:ring-2 ${confirmClass}`}
+            className={`${buttonSizing} text-sm font-medium text-white rounded focus:outline-none focus:ring-2 ${confirmClass}`}
             data-testid="confirm-modal-confirm"
           >
             {confirmLabel}
