@@ -1022,12 +1022,17 @@ export function ChatInterface({
         return;
       }
 
-      // Reset the composer blocker on real chartId/route transitions.
-      // Placed AFTER the auto-create early-return (so first-send-from-root
-      // doesn't lose the blocker mid-transition) and BEFORE the root-path
-      // branch (so navigating to `/` from a chart with a blocker also
-      // resets — fresh URL → fresh state). Closes failure mode J.
-      setComposerBlocker(null);
+      // Reset per-context composer blockers on real chartId/route
+      // transitions, but PRESERVE cap-class blockers (cap_reached,
+      // request_cut_off) because those represent genuinely global user
+      // state — the cap lives in user_api_usage, not per-chart. Clearing
+      // them on navigation would briefly mislead the user into thinking
+      // they have quota in the new chart; their next send would fail and
+      // the banner would re-fire. `clearOnSendStart` filters by
+      // `isCapClassBlocker` — same logic, both "user changed context"
+      // signals. Closes failure mode J for per-context banners
+      // (advisory, last_send_exceeded); cap-class persists as before.
+      setComposerBlocker(clearOnSendStart);
 
       // At the root path (new ToC), start with an empty in-memory chat but
       // DON'T touch localStorage. Previously this branch did a
@@ -1248,6 +1253,19 @@ export function ChatInterface({
     },
     [refreshUsage],
   );
+
+  // Auto-clear `last_send_exceeded` when the user edits anything that would
+  // change the next send's projected cost. The variant is past-tense ("your
+  // last send would have exceeded") — once they edit the draft or attached
+  // files, the rejection is moot and the user is signaling retry intent.
+  // The setComposerBlocker callback is idempotent when prev isn't this
+  // variant, so firing on every keystroke is a no-op for any other state.
+  // Covers both Chat (inputValue, chatAttachedFiles) and Generate
+  // (additionalInstructions, files, generateAttachedFileIds) inputs; the
+  // server-rejected event could come from either mode.
+  useEffect(() => {
+    setComposerBlocker((prev) => (prev?.type === 'last_send_exceeded' ? null : prev));
+  }, [inputValue, chatAttachedFiles, additionalInstructions, files, generateAttachedFileIds]);
 
   // Page-load probe: ask the worker whether an existing tocb_anon cookie is
   // still valid for this caller. The cookie is httpOnly so the client can't
@@ -2236,7 +2254,12 @@ export function ChatInterface({
 
     setMessages([]);
     setChatAttachedFiles([]);
-    setComposerBlocker(null);
+    // Preserve cap-class blockers across clearChat — cap is global to the
+    // user (not per-chart), so wiping the banner on Clear Chat would
+    // briefly mislead them. Per-context blockers (advisory,
+    // last_send_exceeded) clear. Same predicate as the route-change
+    // effect — both are "user changed context, but global state stands".
+    setComposerBlocker(clearOnSendStart);
     // Clear chat history from localStorage
     try {
       const storageKey = getStorageKey();

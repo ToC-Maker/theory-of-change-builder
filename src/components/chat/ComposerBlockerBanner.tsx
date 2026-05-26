@@ -7,7 +7,8 @@
 // frequency than the rest of ChatInterface state.
 //
 // Variants handled:
-//   - cap_reached: red, "your send would have exceeded the free-tier limit"
+//   - cap_reached: red, "you've reached the free-tier limit"
+//   - last_send_exceeded: amber, "your last send would have exceeded the limit"
 //   - request_cut_off: red, "message cut off, your last message used the rest"
 //   - global_budget: red, conditional copy by hasKey
 //   - would_exceed_cap: amber, "your next send is estimated at $X but only $Y left"
@@ -118,27 +119,37 @@ function ComposerBlockerBannerImpl({
       );
 
     case 'cap_reached':
-      // Server-confirmed preflight rejection. Reads limit_usd from the
-      // live usage snapshot rather than the blocker payload (single
-      // source of truth; survives a stale event payload).
-      //
-      // Past-conditional ("would have exceeded") is honest in both
-      // cases that trigger this banner: (a) user is truly at cap
-      // (used >= limit) → any next send would exceed; (b) user is
-      // under cap but the projected cost of this specific send pushed
-      // over (used + projected > limit) → this send in particular
-      // would have exceeded. Saying "you've used the free quota of
-      // $5.00" would mislead case (b) users into thinking they spent
-      // the whole quota when their actual usage might be e.g. $4.50.
+      // Server-confirmed preflight rejection AND user genuinely at-or-over
+      // the lifetime cap (used >= limit). Sticky red blocking banner —
+      // editing the draft can't help because any send would still fail.
+      // Only clears on BYOK / chart-change / clearChat.
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            Your send would have exceeded the free-tier limit of{' '}
+            You&apos;ve reached the free-tier limit of{' '}
             {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Add an Anthropic API key to keep
             going.
           </div>
           <AddApiKeyButton />
           <DonateCta />
+        </div>
+      );
+
+    case 'last_send_exceeded':
+      // Server-confirmed preflight rejection BUT user is under the cap
+      // (used < limit). The rejection was about THIS send's projected
+      // cost being too large for the remaining quota — editing down
+      // to a smaller draft may let it through. Non-blocking amber
+      // banner; auto-clears on input/files edit (via useEffect in
+      // ChatInterface that nulls the blocker when this variant is set).
+      return (
+        <div className="space-y-2">
+          <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            Your last send would have exceeded the free-tier limit of{' '}
+            {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Edit and try again, or add an
+            Anthropic API key to continue.
+          </div>
+          <AddApiKeyButton />
         </div>
       );
 

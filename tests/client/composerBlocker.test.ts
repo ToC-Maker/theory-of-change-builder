@@ -113,9 +113,11 @@ describe('costErrorToBlocker — full matrix', () => {
   };
 
   // Special-case lifetime_cap_reached with populated data so it returns
-  // cap_reached (not the $0/$0 advisory fallback).
+  // cap_reached (case a, used >= limit). Case-b (used < limit, returns
+  // last_send_exceeded) is covered separately by the "lifetime_cap_reached
+  // under cap → last_send_exceeded" spec below.
   const dataByType: Partial<Record<CostErrorType, unknown>> = {
-    lifetime_cap_reached: { used_usd: 4.99, limit_usd: 5.0 },
+    lifetime_cap_reached: { used_usd: 5.0, limit_usd: 5.0 },
   };
 
   for (const type of ALL_COST_ERROR_TYPES) {
@@ -167,9 +169,36 @@ describe('costErrorToBlocker — specials', () => {
     });
   });
 
-  it('lifetime_cap_reached with non-zero limit only → cap_reached', () => {
+  it('lifetime_cap_reached with non-zero limit only (used 0 < limit) → last_send_exceeded', () => {
+    // used (0) < limit (5) → case (b) → last_send_exceeded. Case (a)
+    // (truly at cap) requires used >= limit; covered by the matrix above
+    // which uses used=limit=5.0.
     const result = costErrorToBlocker(
       makeError('lifetime_cap_reached', { used_usd: 0, limit_usd: 5 }),
+    );
+    expect(result).toEqual({ type: 'last_send_exceeded' });
+  });
+
+  it('lifetime_cap_reached with used < limit → last_send_exceeded (case b)', () => {
+    // The "this specific send was too big, but user is under cap" case.
+    // Editing down may let a smaller send through.
+    const result = costErrorToBlocker(
+      makeError('lifetime_cap_reached', { used_usd: 4.5, limit_usd: 5 }),
+    );
+    expect(result).toEqual({ type: 'last_send_exceeded' });
+  });
+
+  it('lifetime_cap_reached with used == limit → cap_reached (case a, boundary)', () => {
+    const result = costErrorToBlocker(
+      makeError('lifetime_cap_reached', { used_usd: 5, limit_usd: 5 }),
+    );
+    expect(result).toEqual({ type: 'cap_reached' });
+  });
+
+  it('lifetime_cap_reached with used > limit → cap_reached (case a, over)', () => {
+    // Shouldn't normally happen (reservation can't push over) but defensive.
+    const result = costErrorToBlocker(
+      makeError('lifetime_cap_reached', { used_usd: 5.5, limit_usd: 5 }),
     );
     expect(result).toEqual({ type: 'cap_reached' });
   });
@@ -416,6 +445,14 @@ describe('shouldBlockSend', () => {
       }),
     ).toBe(false);
   });
+
+  it('last_send_exceeded → false (non-blocking, user can edit and retry)', () => {
+    // The variant is past-tense ("your last send would have exceeded").
+    // User is under cap; editing down may let a smaller send through.
+    // would_exceed_cap derived state gates if their CURRENT draft is
+    // still too big — this variant alone shouldn't block.
+    expect(shouldBlockSend({ type: 'last_send_exceeded' })).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -447,6 +484,16 @@ describe('isCapClassBlocker', () => {
 
   it('null → false', () => {
     expect(isCapClassBlocker(null)).toBe(false);
+  });
+
+  it('last_send_exceeded → false (per-attempt, not cap-class for preservation)', () => {
+    // isCapClassBlocker means "preserve across context changes (send-start,
+    // chart-change, clearChat)" — represents global state that survives UI
+    // navigation. last_send_exceeded is about a specific past attempt, so
+    // it's per-context and should clear on those signals. (Separately,
+    // selectBlocker also clears it on BYOK tier-flip — that's a different
+    // predicate, inlined in selectBlocker.)
+    expect(isCapClassBlocker({ type: 'last_send_exceeded' })).toBe(false);
   });
 });
 
@@ -482,6 +529,10 @@ describe('clearOnSendStart', () => {
       }),
     ).toBeNull();
   });
+
+  it('last_send_exceeded prior → cleared (per-attempt, not preserved on send-start)', () => {
+    expect(clearOnSendStart({ type: 'last_send_exceeded' })).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -489,7 +540,7 @@ describe('clearOnSendStart', () => {
 // ---------------------------------------------------------------------------
 
 describe('Mode A regression: silent post-send on cap rejection', () => {
-  it('would_exceed_cap → cap_reached event → cap_reached wins (event wins over derived)', () => {
+  it('case (a): would_exceed_cap → cap_reached event → cap_reached wins', () => {
     // Initial: under cap, draft would exceed; user sees would_exceed_cap
     const initial = selectBlocker({
       eventBlocker: null,
@@ -498,26 +549,52 @@ describe('Mode A regression: silent post-send on cap rejection', () => {
     });
     expect(initial).toEqual({ type: 'would_exceed_cap' });
 
-    // User clicks Send; server returns 429 lifetime_cap_reached. Mode A bug:
-    // before the fix, costErrorBanner was cleared then capAlreadyReached
-    // was trusted to flip via async refreshUsage — but the rejected request
-    // didn't bill, so it stayed false, banner vanished.
+    // User clicks Send; server returns 429 lifetime_cap_reached. Mode A
+    // bug: before the fix, costErrorBanner was cleared then
+    // capAlreadyReached was trusted to flip via async refreshUsage — but
+    // the rejected request didn't bill, so it stayed false, banner
+    // vanished. After the fix: costErrorToBlocker returns the
+    // appropriate sticky event variant.
     //
-    // After the fix: costErrorToBlocker returns {type:'cap_reached'};
-    // setComposerBlocker stores it; selectBlocker returns the event blocker
-    // even when derived would_exceed_cap is no longer applicable (draft has
-    // been sent and cleared, so composerEstimateUsd=0).
+    // Case (a): server reports used >= limit at rejection time (e.g.
+    // user was at $5.00 already). Routes to cap_reached.
     const newEvent = costErrorToBlocker(
-      makeError('lifetime_cap_reached', { used_usd: 4.99, limit_usd: 5 }),
+      makeError('lifetime_cap_reached', { used_usd: 5, limit_usd: 5 }),
     );
     expect(newEvent).toEqual({ type: 'cap_reached' });
 
     const after = selectBlocker({
       eventBlocker: newEvent ?? null,
-      usage: { used_usd: 4.99, limit_usd: 5, tier: 'free' },
+      usage: { used_usd: 5, limit_usd: 5, tier: 'free' },
       composerEstimateUsd: 0,
     });
     expect(after).toEqual({ type: 'cap_reached' });
+  });
+
+  it('case (b): would_exceed_cap → last_send_exceeded event → event wins, banner shows', () => {
+    // Initial: under cap, draft would exceed; user sees would_exceed_cap
+    const initial = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 4.5, limit_usd: 5, tier: 'free' },
+      composerEstimateUsd: 0.6,
+    });
+    expect(initial).toEqual({ type: 'would_exceed_cap' });
+
+    // User clicks Send; server rejects with 429 lifetime_cap_reached but
+    // server reports used (4.5) < limit (5) — this specific send was too
+    // big, not user-at-cap. Routes to last_send_exceeded (non-blocking,
+    // amber, auto-clears on edit per the ChatInterface useEffect).
+    const newEvent = costErrorToBlocker(
+      makeError('lifetime_cap_reached', { used_usd: 4.5, limit_usd: 5 }),
+    );
+    expect(newEvent).toEqual({ type: 'last_send_exceeded' });
+
+    const after = selectBlocker({
+      eventBlocker: newEvent ?? null,
+      usage: { used_usd: 4.5, limit_usd: 5, tier: 'free' },
+      composerEstimateUsd: 0,
+    });
+    expect(after).toEqual({ type: 'last_send_exceeded' });
   });
 });
 

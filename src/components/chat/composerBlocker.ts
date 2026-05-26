@@ -28,8 +28,16 @@ type UsageSnapshot = {
  * derived blockers (would_exceed_cap) are NOT included here; they live in
  * `RenderedBlocker` and are composed by `selectBlocker`.
  *
- * - `cap_reached`: server rejected because per-user lifetime cap is hit.
- *   Reads `limit_usd` from `usage` at render time, no payload.
+ * - `cap_reached`: server rejected AND user genuinely at-or-over cap
+ *   (used_usd >= limit_usd at the moment of rejection). Sticky blocking
+ *   red banner; only clears via BYOK / chart-change / clearChat. Editing
+ *   the draft can't help — any send would still fail.
+ * - `last_send_exceeded`: server rejected because THIS specific send was
+ *   projected over remaining quota, but user is under cap
+ *   (used_usd < limit_usd). Non-blocking amber banner; auto-clears on
+ *   input/files edit (a smaller draft may succeed). Differs from
+ *   `would_exceed_cap` (derived, present-tense, current draft) in being
+ *   event-driven and past-tense about a specific rejection.
  * - `request_cut_off`: mid-stream kill switch fired (request_cost_ceiling).
  * - `global_budget`: Anthropic Console budget cap; optional upstream message
  *   so the user sees Anthropic's actual reason.
@@ -40,6 +48,7 @@ type UsageSnapshot = {
  */
 export type ComposerBlocker =
   | { type: 'cap_reached' }
+  | { type: 'last_send_exceeded' }
   | { type: 'request_cut_off' }
   | { type: 'global_budget'; upstream_message?: string }
   | {
@@ -109,6 +118,15 @@ export function costErrorToBlocker(error: CostError): ComposerBlocker | undefine
       return undefined;
 
     case 'lifetime_cap_reached': {
+      // Two distinct cases route to two distinct variants:
+      // (a) used >= limit: user genuinely at cap. Any send fails. Sticky
+      //     blocking red banner; only clears on BYOK / chart-change /
+      //     clearChat. → cap_reached
+      // (b) used <  limit: user under cap, this specific send projected
+      //     over remaining quota. Editing down may let a smaller send
+      //     through. Non-blocking amber banner; auto-clears on input/
+      //     files edit (handled by a useEffect in ChatInterface).
+      //     → last_send_exceeded
       const data = error.data as { used_usd?: number; limit_usd?: number } | null | undefined;
       const used = typeof data?.used_usd === 'number' ? data.used_usd : 0;
       const limit = typeof data?.limit_usd === 'number' ? data.limit_usd : 0;
@@ -121,7 +139,8 @@ export function costErrorToBlocker(error: CostError): ComposerBlocker | undefine
           detail: 'Free-tier limit reached. Add an Anthropic API key to continue.',
         };
       }
-      return { type: 'cap_reached' };
+      if (used >= limit) return { type: 'cap_reached' };
+      return { type: 'last_send_exceeded' };
     }
 
     case 'request_cost_ceiling_exceeded':
@@ -208,12 +227,25 @@ export function selectBlocker(params: {
 }): RenderedBlocker {
   const { eventBlocker, usage, composerEstimateUsd } = params;
 
-  // Cap-class event blockers clear when tier flips to byok (cross-tab
-  // BYOK-add scenario, or post-add refresh). Non-cap blockers preserved
-  // (global_budget can fire for BYOK-billing errors; chart_deleted is
-  // independent of tier).
+  // BYOK tier-flip clear: cap-related event blockers become irrelevant
+  // when the user has BYOK active (free-tier cap doesn't apply). Includes
+  // last_send_exceeded — the past rejection was about the free-tier cap;
+  // doesn't apply to BYOK users. NOT global_budget (BYOK billing errors
+  // also produce global_budget; BYOK doesn't fix Anthropic-side billing).
+  // NOT advisory (chart_deleted etc. are independent of tier).
+  //
+  // Membership intentionally inlined here rather than extracted as a
+  // predicate because it's slightly different from isCapClassBlocker
+  // (which is "preserve across UI navigation/send-start" and excludes
+  // last_send_exceeded since that variant clears on edit instead).
   const filteredEvent =
-    eventBlocker && isCapClassBlocker(eventBlocker) && usage?.tier === 'byok' ? null : eventBlocker;
+    eventBlocker &&
+    usage?.tier === 'byok' &&
+    (eventBlocker.type === 'cap_reached' ||
+      eventBlocker.type === 'last_send_exceeded' ||
+      eventBlocker.type === 'request_cut_off')
+      ? null
+      : eventBlocker;
 
   if (filteredEvent) return filteredEvent;
 
@@ -259,7 +291,9 @@ export function clearOnSendStart(prev: ComposerBlocker | null): ComposerBlocker 
  * AND advisory with cost_error_type='unknown' (FM-Q4 defensive over-block
  * for client/server bundle skew).
  *
- * Does NOT block: regular advisory (body_too_large, invalid_token, etc.)
+ * Does NOT block: regular advisory (body_too_large, invalid_token, etc.),
+ * last_send_exceeded (user can retry with a smaller draft — would_exceed_cap
+ * derived state gates the actual attempt if the new draft is still too big),
  * or null.
  */
 export function shouldBlockSend(rendered: RenderedBlocker): boolean {
@@ -270,6 +304,11 @@ export function shouldBlockSend(rendered: RenderedBlocker): boolean {
     case 'global_budget':
     case 'would_exceed_cap':
       return true;
+    case 'last_send_exceeded':
+      // Past-tense informational. User is under cap; editing down may let
+      // a smaller send through. would_exceed_cap derived gates if their
+      // current draft also exceeds.
+      return false;
     case 'advisory':
       return rendered.cost_error_type === 'unknown';
     default: {
