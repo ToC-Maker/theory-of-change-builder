@@ -2177,10 +2177,13 @@ export function ChatInterface({
     // AbortError before any client callback fires, but the streaming
     // callbacks ALSO read these refs to decide whether to stamp a partial
     // turn (see the onError/onCostError "stamp if there's partial content"
-    // branches); null them so those branches naturally no-op.
+    // branches); null them so those branches naturally no-op. Also reset
+    // acceptedRef so the partial-turn gate stays false if a stream-end
+    // callback somehow fires after the abort window.
     abortControllerRef.current?.abort();
     streamingMessageRef.current = null;
     streamingContentBlocksRef.current = [];
+    acceptedRef.current = false;
 
     setMessages([]);
     setChatAttachedFiles([]);
