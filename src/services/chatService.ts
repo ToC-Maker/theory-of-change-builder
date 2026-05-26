@@ -1593,6 +1593,7 @@ class ChatService {
               messages,
               webSearchEnabled,
               extendedThinkingEnabled,
+              keyLast4,
             );
             return; // Retry succeeded, callbacks already fired
           } catch (retryError: unknown) {
