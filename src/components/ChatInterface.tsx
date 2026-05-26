@@ -2747,6 +2747,10 @@ export function ChatInterface({
   // GenerateConfirmDialog.tsx for the modal that re-enters here.
   const startGenerationInternal = async () => {
     sendInFlightRef.current = true;
+    // Cancel any pending/in-flight debounced count_tokens estimate (same
+    // banner-thrash mitigation as handleSendMessage). Server preflight
+    // is authoritative; the estimate is moot once Generate is in flight.
+    cancelGenerateEstimate();
     // Spinner ON (S1: shown via spinner icon on the Generate button while
     // isLoading && !isStreaming). Set sync, BEFORE the streamMessage call,
     // so a slow preflight surfaces the spinner immediately.
@@ -3890,16 +3894,19 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           </button>
                         ) : isLoading ? (
                           // Preflight window (server's reserveCost reservation
-                          // in flight). Per Q4/S1 the ONLY visual signal is
-                          // the spinner icon swap on the Send button position;
-                          // no other UI changes. Clickable so the user can
-                          // abort — handleStopStreaming aborts the fetch and
-                          // gates its stamping on acceptedRef so no phantom
-                          // assistant turn lands in chat.
+                          // in flight). Per Q4 / user direction the ONLY
+                          // visual signal is the spinner icon swap on the
+                          // Send button position; no other UI changes,
+                          // including no click affordance. Disabled — the
+                          // preflight is fast (~100-300ms typically) and
+                          // exposing a "stop" semantic on a non-streaming
+                          // request adds complexity without a clear user
+                          // need (no spend has been committed yet anyway).
                           <button
-                            onClick={handleStopStreaming}
-                            className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                            title="Cancel"
+                            type="button"
+                            disabled
+                            className="p-2 bg-blue-500 text-white rounded-lg opacity-60 cursor-not-allowed"
+                            title="Sending…"
                           >
                             <div
                               className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"
