@@ -5,9 +5,11 @@
 //      (no auth, but possessing the edit token) it is still shown
 //      because anyone with the edit token is the de-facto owner. For
 //      authenticated callers it shows only when `isOwner=true`.
-//   2. Static items are always present: New ToC, Open recent, Import,
-//      Export, all in that order. Import/Export sub-actions are
-//      placeholders in PR 1 (PR 6 wires the real implementations).
+//   2. Static items are always present: New ToC, Open recent,
+//      Import JSON, Export, all in that order. PR 7 feedback (11)
+//      collapsed the Import submenu into a single top-level
+//      "Import JSON" entry (no nested format submenu); the file-
+//      picker file-menu-import-input is still used.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -64,7 +66,9 @@ describe('FileMenu', () => {
 
     expect(screen.getByText(/new toc/i)).toBeInTheDocument();
     expect(screen.getByText(/open recent/i)).toBeInTheDocument();
-    expect(screen.getByText(/^import$/i)).toBeInTheDocument();
+    // PR 7 feedback (11): Import is now a top-level direct action
+    // called "Import JSON" (was previously "Import" parent + JSON child).
+    expect(screen.getByText(/^import json$/i)).toBeInTheDocument();
     expect(screen.getByText(/^export$/i)).toBeInTheDocument();
   });
 
@@ -267,7 +271,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -287,7 +290,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -322,7 +324,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -344,7 +345,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -383,7 +383,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     renderMenu({ data: { sections: [] }, onImportJson });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -405,7 +404,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     renderMenu({ data: { sections: [] }, onImportJson });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -430,7 +428,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     renderMenu({ data: { sections: [] }, onImportJson });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -476,7 +473,6 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     renderMenu({ data: sampleData, onImportJson });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;
@@ -497,7 +493,6 @@ describe('FileMenu — Error modal titles distinguish export vs import (I2)', ()
     renderMenu({ data: { sections: [] }, onImportJson });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
-    await user.click(screen.getByText(/^import$/i));
     await user.click(screen.getByTestId('file-menu-import-json'));
 
     const fileInput = screen.getByTestId('file-menu-import-input') as HTMLInputElement;

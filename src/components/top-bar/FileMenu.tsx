@@ -1,11 +1,24 @@
 // FileMenu — File dropdown in the new TopBar.
 //
-// Items (per plan §1.2):
+// Items (per plan §1.2 + PR 7 feedback (10)/(11)/(12)):
 //   - New ToC (opens "/")
-//   - Open recent (anchors a recent-charts list; reuses ChartService)
-//   - Import → JSON (PR 6 Task 6.2: wired to a hidden file picker)
-//   - Export → JSON / PNG / PDF (PR 6 Task 6.2: wired to `exportChart.ts`)
+//   - Open recent (anchors a recent-charts list; reuses ChartService).
+//     Opens on hover after a ~200ms delay; click is also supported as
+//     an immediate/keyboard fallback.
+//   - Import JSON (PR 7 feedback (11): collapsed submenu, now a direct
+//     action — opens the hidden JSON file picker on click).
+//   - Export → JSON / PNG / PDF (PR 6 Task 6.2: wired to `exportChart.ts`).
+//     Same hover-with-delay treatment as Open recent.
 //   - Delete chart (owner-gated)
+//
+// Hover-with-delay rationale: the parent submenu items (Open recent,
+// Export) trigger a setTimeout(200ms) on `onPointerEnter` and clear it
+// on `onPointerLeave`. Click stays as an immediate fallback for
+// keyboard/touch users. We deliberately do NOT auto-close the submenu
+// on `pointerleave` — submenus replace the main view inline (no side
+// flyout), so an auto-close would dump the user back to the main
+// menu when they nudge the cursor away from the now-disappeared
+// parent item. The dropdown closes on click-outside (existing behavior).
 //
 // Owner-gating rules for Delete (mirrors the rule used by the old
 // EditToolbar share dropdown):
@@ -62,7 +75,10 @@ interface Props {
   onImportJson?: (next: ToCData) => void;
 }
 
-type Submenu = 'main' | 'import' | 'export' | 'recent';
+// Import is no longer a submenu (PR 7 feedback (11)): the top-level
+// "Import JSON" entry triggers the file picker directly. Only Open
+// recent and Export remain as submenus.
+type Submenu = 'main' | 'export' | 'recent';
 
 /**
  * Lowercase, slugify, trim. Used to derive a sane filename from a
@@ -135,6 +151,19 @@ export function FileMenu({
   const [importError, setImportError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // PR 7 feedback (10)/(12): hover-open-with-delay for parent submenu
+  // items. Holds the pending timer ID so we can cancel it on
+  // `pointerleave` or on unmount. We store the timer ID at module
+  // scope (`hoverTimerRef`) rather than per-item because at most one
+  // parent item can be hovered at a time — moving from Open recent to
+  // Export should cancel the first timer and start a new one.
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Delay before a hovered parent item opens its submenu. 200ms is the
+  // standard menu-flyout delay (matches Radix UI's NavigationMenu
+  // default) — short enough to feel responsive on intentional hover,
+  // long enough to ignore the cursor merely passing over en route to
+  // another item.
+  const HOVER_OPEN_DELAY_MS = 200;
   const { user } = useAuth0();
 
   // Anyone holding an edit token can delete an anonymous chart. For
@@ -149,6 +178,17 @@ export function FileMenu({
   const canExport = Boolean(data);
   const canImport = Boolean(onImportJson);
 
+  // Latest `submenu` value, available to keydown handler via ref
+  // rather than via the useEffect dep list. Keeps the useEffect dep
+  // at `[open]` (matching the original implementation) so submenu
+  // transitions don't churn the document listeners — the tear-down/
+  // re-add timing on every submenu change was suspect for flakes in
+  // the Export click test under heavy parallel load.
+  const submenuRef = useRef<Submenu>('main');
+  useEffect(() => {
+    submenuRef.current = submenu;
+  }, [submenu]);
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
@@ -156,11 +196,60 @@ export function FileMenu({
         setSubmenu('main');
       }
     };
+    // Escape closes the dropdown (accessibility). If a submenu is
+    // showing, first Esc backs out to the main view; second Esc
+    // closes the menu. This mirrors the keyboard pattern used by
+    // common menu primitives (Radix UI, Headless UI).
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (submenuRef.current !== 'main') {
+        setSubmenu('main');
+        cancelHoverOpen();
+      } else {
+        setOpen(false);
+      }
+    };
     if (open) {
       document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('keydown', handleKeyDown);
+      };
     }
   }, [open]);
+
+  // Cancel any pending hover-open timer on unmount. Prevents a fire-
+  // after-unmount setState (React warns about that, and it'd be a
+  // memory leak if the user navigated away mid-hover).
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current !== null) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Cancel pending timer + clear ref. Used by `pointerleave` on a
+  // parent item and at the top of `pointerenter` (so moving from one
+  // parent to another doesn't queue two simultaneous opens).
+  const cancelHoverOpen = () => {
+    if (hoverTimerRef.current !== null) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
+  // Queue a delayed setSubmenu(target). Cancels any prior pending
+  // timer first.
+  const scheduleHoverOpen = (target: Submenu) => {
+    cancelHoverOpen();
+    hoverTimerRef.current = setTimeout(() => {
+      setSubmenu(target);
+      hoverTimerRef.current = null;
+    }, HOVER_OPEN_DELAY_MS);
+  };
 
   // Lazy-load recent charts when the submenu opens.
   useEffect(() => {
@@ -389,6 +478,7 @@ export function FileMenu({
             <>
               <a
                 href="/"
+                onPointerEnter={cancelHoverOpen}
                 className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 role="menuitem"
               >
@@ -397,9 +487,16 @@ export function FileMenu({
               </a>
               <button
                 type="button"
-                onClick={() => setSubmenu('recent')}
+                onClick={() => {
+                  cancelHoverOpen();
+                  setSubmenu('recent');
+                }}
+                onPointerEnter={() => scheduleHoverOpen('recent')}
+                onPointerLeave={cancelHoverOpen}
+                onFocus={() => scheduleHoverOpen('recent')}
                 className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 role="menuitem"
+                data-testid="file-menu-open-recent"
               >
                 <span className="flex items-center gap-2">
                   <ClockIcon className="w-4 h-4 text-gray-500" />
@@ -409,21 +506,30 @@ export function FileMenu({
               </button>
               <button
                 type="button"
-                onClick={() => setSubmenu('import')}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                onClick={handleImportClick}
+                disabled={!canImport}
+                onPointerEnter={cancelHoverOpen}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm ${
+                  canImport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+                }`}
                 role="menuitem"
+                data-testid="file-menu-import-json"
               >
-                <span className="flex items-center gap-2">
-                  <ArrowUpTrayIcon className="w-4 h-4 text-gray-500" />
-                  Import
-                </span>
-                <ChevronDownIcon className="w-3 h-3 -rotate-90" />
+                <ArrowUpTrayIcon className="w-4 h-4 text-gray-500" />
+                Import JSON
               </button>
               <button
                 type="button"
-                onClick={() => setSubmenu('export')}
+                onClick={() => {
+                  cancelHoverOpen();
+                  setSubmenu('export');
+                }}
+                onPointerEnter={() => scheduleHoverOpen('export')}
+                onPointerLeave={cancelHoverOpen}
+                onFocus={() => scheduleHoverOpen('export')}
                 className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 role="menuitem"
+                data-testid="file-menu-export"
               >
                 <span className="flex items-center gap-2">
                   <ArrowDownTrayIcon className="w-4 h-4 text-gray-500" />
@@ -438,6 +544,7 @@ export function FileMenu({
                   <button
                     type="button"
                     onClick={handleDeleteClick}
+                    onPointerEnter={cancelHoverOpen}
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
                     role="menuitem"
                   >
@@ -446,30 +553,6 @@ export function FileMenu({
                   </button>
                 </>
               )}
-            </>
-          )}
-
-          {submenu === 'import' && (
-            <>
-              <button
-                type="button"
-                onClick={() => setSubmenu('main')}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:bg-gray-100"
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                onClick={handleImportClick}
-                disabled={!canImport}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-                  canImport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
-                }`}
-                role="menuitem"
-                data-testid="file-menu-import-json"
-              >
-                <span>JSON</span>
-              </button>
             </>
           )}
 
