@@ -1662,14 +1662,13 @@ export function ChatInterface({
     setStreamingThinking('');
     setStreamPhase(null);
 
-    // Finalize a partial assistant turn when the user clicked Stop. Two
-    // signals to preserve: visible text (streamingContent) AND structured
-    // blocks (streamingContentBlocksRef, captured per content_block_stop
-    // via onContentBlocks). Always stamp a placeholder if the request was
-    // in flight — even if Stop landed during thinking or tool use with no
-    // committed block yet (hasText=false, hasBlocks=false), the user
-    // needs visible feedback that their action took effect. Without this
-    // the bubble vanishes silently and looks like a no-op.
+    // Finalize a partial assistant turn when the user clicked Stop during
+    // an accepted stream. Two signals to preserve: visible text
+    // (streamingContent) AND structured blocks (streamingContentBlocksRef,
+    // captured per content_block_stop via onContentBlocks). Stamp a
+    // placeholder even when Stop landed during thinking/tool use with no
+    // committed block yet — the user needs visible feedback that their
+    // action took effect.
     //
     // Gate on acceptedRef so a Stop click during the preflight window
     // (server hasn't accepted yet → no user message in chat, no streaming
@@ -1859,7 +1858,12 @@ export function ChatInterface({
           // lets handleStopStreaming + onCostError/onError gate their
           // stamping logic on whether streaming actually started.
           onAccepted: () => {
-            acceptedRef.current = true;
+            // Commit the user message first so the post-accept renders see
+            // the new state. acceptedRef flips LAST so any throw above
+            // leaves the gate closed (the outer error handlers fall back
+            // to the "no stamping" branch). React state setters don't
+            // throw, but logUserMessage is the only externally-callable
+            // function here — keep it after the visible commits.
             setMessages((prev) => [...prev, userMessage]);
             setInputValue('');
             // Clear the chip tray now that the files are committed to the
@@ -1886,6 +1890,7 @@ export function ChatInterface({
               role: 'user',
               content: userMessage.content,
             });
+            acceptedRef.current = true;
           },
           onStreamPhase: (phase) => {
             setStreamPhase(phase);
@@ -2836,7 +2841,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           // Generate would lose their Chat history pre-reservation
           // without this gate.
           onAccepted: () => {
-            acceptedRef.current = true;
             // Switch to chat mode now that the generation is going to
             // happen — JSX gating for streaming UI, banner placement,
             // and the post-rejection banner area all key off currentMode.
@@ -2847,6 +2851,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             setIsStreaming(true);
             // Extended thinking is always on; seed the phase.
             setStreamPhase('thinking');
+            // acceptedRef flips LAST so any throw above leaves the gate
+            // closed and outer error handlers skip stamping.
+            acceptedRef.current = true;
           },
           onStreamPhase: (phase) => {
             setStreamPhase(phase);
