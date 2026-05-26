@@ -7,7 +7,7 @@
 // frequency than the rest of ChatInterface state.
 //
 // Variants handled:
-//   - cap_reached: red, "you've used the free quota"
+//   - cap_reached: red, "your send would have exceeded the free-tier limit"
 //   - request_cut_off: red, "message cut off, your last message used the rest"
 //   - global_budget: red, conditional copy by hasKey
 //   - would_exceed_cap: amber, "your next send is estimated at $X but only $Y left"
@@ -118,14 +118,24 @@ function ComposerBlockerBannerImpl({
       );
 
     case 'cap_reached':
-      // Server-confirmed lifetime cap. Reads limit_usd from the live
-      // usage snapshot rather than the blocker payload (single source
-      // of truth; survives a stale event payload).
+      // Server-confirmed preflight rejection. Reads limit_usd from the
+      // live usage snapshot rather than the blocker payload (single
+      // source of truth; survives a stale event payload).
+      //
+      // Past-conditional ("would have exceeded") is honest in both
+      // cases that trigger this banner: (a) user is truly at cap
+      // (used >= limit) → any next send would exceed; (b) user is
+      // under cap but the projected cost of this specific send pushed
+      // over (used + projected > limit) → this send in particular
+      // would have exceeded. Saying "you've used the free quota of
+      // $5.00" would mislead case (b) users into thinking they spent
+      // the whole quota when their actual usage might be e.g. $4.50.
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            You&apos;ve used the free quota of {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}.
-            Add an Anthropic API key to keep going.
+            Your send would have exceeded the free-tier limit of{' '}
+            {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Add an Anthropic API key to keep
+            going.
           </div>
           <AddApiKeyButton />
           <DonateCta />
