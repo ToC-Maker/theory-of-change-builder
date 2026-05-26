@@ -49,6 +49,17 @@ export default defineConfig({
       },
       {
         plugins: [react()],
+        // Worktree dev: node_modules is symlinked from a sibling worktree
+        // (`../figma-pr-7/node_modules`). Vite's filesystem allowlist
+        // rejects paths outside the project root by default, which makes
+        // setupFiles fail to load with a misleading "Cannot find module"
+        // error pointing at the resolved path. Allow the parent worktrees
+        // dir so the symlinked deps resolve.
+        server: {
+          fs: {
+            allow: ['..', '../..'],
+          },
+        },
         test: {
           name: 'frontend',
           environment: 'jsdom',
