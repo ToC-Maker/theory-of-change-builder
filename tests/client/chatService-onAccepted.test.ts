@@ -231,6 +231,38 @@ describe('chatService.streamMessage onAccepted callback', () => {
     expect(onCostError.mock.calls[0][0]).toMatchObject({ type: 'lifetime_cap_reached' });
   });
 
+  it('does NOT fire onAccepted on HTTP 409 idempotent_replay (caller-side spinner clear comes from finally block)', async () => {
+    // Confirms the deferred-add precondition for the idempotent-replay
+    // 60s dedup case: the caller's onAccepted (which would commit the
+    // user message + flip isStreaming) must NOT fire. Combined with
+    // handleSendMessage's finally `setIsLoading(false)`, the spinner
+    // clears cleanly without the caller needing a dedicated 409
+    // recovery handler.
+    const onAccepted = vi.fn();
+    const onCostError = vi.fn();
+
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : ((input as Request).url ?? String(input));
+      if (url.includes('/api/anthropic-stream')) {
+        return new Response(JSON.stringify({ error: { type: 'idempotent_replay' } }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('', { status: 200 });
+    });
+
+    const ac = new AbortController();
+    await startStream({
+      signal: ac.signal,
+      callbacks: { onAccepted, onCostError },
+    });
+
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(onCostError).toHaveBeenCalledTimes(1);
+    expect(onCostError.mock.calls[0][0]).toMatchObject({ type: 'idempotent_replay' });
+  });
+
   it('does NOT fire onAccepted when the server rejects with HTTP 413 body_too_large', async () => {
     const onAccepted = vi.fn();
     const onCostError = vi.fn();
