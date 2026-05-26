@@ -1741,6 +1741,14 @@ function ToCViewer() {
         isOwner={isOwner}
         currentChartId={currentChartId}
         onDeleteChart={handleDeleteChart}
+        // PR 6 (Task 6.2): FileMenu Export reads `data` (filename
+        // from `data.title`, payload from current state) and Import
+        // reads it to decide whether to show a "replace existing
+        // chart?" confirm. Without this prop the FileMenu disables
+        // all three Export entries (canExport = Boolean(data)),
+        // which is the bug reported as PR 7 feedback (34) — Export
+        // appeared disabled even on charts with modifications.
+        data={data}
         // PR 6 (Task 6.2): FileMenu Import → JSON drops through
         // `handleUploadJSON`, which validates the shape, saves to
         // history, and triggers a debounced DB save.
