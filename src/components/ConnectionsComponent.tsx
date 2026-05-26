@@ -3,7 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
-import { computePathWithWaypoints } from '../utils/connectionPath';
+import { computePathWithWaypoints, computeSegmentMidpoints } from '../utils/connectionPath';
 import { EdgeEditor } from './edge-editor/EdgeEditor';
 import { buildConnectionPath } from './canvas/connectionPath';
 import type { WaypointDragState } from '../hooks/useWaypointDrag';
@@ -535,6 +535,19 @@ export function ConnectionsComponent({
             { x: endX, y: endY },
           ];
           const waypointCount = connection.waypoints?.length ?? 0;
+          // PR 7 feedback (A): midpoint affordances must sit ON the
+          // rendered curve, not on the straight chord between anchors.
+          // `computeSegmentMidpoints` shares the exact same control-
+          // point math as the path renderer and evaluates each segment
+          // at t=0.5 → handle dots line up with the visible curve
+          // regardless of waypoint position, curvature, or zoom.
+          const segmentMidpoints = computeSegmentMidpoints({
+            source: { x: startX, y: startY },
+            target: { x: endX, y: endY },
+            waypoints: connection.waypoints ?? [],
+            curvature,
+            direction: pathDirection,
+          });
 
           return (
             <g key={index}>
@@ -618,6 +631,7 @@ export function ConnectionsComponent({
                   sourceNodeId={connection.sourceId}
                   targetNodeId={connection.targetId}
                   anchors={waypointAnchors}
+                  segmentMidpoints={segmentMidpoints}
                   waypointCount={waypointCount}
                   visible={handlesVisible}
                   dragInProgress={isThisConnectionBeingDragged}

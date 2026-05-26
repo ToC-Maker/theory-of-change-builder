@@ -82,6 +82,78 @@ export function computePathWithWaypoints(args: ComputePathArgs): string {
   return buildMultiWaypointPath(source, target, safeWaypoints, curvature, direction);
 }
 
+/**
+ * Compute the ON-CURVE midpoint (bezier `B(0.5)`) for every segment of
+ * the rendered path. PR 7 feedback (A): the midpoint affordance circles
+ * in `<ConnectionWaypointHandles>` previously used the straight chord
+ * midpoint `(P0 + P3) / 2`, which sits noticeably off the actual bezier
+ * for any non-trivial curvature — visually the dots appeared to "float"
+ * above (or below) the connection line. Sharing the exact same control-
+ * point math as `computePathWithWaypoints` and evaluating at t=0.5 puts
+ * each handle ON the curve, regardless of waypoint position, curvature,
+ * or chord asymmetry.
+ *
+ * Returns one `{x, y}` per segment, indexed identically to the segment
+ * indexing in `<ConnectionWaypointHandles>` (segment i runs between
+ * `anchors[i]` and `anchors[i+1]`, where `anchors = [source,
+ * ...waypoints, target]`). A 0-waypoint connection returns one
+ * midpoint (the single segment's B(0.5)).
+ *
+ * Pure function: identical args → identical result. Safe to call inside
+ * render.
+ */
+export function computeSegmentMidpoints(args: ComputePathArgs): Point[] {
+  const { source, target, waypoints, curvature, direction } = args;
+  const safeWaypoints = sanitizeWaypoints(waypoints);
+
+  if (safeWaypoints.length === 0) {
+    // 0-waypoint case: one cubic bezier from source to target. Reuse
+    // `buildZeroWaypointPath`'s control-point logic exactly so the
+    // midpoint sits on the rendered curve.
+    const offset = computeControlPointOffset(source.x, target.x, curvature, direction);
+    let c1x: number, c2x: number;
+    switch (direction) {
+      case 'vertical':
+        c1x = source.x + offset;
+        c2x = target.x + offset;
+        break;
+      case 'backward':
+        c1x = source.x - offset;
+        c2x = target.x + offset;
+        break;
+      case 'forward':
+      default:
+        c1x = source.x + offset;
+        c2x = target.x - offset;
+        break;
+    }
+    return [bezierMidpoint(source, { x: c1x, y: source.y }, { x: c2x, y: target.y }, target)];
+  }
+
+  // Multi-waypoint case: reuse the segment + control-point compute from
+  // `buildMultiWaypointPath`. We extract it into a shared helper so the
+  // two callers can't drift.
+  const segments = computeMultiWaypointSegments(
+    source,
+    target,
+    safeWaypoints,
+    curvature,
+    direction,
+  );
+  return segments.map((s) => bezierMidpoint(s.p0, s.c1, s.c2, s.p3));
+}
+
+/**
+ * Cubic bezier evaluation at t=0.5. Standard formula
+ * `B(0.5) = (P0 + 3·P1 + 3·P2 + P3) / 8`.
+ */
+function bezierMidpoint(p0: Point, p1: Point, p2: Point, p3: Point): Point {
+  return {
+    x: (p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8,
+    y: (p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8,
+  };
+}
+
 function sanitizeWaypoints(input: unknown): Point[] {
   if (!Array.isArray(input)) return [];
   const out: Point[] = [];
@@ -208,13 +280,32 @@ function computeControlPointOffset(
 //   The C1 reflection test passes because we now use the SAME magnitude
 //   for both control points around an interior waypoint.
 
-function buildMultiWaypointPath(
+/**
+ * Per-segment control-point + anchor record. Returned by
+ * `computeMultiWaypointSegments` so the path-string builder and the
+ * midpoint-affordance positioner share identical math.
+ */
+interface Segment {
+  p0: Point;
+  c1: Point;
+  c2: Point;
+  p3: Point;
+}
+
+/**
+ * Compute the list of cubic bezier segments for a multi-waypoint
+ * connection. Each segment has explicit P0/c1/c2/P3 so callers can
+ * either render the path string or evaluate the bezier (e.g. for
+ * on-curve midpoint affordances). Single source of truth for the
+ * control-point geometry.
+ */
+function computeMultiWaypointSegments(
   source: Point,
   target: Point,
   waypoints: Point[],
   curvature: number,
   direction: ConnectionPathDirection,
-): string {
+): Segment[] {
   // Anchors include source and target at the ends.
   const anchors: Point[] = [source, ...waypoints, target];
 
@@ -303,7 +394,7 @@ function buildMultiWaypointPath(
   // Source's c1 = sourceOut; target's c2 = targetIn. Interior endpoints
   // place controls along their tangent at +/- mag from the anchor, with
   // the SAME mag for both sides of any given waypoint (C1 invariant).
-  const segments: string[] = [];
+  const segments: Segment[] = [];
   for (let i = 0; i < anchors.length - 1; i++) {
     const a = anchors[i];
     const b = anchors[i + 1];
@@ -332,8 +423,24 @@ function buildMultiWaypointPath(
       c2y = b.y - t.uy * t.mag;
     }
 
-    segments.push(`C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`);
+    segments.push({ p0: a, c1: { x: c1x, y: c1y }, c2: { x: c2x, y: c2y }, p3: b });
   }
 
-  return `M ${source.x} ${source.y} ${segments.join(' ')}`;
+  return segments;
+}
+
+function buildMultiWaypointPath(
+  source: Point,
+  target: Point,
+  waypoints: Point[],
+  curvature: number,
+  direction: ConnectionPathDirection,
+): string {
+  const segments = computeMultiWaypointSegments(source, target, waypoints, curvature, direction);
+  // Stringify exactly as before — the unit tests pin the byte shape
+  // (single Move + N+1 Curves, anchor coordinates round-tripping).
+  const segStrs = segments.map(
+    (s) => `C ${s.c1.x} ${s.c1.y}, ${s.c2.x} ${s.c2.y}, ${s.p3.x} ${s.p3.y}`,
+  );
+  return `M ${source.x} ${source.y} ${segStrs.join(' ')}`;
 }

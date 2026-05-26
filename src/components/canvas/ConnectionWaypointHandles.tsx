@@ -33,13 +33,14 @@
 // distraction; they reappear on pointerup so the user can continue
 // adding more waypoints.
 //
-// Geometry: midpoint coords use the STRAIGHT-LINE midpoint of the
-// chord between consecutive anchors (not the bezier midpoint at
-// t=0.5). The straight midpoint is cheap, predictable, and visually
-// adequate at this scale — a 6x6 px translucent dot sitting near the
-// curve is unambiguous enough as an affordance. If we ever want
-// tighter visual coupling we can switch to B(0.5); contract here is
-// just "render a small circle nearby the segment".
+// Geometry: midpoint coords come from the caller as `segmentMidpoints`.
+// They are the on-curve B(0.5) points of each segment (see
+// `computeSegmentMidpoints` in `src/utils/connectionPath.ts`), so the
+// handle dots sit ON the visible bezier line regardless of waypoint
+// placement, curvature, or chord asymmetry. PR 7 feedback (A) — the
+// earlier chord-midpoint formula put each dot a few pixels OFF the
+// curve, which read as "floating" and made users wonder what those
+// circles were attached to.
 
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
@@ -57,9 +58,20 @@ export interface ConnectionWaypointHandlesProps {
   targetNodeId: string;
   /**
    * Anchor coordinates for the full path, in container-local space.
-   * Always `[source, ...waypoints, target]`, length ≥ 2.
+   * Always `[source, ...waypoints, target]`, length ≥ 2. Only the
+   * interior entries (`anchors[1..N]`) are read here — they're the
+   * positions of the existing waypoints.
    */
   anchors: Point[];
+  /**
+   * On-curve midpoint per segment, in container-local space. There is
+   * one entry per segment (= `anchors.length - 1` = `waypointCount + 1`),
+   * each one the bezier `B(0.5)` of the segment as rendered. Computed
+   * by `computeSegmentMidpoints` in the parent so the handle dots
+   * share identical control-point math with the rendered path and
+   * always sit ON the visible curve.
+   */
+  segmentMidpoints: Point[];
   /** Number of waypoints (anchors.length - 2). */
   waypointCount: number;
   /** True when the connection is hovered or selected. */
@@ -79,6 +91,7 @@ export function ConnectionWaypointHandles({
   sourceNodeId,
   targetNodeId,
   anchors,
+  segmentMidpoints,
   waypointCount,
   visible,
   dragInProgress,
@@ -95,21 +108,16 @@ export function ConnectionWaypointHandles({
     waypoints.push({ x: anchors[i].x, y: anchors[i].y, index: i - 1 });
   }
 
-  // Segment midpoints: between each consecutive pair of anchors. There
-  // are anchors.length - 1 segments (== waypointCount + 1). Skipped
-  // entirely while a drag is in flight on this connection (PR 7
-  // feedback item 17): the user dragging a waypoint shouldn't see two
-  // new translucent dots spawn next to it.
+  // Segment midpoints arrive precomputed (B(0.5) of each rendered
+  // bezier segment) so the handle dots line up with the visible curve.
+  // Skipped entirely while a drag is in flight on this connection (PR
+  // 7 feedback item 17): the user dragging a waypoint shouldn't see
+  // two new translucent dots spawn next to it.
   const midpoints: Array<{ x: number; y: number; segmentIndex: number }> = [];
   if (!dragInProgress) {
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i];
-      const b = anchors[i + 1];
-      midpoints.push({
-        x: (a.x + b.x) / 2,
-        y: (a.y + b.y) / 2,
-        segmentIndex: i,
-      });
+    for (let i = 0; i < segmentMidpoints.length; i++) {
+      const m = segmentMidpoints[i];
+      midpoints.push({ x: m.x, y: m.y, segmentIndex: i });
     }
   }
 
