@@ -315,6 +315,20 @@ export interface StreamCallbacks {
    * generic `onError` handler or the H3->H2 retry path.
    */
   onCostError?: (error: CostError) => void;
+  /**
+   * Fires after the server's preflight reservation accepts the request
+   * (HTTP 200 from /api/anthropic-stream, before SSE delivery begins) and
+   * BEFORE any stream content is processed. Callers (ChatInterface) use this
+   * as the "commit the user message to chat" trigger so a preflight rejection
+   * (429 cap, 413 body too large, etc.) doesn't leak an orphan user message
+   * into the chat history.
+   *
+   * Guaranteed at-most-once per `streamMessage` invocation, even across the
+   * H3->H2 fallback retry path: the wrapper layer holds an `acceptedFired`
+   * flag so a retry whose first attempt already accepted (then mid-streamed
+   * a network error) doesn't double-fire.
+   */
+  onAccepted?: () => void;
 }
 
 /**
@@ -672,6 +686,13 @@ class ChatService {
     }
 
     ctx?.markHeadersReceived();
+
+    // Server's preflight reservation accepted. Signal the caller BEFORE SSE
+    // delivery begins so the deferred-add path (ChatInterface) can commit the
+    // user message to chat, clear the composer, and switch modes. The wrapper
+    // (streamMessage) deduplicates this across the H3-fallback retry — see
+    // the at-most-once guard there.
+    callbacks.onAccepted?.();
 
     // Parse SSE stream
     const reader = response.body.getReader();
@@ -1244,7 +1265,7 @@ class ChatService {
       messages,
       currentGraphData,
       mode,
-      callbacks = {},
+      callbacks: rawCallbacks = {},
       signal,
       model = 'claude-opus-4-7',
       webSearchEnabled = false,
@@ -1259,6 +1280,24 @@ class ChatService {
       editToken,
       loggingMessageId,
     } = options;
+
+    // At-most-once guard around `onAccepted`. The wrapped callback is passed
+    // down to streamFromApi for both the primary attempt AND the H3->H2
+    // fallback retry (chatService.ts: catch block below). Without the guard,
+    // a retry whose first attempt's preflight already accepted (and then
+    // mid-streamed a network error) would double-fire onAccepted, and the
+    // ChatInterface would commit the same user message to chat twice.
+    let acceptedFired = false;
+    const callbacks: StreamCallbacks = {
+      ...rawCallbacks,
+      onAccepted: rawCallbacks.onAccepted
+        ? () => {
+            if (acceptedFired) return;
+            acceptedFired = true;
+            rawCallbacks.onAccepted?.();
+          }
+        : undefined,
+    };
 
     // New-message-send catch-up. Before this stream begins, drain the
     // pending-reconcile queue. Any prior-stream unreconciled entry gets
