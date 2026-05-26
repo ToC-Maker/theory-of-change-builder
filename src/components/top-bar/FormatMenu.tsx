@@ -12,7 +12,7 @@
 // reads/writes the surface-level values via the supplied setters.
 //
 // Disabled when not in edit mode (the parent decides what to pass).
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDownIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 
 interface Props {
@@ -27,6 +27,14 @@ interface Props {
   setColumnPadding: (next: number) => void;
   sectionPadding: number;
   setSectionPadding: (next: number) => void;
+  // PR 7 feedback (37): menubar hover-switch. See FileMenu.tsx for
+  // details — when the parent (TopBar) controls open state, it
+  // passes these so a hover from a sibling open menu can switch to
+  // this one without a click. Optional so MobileMenu / tests still
+  // work as uncontrolled.
+  isOpen?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  onHoverOpen?: () => void;
 }
 
 const FONT_OPTIONS: { value: string; label: string }[] = [
@@ -58,8 +66,25 @@ export function FormatMenu({
   setColumnPadding,
   sectionPadding,
   setSectionPadding,
+  isOpen,
+  onOpenChange,
+  onHoverOpen,
 }: Props) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen ?? internalOpen;
+  // Memoized so it's a stable dep for effects. See FileMenu.tsx for
+  // the controlled-vs-uncontrolled rationale.
+  const setOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      if (onOpenChange) {
+        const resolved = typeof next === 'function' ? next(isOpen ?? false) : next;
+        onOpenChange(resolved);
+      } else {
+        setInternalOpen(next);
+      }
+    },
+    [onOpenChange, isOpen],
+  );
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -72,7 +97,7 @@ export function FormatMenu({
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [open]);
+  }, [open, setOpen]);
 
   const currentPx = Math.round(textSize * 18);
 
@@ -81,6 +106,7 @@ export function FormatMenu({
       <button
         type="button"
         onClick={() => editMode && setOpen((s) => !s)}
+        onPointerEnter={editMode ? onHoverOpen : undefined}
         disabled={!editMode}
         className={`px-2 sm:px-3 py-1.5 text-sm font-medium rounded transition-colors flex items-center gap-1 ${
           editMode ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'

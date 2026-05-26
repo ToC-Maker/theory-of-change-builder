@@ -37,7 +37,7 @@
 //     edit token IS the credential).
 //   - Authenticated user: shown only when `isOwner=true`.
 //   - No edit token / no chart ID: hidden (nothing to delete).
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDownIcon,
   TrashIcon,
@@ -83,6 +83,24 @@ interface Props {
    * graph has nodes) the user has confirmed the overwrite.
    */
   onImportJson?: (next: ToCData) => void;
+
+  // PR 7 feedback (37) — menubar hover-switch. When the parent
+  // (TopBar) lifts the "which top-level menu is open" state, it
+  // passes `isOpen` / `onOpenChange` to make this menu controlled,
+  // and `onHoverOpen` for the pointerenter handler on the trigger
+  // button. When the parent omits these (e.g. MobileMenu, which
+  // stacks the menus vertically and doesn't need hover-switching),
+  // the component falls back to its internal `useState(open)` and
+  // behaves exactly as it did before.
+  isOpen?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  /**
+   * Called on `pointerenter` over the trigger button. The parent is
+   * responsible for deciding whether to actually open this menu —
+   * the standard menubar rule is "switch only when another menu is
+   * already open" so a casual mouse-over doesn't open menus.
+   */
+  onHoverOpen?: () => void;
 }
 
 // PR 7 feedback (38): submenus are now side flyouts that render
@@ -134,8 +152,36 @@ export function FileMenu({
   onDeleteChart,
   data,
   onImportJson,
+  isOpen,
+  onOpenChange,
+  onHoverOpen,
 }: Props) {
-  const [open, setOpen] = useState(false);
+  // Controlled vs uncontrolled. When the parent passes `isOpen` the
+  // component is fully controlled (this is the menubar-with-hover-
+  // switch path used by TopBar). When it doesn't (MobileMenu, tests),
+  // we fall back to internal state.
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen ?? internalOpen;
+  // `setOpen` is memoized so it can be a stable dep for any effect
+  // that needs it (the click-outside effect, currently). Reading the
+  // latest `open` via the function-form keeps it correct even when
+  // the wrapper closure is stale.
+  const setOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      if (onOpenChange) {
+        // Controlled path: parent owns the value, so just notify.
+        // The function-form needs the latest value from props; pass
+        // the current `isOpen` (defaults to false if unset, but in
+        // controlled mode `isOpen` is always provided).
+        const resolved = typeof next === 'function' ? next(isOpen ?? false) : next;
+        onOpenChange(resolved);
+      } else {
+        // Uncontrolled path: React's setState supports both forms.
+        setInternalOpen(next);
+      }
+    },
+    [onOpenChange, isOpen],
+  );
   const [flyout, setFlyout] = useState<Flyout>(null);
   const [recent, setRecent] = useState<UserChart[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(false);
@@ -206,6 +252,13 @@ export function FileMenu({
     flyoutRef.current = flyout;
   }, [flyout]);
 
+  // When the menu closes (including via parent switching to a sibling
+  // menu via menubar hover-switch), drop any open flyout so reopening
+  // shows the main view.
+  useEffect(() => {
+    if (!open) setFlyout(null);
+  }, [open]);
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
@@ -235,7 +288,7 @@ export function FileMenu({
         document.removeEventListener('keydown', handleKeyDown);
       };
     }
-  }, [open]);
+  }, [open, setOpen]);
 
   // Cancel any pending hover-open/close timers on unmount. Prevents
   // a fire-after-unmount setState (React warns about that, and it'd
@@ -492,6 +545,7 @@ export function FileMenu({
       <button
         type="button"
         onClick={() => setOpen((s) => !s)}
+        onPointerEnter={onHoverOpen}
         className="px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded transition-colors flex items-center gap-1"
         aria-haspopup="menu"
         aria-expanded={open}

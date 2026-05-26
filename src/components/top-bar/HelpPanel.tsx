@@ -18,7 +18,7 @@
 // The previous EditToolbar's Help modal was a single dump of everything;
 // the new HelpPanel keeps the same surface but groups it under explicit
 // sections so the user knows where to look.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDownIcon,
   QuestionMarkCircleIcon,
@@ -31,8 +31,33 @@ const TOC_EXPLAINER_URL = 'https://en.wikipedia.org/wiki/Theory_of_change';
 const CONTACT_EMAIL = 'theoryofchangebuilder@gmail.com';
 const GITHUB_ISSUES_URL = 'https://github.com/ToC-Maker/theory-of-change-builder/issues/new';
 
-export function HelpPanel() {
-  const [open, setOpen] = useState(false);
+interface Props {
+  // PR 7 feedback (37): menubar hover-switch. See FileMenu.tsx for
+  // details — when the parent (TopBar) controls open state, it
+  // passes these so a hover from a sibling open menu can switch to
+  // this one without a click. Optional so MobileMenu / tests still
+  // work as uncontrolled.
+  isOpen?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  onHoverOpen?: () => void;
+}
+
+export function HelpPanel({ isOpen, onOpenChange, onHoverOpen }: Props = {}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen ?? internalOpen;
+  // Memoized so it's a stable dep for effects. See FileMenu.tsx for
+  // the controlled-vs-uncontrolled rationale.
+  const setOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      if (onOpenChange) {
+        const resolved = typeof next === 'function' ? next(isOpen ?? false) : next;
+        onOpenChange(resolved);
+      } else {
+        setInternalOpen(next);
+      }
+    },
+    [onOpenChange, isOpen],
+  );
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,7 +70,7 @@ export function HelpPanel() {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [open]);
+  }, [open, setOpen]);
 
   const handleReplayTutorial = () => {
     setOpen(false);
@@ -60,6 +85,7 @@ export function HelpPanel() {
       <button
         type="button"
         onClick={() => setOpen((s) => !s)}
+        onPointerEnter={onHoverOpen}
         className="px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded transition-colors flex items-center gap-1"
         aria-haspopup="menu"
         aria-expanded={open}

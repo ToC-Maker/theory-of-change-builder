@@ -18,6 +18,15 @@
 // text input has focus doesn't shift focus to the button before
 // `handleUndo`/`handleRedo` read `document.activeElement`. (PR 0
 // applied this to the old EditToolbar; the new TopBar must keep it.)
+//
+// Menubar hover-switch (PR 7 feedback (37)): TopBar lifts the
+// "which top-level menu is open" state (`openMenuId`) so siblings
+// can switch on hover once any menu is already open. The three menu
+// triggers also sit edge-to-edge in their own no-gap flex wrapper
+// (the parent's `gap-3` was creating a 12px dead zone between menu
+// buttons that broke `pointerenter` switching). See `handleHoverOpen`
+// below for the standard menubar rule: hover only switches when a
+// sibling is already open — a casual mouse-over does NOT open menus.
 import { useEffect, useState } from 'react';
 import { ShareIcon } from '@heroicons/react/24/outline';
 import type { ToCData } from '../../types';
@@ -114,6 +123,8 @@ function useBreakpoint(forced?: Breakpoint): Breakpoint {
   return bp;
 }
 
+type MenuId = 'file' | 'format' | 'help';
+
 export function TopBar(props: TopBarProps) {
   const bp = useBreakpoint(props.breakpoint);
 
@@ -126,6 +137,32 @@ export function TopBar(props: TopBarProps) {
 
   const isViewer = !props.showEditButton;
 
+  // PR 7 feedback (37): lifted "which menu is open" state. `null`
+  // means no menu is open; setting it to a different id closes the
+  // previously open menu (the controlled-`isOpen` prop on each menu
+  // becomes false) and opens the new one. Hover-switch only fires
+  // when this is already non-null — a stray hover with everything
+  // closed does NOT open menus (would be obnoxious otherwise).
+  const [openMenuId, setOpenMenuId] = useState<MenuId | null>(null);
+  const handleHoverOpen = (id: MenuId) => {
+    // Only switch on hover when a sibling menu is already open;
+    // otherwise the user's intent on a bare hover is unclear and
+    // we'd be opening menus they didn't ask for.
+    if (openMenuId !== null && openMenuId !== id) setOpenMenuId(id);
+  };
+  // Escape closes whatever menu is open. Kept centralized here (rather
+  // than per-menu) because TopBar already owns the open state. The
+  // per-menu click-outside handlers continue to fire for mouse
+  // dismissal; this only adds keyboard parity for menubar items.
+  useEffect(() => {
+    if (openMenuId === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenuId(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [openMenuId]);
+
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
       <div className="mx-auto py-2 px-2 sm:px-4">
@@ -133,7 +170,12 @@ export function TopBar(props: TopBarProps) {
           {/* Left cluster */}
           <div className="flex items-center gap-1 sm:gap-3 min-w-0">
             {bp === 'md' && !isViewer && (
-              <>
+              // Menubar group: the three top-level menus sit edge-to-
+              // edge (no `gap-*`) so `pointerenter` on a sibling fires
+              // without the cursor traversing dead space in between.
+              // Visual separation comes from each button's `px-2/3`
+              // padding rather than parent gap.
+              <div className="flex items-center">
                 <FileMenu
                   isAuthenticated={isAuthenticated}
                   isOwner={isOwner}
@@ -142,6 +184,9 @@ export function TopBar(props: TopBarProps) {
                   onDeleteChart={onDeleteChart}
                   data={props.data}
                   onImportJson={props.onImportJson}
+                  isOpen={openMenuId === 'file'}
+                  onOpenChange={(next) => setOpenMenuId(next ? 'file' : null)}
+                  onHoverOpen={() => handleHoverOpen('file')}
                 />
                 <FormatMenu
                   editMode={props.editMode}
@@ -155,13 +200,25 @@ export function TopBar(props: TopBarProps) {
                   setColumnPadding={props.setColumnPadding}
                   sectionPadding={props.sectionPadding}
                   setSectionPadding={props.setSectionPadding}
+                  isOpen={openMenuId === 'format'}
+                  onOpenChange={(next) => setOpenMenuId(next ? 'format' : null)}
+                  onHoverOpen={() => handleHoverOpen('format')}
                 />
-                <HelpPanel />
-              </>
+                <HelpPanel
+                  isOpen={openMenuId === 'help'}
+                  onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
+                  onHoverOpen={() => handleHoverOpen('help')}
+                />
+              </div>
             )}
             {bp === 'md' && isViewer && (
               <>
-                <HelpPanel />
+                <HelpPanel
+                  isOpen={openMenuId === 'help'}
+                  onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
+                  // Viewer mode has only one menu — no sibling to
+                  // switch from. `onHoverOpen` is omitted (no-op).
+                />
                 <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded">
                   View-only
                 </span>
