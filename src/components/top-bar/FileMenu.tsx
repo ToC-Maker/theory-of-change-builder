@@ -1,24 +1,34 @@
 // FileMenu — File dropdown in the new TopBar.
 //
-// Items (per plan §1.2 + PR 7 feedback (10)/(11)/(12)):
+// Items (per plan §1.2 + PR 7 feedback (10)/(11)/(12)/(38)/(39)):
 //   - New ToC (opens "/")
-//   - Open recent (anchors a recent-charts list; reuses ChartService).
-//     Opens on hover after a ~200ms delay; click is also supported as
-//     an immediate/keyboard fallback.
-//   - Import JSON (PR 7 feedback (11): collapsed submenu, now a direct
-//     action — opens the hidden JSON file picker on click).
-//   - Export → JSON / PNG / PDF (PR 6 Task 6.2: wired to `exportChart.ts`).
-//     Same hover-with-delay treatment as Open recent.
+//   - Open recent → side flyout listing recent charts. Opens on hover
+//     after a 200ms delay; click is an immediate fallback.
+//   - Import JSON (PR 7 feedback (11): direct action, no submenu —
+//     opens the hidden JSON file picker on click).
+//   - Export → side flyout with JSON / PNG / PDF entries (wired to
+//     `exportChart.ts`). Same hover-with-delay treatment.
 //   - Delete chart (owner-gated)
 //
-// Hover-with-delay rationale: the parent submenu items (Open recent,
-// Export) trigger a setTimeout(200ms) on `onPointerEnter` and clear it
-// on `onPointerLeave`. Click stays as an immediate fallback for
-// keyboard/touch users. We deliberately do NOT auto-close the submenu
-// on `pointerleave` — submenus replace the main view inline (no side
-// flyout), so an auto-close would dump the user back to the main
-// menu when they nudge the cursor away from the now-disappeared
-// parent item. The dropdown closes on click-outside (existing behavior).
+// Layout (PR 7 feedback (38)): submenus are side flyouts anchored to
+// the right edge of the main menu (`absolute top-full left-56 ml-1`,
+// where `left-56` mirrors the main menu's `w-56`).
+// The main menu stays visible alongside the flyout — both panels are
+// children of the same `relative` container, so click-outside (which
+// dismisses everything) and Escape continue to work without a back
+// button. macOS Finder / Windows context-menu UX.
+//
+// Hover-area handling: the main menu items schedule open/close on
+// pointerenter/leave. The flyout panel itself also clears the close
+// timer on pointerenter and re-arms it on pointerleave, so the user
+// can move diagonally from "Open recent" into the flyout without it
+// snapping shut as the cursor crosses the 4px gap (a "generous
+// hover-leave delay" — 250ms — substitutes for a triangular safe
+// area, which would be heavier code than the UX benefit warrants).
+//
+// Open recent flyout width (PR 7 feedback (39)): `w-80` (320px) gives
+// chart titles + timestamps comfortable room. Export keeps `w-44`
+// because its items are short ("JSON" / "PNG" / "PDF").
 //
 // Owner-gating rules for Delete (mirrors the rule used by the old
 // EditToolbar share dropdown):
@@ -75,10 +85,12 @@ interface Props {
   onImportJson?: (next: ToCData) => void;
 }
 
-// Import is no longer a submenu (PR 7 feedback (11)): the top-level
-// "Import JSON" entry triggers the file picker directly. Only Open
-// recent and Export remain as submenus.
-type Submenu = 'main' | 'export' | 'recent';
+// PR 7 feedback (38): submenus are now side flyouts that render
+// alongside the main menu rather than replacing it. `null` = no
+// flyout visible; the main menu shows whenever `open === true`. The
+// previous `'main'` discriminator is no longer needed (back button
+// is gone too).
+type Flyout = 'export' | 'recent' | null;
 
 /**
  * Lowercase, slugify, trim. Used to derive a sane filename from a
@@ -124,7 +136,7 @@ export function FileMenu({
   onImportJson,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [submenu, setSubmenu] = useState<Submenu>('main');
+  const [flyout, setFlyout] = useState<Flyout>(null);
   const [recent, setRecent] = useState<UserChart[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(false);
   // errorRecent: distinguishes "load failed" from "empty list". Without
@@ -151,19 +163,24 @@ export function FileMenu({
   const [importError, setImportError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // PR 7 feedback (10)/(12): hover-open-with-delay for parent submenu
-  // items. Holds the pending timer ID so we can cancel it on
-  // `pointerleave` or on unmount. We store the timer ID at module
-  // scope (`hoverTimerRef`) rather than per-item because at most one
-  // parent item can be hovered at a time — moving from Open recent to
-  // Export should cancel the first timer and start a new one.
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Delay before a hovered parent item opens its submenu. 200ms is the
+  // PR 7 feedback (10)/(12)/(38): hover open/close timers for the
+  // side-flyout submenus. At most one of each is pending at any
+  // moment, so a single ref per direction is enough — moving from
+  // Open recent to Export cancels both and re-arms the open timer.
+  const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Delay before a hovered parent item opens its flyout. 200ms is the
   // standard menu-flyout delay (matches Radix UI's NavigationMenu
   // default) — short enough to feel responsive on intentional hover,
   // long enough to ignore the cursor merely passing over en route to
   // another item.
   const HOVER_OPEN_DELAY_MS = 200;
+  // Delay before an open flyout closes when the cursor leaves both
+  // the parent item and the flyout panel. Generous (250ms) because
+  // the cursor has to cross a 4px gap between the main menu and the
+  // flyout — this serves as a simple substitute for a triangular
+  // safe-area calculation.
+  const HOVER_CLOSE_DELAY_MS = 250;
   const { user } = useAuth0();
 
   // Anyone holding an edit token can delete an anonymous chart. For
@@ -178,33 +195,34 @@ export function FileMenu({
   const canExport = Boolean(data);
   const canImport = Boolean(onImportJson);
 
-  // Latest `submenu` value, available to keydown handler via ref
-  // rather than via the useEffect dep list. Keeps the useEffect dep
-  // at `[open]` (matching the original implementation) so submenu
-  // transitions don't churn the document listeners — the tear-down/
-  // re-add timing on every submenu change was suspect for flakes in
-  // the Export click test under heavy parallel load.
-  const submenuRef = useRef<Submenu>('main');
+  // Latest `flyout` value, available to keydown handler via ref
+  // rather than via the useEffect dep list. Keeps the document-
+  // listener useEffect dep at `[open]` so flyout transitions don't
+  // churn listeners — the tear-down/re-add timing on every flyout
+  // change was suspect for flakes in Export click tests under
+  // heavy parallel load (see commit b789fa9).
+  const flyoutRef = useRef<Flyout>(null);
   useEffect(() => {
-    submenuRef.current = submenu;
-  }, [submenu]);
+    flyoutRef.current = flyout;
+  }, [flyout]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
-        setSubmenu('main');
+        setFlyout(null);
       }
     };
-    // Escape closes the dropdown (accessibility). If a submenu is
-    // showing, first Esc backs out to the main view; second Esc
-    // closes the menu. This mirrors the keyboard pattern used by
-    // common menu primitives (Radix UI, Headless UI).
+    // Escape closes the dropdown (accessibility). If a flyout is
+    // showing, first Esc closes the flyout; second Esc closes the
+    // menu. This mirrors the keyboard pattern used by common menu
+    // primitives (Radix UI, Headless UI).
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (submenuRef.current !== 'main') {
-        setSubmenu('main');
+      if (flyoutRef.current !== null) {
+        setFlyout(null);
         cancelHoverOpen();
+        cancelHoverClose();
       } else {
         setOpen(false);
       }
@@ -219,41 +237,71 @@ export function FileMenu({
     }
   }, [open]);
 
-  // Cancel any pending hover-open timer on unmount. Prevents a fire-
-  // after-unmount setState (React warns about that, and it'd be a
-  // memory leak if the user navigated away mid-hover).
+  // Cancel any pending hover-open/close timers on unmount. Prevents
+  // a fire-after-unmount setState (React warns about that, and it'd
+  // be a memory leak if the user navigated away mid-hover).
   useEffect(() => {
     return () => {
-      if (hoverTimerRef.current !== null) {
-        clearTimeout(hoverTimerRef.current);
-        hoverTimerRef.current = null;
+      if (hoverOpenTimerRef.current !== null) {
+        clearTimeout(hoverOpenTimerRef.current);
+        hoverOpenTimerRef.current = null;
+      }
+      if (hoverCloseTimerRef.current !== null) {
+        clearTimeout(hoverCloseTimerRef.current);
+        hoverCloseTimerRef.current = null;
       }
     };
   }, []);
 
-  // Cancel pending timer + clear ref. Used by `pointerleave` on a
-  // parent item and at the top of `pointerenter` (so moving from one
-  // parent to another doesn't queue two simultaneous opens).
+  // Cancel a pending hover-open. Used by `pointerleave` on a parent
+  // item and at the top of `pointerenter` on a different parent item
+  // (so moving between parents doesn't queue two simultaneous opens).
   const cancelHoverOpen = () => {
-    if (hoverTimerRef.current !== null) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
+    if (hoverOpenTimerRef.current !== null) {
+      clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
     }
   };
 
-  // Queue a delayed setSubmenu(target). Cancels any prior pending
-  // timer first.
-  const scheduleHoverOpen = (target: Submenu) => {
+  // Cancel a pending hover-close. Used by `pointerenter` on the
+  // flyout panel (the cursor reached the panel, so the "leave"
+  // intent is over) and by `pointerenter` on the same parent item
+  // (cursor returned before the close timer fired).
+  const cancelHoverClose = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  };
+
+  // Queue a delayed flyout open. Cancels any prior pending open
+  // timer and any pending close timer (the user just expressed
+  // intent to open, so a stale close from a previous flyout would
+  // race and immediately undo this).
+  const scheduleHoverOpen = (target: Exclude<Flyout, null>) => {
     cancelHoverOpen();
-    hoverTimerRef.current = setTimeout(() => {
-      setSubmenu(target);
-      hoverTimerRef.current = null;
+    cancelHoverClose();
+    hoverOpenTimerRef.current = setTimeout(() => {
+      setFlyout(target);
+      hoverOpenTimerRef.current = null;
     }, HOVER_OPEN_DELAY_MS);
   };
 
-  // Lazy-load recent charts when the submenu opens.
+  // Queue a delayed flyout close. Cancels any prior pending open
+  // (the cursor moved off the parent before the open fired, so the
+  // open is no longer wanted) before arming the close.
+  const scheduleHoverClose = () => {
+    cancelHoverOpen();
+    cancelHoverClose();
+    hoverCloseTimerRef.current = setTimeout(() => {
+      setFlyout(null);
+      hoverCloseTimerRef.current = null;
+    }, HOVER_CLOSE_DELAY_MS);
+  };
+
+  // Lazy-load recent charts when the flyout opens.
   useEffect(() => {
-    if (submenu !== 'recent') return;
+    if (flyout !== 'recent') return;
     const load = async () => {
       setErrorRecent(null);
       if (isAuthenticated && user?.sub) {
@@ -301,7 +349,7 @@ export function FileMenu({
       }
     };
     void load();
-  }, [submenu, isAuthenticated, user?.sub, retryNonce]);
+  }, [flyout, isAuthenticated, user?.sub, retryNonce]);
 
   // PR 5: replace `window.confirm()` with the shared ConfirmModal
   // primitive. The dropdown closes immediately so the modal anchors
@@ -311,7 +359,7 @@ export function FileMenu({
     if (!currentChartId) return;
     setConfirmDeleteOpen(true);
     setOpen(false);
-    setSubmenu('main');
+    setFlyout(null);
   };
 
   const handleConfirmDelete = () => {
@@ -325,7 +373,7 @@ export function FileMenu({
   // so the user sees the click was registered, then runs the export.
   const closeAndReset = () => {
     setOpen(false);
-    setSubmenu('main');
+    setFlyout(null);
   };
 
   const handleExportJson = async () => {
@@ -474,185 +522,226 @@ export function FileMenu({
           role="menu"
           className="absolute top-full mt-1 left-0 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
         >
-          {submenu === 'main' && (
-            <>
-              <a
-                href="/"
-                onPointerEnter={cancelHoverOpen}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                role="menuitem"
-              >
-                <PlusIcon className="w-4 h-4 text-gray-500" />
-                New ToC
-              </a>
-              <button
-                type="button"
-                onClick={() => {
-                  cancelHoverOpen();
-                  setSubmenu('recent');
-                }}
-                onPointerEnter={() => scheduleHoverOpen('recent')}
-                onPointerLeave={cancelHoverOpen}
-                onFocus={() => scheduleHoverOpen('recent')}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                role="menuitem"
-                data-testid="file-menu-open-recent"
-              >
-                <span className="flex items-center gap-2">
-                  <ClockIcon className="w-4 h-4 text-gray-500" />
-                  Open recent
-                </span>
-                <ChevronDownIcon className="w-3 h-3 -rotate-90" />
-              </button>
-              <button
-                type="button"
-                onClick={handleImportClick}
-                disabled={!canImport}
-                onPointerEnter={cancelHoverOpen}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm ${
-                  canImport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
-                }`}
-                role="menuitem"
-                data-testid="file-menu-import-json"
-              >
-                <ArrowUpTrayIcon className="w-4 h-4 text-gray-500" />
-                Import JSON
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  cancelHoverOpen();
-                  setSubmenu('export');
-                }}
-                onPointerEnter={() => scheduleHoverOpen('export')}
-                onPointerLeave={cancelHoverOpen}
-                onFocus={() => scheduleHoverOpen('export')}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                role="menuitem"
-                data-testid="file-menu-export"
-              >
-                <span className="flex items-center gap-2">
-                  <ArrowDownTrayIcon className="w-4 h-4 text-gray-500" />
-                  Export
-                </span>
-                <ChevronDownIcon className="w-3 h-3 -rotate-90" />
-              </button>
+          <a
+            href="/"
+            onPointerEnter={cancelHoverOpen}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            role="menuitem"
+          >
+            <PlusIcon className="w-4 h-4 text-gray-500" />
+            New ToC
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              // Click is the immediate-open path. Cancel any pending
+              // open/close so the click doesn't race with a stale
+              // timer (e.g. user hovered briefly then clicked).
+              cancelHoverOpen();
+              cancelHoverClose();
+              setFlyout('recent');
+            }}
+            onPointerEnter={() => scheduleHoverOpen('recent')}
+            onPointerLeave={() => {
+              // If the flyout for this item is already open, don't
+              // cancel hover-open — instead arm the close timer so
+              // the cursor crossing the 4px gap to the flyout has
+              // time to land before we dismiss.
+              cancelHoverOpen();
+              if (flyout === 'recent') scheduleHoverClose();
+            }}
+            onFocus={() => scheduleHoverOpen('recent')}
+            // aria-haspopup + aria-expanded reflect the side flyout
+            // for assistive tech (announce "submenu, expanded").
+            aria-haspopup="menu"
+            aria-expanded={flyout === 'recent'}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            role="menuitem"
+            data-testid="file-menu-open-recent"
+          >
+            <span className="flex items-center gap-2">
+              <ClockIcon className="w-4 h-4 text-gray-500" />
+              Open recent
+            </span>
+            <ChevronDownIcon className="w-3 h-3 -rotate-90" />
+          </button>
+          <button
+            type="button"
+            onClick={handleImportClick}
+            disabled={!canImport}
+            onPointerEnter={() => {
+              // Import JSON is a leaf action — entering it should
+              // cancel any pending open AND close any visible flyout
+              // (the cursor moved away from Open recent / Export).
+              cancelHoverOpen();
+              if (flyout !== null) scheduleHoverClose();
+            }}
+            className={`w-full flex items-center gap-2 px-3 py-2 text-sm ${
+              canImport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+            }`}
+            role="menuitem"
+            data-testid="file-menu-import-json"
+          >
+            <ArrowUpTrayIcon className="w-4 h-4 text-gray-500" />
+            Import JSON
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              cancelHoverOpen();
+              cancelHoverClose();
+              setFlyout('export');
+            }}
+            onPointerEnter={() => scheduleHoverOpen('export')}
+            onPointerLeave={() => {
+              cancelHoverOpen();
+              if (flyout === 'export') scheduleHoverClose();
+            }}
+            onFocus={() => scheduleHoverOpen('export')}
+            aria-haspopup="menu"
+            aria-expanded={flyout === 'export'}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            role="menuitem"
+            data-testid="file-menu-export"
+          >
+            <span className="flex items-center gap-2">
+              <ArrowDownTrayIcon className="w-4 h-4 text-gray-500" />
+              Export
+            </span>
+            <ChevronDownIcon className="w-3 h-3 -rotate-90" />
+          </button>
 
-              {canDelete && (
-                <>
-                  <div className="my-1 h-px bg-gray-100" />
-                  <button
-                    type="button"
-                    onClick={handleDeleteClick}
-                    onPointerEnter={cancelHoverOpen}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-                    role="menuitem"
-                  >
-                    <TrashIcon className="w-4 h-4" />
-                    Delete chart
-                  </button>
-                </>
-              )}
-            </>
-          )}
-
-          {submenu === 'export' && (
+          {canDelete && (
             <>
+              <div className="my-1 h-px bg-gray-100" />
               <button
                 type="button"
-                onClick={() => setSubmenu('main')}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:bg-gray-100"
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleExportJson()}
-                disabled={!canExport}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-                  canExport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
-                }`}
+                onClick={handleDeleteClick}
+                onPointerEnter={() => {
+                  cancelHoverOpen();
+                  if (flyout !== null) scheduleHoverClose();
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
                 role="menuitem"
-                data-testid="file-menu-export-json"
               >
-                <span>JSON</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleExportImage('PNG')}
-                disabled={!canExport || busyFormat !== null}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-                  canExport && busyFormat === null
-                    ? 'text-gray-700 hover:bg-gray-100'
-                    : 'text-gray-400 cursor-not-allowed'
-                }`}
-                role="menuitem"
-                data-testid="file-menu-export-png"
-              >
-                <span>PNG</span>
-                {busyFormat === 'PNG' && <span className="text-xs italic">Generating…</span>}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleExportImage('PDF')}
-                disabled={!canExport || busyFormat !== null}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-                  canExport && busyFormat === null
-                    ? 'text-gray-700 hover:bg-gray-100'
-                    : 'text-gray-400 cursor-not-allowed'
-                }`}
-                role="menuitem"
-                data-testid="file-menu-export-pdf"
-              >
-                <span>PDF</span>
-                {busyFormat === 'PDF' && <span className="text-xs italic">Generating…</span>}
+                <TrashIcon className="w-4 h-4" />
+                Delete chart
               </button>
             </>
           )}
+        </div>
+      )}
 
-          {submenu === 'recent' && (
-            <>
+      {/* Side flyout: Export. Rendered as a sibling to the main menu
+        so both panels are visible simultaneously and the outer
+        `relative` ref still encloses the click-outside hit-test.
+        Positioning: `left-56` matches the main menu's `w-56` so the
+        flyout starts at the menu's right edge; `ml-1` adds a 4px
+        gap. We can't use `left-full` here because the `relative`
+        container is sized by the File trigger button (not the
+        absolute-positioned menu), so `left-full` would put the
+        flyout on top of the menu's right half. `top-full mt-1`
+        vertically aligns the flyout with the main menu's top edge. */}
+      {open && flyout === 'export' && (
+        <div
+          role="menu"
+          // Re-enter cancels the pending close (cursor reached the
+          // flyout). Leave arms a delayed close, giving the user time
+          // to move back to the parent or another flyout-targeted
+          // item.
+          onPointerEnter={cancelHoverClose}
+          onPointerLeave={scheduleHoverClose}
+          className="absolute top-full mt-1 left-56 ml-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+          data-testid="file-menu-export-flyout"
+        >
+          <button
+            type="button"
+            onClick={() => void handleExportJson()}
+            disabled={!canExport}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+              canExport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+            }`}
+            role="menuitem"
+            data-testid="file-menu-export-json"
+          >
+            <span>JSON</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportImage('PNG')}
+            disabled={!canExport || busyFormat !== null}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+              canExport && busyFormat === null
+                ? 'text-gray-700 hover:bg-gray-100'
+                : 'text-gray-400 cursor-not-allowed'
+            }`}
+            role="menuitem"
+            data-testid="file-menu-export-png"
+          >
+            <span>PNG</span>
+            {busyFormat === 'PNG' && <span className="text-xs italic">Generating…</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportImage('PDF')}
+            disabled={!canExport || busyFormat !== null}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+              canExport && busyFormat === null
+                ? 'text-gray-700 hover:bg-gray-100'
+                : 'text-gray-400 cursor-not-allowed'
+            }`}
+            role="menuitem"
+            data-testid="file-menu-export-pdf"
+          >
+            <span>PDF</span>
+            {busyFormat === 'PDF' && <span className="text-xs italic">Generating…</span>}
+          </button>
+        </div>
+      )}
+
+      {/* Side flyout: Open recent. Wider (w-80) than Export because
+        chart titles + timestamps need horizontal room (PR 7
+        feedback (39)). */}
+      {open && flyout === 'recent' && (
+        <div
+          role="menu"
+          onPointerEnter={cancelHoverClose}
+          onPointerLeave={scheduleHoverClose}
+          className="absolute top-full mt-1 left-56 ml-1 w-80 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+          data-testid="file-menu-recent-flyout"
+        >
+          {loadingRecent ? (
+            <div className="px-3 py-4 text-center text-xs text-gray-500">Loading…</div>
+          ) : errorRecent ? (
+            <div className="px-3 py-3 text-xs text-red-700">
+              <div>Couldn’t load recent charts.</div>
               <button
                 type="button"
-                onClick={() => setSubmenu('main')}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:bg-gray-100"
+                onClick={() => setRetryNonce((n) => n + 1)}
+                className="mt-1 underline text-red-700 hover:text-red-800"
               >
-                ← Back
+                Retry
               </button>
-              {loadingRecent ? (
-                <div className="px-3 py-4 text-center text-xs text-gray-500">Loading…</div>
-              ) : errorRecent ? (
-                <div className="px-3 py-3 text-xs text-red-700">
-                  <div>Couldn’t load recent charts.</div>
-                  <button
-                    type="button"
-                    onClick={() => setRetryNonce((n) => n + 1)}
-                    className="mt-1 underline text-red-700 hover:text-red-800"
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : recent.length === 0 ? (
-                <div className="px-3 py-3 text-xs text-gray-500">
-                  {isAuthenticated ? 'No saved charts yet.' : 'No local charts found.'}
-                </div>
-              ) : (
-                <div className="max-h-72 overflow-y-auto py-1">
-                  {recent.map((chart, idx) => (
-                    <a
-                      key={chart.chartId || idx}
-                      href={chart.editUrl}
-                      className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      <div className="font-medium truncate">{chart.title}</div>
-                      <div className="text-xs text-gray-500">
-                        {new Date(chart.updatedAt).toLocaleDateString()}
-                      </div>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </>
+            </div>
+          ) : recent.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-gray-500">
+              {isAuthenticated ? 'No saved charts yet.' : 'No local charts found.'}
+            </div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto py-1">
+              {recent.map((chart, idx) => (
+                <a
+                  key={chart.chartId || idx}
+                  href={chart.editUrl}
+                  className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                >
+                  <div className="font-medium truncate">{chart.title}</div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(chart.updatedAt).toLocaleDateString()}
+                  </div>
+                </a>
+              ))}
+            </div>
           )}
         </div>
       )}
