@@ -720,17 +720,18 @@ export function ToC({
         yPosition: adjustedYPosition,
       });
 
-      // PR 7 feedback (25): when a node moves, translate the waypoints
-      // of all connections touching that node so the curve's middle
-      // segment "follows" the move instead of leaving the waypoints
-      // pinned at their old container-local coordinates. Same-column
-      // moves get the full treatment (only `y` changes; we know the
-      // delta synchronously). Cross-column / new-column moves change
-      // the node's `x` too, but that new `x` is determined by the
-      // post-layout column geometry which isn't available at this
-      // point — for those structural rearrangements the user is
-      // already expecting the layout to reshuffle, so we leave
-      // waypoints alone rather than guessing.
+      // PR 7 feedback (25 + B): when a node moves, translate the
+      // waypoints of all connections touching that node so the curve's
+      // middle segment "follows" the move. Three cases:
+      //
+      //   - Same-column move: only `y` changes. dx=0, dy=Δy.
+      //   - Cross-column move (existing target column): both x and y
+      //     change. dx = new column center-x − old column center-x.
+      //   - New-column move: a new column is inserted at
+      //     `targetColumnIndex`, pushing existing columns right. The
+      //     new column's x sits between the two columns it's inserted
+      //     between. Estimate as the gutter midpoint from the
+      //     pre-drop layout snapshot.
       //
       // The translation magnitude is HALF the node's delta. Rationale:
       //   - If only the source (or only the target) moved, the
@@ -740,7 +741,6 @@ export function ToC({
       //     the waypoint would move by that full delta — but in the
       //     single-drop case we have here, only one node moves per
       //     event, so half-delta is the correct contribution.
-      //   - This matches the reviewer's recommended design verbatim.
       const isSameColumnMove =
         !isNewColumn &&
         sourceLocation.sectionIndex === targetSectionIndex &&
@@ -755,22 +755,72 @@ export function ToC({
       // up from the absolutely-positioned slot), so it can't be
       // compared against `adjustedYPosition` directly.
       let preDropYCenter: number | null = null;
-      if (isSameColumnMove) {
-        const sourceColumn =
-          data.sections[sourceLocation.sectionIndex]?.columns[sourceLocation.columnIndex];
-        const sourceNodeIndex = sourceColumn?.nodes.findIndex((n) => n.id === draggedNodeId) ?? -1;
-        const sourceNodeFromData =
-          sourceNodeIndex >= 0 ? sourceColumn!.nodes[sourceNodeIndex] : null;
-        if (sourceNodeFromData) {
-          const actualHeight = nodeHeights[draggedNodeId] || 76;
-          preDropYCenter =
-            sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + actualHeight / 2;
+      const sourceColumn =
+        data.sections[sourceLocation.sectionIndex]?.columns[sourceLocation.columnIndex];
+      const sourceNodeIndex = sourceColumn?.nodes.findIndex((n) => n.id === draggedNodeId) ?? -1;
+      const sourceNodeFromData = sourceNodeIndex >= 0 ? sourceColumn!.nodes[sourceNodeIndex] : null;
+      if (sourceNodeFromData) {
+        const actualHeight = nodeHeights[draggedNodeId] || 76;
+        preDropYCenter =
+          sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + actualHeight / 2;
+      }
+      // Snapshot the pre-drop COLUMN center-x for the source and target
+      // columns from the layout snapshot. The snapshot's `columnRects`
+      // are viewport-coords (read via `getBoundingClientRect`); we
+      // convert to container-local by subtracting the container's own
+      // viewport offset and dividing by zoom — same space waypoints
+      // live in.
+      let preDropXCenter: number | null = null;
+      let postDropXCenter: number | null = null;
+      const layoutSnap = getSnapshot();
+      const graphContainerEl = graphContainerRef.current;
+      if (graphContainerEl && layoutSnap.columnRects.length > 0) {
+        const containerRect = graphContainerEl.getBoundingClientRect();
+        const toLocalX = (clientX: number) => (clientX - containerRect.left) / zoomScale;
+        const srcCol =
+          layoutSnap.columnRects[sourceLocation.sectionIndex]?.[sourceLocation.columnIndex];
+        if (srcCol) {
+          preDropXCenter = toLocalX((srcCol.left + srcCol.right) / 2);
+        }
+        if (isSameColumnMove) {
+          // Same column → post-drop x equals pre-drop x.
+          postDropXCenter = preDropXCenter;
+        } else if (isNewColumn) {
+          // New column is inserted at `targetColumnIndex`, pushing the
+          // column currently at that index to the right. Best pre-drop
+          // estimate of the new column's center-x: the gutter midpoint
+          // between the column to the LEFT of the insertion point and
+          // the column currently AT the insertion point.
+          const sec = layoutSnap.columnRects[targetSectionIndex];
+          if (sec) {
+            const leftCol = sec[targetColumnIndex - 1];
+            const rightCol = sec[targetColumnIndex];
+            if (leftCol && rightCol) {
+              const gutterMid = (leftCol.right + rightCol.left) / 2;
+              postDropXCenter = toLocalX(gutterMid);
+            } else if (leftCol) {
+              // Drop past the last column → new column lands to the
+              // right of the current rightmost; approximate one
+              // column-width to the right.
+              postDropXCenter = toLocalX(leftCol.right + (leftCol.right - leftCol.left) / 2);
+            } else if (rightCol) {
+              // Drop before the first column → mirror.
+              postDropXCenter = toLocalX(rightCol.left - (rightCol.right - rightCol.left) / 2);
+            }
+          }
+        } else {
+          // Existing target column — its rect is already known.
+          const tgtCol = layoutSnap.columnRects[targetSectionIndex]?.[targetColumnIndex];
+          if (tgtCol) {
+            postDropXCenter = toLocalX((tgtCol.left + tgtCol.right) / 2);
+          }
         }
       }
-      const dy =
-        isSameColumnMove && preDropYCenter !== null ? adjustedYPosition - preDropYCenter : 0;
-      const shouldTranslateWaypoints = isSameColumnMove && dy !== 0;
-      const waypointShiftY = dy / 2; // half-delta — see comment above
+      const dy = preDropYCenter !== null ? adjustedYPosition - preDropYCenter : 0;
+      const dx =
+        preDropXCenter !== null && postDropXCenter !== null ? postDropXCenter - preDropXCenter : 0;
+      const shouldTranslateWaypoints = dx !== 0 || dy !== 0;
+      const waypointShift = { x: dx / 2, y: dy / 2 }; // half-delta — see comment above
 
       setDataAndNotify((prevData) => {
         // Locate the source node fresh inside the updater so we don't
@@ -851,15 +901,18 @@ export function ToC({
               : section,
           );
           const sectionsAfterWaypoints = shouldTranslateWaypoints
-            ? shiftWaypointsForNode(sectionsAfterMove, draggedNodeId, {
-                x: 0,
-                y: waypointShiftY,
-              })
+            ? shiftWaypointsForNode(sectionsAfterMove, draggedNodeId, waypointShift)
             : sectionsAfterMove;
           return { ...prevData, sections: sectionsAfterWaypoints };
         }
 
-        // Cross-column / cross-section move: remove from source, add to target.
+        // Cross-column / cross-section / new-column move: remove from
+        // source, add to target, then translate waypoints by the
+        // half-delta computed from the layout snapshot (PR 7 feedback
+        // B). The waypoint translation is folded into the SAME update
+        // so undo/redo treats the whole gesture atomically — no extra
+        // history entry, no flash-of-stale-waypoint visual blink
+        // between the node move and the waypoint shift.
         const newData = { ...prevData };
         newData.sections = prevData.sections.map((section) => ({
           ...section,
@@ -880,10 +933,14 @@ export function ToC({
           );
         }
 
+        if (shouldTranslateWaypoints) {
+          newData.sections = shiftWaypointsForNode(newData.sections, draggedNodeId, waypointShift);
+        }
+
         return newData;
       });
     },
-    [data, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
+    [data, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify, getSnapshot],
   );
 
   // PR 4: `usePointerDrag` owns drag state. `onDrop` flows directly to
