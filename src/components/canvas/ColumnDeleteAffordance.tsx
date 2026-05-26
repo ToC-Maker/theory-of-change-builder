@@ -12,6 +12,16 @@
 // `window.confirm()` is intentionally not used (red-team L4) — the
 // React modal keeps the event loop responsive, gives screen-reader
 // announcements, and is keyboard-navigable.
+//
+// PR 7 feedback (task 8): use Tailwind *named* groups (`group/column`,
+// `group/section` with `group-hover/column:` / `group-hover/section:`)
+// instead of the anonymous `group` / `group-hover:` selector. The
+// anonymous version matches when ANY ancestor with `.group` is
+// hovered, so hovering a column also fires the section's × (the
+// section wraps the columns and carries its own `.group`) and every
+// sibling column's × (their `.group` is descended from the same
+// section). Named groups scope hover-reveal to the specific level
+// the affordance belongs to.
 
 import { useState } from 'react';
 import { XMarkIcon } from '@heroicons/react/24/outline';
@@ -60,9 +70,14 @@ export function ColumnDeleteAffordance({
       <button
         type="button"
         // The × button is hidden by default and revealed via the
-        // surrounding column/section's `group` class. Parent must
-        // carry `group` for this to work.
-        className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-1 right-1 z-30 flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-gray-500 hover:text-red-600 hover:border-red-300 hover:bg-red-50 shadow-sm"
+        // surrounding column/section's *named* group class. The
+        // parent must carry the matching `group/<scope>` for this to
+        // work (`group/column` for `scope='column'`, `group/section`
+        // for `scope='section'`). See header comment for why named
+        // groups (not anonymous `group`) are required.
+        className={`opacity-0 ${
+          scope === 'column' ? 'group-hover/column:opacity-100' : 'group-hover/section:opacity-100'
+        } transition-opacity absolute top-1 right-1 z-30 flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-gray-500 hover:text-red-600 hover:border-red-300 hover:bg-red-50 shadow-sm`}
         aria-label={`Delete ${scope}`}
         title={`Delete ${scope}`}
         onClick={handleClick}

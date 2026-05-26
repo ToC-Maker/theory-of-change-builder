@@ -1114,17 +1114,13 @@ export function ToC({
           }
         }}
       >
-        {/* Empty state message - show when there are no nodes */}
-        {Array.isArray(data.sections) &&
-          data.sections.every(
-            (s) => s.columns && s.columns.every((c) => !c.nodes || c.nodes.length === 0),
-          ) && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-gray-300 text-5xl font-light" style={{ fontFamily: fontFamily }}>
-                Double Click Anywhere to Add a Node
-              </div>
-            </div>
-          )}
+        {/* PR 7 feedback (task 7): the previous "Double Click Anywhere
+            to Add a Node" empty-state banner is no longer accurate.
+            PR 5 introduced always-on add affordances in column gutters
+            and section padding, so "click anywhere" oversells where
+            adds actually land. Removed entirely (no replacement copy)
+            since the gutter labels already announce "+ Column" /
+            "+ Section" on hover. */}
 
         {Array.isArray(data.sections) ? (
           data.sections.map((section, sectionIndex) => (
@@ -1165,40 +1161,70 @@ export function ToC({
               >
                 <div className="flex">
                   {/* Section title positioned to center over actual columns */}
-                  <div
-                    className={clsx(
-                      'flex flex-col',
-                      // PR 5 Task 5.3: `group relative` enables the
-                      // child × delete button's hover-reveal anywhere
-                      // inside the section.
-                      editMode && 'group relative',
-                    )}
-                    data-section-index={sectionIndex}
-                  >
-                    {/* PR 5 Task 5.3: hover-× section delete.
-                      Visible only when the section is hovered (via
-                      the parent's `group` class). Click → React
-                      confirm modal. */}
-                    {editMode && (
-                      <ColumnDeleteAffordance
-                        nodeCount={section.columns.reduce((sum, col) => sum + col.nodes.length, 0)}
-                        scope="section"
-                        onDelete={() => deleteSection(sectionIndex)}
-                        testIdSuffix={`${sectionIndex}`}
-                      />
-                    )}
+                  <div className="flex flex-col" data-section-index={sectionIndex}>
                     <div
-                      className="rounded py-3 mb-2 px-3"
+                      className={clsx(
+                        'rounded py-3 mb-2 px-3',
+                        // PR 5 Task 5.3 + PR 7 task 8: `group/section
+                        // relative` lives on the section *title bar*,
+                        // not the outer column wrapper, so the section
+                        // × reveals only when the title bar itself is
+                        // hovered. Hovering inside a column does NOT
+                        // light it up — CSS `:hover` bubbles through
+                        // ancestors, so putting the group on the outer
+                        // wrapper made every descendant-hover (every
+                        // column, every node) also satisfy
+                        // `.group/section:hover`. Title bar is the
+                        // visually-obvious hover target for "delete
+                        // this section".
+                        editMode && 'group/section relative',
+                      )}
                       style={{
                         backgroundColor: data.color || '#374151', // Default to gray-700
                         // PR 5: section title width must account for the
                         // always-on column gutters in edit mode (N+1
                         // gutters around N columns, each `columnPadding`
                         // wide). View mode renders no gutters.
-                        minWidth: `${sectionWidths[sectionIndex] + (editMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
-                        width: 'max-content',
+                        //
+                        // PR 7 task 15: in edit mode, pin `width` to the
+                        // columns-driven layout figure so the section
+                        // doesn't visibly resize when the title swaps
+                        // between `<h2>` and `<input>`. The `<input>`
+                        // defaults to a ~20-char intrinsic width at
+                        // 3xl, which used to push `max-content`
+                        // (previously `width: max-content`) wider than
+                        // the columns. Locking the width matches what
+                        // the columns underneath need; the `<h2>` and
+                        // `<input>` inside use `w-full` and let this
+                        // wrapper dictate the layout. View mode keeps
+                        // the historical `max-content + minWidth`
+                        // behaviour so long titles can still grow the
+                        // section past its columns.
+                        ...(editMode
+                          ? {
+                              width: `${sectionWidths[sectionIndex] + (section.columns.length + 1) * columnPadding}px`,
+                            }
+                          : {
+                              minWidth: `${sectionWidths[sectionIndex]}px`,
+                              width: 'max-content',
+                            }),
                       }}
                     >
+                      {/* PR 5 Task 5.3: hover-× section delete.
+                        Visible only when the title bar is hovered (via
+                        the parent's `group/section` class). Click →
+                        React confirm modal. */}
+                      {editMode && (
+                        <ColumnDeleteAffordance
+                          nodeCount={section.columns.reduce(
+                            (sum, col) => sum + col.nodes.length,
+                            0,
+                          )}
+                          scope="section"
+                          onDelete={() => deleteSection(sectionIndex)}
+                          testIdSuffix={`${sectionIndex}`}
+                        />
+                      )}
                       {editMode && editingSectionIndex === sectionIndex ? (
                         <input
                           type="text"
@@ -1228,14 +1254,27 @@ export function ToC({
                               setEditingSectionIndex(null);
                             }
                           }}
-                          className="text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
+                          // PR 7 task 15: keep section dimensions stable
+                          // while editing the title.
+                          //   - `w-full` (no HTML `size` attribute): the
+                          //     input fills the title bar width — no
+                          //     horizontal growth per character.
+                          //   - `border-b-2 border-white/50` matches the
+                          //     pre-PR-7 focus underline; the matching
+                          //     h2 below carries `border-b-2
+                          //     border-transparent` so the swap is
+                          //     vertically identical (no height jump).
+                          className="w-full text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
                           style={{ fontFamily: fontFamily }}
-                          size={section.title.length || 1}
                           autoFocus
                         />
                       ) : (
                         <h2
-                          className={`text-3xl font-bold text-center text-white uppercase ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                          // PR 7 task 15: the 2px transparent bottom
+                          // border matches the input's `border-b-2`
+                          // underline, so swapping between view and
+                          // edit doesn't change the title row's height.
+                          className={`block w-full text-3xl font-bold text-center text-white uppercase border-b-2 border-transparent ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
                           style={{ fontFamily: fontFamily }}
                           onClick={() => editMode && setEditingSectionIndex(sectionIndex)}
                           title={editMode ? 'Click to edit section label' : ''}
@@ -1292,9 +1331,13 @@ export function ToC({
                             data-column={`${sectionIndex}-${colIndex}`}
                             className={clsx(
                               'relative',
-                              // PR 5 Task 5.3: `group` enables the
-                              // child × delete button's hover-reveal.
-                              editMode && 'group',
+                              // PR 5 Task 5.3 + PR 7 task 8:
+                              // `group/column` enables the *column* ×
+                              // delete button's hover-reveal. Named
+                              // group so hovering one column doesn't
+                              // light up sibling columns' × buttons
+                              // (or the surrounding section's ×).
+                              editMode && 'group/column',
                               // CSS-hover affordance for empty-column
                               // body: `cursor-cell` signals "click here
                               // to drop a node". Pure CSS, no JS hover
