@@ -23,7 +23,7 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
-import { parseFile, getFileTypeDescription } from '../utils/fileParser';
+import { parseFile } from '../utils/fileParser';
 import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
 import { getFreshIdToken } from '../utils/auth';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
@@ -2828,7 +2828,10 @@ export function ChatInterface({
 
     const readyTextFiles = files.filter((f) => f.status === 'ready').length;
     const readyPdfFiles = generateAttachedFileIds.length;
-    if (readyTextFiles + readyPdfFiles === 0) {
+    const hasPrompt = additionalInstructions.trim().length > 0;
+    // Allow prompt-only generation. Documents are optional; a non-empty
+    // prompt is enough to kick off a Generate run.
+    if (readyTextFiles + readyPdfFiles === 0 && !hasPrompt) {
       return;
     }
     // Block on in-flight PDF uploads so the request doesn't race the file_id.
@@ -3239,25 +3242,42 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           height: 'calc(100vh - 52px)',
         }}
       >
-        {/* Toggle Button */}
-        <div className="flex-shrink-0 p-2 border-b border-gray-200">
-          <button
-            onClick={onToggle}
-            className="w-full h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-            title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+        {/* Drawer Header. Title sits left, collapse chevron sits right;
+            only the chevron is the click target (clicking the title text
+            does NOT toggle). When collapsed the title is hidden and the
+            chevron is centered as the sole control. */}
+        <div className="flex-shrink-0 p-2">
+          <div
+            className={`h-8 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}
           >
-            {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
-            <ChevronLeftIcon
-              className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
-            />
-          </button>
+            {!isCollapsed && (
+              <span className="text-sm font-medium text-gray-700 pl-1 select-none">
+                AI Assistant
+              </span>
+            )}
+            <button
+              onClick={onToggle}
+              className="p-1 rounded-md text-gray-500 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 transition-colors"
+              title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+              aria-label={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+              aria-expanded={!isCollapsed}
+            >
+              <ChevronLeftIcon
+                className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
+              />
+            </button>
+          </div>
         </div>
 
-        {/* Chat Content */}
+        {/* Chat Content. `min-h-0` lets the inner `flex-1 overflow-y-auto`
+            content area actually scroll — without it, flex-1's default
+            min-height of `auto` lets the content's intrinsic size win and
+            the scroll container grows past the viewport instead of
+            clipping + scrolling. */}
         <div
-          className={`flex-1 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}
+          className={`flex-1 min-h-0 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}
         >
-          <div className="h-full flex flex-col">
+          <div className="h-full flex flex-col min-h-0">
             {/* Chat Header */}
             <div className="p-3 border-b border-gray-200">
               <div className="flex items-center justify-between mb-3">
@@ -3388,7 +3408,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             {/* Content Area */}
             <div
               ref={chatContainerRef}
-              className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3"
+              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3 space-y-3"
               onScroll={handleScroll}
             >
               {currentMode === 'chat' ? (
@@ -3426,10 +3446,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     reserveCost + the kill switch enforce the $5 lifetime cap
                     for free/anon tiers; BYOK bypasses it. */}
                   <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                    Generate runs a deep analysis of your documents. A single run typically costs a
-                    few dollars — more for large documents or heavy web searching. The running cost
-                    is shown as the answer is written, so you can stop it at any time if it starts
-                    to add up.
+                    A run typically costs a few dollars, more for large documents or heavy web
+                    searching. Cost is shown live as the answer is written, so you can stop anytime.
                   </div>
                   <div className="text-center text-gray-500 text-sm py-4">
                     <div className="mb-2">
@@ -3448,10 +3466,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </p>
                   </div>
 
-                  {/* File Upload */}
-                  <div
-                    className={`border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors ${
-                      generateBlockedByTurnstile ? 'opacity-50' : 'hover:border-gray-400'
+                  {/* File Upload. The outer <label> is the entire click
+                      target — clicking anywhere inside (including the
+                      format-list helper text) opens the file picker via
+                      the hidden <input>. Keyboard activation works via the
+                      label's native semantics (Enter/Space focuses the
+                      input). Drag-and-drop listeners stay on the label. */}
+                  <label
+                    className={`block border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors ${
+                      generateBlockedByTurnstile
+                        ? 'opacity-50 cursor-not-allowed'
+                        : 'cursor-pointer hover:border-gray-400 hover:bg-gray-50'
                     }`}
                     onDragOver={(e) => {
                       if (generateBlockedByTurnstile) return;
@@ -3477,20 +3502,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       multiple
                       accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
                       onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+                      disabled={generateBlockedByTurnstile}
                       className="hidden"
                     />
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={generateBlockedByTurnstile}
-                      className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 enabled:hover:text-gray-800 enabled:hover:bg-gray-50 disabled:cursor-not-allowed rounded transition-colors"
-                    >
+                    <div className="w-full flex items-center justify-center gap-2 p-3 text-gray-600">
                       <CloudArrowUpIcon className="w-5 h-5" />
                       Click to upload or drag & drop documents
-                    </button>
+                    </div>
                     <p className="text-xs text-gray-500 text-center mt-2">
-                      Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
+                      Supports PDF, TXT, MD, CSV, HTML, and other text formats
                     </p>
-                  </div>
+                  </label>
 
                   {/* Generate-mode PDF chips (Files API uploads). */}
                   {generateAttachedChips.length > 0 && (
@@ -3523,17 +3545,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                                   <span className="text-sm text-gray-700 truncate">
                                     {file.file.name}
                                   </span>
-                                  <span className="text-xs text-gray-500">
-                                    ({getFileTypeDescription(file.file.name)})
-                                  </span>
                                 </div>
                                 {file.status === 'reading' && (
                                   <span className="text-xs text-gray-500">Reading file...</span>
-                                )}
-                                {file.status === 'ready' && file.content && (
-                                  <span className="text-xs text-green-600">
-                                    {Math.round(file.content.length / 1000)}KB of text extracted
-                                  </span>
                                 )}
                                 {file.status === 'error' && (
                                   <span className="text-xs text-red-600">
@@ -3654,9 +3668,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   <button
                     onClick={startGeneration}
                     disabled={
-                      files.filter((f) => f.status === 'ready').length +
+                      // Documents are optional — a non-empty prompt is
+                      // enough to enable Generate. Only disable when both
+                      // files and prompt are empty.
+                      (files.filter((f) => f.status === 'ready').length +
                         generateAttachedFileIds.length ===
-                        0 ||
+                        0 &&
+                        additionalInstructions.trim().length === 0) ||
                       generateAttachedChips.some(
                         (f) => f.status === 'uploading' || f.status === 'error',
                       ) ||
@@ -4029,19 +4047,17 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <Cog6ToothIcon className="w-5 h-5" />
                           </button>
                           {showComposerOptions && (
+                            // Anchor to the LEFT of the cog so the popover
+                            // extends rightward into the canvas area instead
+                            // of off-screen-left when the chat panel sits at
+                            // the viewport's left edge. Each row is a single
+                            // line: label left, control right.
                             <div
                               role="menu"
-                              className="absolute bottom-full mb-2 right-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
+                              className="absolute bottom-full mb-2 left-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
                             >
                               <div className="flex items-center justify-between gap-3">
-                                <div>
-                                  <div className="text-xs font-medium text-gray-700">
-                                    Web search
-                                  </div>
-                                  <div className="text-[10px] text-gray-500">
-                                    Let the assistant browse the web mid-conversation.
-                                  </div>
-                                </div>
+                                <div className="text-xs font-medium text-gray-700">Web search</div>
                                 <button
                                   type="button"
                                   onClick={() => setWebSearchEnabled((v) => !v)}
@@ -4058,8 +4074,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                                   />
                                 </button>
                               </div>
-                              <div>
-                                <div className="text-xs font-medium text-gray-700 mb-1">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium text-gray-700">
                                   Effort level
                                 </div>
                                 <EffortDropdown
