@@ -98,21 +98,35 @@ export function FormatMenu({
           role="menu"
           className="absolute top-full mt-1 left-0 w-72 bg-white rounded-lg shadow-lg border border-gray-200 py-3 px-4 z-50 space-y-4"
         >
-          {/* Font family */}
+          {/* Font family — styled to match the `Picker` trigger pattern
+            used in `ChatInterface.tsx` (model + effort selectors):
+              rounded-lg, slightly larger padding, hover border darken,
+              ring-2 focus, smooth transition, custom ChevronDownIcon.
+            Native `<select>` chevron is hidden via `appearance-none` +
+            right padding for the overlaid icon. The popup option list
+            is still browser-native (a full custom popover for 14
+            options would be a much bigger change than the reviewer
+            asked for); only the trigger styling is brought into line. */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Font family</label>
-            <select
-              value={fontFamily}
-              onChange={(e) => setFontFamily(e.target.value)}
-              className="w-full text-sm text-gray-700 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              style={{ fontFamily }}
-            >
-              {FONT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value} style={{ fontFamily: opt.value }}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                value={fontFamily}
+                onChange={(e) => setFontFamily(e.target.value)}
+                className="w-full text-sm text-gray-700 border border-gray-300 rounded-lg px-2.5 py-2 pr-8 bg-white appearance-none cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                style={{ fontFamily }}
+              >
+                {FONT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value} style={{ fontFamily: opt.value }}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDownIcon
+                className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500"
+                aria-hidden
+              />
+            </div>
           </div>
 
           {/* Text size */}
@@ -132,10 +146,18 @@ export function FormatMenu({
               >
                 <MinusIcon className="w-4 h-4 text-gray-600" />
               </button>
+              {/* `type="text"` (with `inputMode="numeric"` and a numeric
+                `pattern`) avoids the native up/down spinner buttons
+                that `type="number"` renders inside the field — they
+                duplicate the [-]/[+] siblings (reviewer feedback 41).
+                The handler already `parseInt`s + clamps, so a text
+                input round-trips identically. `inputMode="numeric"`
+                still surfaces the numeric soft keyboard on mobile. */}
               <input
-                type="number"
-                min={9}
-                max={36}
+                type="text"
+                inputMode="numeric"
+                pattern="\d*"
+                aria-label="Text size in pixels"
                 value={currentPx}
                 onChange={(e) => {
                   const px = parseInt(e.target.value, 10) || 18;
