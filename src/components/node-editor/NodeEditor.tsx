@@ -61,7 +61,24 @@
 // event-ordering hazard CustomEvent would introduce; we expose
 // `registerOnDragStartedElsewhere` so the parent can plug a single
 // callback in (instead of NodeEditor itself wiring an event listener).
-import { useEffect, useRef } from 'react';
+//
+// ---------------------------------------------------------------------------
+// Dismissal
+// ---------------------------------------------------------------------------
+//
+// Outside-click + Escape dismissal live in the shared
+// `useDismissOnOutsideEvent` hook (same one EdgeEditor uses). The anchor
+// (the selected node's DOM element) is in the "safe" set so a click on
+// the node itself doesn't dismiss the editor it just opened.
+//
+// `useKeyboardShortcuts.clearSelections` ALSO fires on Escape and clears
+// `highlightedNodes`, which causes this editor to unmount. The two
+// Escape paths are intentionally redundant: the global path bails when
+// an input is focused (`isInputFocused()`), while the hook's path
+// closes even from a focused input inside our container. Our hook's
+// `onDismiss` is `setHighlightedNodes(new Set())` (idempotent), so the
+// overlap is benign.
+import { useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { TrashIcon } from '@heroicons/react/24/outline';
 import type { SetStateAction } from 'react';
@@ -69,6 +86,7 @@ import type { ToCData } from '../../types';
 import { useNodeProperties } from './useNodeProperties';
 import { useAnchorPosition } from './useAnchorPosition';
 import { DetailsEditor } from './DetailsEditor';
+import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
@@ -158,22 +176,19 @@ export function NodeEditor(props: NodeEditorProps) {
     registerOnDragStartedElsewhere(() => onRequestClose());
   }, [registerOnDragStartedElsewhere, onRequestClose]);
 
-  // Outside-click dismissal. We listen on `mousedown` (not `click`) so
-  // the dismissal fires before any focus-shift the click would cause.
-  useEffect(() => {
-    const handle = (e: MouseEvent) => {
-      const el = containerRef.current;
-      if (!el) return;
-      if (e.target instanceof Node && el.contains(e.target)) return;
-      // Also ignore clicks that originate from the anchor itself —
-      // re-selecting the same node shouldn't dismiss.
-      const anchor = anchorRef.current;
-      if (anchor && e.target instanceof Node && anchor.contains(e.target)) return;
-      onRequestClose();
-    };
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [anchorRef, onRequestClose]);
+  // Outside-click + Escape dismissal via the shared hook. The anchor
+  // (the selected node's wrapper element) is in the "safe" set so a
+  // click on the node itself — including its connection-source dots,
+  // resize handles, and drag handle — doesn't dismiss the editor.
+  //
+  // `useMemo` keeps the safe-refs array reference-stable across renders
+  // so the hook's effect deps don't churn.
+  const safeRefs = useMemo(() => [anchorRef] as const, [anchorRef]);
+  useDismissOnOutsideEvent({
+    containerRef,
+    onDismiss: onRequestClose,
+    extraSafeRefs: safeRefs,
+  });
 
   if (selectedNodeIds.length === 0) return null;
 
