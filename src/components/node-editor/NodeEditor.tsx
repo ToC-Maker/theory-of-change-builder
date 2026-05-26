@@ -8,22 +8,34 @@
 //   3. The `<NodePopup>` modal that opened from the pencil icon for
 //      title + markdown details editing.
 //
-// All three converge here: a single floating editor anchored beside the
+// All three converge here: a single floating editor anchored below the
 // currently-selected node, with title (input), visual controls (width
-// slider, color picker, delete button), and a lazy MDXEditor accordion
-// for the details block. Multi-selection writes apply to all selected
-// nodes; single-selection writes target the one. See
-// `useNodeProperties.ts` for the commit-cadence semantics.
+// slider, color picker, delete button), and an inline MDXEditor for the
+// details block. Multi-selection writes apply to all selected nodes;
+// single-selection writes target the one. See `useNodeProperties.ts`
+// for the commit-cadence semantics.
 //
 // ---------------------------------------------------------------------------
-// Anchoring
+// Anchoring (PR 7 feedback: bottom-placement)
 // ---------------------------------------------------------------------------
 //
 // The editor portals to `document.body` (so its z-index escapes whatever
 // transform stack the canvas applies) and is `position: fixed`-positioned
-// by `useAnchorPosition`. The hook subscribes to camera, anchor resize,
-// and DOM mutations so the overlay stays glued to the node across pan,
-// zoom, and graph reflow.
+// by `useAnchorPosition` with `placement: 'bottom'`. The hook subscribes
+// to camera, anchor resize, overlay resize, and DOM mutations so the
+// overlay stays glued to the node across pan, zoom, and graph reflow.
+//
+// Why bottom (not right)? When the editor sat to the side and the user
+// dragged the width slider, the node grew wider, the editor re-anchored
+// to the new right edge, and the slider track translated horizontally
+// out from under the cursor — making the drag effectively unbounded
+// upward. Anchoring below keeps the slider track stationary in screen
+// space during a width drag (the only motion is the slider thumb under
+// the cursor).
+//
+// `flip: true` lets the hook escalate to top-placement when the node
+// sits near the viewport's bottom edge and the editor wouldn't fit
+// below (e.g. a goal-column node on a short window).
 //
 // ---------------------------------------------------------------------------
 // Cleanup
@@ -110,9 +122,11 @@ export function NodeEditor(props: NodeEditorProps) {
 
   const position = useAnchorPosition({
     anchorRef,
+    overlayRef: containerRef,
     camera,
-    placement: 'right',
+    placement: 'bottom',
     offset: 12,
+    flip: true,
   });
 
   // Cleanup: flush buffered title + details writes on unmount. This is
@@ -220,9 +234,12 @@ export function NodeEditor(props: NodeEditorProps) {
         />
       </label>
 
-      {/* Visual controls: width + color. Both apply to every selected node. */}
-      <div className="node-editor__visuals mt-3 flex items-center gap-3">
-        <label className="flex items-center gap-2 flex-1">
+      {/* Visual controls: width slider on its own row so the slider
+          gets the full content width, plus color on its own row so the
+          color swatch can't be pushed past the editor's right edge by
+          the slider track. (PR 7 feedback: "color picker overflows".) */}
+      <div className="node-editor__visuals mt-3 space-y-2">
+        <label className="flex items-center gap-2">
           <span className="text-xs text-gray-600 whitespace-nowrap">Width</span>
           <input
             type="range"
@@ -233,29 +250,31 @@ export function NodeEditor(props: NodeEditorProps) {
             onChange={(e) => props_.setWidth(parseInt(e.target.value, 10))}
             onPointerUp={() => props_.commitWidth()}
             onBlur={() => props_.commitWidth()}
-            className="flex-1 h-1 bg-gray-200 rounded appearance-none cursor-pointer"
+            className="flex-1 min-w-0 h-1 bg-gray-200 rounded appearance-none cursor-pointer"
             aria-label="Node width"
           />
           <span className="text-xs text-gray-500 w-10 text-right tabular-nums">{props_.width}</span>
         </label>
-        <label className="flex items-center gap-1">
-          <span className="text-xs text-gray-600">Color</span>
+        <label className="flex items-center gap-2">
+          <span className="text-xs text-gray-600 whitespace-nowrap">Color</span>
           <input
             type="color"
             value={props_.color}
             onChange={(e) => props_.setColor(e.target.value)}
-            className="w-6 h-6 rounded border border-gray-300 cursor-pointer"
+            className="w-6 h-6 rounded border border-gray-300 cursor-pointer shrink-0"
             aria-label="Node color"
           />
         </label>
       </div>
 
-      {/* Details accordion (lazy MDXEditor). */}
+      {/* Details — always-on inline MDXEditor (lazy chunk loads on
+          mount; skeleton covers the download). The old "Edit details"
+          toggle is gone (PR 7 feedback: "the node editor shouldn't be
+          in two parts"). */}
       <div className="node-editor__details mt-3 pt-2 border-t border-gray-100">
         <DetailsEditor
           markdown={props_.details}
           onChange={(md) => props_.setDetails(md)}
-          onCommit={() => props_.commitDetails()}
           placeholder={
             props_.isDetailsMixed ? 'Multiple values' : 'Add details (markdown supported)…'
           }

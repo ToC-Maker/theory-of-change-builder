@@ -1,21 +1,29 @@
-// `DetailsEditor` — lazy MDXEditor accordion inside `NodeEditor`.
+// `DetailsEditor` — always-on lazy MDXEditor inside `NodeEditor`.
 //
-// Collapsed state renders a non-interactive markdown preview (so the
-// node's existing details are visible immediately, even on slow
-// connections where the MDXEditor chunk hasn't downloaded yet). Click
-// to expand triggers two things in parallel:
-//   1. `setExpanded(true)` so the accordion opens
-//   2. an eager preload via the dynamic import promise (so the chunk
-//      starts downloading even if React hasn't fully committed yet).
+// Pre-feedback-editor, the details block was a click-to-expand
+// accordion ("Edit details" / "Hide details" toggle) so the
+// expensive `@mdxeditor/editor` chunk wasn't paid for on every node
+// click. User feedback (PR 7) called this out as a two-step that
+// hurts the editing flow ("the node editor shouldn't be in two
+// parts"). We now mount the editor inline as soon as the NodeEditor
+// opens, with a Suspense skeleton covering the chunk download.
 //
-// Once expanded, we render the full `MDXEditorComponent`. The collapsed
-// preview renders the raw markdown via a plain `<div>` (not the editor)
-// so the collapsed path doesn't pay the chunk-download cost.
+// Performance: the lazy chunk still defers the ~600 KB MDXEditor
+// bundle until the first node-open. Subsequent node-opens reuse the
+// cached chunk (Vite's import cache de-dupes). Effectively: first
+// node-open pays the chunk cost once per session, every later click
+// is instant. Compared with the old toggle, we just moved the load
+// trigger earlier (on NodeEditor mount, not on accordion-open),
+// which is when the user has already signaled "I want to edit this
+// node".
 //
-// Commit semantics: the parent's `onCommit` callback fires when the
-// accordion collapses OR when `NodeEditor` unmounts. Live typing is
-// streamed via `onChange` (buffered by `useNodeProperties` →
-// `mutateDebounced`).
+// We also fire an eager preload as soon as this module is imported,
+// so the chunk download can overlap with the parent React render.
+//
+// Commit semantics: live typing streams via `onChange` (buffered by
+// `useNodeProperties` → `mutateDebounced`). The buffered details are
+// flushed on NodeEditor close via NodeEditor's cleanup effect; this
+// component does not own the close-edge commit.
 //
 // ---------------------------------------------------------------------------
 // Lazy-load failure containment
@@ -33,7 +41,7 @@
 // We wrap the lazy chunk in a local `<ErrorBoundary>` with an inline
 // fallback (retry button + plain-text preview) so the surrounding
 // NodeEditor stays functional.
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useState } from 'react';
 import type { ComponentType, LazyExoticComponent } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { loggingService } from '../../services/loggingService';
@@ -53,8 +61,6 @@ interface DetailsEditorProps {
   markdown: string;
   /** Streaming write — called on every keystroke. */
   onChange: (markdown: string) => void;
-  /** Called when the accordion collapses; the caller flushes the buffer. */
-  onCommit: () => void;
   /** Placeholder for the empty state. */
   placeholder?: string;
   fontFamily?: string;
@@ -67,8 +73,8 @@ interface DetailsEditorProps {
 }
 
 // Lazy import — defers the lexical / mdast / mdxeditor chunk (~600 KB
-// minified) until the user actually clicks to edit. Empty graphs that
-// never open a node skip the cost entirely.
+// minified) until the user actually opens a node editor. Empty graphs
+// that never open a node skip the cost entirely.
 //
 // Returned as a factory so Retry can rebuild a fresh lazy component
 // (React.lazy caches rejected promises — re-using the same instance
@@ -81,32 +87,20 @@ function buildLazyMDXEditor(): LazyExoticComponent<ComponentType<MDXEditorPropsS
   );
 }
 
-// Eager preload: kicked off by the click-to-edit handler so the chunk
-// is fetched in parallel with React's expand-state commit. Idempotent
-// across calls (Vite's import cache de-dupes).
-function preloadMDXEditor() {
-  void import('../MDXEditor');
-}
+// Eager module-load: kicks off the chunk download as soon as this
+// module is imported (which happens when NodeEditor mounts, since
+// NodeEditor imports DetailsEditor directly). The promise is fire-
+// and-forget; Vite's import cache de-dupes with the lazy() call
+// below.
+void import('../MDXEditor');
 
 export function DetailsEditor({
   markdown,
   onChange,
-  onCommit,
   placeholder = 'Add details (markdown supported)...',
   fontFamily,
   lazyFactory = buildLazyMDXEditor,
 }: DetailsEditorProps) {
-  const [expanded, setExpanded] = useState(false);
-  const wasExpandedRef = useRef(false);
-
-  // Track the collapse edge so `onCommit` fires once per close.
-  useEffect(() => {
-    if (wasExpandedRef.current && !expanded) {
-      onCommit();
-    }
-    wasExpandedRef.current = expanded;
-  }, [expanded, onCommit]);
-
   // `loadAttempt` is bumped on Retry; we rebuild the lazy component so
   // a previously-rejected import promise can be retried (React.lazy
   // caches rejections per-component). useState lazy-init is used so we
@@ -114,12 +108,10 @@ export function DetailsEditor({
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [LazyMDXEditor, setLazyMDXEditor] = useState(() => lazyFactory());
   const retry = useCallback(() => {
-    preloadMDXEditor();
+    void import('../MDXEditor');
     setLazyMDXEditor(() => lazyFactory());
     setLoadAttempt((n) => n + 1);
   }, [lazyFactory]);
-
-  const togglerLabel = expanded ? 'Hide details' : markdown ? 'Edit details' : 'Add details';
 
   // Local fallback for the ErrorBoundary: never the full-screen reload
   // UI. The rest of NodeEditor (title input, width, color, delete)
@@ -154,76 +146,51 @@ export function DetailsEditor({
 
   return (
     <div className="details-editor">
-      <button
-        type="button"
-        className="details-editor__toggle text-xs text-blue-600 hover:underline"
-        onClick={() => {
-          // Preload BEFORE the React state update so the network request
-          // starts on the same tick as the click. The Suspense fallback
-          // below then almost-certainly hides under the React 18 paint.
-          if (!expanded) preloadMDXEditor();
-          setExpanded((v) => !v);
-        }}
-        onMouseEnter={() => {
-          // Pre-warm on hover so the click feels instant.
-          if (!expanded) preloadMDXEditor();
+      <span className="text-xs text-gray-600 mb-1 block">Details</span>
+      <ErrorBoundary
+        // `key` resets the boundary state when Retry rebuilds the lazy
+        // factory, so a fresh attempt isn't blocked by the stuck error
+        // state from the previous one.
+        key={loadAttempt}
+        fallback={errorFallback}
+        onCatch={(error, info) => {
+          loggingService.reportError({
+            error_name: error.name || 'Error',
+            error_message: error.message || String(error),
+            stack_trace: error.stack,
+            request_metadata: {
+              component: 'DetailsEditor',
+              componentStack: info.componentStack,
+            },
+          });
         }}
       >
-        {togglerLabel}
-      </button>
-
-      {expanded ? (
-        <ErrorBoundary
-          // `key` resets the boundary state when Retry rebuilds the lazy
-          // factory, so a fresh attempt isn't blocked by the stuck error
-          // state from the previous one.
-          key={loadAttempt}
-          fallback={errorFallback}
-          onCatch={(error, info) => {
-            loggingService.reportError({
-              error_name: error.name || 'Error',
-              error_message: error.message || String(error),
-              stack_trace: error.stack,
-              request_metadata: {
-                component: 'DetailsEditor',
-                componentStack: info.componentStack,
-              },
-            });
-          }}
-        >
-          <Suspense
-            fallback={
-              <div
-                className="details-editor__loading text-xs text-gray-400 italic px-2 py-1"
-                style={{ fontFamily }}
-              >
-                Loading editor…
-              </div>
-            }
-          >
-            <div className="mt-1">
-              <LazyMDXEditor
-                markdown={markdown}
-                onChange={onChange}
-                placeholder={placeholder}
-                fontFamily={fontFamily}
-              />
+        <Suspense
+          fallback={
+            // Skeleton matches the rough height of the MDXEditor toolbar +
+            // an empty body so the panel doesn't jump when the chunk
+            // commits. Includes a label so screen readers / debug callers
+            // know the editor is loading rather than blank.
+            <div
+              className="details-editor__loading mt-1 rounded border border-gray-200 bg-gray-50 px-2 py-3 text-xs text-gray-400 italic"
+              style={{ fontFamily, minHeight: '6rem' }}
+              aria-busy="true"
+              aria-label="Loading editor"
+            >
+              Loading editor…
             </div>
-          </Suspense>
-        </ErrorBoundary>
-      ) : markdown ? (
-        // Collapsed-but-has-content: render a compact text-only preview.
-        // We deliberately avoid loading MDXEditor here so the collapsed
-        // path stays fast. A future enhancement can render the markdown
-        // via a tiny offline renderer (e.g. marked) if richer preview is
-        // useful; today the raw markdown is good enough as a hint.
-        <div
-          className="details-editor__preview text-xs text-gray-500 mt-1 whitespace-pre-wrap line-clamp-3"
-          style={{ fontFamily }}
+          }
         >
-          {markdown}
-        </div>
-      ) : null}
+          <div className="mt-1">
+            <LazyMDXEditor
+              markdown={markdown}
+              onChange={onChange}
+              placeholder={placeholder}
+              fontFamily={fontFamily}
+            />
+          </div>
+        </Suspense>
+      </ErrorBoundary>
     </div>
   );
 }

@@ -9,18 +9,22 @@
 //
 // The fix wraps the Suspense in a local boundary that:
 //   1. Logs to loggingService.reportError with component='DetailsEditor'.
-//   2. Renders an inline error fallback inside the accordion ("Editor
-//      failed to load. Retry").
+//   2. Renders an inline error fallback inside the editor section
+//      ("Editor failed to load. Retry").
 //   3. Leaves the rest of NodeEditor (title input, width, color, delete
 //      button) functional (out-of-scope here — covered by the
 //      surrounding NodeEditor tests).
 //
 // Acceptance:
-//   - Rejected dynamic import → inline error UI inside the accordion
-//     (NOT the root ErrorBoundary), with a Retry button.
+//   - Rejected dynamic import → inline error UI inside the editor
+//     section (NOT the root ErrorBoundary), with a Retry button.
 //   - loggingService.reportError is called with the component tag.
+//
+// Note: PR 7 dropped the "Edit details" toggle; the MDXEditor now
+// mounts directly with the editor. The lazy-load test no longer has
+// to click the toggle first.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { lazy } from 'react';
 import { DetailsEditor } from '../../src/components/node-editor/DetailsEditor';
 import { loggingService } from '../../src/services/loggingService';
@@ -50,22 +54,11 @@ describe('DetailsEditor — lazy-load failure', () => {
   it('shows inline error UI with Retry when the MDXEditor chunk fails to load', async () => {
     const reportSpy = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
 
-    render(
-      <DetailsEditor
-        markdown=""
-        onChange={() => {}}
-        onCommit={() => {}}
-        lazyFactory={buildFailingLazy}
-      />,
-    );
+    render(<DetailsEditor markdown="" onChange={() => {}} lazyFactory={buildFailingLazy} />);
 
-    // Open the accordion — triggers the lazy import.
-    fireEvent.click(screen.getByRole('button', { name: /add details/i }));
-
-    // Wait for the inline error UI to render (replacing the Suspense
-    // fallback once the rejection commits). The lazy promise rejects
-    // asynchronously; React schedules a re-render that lets the local
-    // ErrorBoundary catch the error.
+    // No toggle to click — the lazy import kicks off on mount (the
+    // accordion was removed in PR 7 / feedback-editor). Wait for the
+    // inline error UI to render after the rejection commits.
     await waitFor(
       () => {
         expect(screen.getByText(/editor failed to load/i)).toBeInTheDocument();

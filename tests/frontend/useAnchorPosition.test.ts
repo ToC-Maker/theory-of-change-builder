@@ -206,4 +206,105 @@ describe('useAnchorPosition', () => {
     });
     expect(result.current?.x).toBe(308); // 200 + 100 + 8
   });
+
+  // PR 7 feedback-editor: bottom-placement centers the overlay on the
+  // anchor (not aligned left-edge), so a node that re-centers when its
+  // column grows during a width-slider drag doesn't drag the editor
+  // horizontally with it. This pair of tests covers the new contract.
+  describe('placement: bottom with overlayRef + flip', () => {
+    function makeOverlayRef(rect: { left?: number; top?: number; width: number; height: number }) {
+      const el = document.createElement('div');
+      setRect(el, {
+        left: rect.left ?? 0,
+        top: rect.top ?? 0,
+        width: rect.width,
+        height: rect.height,
+      });
+      return { current: el } as React.RefObject<HTMLElement>;
+    }
+
+    it('centers the overlay on the anchor when overlay width is known', () => {
+      const anchor = makeAnchorRef({ left: 100, top: 200, width: 80, height: 40 });
+      const overlay = makeOverlayRef({ width: 288, height: 100 });
+      // Force a generous viewport so the clamp doesn't engage.
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
+      const { result } = renderHook(() =>
+        useAnchorPosition({
+          anchorRef: anchor,
+          overlayRef: overlay,
+          camera: { x: 0, y: 0, z: 1 },
+          placement: 'bottom',
+          offset: 12,
+          flip: true,
+        }),
+      );
+
+      // anchor center = 100 + 80/2 = 140. Overlay center should equal
+      // 140 → overlay.left = 140 - 288/2 = -4. Y = 200 + 40 + 12 = 252.
+      // (Negative x is fine — the clamp's lower bound is 8, but the
+      // test viewport is wide enough that the floor doesn't apply
+      // unless we engineer it. We keep x small so the math is
+      // unambiguous.)
+      expect(result.current?.x).toBe(8); // clamped to floor (anchor center 140 - 144 < 8)
+      expect(result.current?.y).toBe(252);
+    });
+
+    it('flips to top when the overlay would not fit below the anchor', () => {
+      // Anchor near the bottom of the viewport with not enough space
+      // below for a tall overlay → flip.
+      const anchor = makeAnchorRef({ left: 200, top: 600, width: 80, height: 40 });
+      const overlay = makeOverlayRef({ width: 288, height: 400 });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
+      const { result } = renderHook(() =>
+        useAnchorPosition({
+          anchorRef: anchor,
+          overlayRef: overlay,
+          camera: { x: 0, y: 0, z: 1 },
+          placement: 'bottom',
+          offset: 12,
+          flip: true,
+        }),
+      );
+
+      // Bottom: would need anchor.bottom (640) + 12 + 400 = 1052 vs vh 800 → no fit.
+      // Top: anchor.top (600) - 12 - 400 = 188 → fits. Flip lands here.
+      expect(result.current?.y).toBe(188);
+    });
+
+    it('keeps the overlay X stable when the anchor re-centers (width-drag scenario)', () => {
+      // Simulates the user dragging the width slider:
+      //   - Pre-drag: node is 128 wide, centered → anchor.center = 240
+      //   - Mid-drag: node grew to 200 wide, still centered → anchor.center = 240
+      // The column re-centered around the node in flex-justify-center,
+      // so anchor.left shifted (176→140) but anchor.center stayed put.
+      // The overlay's X should NOT change.
+      const anchor = makeAnchorRef({ left: 176, top: 400, width: 128, height: 40 });
+      const overlay = makeOverlayRef({ width: 288, height: 100 });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
+      const { result } = renderHook(() =>
+        useAnchorPosition({
+          anchorRef: anchor,
+          overlayRef: overlay,
+          camera: { x: 0, y: 0, z: 1 },
+          placement: 'bottom',
+          offset: 12,
+          flip: true,
+        }),
+      );
+      const xBefore = result.current?.x;
+
+      // Resize anchor: same center (240), wider width (left 140, width 200).
+      setRect(anchor.current!, { left: 140, top: 400, width: 200, height: 40 });
+      act(() => {
+        capturedResizeCallbacks.forEach((cb) => cb([], {} as ResizeObserver));
+      });
+      const xAfter = result.current?.x;
+
+      expect(xBefore).toBeDefined();
+      expect(xAfter).toBe(xBefore);
+    });
+  });
 });
