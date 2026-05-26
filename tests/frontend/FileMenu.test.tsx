@@ -239,8 +239,14 @@ describe('FileMenu — Export (PR 6 Task 6.2)', () => {
     await user.click(screen.getByTestId('file-menu-export-json'));
 
     // The handler dynamic-imports `exportChart.ts`, so we await the
-    // import + click to settle.
-    await waitFor(() => expect(clicked).not.toBeNull());
+    // import + click to settle. Under heavy parallel preflight load
+    // (vitest pools + parallel test files), Vite's module transform
+    // can push the lazy `import('../../utils/exportChart')` past the
+    // default 1000ms waitFor timeout (~40% repro rate on warm dev
+    // boxes). 5s gives plenty of headroom for the cold-import case
+    // without slowing the green path noticeably (the resolution still
+    // fires as soon as `clicked` is set).
+    await waitFor(() => expect(clicked).not.toBeNull(), { timeout: 5000 });
     // Filename derived from `data.title` via slugify.
     expect(clicked!.download).toMatch(/sample-theory\.json/);
     expect(objectUrls).toHaveLength(1);
