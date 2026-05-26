@@ -2739,14 +2739,20 @@ export function ChatInterface({
   // GenerateConfirmDialog.tsx for the modal that re-enters here.
   const startGenerationInternal = async () => {
     sendInFlightRef.current = true;
+    // Spinner ON (S1: shown via spinner icon on the Generate button while
+    // isLoading && !isStreaming). Set sync, BEFORE the streamMessage call,
+    // so a slow preflight surfaces the spinner immediately.
     setIsLoading(true);
-    setIsStreaming(true);
+    // Defensive resets: hide leftover content if React commits before
+    // onAccepted lands. Streaming visibility (isStreaming) and mode swap
+    // (setCurrentMode('chat')) are deferred into onAccepted per C5/Q4 so
+    // a preflight rejection doesn't wipe the user's current Chat history.
     setStreamingContent('');
     setStreamingThinking('');
     streamingContentBlocksRef.current = [];
-
-    // Extended thinking is always on.
-    setStreamPhase('thinking');
+    // Pre-arm the accepted flag (set true in onAccepted). Gates
+    // handleStopStreaming's stamping logic across the preflight window.
+    acceptedRef.current = false;
 
     // Combine all file contents
     const documentContent = files
@@ -2781,9 +2787,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
       timestamp: new Date(),
     };
 
-    // Switch to chat mode to show the generation
-    setCurrentMode('chat');
-    setMessages([generationMessage]);
+    // Mode swap (setCurrentMode) + destructive setMessages([generationMessage])
+    // both deferred into onAccepted below. Without this, a capped user who
+    // hit Generate would lose their Chat history before the server's 429
+    // landed.
 
     streamingMessageRef.current = {
       id: generationAssistantId,
@@ -2822,6 +2829,25 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         currentGraphData: graphData,
         mode: 'generate',
         callbacks: {
+          // Deferred-add commit point for Generate. Per C5/C6 we hold off
+          // on the destructive setMessages([generationMessage]) + the
+          // setCurrentMode('chat') flip until the server's preflight
+          // reservation accepts the request. A capped user who hit
+          // Generate would lose their Chat history pre-reservation
+          // without this gate.
+          onAccepted: () => {
+            acceptedRef.current = true;
+            // Switch to chat mode now that the generation is going to
+            // happen — JSX gating for streaming UI, banner placement,
+            // and the post-rejection banner area all key off currentMode.
+            setCurrentMode('chat');
+            setMessages([generationMessage]);
+            // Streaming UI takes over; the thinking placeholder chips
+            // and the bouncing-dots bubble both wait on isStreaming.
+            setIsStreaming(true);
+            // Extended thinking is always on; seed the phase.
+            setStreamPhase('thinking');
+          },
           onStreamPhase: (phase) => {
             setStreamPhase(phase);
           },
@@ -2914,30 +2940,38 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // Chat-site error path: preserve partial content_blocks so
             // signed thinking + paired tool blocks round-trip into the
             // next request after a transient failure.
-            const partial = streamingMessageRef.current;
-            const partialBlocks = streamingContentBlocksRef.current;
-            const hasBlocks = partialBlocks.length > 0;
-            const hasText = !!partial && partial.content.length > 0;
-            if (partial && (hasText || hasBlocks)) {
-              const stamped: ChatMessage = {
-                ...partial,
-                was_killed: true,
-                kill_reason: 'error',
-                kill_message: error,
-                content: hasText
-                  ? partial.content
-                  : '_(Assistant errored before writing a visible response.)_',
-                content_blocks: hasBlocks ? partialBlocks : undefined,
-              };
-              setMessages((prev) => [...prev, stamped]);
-            } else {
-              const errorMessage: ChatMessage = {
-                id: generationAssistantId,
-                role: 'assistant',
-                content: `Error: ${error}`,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, errorMessage]);
+            //
+            // acceptedRef gate: a preflight rejection (server's reserveCost
+            // 429/413/etc.) fires BEFORE onAccepted, so no destructive
+            // setMessages has happened — preserving the user's existing
+            // Chat history. Surface the banner via handleCostError (which
+            // chatService routes separately) and just reset.
+            if (acceptedRef.current) {
+              const partial = streamingMessageRef.current;
+              const partialBlocks = streamingContentBlocksRef.current;
+              const hasBlocks = partialBlocks.length > 0;
+              const hasText = !!partial && partial.content.length > 0;
+              if (partial && (hasText || hasBlocks)) {
+                const stamped: ChatMessage = {
+                  ...partial,
+                  was_killed: true,
+                  kill_reason: 'error',
+                  kill_message: error,
+                  content: hasText
+                    ? partial.content
+                    : '_(Assistant errored before writing a visible response.)_',
+                  content_blocks: hasBlocks ? partialBlocks : undefined,
+                };
+                setMessages((prev) => [...prev, stamped]);
+              } else {
+                const errorMessage: ChatMessage = {
+                  id: generationAssistantId,
+                  role: 'assistant',
+                  content: `Error: ${error}`,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, errorMessage]);
+              }
             }
             resetStreamUiState();
           },
@@ -2963,18 +2997,24 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // Preserve the partial Generate turn (text/thinking streamed
             // before the kill) so it's still visible in the chat. Even with
             // no visible text (cut off mid-thinking), keep a placeholder.
-            const partial = streamingMessageRef.current;
-            if (partial) {
-              const hasText = partial.content.length > 0;
-              setMessages((prev) => [
-                ...prev,
-                hasText
-                  ? partial
-                  : {
-                      ...partial,
-                      content: '_(Assistant was cut off before writing a visible response.)_',
-                    },
-              ]);
+            //
+            // acceptedRef gate: preserves the existing Chat history when
+            // the preflight rejects (no destructive setMessages happened
+            // yet — onAccepted is gated on response.ok).
+            if (acceptedRef.current) {
+              const partial = streamingMessageRef.current;
+              if (partial) {
+                const hasText = partial.content.length > 0;
+                setMessages((prev) => [
+                  ...prev,
+                  hasText
+                    ? partial
+                    : {
+                        ...partial,
+                        content: '_(Assistant was cut off before writing a visible response.)_',
+                      },
+                ]);
+              }
             }
             handleCostError(error);
             resetStreamUiState();
@@ -3006,14 +3046,20 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
     } catch (error) {
       // Transport-level failures (see Chat-site commentary in
       // handleSendMessage). Cost errors are routed via onCostError.
+      // acceptedRef gate: pre-preflight throws (DNS, CORS) preserve the
+      // user's current Chat history; post-accept transport errors surface
+      // the apology bubble paired with the (already-committed) generation
+      // user turn.
       console.error('[ChatInterface] startGeneration transport error:', error);
-      const errorMessage: ChatMessage = {
-        id: generationAssistantId,
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your request.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      if (acceptedRef.current) {
+        const errorMessage: ChatMessage = {
+          id: generationAssistantId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your request.',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      }
       resetStreamUiState();
     } finally {
       setIsLoading(false);
