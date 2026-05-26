@@ -1872,9 +1872,10 @@ function ToCViewer() {
       <PrivacyPolicyPopup onAccept={handlePrivacyAccept} />
 
       {/* View-mode walkthrough. Mounted here (editor route) and in
-        ToCViewerOnly so the HelpPanel "Replay tutorial" button re-arms
-        from either entrypoint. <GraphTutorial> self-gates on
-        localStorage('graph-tutorial-seen') and is invisible by default. */}
+        ToCViewerOnly so HelpPanel's "Replay" button reaches a live
+        listener from either entrypoint. <GraphTutorial> stays invisible
+        until it receives the GRAPH_TUTORIAL_REPLAY_EVENT custom event
+        (dispatched by HelpPanel). No auto-open. */}
       <GraphTutorial />
     </div>
   );

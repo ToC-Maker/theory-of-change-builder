@@ -2,10 +2,11 @@
 //
 // Sections (per plan §1.2):
 //   - Keyboard shortcuts (sourced from `src/data/keyboardShortcuts.ts`)
-//   - View-mode tutorial — a button that resets the
-//     `graph-tutorial-seen` localStorage flag and reloads so
-//     `<GraphTutorial />` re-arms on the next render (no need to wire a
-//     prop chain into TheoryOfChangeGraph for a one-shot affordance).
+//   - View-mode tutorial — a button that dispatches the
+//     `GRAPH_TUTORIAL_REPLAY_EVENT` window event so the already-mounted
+//     `<GraphTutorial />` opens. HelpPanel sits in TopBar; GraphTutorial
+//     sits near the canvas, so we use a window-scoped CustomEvent rather
+//     than threading a prop chain through both subtrees.
 //   - Edit-mode tutorial — "Coming soon" placeholder (deferred to a
 //     later PR; covers the new hover affordances + connection handles
 //     introduced in PRs 5+7).
@@ -24,6 +25,7 @@ import {
   ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline';
 import { keyboardShortcutGroups } from '../../data/keyboardShortcuts';
+import { GRAPH_TUTORIAL_REPLAY_EVENT } from '../GraphTutorial';
 
 const TOC_EXPLAINER_URL = 'https://en.wikipedia.org/wiki/Theory_of_change';
 const CONTACT_EMAIL = 'theoryofchangebuilder@gmail.com';
@@ -31,13 +33,6 @@ const GITHUB_ISSUES_URL = 'https://github.com/ToC-Maker/theory-of-change-builder
 
 export function HelpPanel() {
   const [open, setOpen] = useState(false);
-  // Set when `localStorage.removeItem` throws (private mode, storage
-  // disabled, quota errors). Surfaced inline beside the Replay button
-  // so the user knows why the tutorial didn't re-arm — the previous
-  // silent-catch + unconditional reload made the affordance look
-  // broken (reload happened, but the flag was still set, so the
-  // tutorial silently skipped on the next render).
-  const [storageError, setStorageError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,18 +48,11 @@ export function HelpPanel() {
   }, [open]);
 
   const handleReplayTutorial = () => {
-    try {
-      localStorage.removeItem('graph-tutorial-seen');
-    } catch {
-      // Storage unavailable. Surface inline + skip the reload so we
-      // don't lie to the user about resetting the tutorial.
-      setStorageError("Couldn't reset the tutorial. Storage may be disabled.");
-      return;
-    }
-    setStorageError(null);
     setOpen(false);
-    // Reload so <GraphTutorial> re-runs its first-time check.
-    window.location.reload();
+    // <GraphTutorial> listens for this event on `window` and opens its
+    // tooltip. The component is mounted unconditionally in both
+    // ToCViewer and ToCViewerOnly, so this works regardless of route.
+    window.dispatchEvent(new CustomEvent(GRAPH_TUTORIAL_REPLAY_EVENT));
   };
 
   return (
@@ -123,11 +111,6 @@ export function HelpPanel() {
             >
               Replay the view-mode walkthrough
             </button>
-            {storageError && (
-              <div role="alert" className="text-xs text-red-600 px-1 py-1">
-                {storageError}
-              </div>
-            )}
             <div className="text-xs text-gray-500 px-1 py-1">Edit-mode tutorial — coming soon.</div>
           </div>
 

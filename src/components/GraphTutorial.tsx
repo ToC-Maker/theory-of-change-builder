@@ -1,7 +1,26 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Tooltip } from 'react-tooltip';
+import { XMarkIcon } from '@heroicons/react/24/outline';
+
+// Custom-event name fired by HelpPanel's "Replay the view-mode walkthrough"
+// button. Lifting tutorial state into a shared context would require
+// threading a prop chain through TopBar+MobileMenu+HelpPanel and the
+// editor/viewer root containers (HelpPanel sits in TopBar, GraphTutorial
+// sits next to the canvas — disjoint subtrees), so we use a window-scoped
+// CustomEvent to bridge them with zero plumbing. Tests can fire the same
+// event to drive the tutorial open.
+export const GRAPH_TUTORIAL_REPLAY_EVENT = 'graph-tutorial-replay';
 
 export function GraphTutorial() {
+  // Default closed. Previously this auto-opened 1.5s after first render
+  // when localStorage('graph-tutorial-seen') was absent, which surprised
+  // users (PR #34 reviewer feedback: "some kind of tutorial pops up at
+  // some point, I'm not sure what is triggering it") and offered no
+  // visible dismiss affordance — the only way to clear it was to
+  // complete both steps (click a random node, then click a random edge).
+  // The HelpPanel's "Replay the view-mode walkthrough" button is the
+  // sole entry point; first-time users discover the tutorial via Help
+  // rather than being hijacked by it.
   const [isVisible, setIsVisible] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
@@ -14,7 +33,7 @@ export function GraphTutorial() {
 
   const handleClose = useCallback(() => {
     setIsVisible(false);
-    localStorage.setItem('graph-tutorial-seen', 'true');
+    setCurrentStep(0);
 
     // Clean up hover state
     if (targetNode) {
@@ -27,13 +46,24 @@ export function GraphTutorial() {
     (e: MouseEvent) => {
       const target = e.target as HTMLElement;
 
+      // Clicks on the tutorial tooltip itself (incl. the × close button)
+      // are handled by react-tooltip + the explicit onClick on the
+      // button. Don't treat them as outside-click dismissals.
+      if (target.closest('[data-graph-tutorial-tooltip]')) {
+        return;
+      }
+
       if (currentStep === 0) {
         // Check if clicked on the target node. After PR 3, single-click
         // both highlights connections AND opens the anchored NodeEditor,
         // so this is the only step we need before edges.
         if (targetNode && (target === targetNode || targetNode.contains(target))) {
           setCurrentStep(1);
+          return;
         }
+        // Click outside the highlighted node → dismiss (no localStorage
+        // gate; reopening is via HelpPanel → Replay).
+        handleClose();
       } else if (currentStep === 1) {
         // Check if clicked on an SVG path (edge).
         const svg = document.querySelector('svg');
@@ -50,22 +80,37 @@ export function GraphTutorial() {
             element = element.parentElement;
           }
         }
+        // Click that wasn't on any SVG path → dismiss.
+        handleClose();
       }
     },
     [currentStep, targetNode, handleClose],
   );
 
+  // Listen for the cross-subtree "open tutorial" custom event fired by
+  // HelpPanel. Memoise the handler dep so the listener stays stable
+  // across renders of the same instance.
   useEffect(() => {
-    // Check if user has seen the tutorial before
-    const hasSeenTutorial = localStorage.getItem('graph-tutorial-seen');
-    if (!hasSeenTutorial) {
-      // Show tutorial after a delay to let the graph render
-      const timer = setTimeout(() => {
-        setIsVisible(true);
-      }, 1500);
-      return () => clearTimeout(timer);
-    }
+    const handleReplay = () => {
+      setCurrentStep(0);
+      setIsVisible(true);
+    };
+    window.addEventListener(GRAPH_TUTORIAL_REPLAY_EVENT, handleReplay);
+    return () => window.removeEventListener(GRAPH_TUTORIAL_REPLAY_EVENT, handleReplay);
   }, []);
+
+  // Dismiss on Escape while visible.
+  useEffect(() => {
+    if (!isVisible) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        handleClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isVisible, handleClose]);
 
   const updateTooltipPosition = useCallback(() => {
     if (currentStep === 0) {
@@ -206,10 +251,20 @@ export function GraphTutorial() {
         place="top"
         isOpen={isVisible}
         clickable
-        className="!max-w-[100px] !text-[8px] !px-1.5 !py-0.5 sm:!max-w-[140px] sm:!text-xs sm:!px-3 sm:!py-1.5 md:!max-w-[160px] md:!text-sm md:!px-3 md:!py-2"
+        className="!max-w-[140px] !text-[8px] !px-1.5 !py-0.5 sm:!max-w-[180px] sm:!text-xs sm:!px-3 sm:!py-1.5 md:!max-w-[200px] md:!text-sm md:!px-3 md:!py-2"
         style={{ zIndex: 9999 }}
       >
-        <div className="text-center">{tutorialSteps[currentStep].text}</div>
+        <div data-graph-tutorial-tooltip className="flex items-start gap-1.5 sm:gap-2">
+          <span className="flex-1 text-center">{tutorialSteps[currentStep].text}</span>
+          <button
+            type="button"
+            onClick={handleClose}
+            aria-label="Close tutorial"
+            className="shrink-0 -mr-0.5 -mt-0.5 p-0.5 rounded text-white/80 hover:text-white hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 transition-colors"
+          >
+            <XMarkIcon className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+          </button>
+        </div>
       </Tooltip>
     </>
   );
