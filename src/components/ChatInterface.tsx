@@ -1649,13 +1649,15 @@ export function ChatInterface({
     // Finalize a partial assistant turn when the user clicked Stop. Two
     // signals to preserve: visible text (streamingContent) AND structured
     // blocks (streamingContentBlocksRef, captured per content_block_stop
-    // via onContentBlocks). A turn that streamed only thinking + no text
-    // shows up as blocks-but-no-content; without the blocks check those
-    // would silently vanish.
+    // via onContentBlocks). Always stamp a placeholder if the request was
+    // in flight — even if Stop landed during thinking or tool use with no
+    // committed block yet (hasText=false, hasBlocks=false), the user
+    // needs visible feedback that their action took effect. Without this
+    // the bubble vanishes silently and looks like a no-op.
     const partialBlocks = streamingContentBlocksRef.current;
     const hasBlocks = partialBlocks.length > 0;
     const hasText = streamingContent.length > 0;
-    if (streamingMessageRef.current && (hasText || hasBlocks)) {
+    if (streamingMessageRef.current) {
       const finalMessage: ChatMessage = {
         ...streamingMessageRef.current,
         content: hasText
