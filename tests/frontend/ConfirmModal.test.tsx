@@ -133,6 +133,24 @@ describe('ConfirmModal', () => {
     expect(btn.className).not.toContain('bg-indigo-600');
   });
 
+  it('confirmVariant=blue uses blue instead of red (PrivacyPolicyPopup unification)', () => {
+    render(
+      <ConfirmModal
+        open={true}
+        title="T"
+        body="B"
+        confirmVariant="blue"
+        onConfirm={noop}
+        onCancel={noop}
+      />,
+    );
+    const btn = screen.getByTestId('confirm-modal-confirm');
+    expect(btn.className).toContain('bg-blue-600');
+    expect(btn.className).not.toContain('bg-red-600');
+    expect(btn.className).not.toContain('bg-indigo-600');
+    expect(btn.className).not.toContain('bg-purple-600');
+  });
+
   it('renders supplied icon node above the title when provided', () => {
     render(
       <ConfirmModal
@@ -161,5 +179,91 @@ describe('ConfirmModal', () => {
     );
     expect(screen.getByTestId('confirm-modal-confirm').textContent).toBe('Yes, delete');
     expect(screen.getByTestId('confirm-modal-cancel').textContent).toBe('Never mind');
+  });
+
+  // singleAction mode (PrivacyPolicyPopup unification). A non-dismissable
+  // single-button modal: no cancel button, backdrop click is inert, and
+  // Escape doesn't close. Needed for the privacy gate that demands an
+  // explicit acknowledgment.
+  describe('singleAction mode', () => {
+    it('renders only the confirm button when singleAction=true', () => {
+      render(
+        <ConfirmModal
+          open={true}
+          title="T"
+          body="B"
+          singleAction
+          onConfirm={noop}
+          onCancel={noop}
+        />,
+      );
+      expect(screen.getByTestId('confirm-modal-confirm')).toBeInTheDocument();
+      expect(screen.queryByTestId('confirm-modal-cancel')).toBeNull();
+    });
+
+    it('backdrop click does NOT fire onCancel when singleAction=true', () => {
+      const onCancel = vi.fn();
+      render(
+        <ConfirmModal
+          open={true}
+          title="T"
+          body="B"
+          singleAction
+          onConfirm={noop}
+          onCancel={onCancel}
+        />,
+      );
+      fireEvent.click(screen.getByTestId('confirm-modal-backdrop'));
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it('Escape key does NOT fire onCancel when singleAction=true', () => {
+      const onCancel = vi.fn();
+      render(
+        <ConfirmModal
+          open={true}
+          title="T"
+          body="B"
+          singleAction
+          onConfirm={noop}
+          onCancel={onCancel}
+        />,
+      );
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it('Enter still fires onConfirm when singleAction=true', () => {
+      const onConfirm = vi.fn();
+      render(
+        <ConfirmModal
+          open={true}
+          title="T"
+          body="B"
+          singleAction
+          onConfirm={onConfirm}
+          onCancel={noop}
+        />,
+      );
+      fireEvent.keyDown(document, { key: 'Enter' });
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // extras slot — renders supplemental UI (checkbox row, policy link, etc.)
+  // between the body and the action buttons. Used by PrivacyPolicyPopup
+  // for the "Help improve AI" opt-in + policy link row.
+  it('renders extras node between body and action buttons', () => {
+    render(
+      <ConfirmModal
+        open={true}
+        title="T"
+        body="B"
+        extras={<span data-testid="confirm-modal-extras-fixture">extras</span>}
+        onConfirm={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(screen.getByTestId('confirm-modal-extras-fixture')).toBeInTheDocument();
   });
 });
