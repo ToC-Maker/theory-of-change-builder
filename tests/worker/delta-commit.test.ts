@@ -351,7 +351,7 @@ describe('applyDeltaCommit', () => {
     // Tasks 7+8 dropped the gate (the per-update writer + the post-stream
     // signed-delta reconcile now write to user_api_usage unconditionally),
     // which inadvertently coupled BYOK spend to the free cap: reserveCost
-    // still checks `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD`.
+    // still checks `cost_micro_usd + projected <= EFFECTIVE_LIFETIME_CAP_MICRO_USD`.
     // A user who spent $4 via BYOK, then removed the key, ended up with $1
     // of free cap remaining instead of the full $5.
     //

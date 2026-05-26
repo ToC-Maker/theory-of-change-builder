@@ -657,7 +657,7 @@ describe('/api/reconcile-cost uses applyDeltaCommit (end-to-end seam)', () => {
     // Headline invariant: a user with $4.50 of pre-existing free spend
     // who then issues a BYOK reconcile must not see their free cap
     // depleted. Pre-fix this exact scenario was the Critical regression:
-    // `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD` would fail
+    // `cost_micro_usd + projected <= EFFECTIVE_LIFETIME_CAP_MICRO_USD` would fail
     // after BYOK spend pushed the column past $5.
     it('isByok=true: credits byok_cost_micro_usd, leaves cost_micro_usd untouched (cap preserved)', async () => {
       const { sql, state } = makeBackend({

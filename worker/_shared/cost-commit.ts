@@ -94,7 +94,8 @@ export type ApplyDeltaCommitResult =
  * user_api_usage unconditionally for cost-accuracy reasons), which
  * inadvertently coupled BYOK spend to the free cap: `reserveCost`
  * (the cap-check pre-flight in `anthropic-stream.ts`) still reads
- * `cost_micro_usd + projected <= LIFETIME_CAP_MICRO_USD`. A user who
+ * `cost_micro_usd + projected <= EFFECTIVE_LIFETIME_CAP_MICRO_USD`.
+ * A user who
  * spent $4 via BYOK, then removed the key, ended up with only $1 of
  * free cap remaining instead of the full $5 — a Critical regression
  * caught in PR #23 review.
@@ -103,7 +104,7 @@ export type ApplyDeltaCommitResult =
  * into `byok_cost_micro_usd` (independent of cap, visible in
  * `/api/usage` as `byok_used_usd`). `isByok=false` keeps writing to
  * `cost_micro_usd` (the column reserveCost checks against
- * `LIFETIME_CAP_MICRO_USD`). The CASE-WHEN form keeps the dual-row
+ * `EFFECTIVE_LIFETIME_CAP_MICRO_USD`). The CASE-WHEN form keeps the dual-row
  * write inside the same atomic CTE so cap-check / display invariants
  * survive concurrent writers.
  *

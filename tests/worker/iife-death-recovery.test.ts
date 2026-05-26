@@ -718,7 +718,7 @@ describe('reconcile signed-delta SQL (post-stream IIFE)', () => {
   // signed delta lands in `byok_cost_micro_usd`, NOT `cost_micro_usd`.
   // The headline invariant of the fix: a BYOK reconcile MUST NOT inflate
   // the free-tier cap. `cost_micro_usd` is the column reserveCost reads
-  // against `LIFETIME_CAP_MICRO_USD`, so a BYOK write to that column would
+  // against `EFFECTIVE_LIFETIME_CAP_MICRO_USD`, so a BYOK write to that column would
   // silently deplete the free cap — the exact bug this fix targets.
   // -------------------------------------------------------------------------
   it('BYOK routing: positive signed_delta credits byok_cost_micro_usd, leaves cost_micro_usd untouched (cap not depleted)', () => {
