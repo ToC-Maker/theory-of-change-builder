@@ -732,6 +732,16 @@ function ToCViewer() {
     const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing');
     const isChatPanel = target.closest('.fixed.left-0.z-40') !== null;
     const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null;
+    // PR 7 feedback (18): waypoint + midpoint handles for connection
+    // editing live inside the SVG layer, OUTSIDE of any `[data-tocb-node]`
+    // ancestor, so without this guard a `pointerdown` on a waypoint
+    // handle also kicks off a canvas pan. The mousedown handler in
+    // `useZoomPan` fires through `document` and doesn't see the
+    // `_canvasGestureState` flag (different event type / direct doc
+    // listener), so we have to short-circuit it at the exclusion check.
+    const isWaypointHandle =
+      target.closest('[data-tocb-waypoint-handle]') !== null ||
+      target.closest('[data-tocb-midpoint-handle]') !== null;
     const activeElement = document.activeElement;
     const isTextEditing =
       activeElement &&
@@ -760,7 +770,14 @@ function ToCViewer() {
       isTextEditing ||
       isSelectableText;
 
-    return !!(isNode || isLegend || isEditableElement || isChatPanel || isJsonPanel);
+    return !!(
+      isNode ||
+      isLegend ||
+      isEditableElement ||
+      isChatPanel ||
+      isJsonPanel ||
+      isWaypointHandle
+    );
   }, []);
 
   // Use shared zoom/pan hook
