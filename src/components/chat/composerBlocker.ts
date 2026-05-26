@@ -38,7 +38,16 @@ type UsageSnapshot = {
  *   input/files edit (a smaller draft may succeed). Differs from
  *   `would_exceed_cap` (derived, present-tense, current draft) in being
  *   event-driven and past-tense about a specific rejection.
- * - `request_cut_off`: mid-stream kill switch fired (request_cost_ceiling).
+ * - `request_cut_off`: mid-stream cost-cap kill fired
+ *   (request_cost_ceiling_exceeded). Semantically equivalent to
+ *   `cap_reached` delivered mid-stream — the worker's kill threshold is
+ *   `EFFECTIVE_LIFETIME_CAP - pre_reservation_usage` (= remaining quota,
+ *   plus a small tolerance per `CAP_OVERSPEND_TOLERANCE_FRACTION`), so by
+ *   the time this fires the user is at or just over the lifetime cap.
+ *   Kept as a separate variant for its distinct banner copy ("Message
+ *   cut off…") which conveys to the user that their in-flight response
+ *   was truncated, not just that they're capped. Future cleanup could
+ *   merge into `cap_reached` with a `delivered_mid_stream: true` flag.
  * - `global_budget`: Anthropic Console budget cap; optional upstream message
  *   so the user sees Anthropic's actual reason.
  * - `advisory`: soft warning that doesn't block sends. Covers
@@ -66,7 +75,7 @@ export type RenderedBlocker = ComposerBlocker | { type: 'would_exceed_cap' } | n
 
 /**
  * Cap-class predicate. Used in three places: `selectBlocker` tier-filter,
- * `clearOnSendStart` stickiness rule, and the send-gate label. Single
+ * `preserveCapClassOnly` stickiness rule, and the send-gate label. Single
  * source of truth.
  *
  * Note: `global_budget` is NOT cap-class — it fires for both free-tier-cap
@@ -99,7 +108,7 @@ export const SERVICE_ERROR_TYPES: ReadonlySet<CostErrorType> = new Set([
  *   - `ComposerBlocker` variant → set the slot
  *   - `undefined` → no-op (preserve existing blocker)
  *
- * Stickiness for cap-class variants is enforced by `clearOnSendStart` (the
+ * Stickiness for cap-class variants is enforced by `preserveCapClassOnly` (the
  * send-start updater); this function doesn't enforce stickiness on its own.
  *
  * Stateless w.r.t. the prior blocker (no `current` param needed) — the
@@ -274,9 +283,9 @@ export function selectBlocker(params: {
  * Extracted as a pure function (vs an inline updater closure at the call
  * site) so the stickiness rule is TDD-testable and there's a single source
  * of truth for "what survives a send-start." Suitable for passing directly
- * to setState as `setComposerBlocker(clearOnSendStart)`.
+ * to setState as `setComposerBlocker(preserveCapClassOnly)`.
  */
-export function clearOnSendStart(prev: ComposerBlocker | null): ComposerBlocker | null {
+export function preserveCapClassOnly(prev: ComposerBlocker | null): ComposerBlocker | null {
   if (!prev) return null;
   return isCapClassBlocker(prev) ? prev : null;
 }

@@ -5,7 +5,7 @@
 //   - selectBlocker: derived would_exceed_cap precedence, tier-flip filter
 //   - shouldBlockSend: send-gate semantics including unknown-sentinel over-block
 //   - isCapClassBlocker: cap-class predicate
-//   - clearOnSendStart: send-start stickiness rule
+//   - preserveCapClassOnly: send-start stickiness rule
 //   - Transition sequences covering Mode A regression and BYOK tier flip
 //
 // Pattern: matches tests/client/chatService-reconcile-cadence.test.ts
@@ -19,7 +19,7 @@ import {
   selectBlocker,
   shouldBlockSend,
   isCapClassBlocker,
-  clearOnSendStart,
+  preserveCapClassOnly,
   SERVICE_ERROR_TYPES,
 } from '../../src/components/chat/composerBlocker';
 
@@ -513,31 +513,31 @@ describe('isCapClassBlocker', () => {
 });
 
 // ---------------------------------------------------------------------------
-// clearOnSendStart
+// preserveCapClassOnly
 // ---------------------------------------------------------------------------
 
-describe('clearOnSendStart', () => {
+describe('preserveCapClassOnly', () => {
   it('null prior → null', () => {
-    expect(clearOnSendStart(null)).toBeNull();
+    expect(preserveCapClassOnly(null)).toBeNull();
   });
 
   it('cap_reached prior → preserved (sticky)', () => {
     const prev: ComposerBlocker = { type: 'cap_reached' };
-    expect(clearOnSendStart(prev)).toBe(prev);
+    expect(preserveCapClassOnly(prev)).toBe(prev);
   });
 
   it('request_cut_off prior → preserved (sticky)', () => {
     const prev: ComposerBlocker = { type: 'request_cut_off' };
-    expect(clearOnSendStart(prev)).toBe(prev);
+    expect(preserveCapClassOnly(prev)).toBe(prev);
   });
 
   it('global_budget prior → cleared (not cap-class)', () => {
-    expect(clearOnSendStart({ type: 'global_budget' })).toBeNull();
+    expect(preserveCapClassOnly({ type: 'global_budget' })).toBeNull();
   });
 
   it('advisory prior → cleared', () => {
     expect(
-      clearOnSendStart({
+      preserveCapClassOnly({
         type: 'advisory',
         cost_error_type: 'body_too_large',
         detail: 'x',
@@ -546,7 +546,7 @@ describe('clearOnSendStart', () => {
   });
 
   it('last_send_exceeded prior → cleared (per-attempt, not preserved on send-start)', () => {
-    expect(clearOnSendStart({ type: 'last_send_exceeded' })).toBeNull();
+    expect(preserveCapClassOnly({ type: 'last_send_exceeded' })).toBeNull();
   });
 });
 

@@ -33,7 +33,7 @@ import {
   costErrorToBlocker,
   selectBlocker,
   shouldBlockSend,
-  clearOnSendStart,
+  preserveCapClassOnly,
 } from './chat/composerBlocker';
 import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
@@ -1028,11 +1028,11 @@ export function ChatInterface({
       // state — the cap lives in user_api_usage, not per-chart. Clearing
       // them on navigation would briefly mislead the user into thinking
       // they have quota in the new chart; their next send would fail and
-      // the banner would re-fire. `clearOnSendStart` filters by
+      // the banner would re-fire. `preserveCapClassOnly` filters by
       // `isCapClassBlocker` — same logic, both "user changed context"
       // signals. Closes failure mode J for per-context banners
       // (advisory, last_send_exceeded); cap-class persists as before.
-      setComposerBlocker(clearOnSendStart);
+      setComposerBlocker(preserveCapClassOnly);
 
       // At the root path (new ToC), start with an empty in-memory chat but
       // DON'T touch localStorage. Previously this branch did a
@@ -1266,8 +1266,27 @@ export function ChatInterface({
   // from either mode. `selectedModel` is included because Opus→Sonnet
   // (~5× cheaper) on the same draft is a legitimate "past rejection is
   // moot" signal that doesn't involve touching the text.
+  //
+  // Also reset the live estimate(s) to 0 when last_send_exceeded clears so
+  // a stale composerEstimateUsd (from the previous draft, before the debounced
+  // estimate effect catches up on the new deferredInputValue) doesn't
+  // derive a false `would_exceed_cap` banner during the ~600ms debounce
+  // window. Trade-off: the cost-display row briefly shows $0 instead of
+  // the previous draft's stale figure — honest signal that the estimate
+  // is being recomputed.
   useEffect(() => {
-    setComposerBlocker((prev) => (prev?.type === 'last_send_exceeded' ? null : prev));
+    let cleared = false;
+    setComposerBlocker((prev) => {
+      if (prev?.type === 'last_send_exceeded') {
+        cleared = true;
+        return null;
+      }
+      return prev;
+    });
+    if (cleared) {
+      setComposerEstimateUsd(0);
+      setGenerateEstimateUsd(0);
+    }
   }, [
     inputValue,
     chatAttachedFiles,
@@ -1814,7 +1833,7 @@ export function ChatInterface({
     // advisory blockers clear so they don't linger across the next attempt.
     // (Stays sync per Q5: clearing stale advisory banners on a fresh send
     // attempt is the correct UX regardless of preflight outcome.)
-    setComposerBlocker(clearOnSendStart);
+    setComposerBlocker(preserveCapClassOnly);
 
     // Persist the chart NOW, before the streamMessage call. Without this,
     // a first send on the `/` root URL has no chart_id → loggingService's
@@ -2269,7 +2288,7 @@ export function ChatInterface({
     // briefly mislead them. Per-context blockers (advisory,
     // last_send_exceeded) clear. Same predicate as the route-change
     // effect — both are "user changed context, but global state stands".
-    setComposerBlocker(clearOnSendStart);
+    setComposerBlocker(preserveCapClassOnly);
     // Clear chat history from localStorage
     try {
       const storageKey = getStorageKey();
@@ -2815,6 +2834,12 @@ export function ChatInterface({
     // FM-Crit-1, mutations must hoist above the dialog so cancel leaves
     // the UI in a clean state (no stuck "thinking..." after cancel).
     if (messages.length > 0) {
+      // Note: cancelGenerateEstimate is intentionally NOT called here.
+      // The user is still looking at the Generate panel with the modal
+      // open over it; if they cancel, the live estimate (which may
+      // continue updating during the dialog) reflects the actual cost
+      // of what they'd be sending. cancelGenerateEstimate runs inside
+      // startGenerationInternal — only on confirmed proceed.
       setShowGenerateConfirm(true);
       return;
     }
