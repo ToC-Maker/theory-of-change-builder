@@ -76,8 +76,9 @@ export interface ChatMessage {
   was_killed?: boolean;
   /**
    * Why the turn was interrupted, used by the UI to render specific copy
-   * (cap-exceeded → "Cost limit reached…", aborted → "Stopped.", error
-   * → the upstream message). Always set together with `was_killed`.
+   * (cap-exceeded falls through to a generic "interrupted" indicator,
+   * aborted → "Stopped.", error → the upstream message). Always set
+   * together with `was_killed`.
    */
   kill_reason?: 'cap_exceeded' | 'aborted' | 'error';
   /**

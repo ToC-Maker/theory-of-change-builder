@@ -602,21 +602,22 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
             <div className="mt-1">{formatCostUsd(message.usage.cost_usd)}</div>
           )}
         {message.was_killed && (
-          // Specific copy per kill_reason. cap_exceeded directs the user to
-          // the unblock path; aborted is a neutral "Stopped" so the bubble
-          // visually distinguishes from a complete response; error surfaces
-          // the actual upstream/network failure verbatim so the user can
-          // diagnose without opening devtools.
+          // Specific copy per kill_reason. aborted = neutral "Stopped" so the
+          // bubble visually distinguishes from a complete response; error =
+          // upstream/network failure verbatim so the user can diagnose without
+          // opening devtools. cap_exceeded falls through to the generic
+          // "interrupted" copy — the composer-area panel covers the cap-
+          // recovery affordances (Add an Anthropic API key, Donate), so an
+          // extra inline directive in the message bubble would just
+          // duplicate that.
           <div className="mt-1 inline-flex items-center gap-1 text-amber-700">
             <StopIcon className="w-3 h-3" aria-hidden />
             <span>
-              {message.kill_reason === 'cap_exceeded'
-                ? 'Cost limit reached — sign in or add an API key to continue.'
-                : message.kill_reason === 'aborted'
-                  ? 'Stopped.'
-                  : message.kill_reason === 'error'
-                    ? `Error: ${message.kill_message ?? 'Connection lost.'}`
-                    : 'Response was interrupted.'}
+              {message.kill_reason === 'aborted'
+                ? 'Stopped.'
+                : message.kill_reason === 'error'
+                  ? `Error: ${message.kill_message ?? 'Connection lost.'}`
+                  : 'Response was interrupted.'}
             </span>
           </div>
         )}
