@@ -49,10 +49,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v4.36.0
         with:
           # Unified key covering both JavaScript and TypeScript (.ts + .tsx in
           # src/, worker/, shared/, tests/). Older configs used two separate
@@ -64,10 +64,10 @@ jobs:
         # JS/TS doesn't need a real build for CodeQL — autobuild is a no-op
         # wrapper that's still the documented entry point for non-compiled
         # languages.
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@v4.36.0
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v4.36.0
         with:
           # Namespaced category so the Security tab groups results clearly
           # and future multi-language matrices don't collide.
