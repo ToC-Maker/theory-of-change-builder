@@ -305,7 +305,12 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   let cachedFileTokensDraft = 0;
   let cachedFileTokensHistory = 0;
   const uncountedFileIdList: string[] = [];
-  const sql = getDb(env);
+
+  // The DB is only needed by the two optional blocks below (chart access
+  // check, chart_files lookup). Don't construct the client until a block
+  // actually needs it: getDb throws when DATABASE_URL is unset, and calling
+  // it unconditionally here used to 500 pure-text estimates (no files, no
+  // chartId) that never touch the DB.
 
   // If the caller is authenticated and a chartId is supplied, verify they
   // actually have access to that chart before we hand back token counts.
@@ -313,6 +318,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
   // check. An owned chart + no JWT is refused — returning cache data for
   // a chart the caller can't otherwise read would be an IDOR.
   if (chartId) {
+    // Fail closed: without a DB we can't verify access, so getDb's throw
+    // (→ router 500) beats answering. Deliberately NOT inside a try.
+    const sql = getDb(env);
     const chartRows = (await sql`
       SELECT user_id FROM charts WHERE id = ${chartId}
     `) as { user_id: string | null }[];
@@ -344,6 +352,10 @@ export async function handler(request: Request, env: Env): Promise<Response> {
 
   if (strippedFileIds.length > 0) {
     try {
+      // Inside the try on purpose: an unconfigured DATABASE_URL degrades
+      // exactly like a failed chart_files query — base count still returned,
+      // every stripped file_id reported in uncounted_file_ids.
+      const sql = getDb(env);
       // Scope by chart_id when we have one so a file_id that belongs to a
       // different chart can't leak its token count. When chartId is missing
       // (older clients) we fall back to the file_id-only query; this is

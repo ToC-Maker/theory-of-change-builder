@@ -222,8 +222,10 @@ describe('sanitizeMessagesForCountTokens', () => {
 describe('handler wires the sanitizer in front of the upstream call', () => {
   const env = {
     ANTHROPIC_API_KEY: 'test-key',
-    // getDb(env) is constructed (not queried) on the no-files path; any
-    // syntactically valid URL satisfies it.
+    // Only the files-only test below touches the DB path (its lookup fails
+    // against db.invalid and degrades to uncounted_file_ids). DB *gating*
+    // (no DATABASE_URL at all) is covered in
+    // count-tokens-estimate-db-gating.test.ts.
     DATABASE_URL: 'postgresql://user:pass@db.invalid/neondb',
   } as unknown as Env;
 
