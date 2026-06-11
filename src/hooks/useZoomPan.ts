@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, RefObject } from 'react';
+import { isCanvasGestureActive } from './_canvasGestureState';
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 5;
@@ -244,6 +245,22 @@ export function useZoomPan({
     const handleMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
 
+      // PR #34 feedback (50): never start a pan while a canvas gesture
+      // (node / connection / waypoint drag) is in flight. Those gestures
+      // claim the shared mutex during `pointerdown`, which the browser
+      // always dispatches BEFORE this compatibility `mousedown` — so the
+      // check is race-free. This matters because the target-based
+      // exclusion below can be defeated by mid-gesture re-renders: a
+      // pointerdown on a midpoint-insert handle synchronously unmounts
+      // the pressed element (midpoint handles hide during drag), and
+      // Chrome then retargets the compat mousedown to the closest
+      // still-connected ancestor (`<g data-tocb-waypoint-handles>`),
+      // which the attribute checks in `excludeFromPan` didn't match —
+      // the canvas panned WHILE the waypoint dragged. Reproduced via
+      // CDP trusted input; regression-pinned in
+      // `tests/frontend/useZoomPan.gesture-mutex.test.ts`.
+      if (isCanvasGestureActive()) return;
+
       const target = e.target as HTMLElement;
       if (target.tagName === 'BUTTON' || target.closest('button')) return;
 
@@ -334,6 +351,11 @@ export function useZoomPan({
     };
 
     const handleTouchStart = (e: TouchEvent) => {
+      // Same mutex guard as handleMouseDown: `pointerdown` (where
+      // gestures claim the mutex) fires before `touchstart` in Chrome,
+      // so an in-flight canvas gesture must suppress touch-panning too.
+      if (isCanvasGestureActive()) return;
+
       const target = e.target as HTMLElement;
       if (target.tagName === 'BUTTON' || target.closest('button')) return;
 

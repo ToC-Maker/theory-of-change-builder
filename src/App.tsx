@@ -768,9 +768,18 @@ function ToCViewer() {
     // `useZoomPan` fires through `document` and doesn't see the
     // `_canvasGestureState` flag (different event type / direct doc
     // listener), so we have to short-circuit it at the exclusion check.
+    // `[data-tocb-waypoint-handles]` (plural) is the GROUP element
+    // wrapping all of a connection's handles. It matters because Chrome
+    // retargets compatibility mouse events to the closest still-
+    // connected ancestor when the pressed handle is unmounted by the
+    // gesture's own synchronous re-render (PR #34 feedback 50). The
+    // primary guard for that race is the canvas-gesture mutex check in
+    // `useZoomPan`; this match is defense-in-depth so anything inside
+    // the handles layer is excluded from panning regardless.
     const isWaypointHandle =
       target.closest('[data-tocb-waypoint-handle]') !== null ||
-      target.closest('[data-tocb-midpoint-handle]') !== null;
+      target.closest('[data-tocb-midpoint-handle]') !== null ||
+      target.closest('[data-tocb-waypoint-handles]') !== null;
     const activeElement = document.activeElement;
     const isTextEditing =
       activeElement &&
