@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
@@ -108,6 +108,29 @@ export function ConnectionsComponent({
   // `selectedEdge` (source+target pair + midpoint anchor). The anchored
   // EdgeEditor reads property values from `data` directly.
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
+
+  // Feedback 49: NodeEditor and EdgeEditor are mutually exclusive —
+  // opening one must close the other. Mouse flows already satisfy this
+  // emergently (both editors dismiss on document `mousedown` via
+  // `useDismissOnOutsideEvent`, and every mouse path that changes one
+  // selection starts with a mousedown outside the other editor). The
+  // hole is node-selection paths with NO mousedown: keyboard select-all
+  // (Ctrl/Cmd+A) and Tab node-navigation in `useKeyboardShortcuts`
+  // would mount the NodeEditor while `selectedEdge` was still set.
+  // Enforce the invariant at the state level instead of per-gesture:
+  // whenever node selection is (or becomes) non-empty, drop the edge
+  // selection. Layout effect (not passive) so the dual state never
+  // paints. The `size > 0` guard keeps empty-set identity churn from
+  // closing a just-opened editor, and `setSelectedEdge(null)` on an
+  // already-null state is a React no-op, so this doesn't loop.
+  //
+  // Note the deliberate asymmetry: edge selection only ever arrives via
+  // a path click (mousedown first), so the NodeEditor side is already
+  // covered by its dismissal hook; node selection can arrive silently,
+  // so the EdgeEditor side needs this state-level rule.
+  useLayoutEffect(() => {
+    if (highlightedNodes.size > 0) setSelectedEdge(null);
+  }, [highlightedNodes]);
 
   // Stash `onSizeChange` in a ref so `updateSize` doesn't need it as a dep —
   // the parent passes a fresh inline arrow every render, which would otherwise
