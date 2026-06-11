@@ -3295,11 +3295,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           height: 'calc(100vh - 52px)',
         }}
       >
-        {/* Drawer Header. Title sits left, collapse chevron sits right;
-            only the chevron is the click target (clicking the title text
-            does NOT toggle). When collapsed the title is hidden and the
-            chevron is centered as the sole control. */}
-        <div className="flex-shrink-0 p-2">
+        {/* Drawer Header. Title sits left; Clear (chat mode with history
+            only) and the collapse chevron sit right — only the chevron
+            toggles (clicking the title text does NOT). When collapsed the
+            title and Clear are hidden and the chevron is centered as the
+            sole control. No bottom padding: the chat header below brings
+            its own p-3, keeping the title→tabs gap tight (round-2
+            feedback 42 — the old layout stacked p-2 + p-3 + an orphaned
+            mb-3 spacer row into a 32px dead gap). */}
+        <div className="flex-shrink-0 px-2 pt-2">
           <div
             className={`h-8 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}
           >
@@ -3308,17 +3312,33 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 AI Assistant
               </span>
             )}
-            <button
-              onClick={onToggle}
-              className="p-1 rounded-md text-gray-500 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 transition-colors"
-              title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
-              aria-label={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
-              aria-expanded={!isCollapsed}
-            >
-              <ChevronLeftIcon
-                className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
-              />
-            </button>
+            <div className="flex items-center gap-1">
+              {!isCollapsed && currentMode === 'chat' && messages.length > 0 && (
+                <button
+                  onClick={() => {
+                    // Destructive: wipes the in-memory chat + attached files +
+                    // any uploaded file chips from the server. Confirm first so
+                    // a mis-click can't silently delete a long conversation.
+                    setConfirmClearChatOpen(true);
+                  }}
+                  className="text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 px-1.5 py-1 rounded-md transition-colors"
+                  title="Clear chat"
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                onClick={onToggle}
+                className="p-1 rounded-md text-gray-500 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 transition-colors"
+                title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+                aria-label={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+                aria-expanded={!isCollapsed}
+              >
+                <ChevronLeftIcon
+                  className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
+                />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -3331,27 +3351,11 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           className={`flex-1 min-h-0 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}
         >
           <div className="h-full flex flex-col min-h-0">
-            {/* Chat Header */}
+            {/* Chat Header. (The Clear-chat affordance lives in the drawer
+                title row above — its old wrapper row here was an orphaned
+                spacer that inflated the title→tabs gap, round-2 feedback
+                42.) */}
             <div className="p-3 border-b border-gray-200">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  {currentMode === 'chat' && messages.length > 0 && (
-                    <button
-                      onClick={() => {
-                        // Destructive: wipes the in-memory chat + attached files +
-                        // any uploaded file chips from the server. Confirm first so
-                        // a mis-click can't silently delete a long conversation.
-                        setConfirmClearChatOpen(true);
-                      }}
-                      className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
-                      title="Clear chat"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-
               {/* Mode Switcher and Model Selector */}
               <div className="space-y-2">
                 <div className="flex bg-gray-100 rounded-lg p-1">
