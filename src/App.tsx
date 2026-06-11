@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useZoomPan } from './hooks/useZoomPan';
+import { useViewportOffset } from './hooks/useViewportOffset';
 import { Routes, Route, useParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { ToC } from './components/TheoryOfChangeGraph';
@@ -712,42 +713,12 @@ function ToCViewer() {
   // Important: "PR 4 pointer-capture during cross-tab delete race".
   const isDragInFlightRef = useRef(false);
 
-  // Calculate viewport offset based on sidebar state.
-  //
-  // Each side reserves the space its sibling chrome consumes, *plus* a
-  // 24px breathing-room pad so the auto-fit zoom never butts the canvas
-  // against the viewport edge. PR 1 removed the JsonDropdown and dropped
-  // `bottom` from 80 → 0; that, combined with `right: 0`, made the
-  // limiting dimension for the auto-fit min(scaleX, scaleY) flip from
-  // vertical to horizontal for typical chart shapes, so the canvas
-  // scaled up to fill the full available width and rendered flush
-  // against the right edge (and the legend got clipped). Symmetric 24px
-  // pads on right/bottom restore the centered look reported as "not
-  // centered as it should be anymore — top, left, and bottom borders;
-  // right border looks correct" by the reviewer.
-  //
-  // Round-2 feedback (55): the reserved width must mirror the *rendered*
-  // drawer width (ChatInterface root: `w-12` collapsed; `md:w-1/4
-  // md:min-w-[280px] md:max-w-[400px]` expanded). The old formula used
-  // unclamped `innerWidth * 0.25`, so viewports wider than 1600px
-  // over-reserved (480 at 1920 vs the panel's real 400px max-w), leaving
-  // an ~80px dead band between the drawer and the canvas; below 1120px it
-  // under-reserved (min-w side) and the canvas tucked under the panel
-  // edge. Below md (768px) the drawer is a mobile overlay; keep the
-  // legacy reserve there unchanged.
-  const viewportOffset = useMemo(() => {
-    const drawerWidth = isLeftPanelCollapsed
-      ? 48
-      : window.innerWidth >= 768
-        ? Math.min(400, Math.max(280, window.innerWidth * 0.25))
-        : Math.floor(window.innerWidth * 0.25);
-    return {
-      left: drawerWidth + 24,
-      top: 64 + 24, // Toolbar height + breathing room
-      right: 24,
-      bottom: 24,
-    };
-  }, [isLeftPanelCollapsed]);
+  // Reserved chrome space + breathing pad for the canvas auto-fit.
+  // Computation and history (PR 1 pads, round-2 fb 55 drawer clamp,
+  // fb3 K1 resize subscription) live in useViewportOffset — the hook
+  // re-renders us when a debounced window resize changes the reserve,
+  // which the old [isLeftPanelCollapsed]-keyed memo here never did.
+  const viewportOffset = useViewportOffset(isLeftPanelCollapsed);
 
   // Exclude interactive elements from panning in edit mode.
   // PR 4: node selector switched from `[draggable="true"]` to
