@@ -617,7 +617,30 @@ export function ConnectionsComponent({
                 style={{
                   stroke: 'transparent',
                   strokeWidth: '20px', // Much thicker for easier clicking
-                  pointerEvents: hasHighlightedNodes && !isHighlighted ? 'none' : 'stroke',
+                  // K8: hover priority for overlapping fat bands. SVG
+                  // hit-testing gives overlap to the LAST connection in
+                  // document order, so on crossing layouts the topmost
+                  // band stole hover mid-glide — the lower connection's
+                  // group fired mouseleave while the cursor was still
+                  // on its visible curve, unmounting the very handles
+                  // the user was approaching (reproduced live: hover
+                  // log flipped to the upper band at t=0.35 of the
+                  // lower curve; its midpoint handle never mounted).
+                  // While ANY connection is hovered, every other
+                  // connection's hit path goes inert: acquisition is
+                  // unchanged (first contact happens on a
+                  // non-overlapped stretch), but once acquired, hover
+                  // sticks until the pointer truly leaves the hovered
+                  // band — and the hovered connection's handles win
+                  // the hit test inside the overlap, so they're
+                  // reachable. Release (group mouseleave → hoveredEdge
+                  // null) re-arms all bands; the next pointer move
+                  // re-acquires whatever is under the cursor.
+                  pointerEvents:
+                    (hasHighlightedNodes && !isHighlighted) ||
+                    (hoveredEdge !== null && !isEdgeHovered)
+                      ? 'none'
+                      : 'stroke',
                 }}
                 onPointerDown={(e) => {
                   // K7: record where the press started; the click
