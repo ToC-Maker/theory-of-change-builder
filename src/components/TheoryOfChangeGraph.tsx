@@ -1378,10 +1378,12 @@ export function ToC({
                             }),
                       }}
                     >
-                      {/* PR 5 Task 5.3: hover-× section delete.
-                        Visible only when the title bar is hovered (via
-                        the parent's `group/section` class). Click →
-                        React confirm modal. */}
+                      {/* PR 5 Task 5.3: hover-revealed section delete
+                        (bare trash glyph, light tone for the dark
+                        title bar — issue 54). Visible only when the
+                        title bar is hovered (via the parent's
+                        `group/section` class). Click → React confirm
+                        modal. */}
                       {editMode && (
                         <ColumnDeleteAffordance
                           nodeCount={section.columns.reduce(
@@ -1602,10 +1604,11 @@ export function ToC({
                               );
                             })}
 
-                            {/* PR 5 Task 5.3: hover-× column delete.
+                            {/* PR 5 Task 5.3: hover-revealed column
+                              delete (bare trash glyph — issue 54).
                               Visible only on column hover via the
-                              parent's `group` class. Click → React
-                              confirm modal (NOT window.confirm). */}
+                              parent's `group/column` class. Click →
+                              React confirm modal (NOT window.confirm). */}
                             {editMode && (
                               <ColumnDeleteAffordance
                                 nodeCount={column.nodes.length}

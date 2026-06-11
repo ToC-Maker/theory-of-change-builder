@@ -101,4 +101,63 @@ describe('ColumnDeleteAffordance', () => {
     fireEvent.click(screen.getByTestId('column-delete'));
     expect(parentClick).not.toHaveBeenCalled();
   });
+
+  // PR 7 round-2 feedback (issue 54): "The delete icons shouldn't have a
+  // background and outline, just the cross, and maybe we should just use
+  // a bin." Contract: the affordance is a bare trash glyph — no
+  // background, border/outline, or shadow classes in ANY state (rest or
+  // hover). The only permitted ring is the keyboard focus indicator
+  // (`focus-visible:ring-*`), which is not the resting outline the
+  // reviewer objected to.
+  describe('bare-glyph visual contract', () => {
+    it('column scope: no background / border / shadow classes; ring only behind focus-visible', () => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope="column" onDelete={vi.fn()} />);
+      const btn = screen.getByTestId('column-delete');
+      expect(btn.className).not.toMatch(/bg-/); // no resting or hover background
+      expect(btn.className).not.toMatch(/border/); // no outline
+      expect(btn.className).not.toMatch(/shadow/); // no elevation chip
+      // Any ring-* must be gated on focus-visible (keyboard focus indicator).
+      expect(btn.className.match(/(?<!focus-visible:)ring-/)).toBeNull();
+    });
+
+    it('column scope: renders a bin glyph, dark-on-light tone, hover-to-red', () => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope="column" onDelete={vi.fn()} />);
+      const btn = screen.getByTestId('column-delete');
+      expect(btn.querySelector('svg')).not.toBeNull();
+      expect(btn.className).toContain('text-gray-400');
+      expect(btn.className).toContain('hover:text-red-500');
+    });
+
+    it('section scope: light icon for the dark title bar (no bg/border/shadow either)', () => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope="section" onDelete={vi.fn()} />);
+      const btn = screen.getByTestId('section-delete');
+      expect(btn.className).not.toMatch(/bg-/);
+      expect(btn.className).not.toMatch(/border/);
+      expect(btn.className).not.toMatch(/shadow/);
+      expect(btn.className).toContain('text-white/70');
+      expect(btn.className).toContain('hover:text-white');
+    });
+
+    it('preserves the named-group hover-reveal scoping per scope', () => {
+      render(
+        <>
+          <ColumnDeleteAffordance nodeCount={0} scope="column" onDelete={vi.fn()} />
+          <ColumnDeleteAffordance nodeCount={0} scope="section" onDelete={vi.fn()} />
+        </>,
+      );
+      const column = screen.getByTestId('column-delete');
+      const section = screen.getByTestId('section-delete');
+      expect(column.className).toContain('opacity-0');
+      expect(column.className).toContain('group-hover/column:opacity-100');
+      expect(section.className).toContain('opacity-0');
+      expect(section.className).toContain('group-hover/section:opacity-100');
+    });
+
+    it('keyboard focus stays visible: focus-visible ring + opacity reveal', () => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope="column" onDelete={vi.fn()} />);
+      const btn = screen.getByTestId('column-delete');
+      expect(btn.className).toMatch(/focus-visible:ring-2/);
+      expect(btn.className).toMatch(/focus-visible:opacity-100/);
+    });
+  });
 });
