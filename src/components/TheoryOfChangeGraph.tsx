@@ -155,9 +155,26 @@ export function ToC({
   // other streaming input uses. Per-keystroke height recompute is
   // handled by the ResizeObserver in `useAnchorPosition`.
 
+  // Pending height-recalc timer. Tracked so unmount can clear it: the
+  // bare setTimeout used to outlive the component (it fires on every
+  // mount via the initialData effect below), and a mount→unmount inside
+  // the 50ms window made the callback setState against a dead tree —
+  // observed as a flaky "window is not defined" unhandled error when a
+  // jsdom test environment tore down first.
+  const heightRecalcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (heightRecalcTimerRef.current != null) clearTimeout(heightRecalcTimerRef.current);
+    };
+  }, []);
+
   const recalculateAllNodeHeights = useCallback(() => {
-    // Force recalculation of all node heights
-    setTimeout(() => {
+    // Force recalculation of all node heights. Last call wins — a
+    // pending timer is superseded (the callback recomputes ALL heights
+    // from the current refs, so collapsing rapid calls is lossless).
+    if (heightRecalcTimerRef.current != null) clearTimeout(heightRecalcTimerRef.current);
+    heightRecalcTimerRef.current = setTimeout(() => {
+      heightRecalcTimerRef.current = null;
       Object.entries(nodeRefs).forEach(([nodeId, ref]) => {
         if (ref) {
           const height = ref.offsetHeight;
