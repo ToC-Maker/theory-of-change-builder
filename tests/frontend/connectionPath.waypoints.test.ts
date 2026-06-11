@@ -22,8 +22,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   computePathWithWaypoints,
+  computeSegmentMidpoints,
   type ConnectionPathDirection,
 } from '../../src/utils/connectionPath';
+
+interface Point {
+  x: number;
+  y: number;
+}
 
 describe('computePathWithWaypoints', () => {
   describe('0 waypoints — backward-compat fallback', () => {
@@ -185,6 +191,171 @@ describe('computePathWithWaypoints', () => {
         expect((d.match(/ C /g) ?? []).length).toBe(expectedCurves);
       });
     }
+  });
+
+  describe('single waypoint — issue 52 geometry (horizontal ends, chord-aligned at W)', () => {
+    // PR #34 feedback (52): "the arrow head isn't horizontal, which it
+    // should be, but also the path isn't smooth/elegant enough."
+    // Contract for the single-waypoint path (the only kind the UI can
+    // produce after feedback 53):
+    //   - The path LEAVES the source along the flow axis (horizontal
+    //     for forward/backward, vertical for same-column).
+    //   - The path ENTERS the target along the flow axis — the
+    //     arrowhead (marker orient=auto) renders horizontal for
+    //     forward/backward connections.
+    //   - The tangent AT the waypoint is chord-aligned (parallel to
+    //     target - source) and C1-continuous (equal-magnitude
+    //     reflection), so the curve flows through the waypoint without
+    //     a kink and dash patterns stay smooth.
+    const S = { x: 0, y: 100 };
+    const T = { x: 400, y: 100 };
+
+    /** Parse `M sx sy C c1, c2, a C c3, c4, b` into numeric points. */
+    function parse(d: string) {
+      const tokens = d.split(' C ');
+      const num = (s: string) => s.trim().split(' ').map(Number);
+      const seg1 = tokens[1].split(', ');
+      const seg2 = tokens[2].split(', ');
+      const [c1x, c1y] = num(seg1[0]);
+      const [c2x, c2y] = num(seg1[1]);
+      const [wx, wy] = num(seg1[2]);
+      const [c3x, c3y] = num(seg2[0]);
+      const [c4x, c4y] = num(seg2[1]);
+      const [tx, ty] = num(seg2[2]);
+      return {
+        c1: { x: c1x, y: c1y },
+        c2: { x: c2x, y: c2y },
+        w: { x: wx, y: wy },
+        c3: { x: c3x, y: c3y },
+        c4: { x: c4x, y: c4y },
+        t: { x: tx, y: ty },
+      };
+    }
+
+    const waypointPositions = [
+      { name: 'mid above', w: { x: 200, y: 20 } },
+      { name: 'mid below', w: { x: 200, y: 190 } },
+      { name: 'near source high', w: { x: 60, y: 10 } },
+      { name: 'near target low', w: { x: 360, y: 200 } },
+      { name: 'directly above source', w: { x: 2, y: 0 } },
+      { name: 'directly above target', w: { x: 398, y: 0 } },
+    ];
+
+    for (const { name, w } of waypointPositions) {
+      it(`forward, W ${name}: horizontal departure, horizontal arrival, chord-aligned C1 at W`, () => {
+        const d = computePathWithWaypoints({
+          source: S,
+          target: T,
+          waypoints: [w],
+          curvature: 0.5,
+          direction: 'forward',
+        });
+        const p = parse(d);
+
+        // Horizontal departure: first control shares the source's y and
+        // sits to the RIGHT of it (forward sense).
+        expect(p.c1.y).toBeCloseTo(S.y, 6);
+        expect(p.c1.x).toBeGreaterThan(S.x);
+
+        // Horizontal arrival: last control shares the target's y and
+        // sits to the LEFT of it → end tangent points +x → the
+        // arrowhead renders horizontal.
+        expect(p.c4.y).toBeCloseTo(T.y, 6);
+        expect(p.c4.x).toBeLessThan(T.x);
+
+        // Chord-aligned tangent at W: both controls around the
+        // waypoint lie on the line through W parallel to (T - S).
+        // Cross-product of (W - c2) with the chord must vanish.
+        const chord = { x: T.x - S.x, y: T.y - S.y };
+        const inArm = { x: p.w.x - p.c2.x, y: p.w.y - p.c2.y };
+        const outArm = { x: p.c3.x - p.w.x, y: p.c3.y - p.w.y };
+        expect(inArm.x * chord.y - inArm.y * chord.x).toBeCloseTo(0, 6);
+        expect(outArm.x * chord.y - outArm.y * chord.x).toBeCloseTo(0, 6);
+
+        // C1: outgoing control is the reflection of the incoming one.
+        expect(p.c3.x).toBeCloseTo(2 * p.w.x - p.c2.x, 6);
+        expect(p.c3.y).toBeCloseTo(2 * p.w.y - p.c2.y, 6);
+      });
+    }
+
+    it('backward: horizontal departure to the LEFT, horizontal arrival from the RIGHT', () => {
+      // Backward connection: source's anchor is its left edge, target's
+      // anchor is its right edge — the arrow points -x into the target.
+      const bS = { x: 400, y: 100 };
+      const bT = { x: 0, y: 100 };
+      const d = computePathWithWaypoints({
+        source: bS,
+        target: bT,
+        waypoints: [{ x: 200, y: 220 }],
+        curvature: 0.5,
+        direction: 'backward',
+      });
+      const p = parse(d);
+      expect(p.c1.y).toBeCloseTo(bS.y, 6);
+      expect(p.c1.x).toBeLessThan(bS.x); // leaves leftward
+      expect(p.c4.y).toBeCloseTo(bT.y, 6);
+      expect(p.c4.x).toBeGreaterThan(bT.x); // arrives pointing leftward
+    });
+
+    it('vertical (same-column): vertical departure and arrival', () => {
+      const vS = { x: 100, y: 0 };
+      const vT = { x: 100, y: 300 };
+      const d = computePathWithWaypoints({
+        source: vS,
+        target: vT,
+        waypoints: [{ x: 180, y: 150 }],
+        curvature: 0.5,
+        direction: 'vertical',
+      });
+      const p = parse(d);
+      // Departure straight down (target below source).
+      expect(p.c1.x).toBeCloseTo(vS.x, 6);
+      expect(p.c1.y).toBeGreaterThan(vS.y);
+      // Arrival straight down into the target.
+      expect(p.c4.x).toBeCloseTo(vT.x, 6);
+      expect(p.c4.y).toBeLessThan(vT.y);
+    });
+
+    it('curvature=0 collapses to the straight polyline through W', () => {
+      const w = { x: 150, y: 30 };
+      const d = computePathWithWaypoints({
+        source: S,
+        target: T,
+        waypoints: [w],
+        curvature: 0,
+        direction: 'forward',
+      });
+      const p = parse(d);
+      expect(p.c1).toEqual(S);
+      expect(p.c2).toEqual(w);
+      expect(p.c3).toEqual(w);
+      expect(p.c4).toEqual(T);
+    });
+
+    it('computeSegmentMidpoints stays on the rendered curve (shared control math)', () => {
+      const w = { x: 250, y: 10 };
+      const args = {
+        source: S,
+        target: T,
+        waypoints: [w],
+        curvature: 0.5,
+        direction: 'forward' as ConnectionPathDirection,
+      };
+      const p = parse(computePathWithWaypoints(args));
+      const mids = computeSegmentMidpoints(args);
+      expect(mids).toHaveLength(2);
+      // Manual B(0.5) of segment 1 from the path string's controls.
+      const b05 = (p0: Point, p1: Point, p2: Point, p3: Point) => ({
+        x: (p0.x + 3 * p1.x + 3 * p2.x + p3.x) / 8,
+        y: (p0.y + 3 * p1.y + 3 * p2.y + p3.y) / 8,
+      });
+      const m1 = b05(S, p.c1, p.c2, p.w);
+      const m2 = b05(p.w, p.c3, p.c4, p.t);
+      expect(mids[0].x).toBeCloseTo(m1.x, 6);
+      expect(mids[0].y).toBeCloseTo(m1.y, 6);
+      expect(mids[1].x).toBeCloseTo(m2.x, 6);
+      expect(mids[1].y).toBeCloseTo(m2.y, 6);
+    });
   });
 
   describe('control-point smoothness at waypoints', () => {

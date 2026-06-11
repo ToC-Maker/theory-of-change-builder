@@ -79,7 +79,11 @@ export function computePathWithWaypoints(args: ComputePathArgs): string {
     return buildZeroWaypointPath(source, target, curvature, direction);
   }
 
-  return buildMultiWaypointPath(source, target, safeWaypoints, curvature, direction);
+  const segments =
+    safeWaypoints.length === 1
+      ? computeSingleWaypointSegments(source, target, safeWaypoints[0], curvature, direction)
+      : computeMultiWaypointSegments(source, target, safeWaypoints, curvature, direction);
+  return stringifySegments(source, segments);
 }
 
 /**
@@ -130,16 +134,13 @@ export function computeSegmentMidpoints(args: ComputePathArgs): Point[] {
     return [bezierMidpoint(source, { x: c1x, y: source.y }, { x: c2x, y: target.y }, target)];
   }
 
-  // Multi-waypoint case: reuse the segment + control-point compute from
-  // `buildMultiWaypointPath`. We extract it into a shared helper so the
-  // two callers can't drift.
-  const segments = computeMultiWaypointSegments(
-    source,
-    target,
-    safeWaypoints,
-    curvature,
-    direction,
-  );
+  // Waypoint case: reuse the exact segment + control-point compute the
+  // path renderer uses (single source of truth so the midpoint dots
+  // can't drift off the rendered curve).
+  const segments =
+    safeWaypoints.length === 1
+      ? computeSingleWaypointSegments(source, target, safeWaypoints[0], curvature, direction)
+      : computeMultiWaypointSegments(source, target, safeWaypoints, curvature, direction);
   return segments.map((s) => bezierMidpoint(s.p0, s.c1, s.c2, s.p3));
 }
 
@@ -211,8 +212,137 @@ function computeControlPointOffset(
 }
 
 // ---------------------------------------------------------------------------
-// N-waypoint multi-segment bezier
+// Single-waypoint bezier (PR #34 feedback 52)
 // ---------------------------------------------------------------------------
+//
+// The UI produces at most ONE waypoint per connection (feedback 53), so
+// this is the geometry users actually see. Reviewer requirements:
+// "the arrow head isn't horizontal, which it should be, but also the
+// path isn't smooth/elegant enough."
+//
+// Shape: two cubic segments source → W → target with
+//
+//   1. FLOW-AXIS END TANGENTS. The path leaves the source horizontally
+//      and enters the target horizontally (vertically for same-column
+//      connections), so the auto-oriented arrowhead is always
+//      horizontal (resp. vertical) — matching the left-to-right flow
+//      of the chart. Direction-sensitive sign: forward departs +x and
+//      arrives +x; backward departs −x and arrives −x.
+//
+//   2. CHORD-ALIGNED TANGENT AT W. The tangent through the waypoint is
+//      parallel to (target − source). Evaluated against a gallery of
+//      waypoint positions (above/below/near-source/near-target/off-
+//      axis/diagonal-layout; see PR #34 thread), chord-aligned beat
+//      horizontal-at-W: identical for the common same-row layout
+//      (chord is horizontal) but visibly smoother for diagonal
+//      layouts, where horizontal-at-W produced a terraced "shelf" at
+//      the waypoint.
+//
+//   3. C1 CONTINUITY AT W. Incoming and outgoing controls are equal-
+//      magnitude reflections across W, so there is no kink and dash
+//      patterns flow through the waypoint smoothly (same invariant the
+//      N-waypoint path pins).
+//
+//   4. ARM LENGTHS. Each end arm scales with that side's extent along
+//      the flow axis, blended with 0.4× the cross-axis extent so a
+//      waypoint placed directly above an endpoint (zero horizontal
+//      extent) still gets a round, non-pinched hairpin. The waypoint
+//      arm uses the SHORTER of the two side arms (clamps the curve
+//      inside the polyline envelope; prevents control-arm-inversion
+//      S-shapes when W sits close to one endpoint). The 0.4 blend and
+//      the k(curvature) scale below were picked from a rendered
+//      parameter sweep (0.25 pinched, 0.55 ballooned).
+//
+//   5. CURVATURE SCALE. k = (0.1 + 1.9·curvature)/2, capped at 0.75 —
+//      the same family the 0-waypoint auto-bezier uses for its control
+//      offset (offset = |dx|/2 · (0.1 + 1.9·curvature)), so the slider
+//      feels consistent with and without a waypoint. curvature=0
+//      degenerates to the straight polyline source → W → target,
+//      mirroring the 0-waypoint straight-line special case.
+
+function computeSingleWaypointSegments(
+  source: Point,
+  target: Point,
+  w: Point,
+  curvature: number,
+  direction: ConnectionPathDirection,
+): Segment[] {
+  if (curvature === 0) {
+    // Straight polyline through W (controls collapse onto anchors),
+    // mirroring the existing curvature=0 straight-line behavior.
+    return [
+      { p0: source, c1: { ...source }, c2: { ...w }, p3: w },
+      { p0: w, c1: { ...w }, c2: { ...target }, p3: target },
+    ];
+  }
+
+  const k = Math.min(0.75, (0.1 + 1.9 * curvature) / 2);
+  const CROSS_AXIS_BLEND = 0.4;
+
+  // Chord unit vector (S → T sense) for the waypoint tangent.
+  const chordX = target.x - source.x;
+  const chordY = target.y - source.y;
+  const chordLen = Math.hypot(chordX, chordY);
+
+  if (direction === 'vertical') {
+    // Same-column connection: flow axis is vertical. The 0-waypoint
+    // vertical path enters the target along ±y (arrow vertical); keep
+    // that with a waypoint.
+    const sgnY = target.y >= source.y ? 1 : -1;
+    const armS =
+      k * Math.max(Math.abs(w.y - source.y), CROSS_AXIS_BLEND * Math.abs(w.x - source.x));
+    const armT =
+      k * Math.max(Math.abs(target.y - w.y), CROSS_AXIS_BLEND * Math.abs(target.x - w.x));
+    const armW = Math.min(armS, armT);
+    const ux = chordLen === 0 ? 0 : chordX / chordLen;
+    const uy = chordLen === 0 ? sgnY : chordY / chordLen;
+    return [
+      {
+        p0: source,
+        c1: { x: source.x, y: source.y + sgnY * armS },
+        c2: { x: w.x - ux * armW, y: w.y - uy * armW },
+        p3: w,
+      },
+      {
+        p0: w,
+        c1: { x: w.x + ux * armW, y: w.y + uy * armW },
+        c2: { x: target.x, y: target.y - sgnY * armT },
+        p3: target,
+      },
+    ];
+  }
+
+  // Horizontal flow (forward / backward).
+  const sgnX = direction === 'backward' ? -1 : 1;
+  const armS = k * Math.max(Math.abs(w.x - source.x), CROSS_AXIS_BLEND * Math.abs(w.y - source.y));
+  const armT = k * Math.max(Math.abs(target.x - w.x), CROSS_AXIS_BLEND * Math.abs(target.y - w.y));
+  const armW = Math.min(armS, armT);
+  const ux = chordLen === 0 ? sgnX : chordX / chordLen;
+  const uy = chordLen === 0 ? 0 : chordY / chordLen;
+  return [
+    {
+      p0: source,
+      c1: { x: source.x + sgnX * armS, y: source.y },
+      c2: { x: w.x - ux * armW, y: w.y - uy * armW },
+      p3: w,
+    },
+    {
+      p0: w,
+      c1: { x: w.x + ux * armW, y: w.y + uy * armW },
+      c2: { x: target.x - sgnX * armT, y: target.y },
+      p3: target,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// N-waypoint multi-segment bezier (legacy charts only)
+// ---------------------------------------------------------------------------
+//
+// The UI no longer creates multi-waypoint connections (PR #34 feedback
+// 53); this code path keeps charts saved by the earlier build rendering
+// EXACTLY as they did. The first edit collapses them to a single
+// waypoint, which then renders through `computeSingleWaypointSegments`.
 //
 // Strategy (rewritten for PR 7 feedback item 17 — small drags must
 // produce small curve deformations, no S-shapes near endpoints):
@@ -246,20 +376,14 @@ function computeControlPointOffset(
 //
 //   4. Source-side outgoing control: along the first segment's chord
 //      direction (source → first waypoint), magnitude = factor *
-//      |source → firstWp|. Symmetric for target side. This replaces
-//      the previous "always horizontal" tangent at the endpoints,
-//      which was the SECOND source of S-shapes: a horizontal source
-//      tangent reaching 34px right + an interior tangent reaching
-//      back 42px to the left would cross each other.
+//      |source → firstWp|. Symmetric for target side.
 //
-//      The trade-off: the arrowhead no longer enters target strictly
-//      horizontally when there are waypoints. In practice this looks
-//      MORE natural — the curve smoothly flows toward the arrowhead
-//      from the last waypoint's direction, rather than making a hard
-//      90° turn to enter horizontally. The 0-waypoint case is
-//      unchanged (byte-identical) and that's what most connections
-//      look like, so the new behavior only surfaces when the user has
-//      explicitly added a waypoint.
+//      NOTE (PR #34 feedback 52): this non-horizontal endpoint-tangent
+//      behavior now applies ONLY to legacy N≥2 charts. The N=1 case —
+//      the only one the UI can produce since feedback 53 — goes
+//      through `computeSingleWaypointSegments`, which guarantees
+//      horizontal (flow-axis) departure and arrival so the arrowhead
+//      renders horizontal.
 //
 //   5. Scale `factor(curvature)` so that:
 //        - At curvature=0: factor=0 (straight polyline segments).
@@ -429,16 +553,12 @@ function computeMultiWaypointSegments(
   return segments;
 }
 
-function buildMultiWaypointPath(
-  source: Point,
-  target: Point,
-  waypoints: Point[],
-  curvature: number,
-  direction: ConnectionPathDirection,
-): string {
-  const segments = computeMultiWaypointSegments(source, target, waypoints, curvature, direction);
-  // Stringify exactly as before — the unit tests pin the byte shape
-  // (single Move + N+1 Curves, anchor coordinates round-tripping).
+/**
+ * Stringify segments as a single `M ... C ... [C ...]*` path. One Move
+ * + one Curve per segment — the unit tests pin this shape (dash
+ * patterns must span the whole connection as ONE `<path>`).
+ */
+function stringifySegments(source: Point, segments: Segment[]): string {
   const segStrs = segments.map(
     (s) => `C ${s.c1.x} ${s.c1.y}, ${s.c2.x} ${s.c2.y}, ${s.p3.x} ${s.p3.y}`,
   );
