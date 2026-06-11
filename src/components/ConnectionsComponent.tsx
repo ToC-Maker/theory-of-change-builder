@@ -576,7 +576,21 @@ export function ConnectionsComponent({
           });
 
           return (
-            <g key={index}>
+            // Hover state lives on the GROUP, not the invisible hit
+            // path: the waypoint/midpoint handles are siblings of the
+            // path inside this <g>, so path ↔ handle transitions stay
+            // internal and fire no leave. With the handlers on the
+            // path (previous design), reaching a handle fired the
+            // path's mouseleave → hoveredEdge=null → the handle under
+            // the pointer UNMOUNTED → the user's press fell through to
+            // the canvas and panned it (PR #34 feedback 50, leak path
+            // 2; regression test in ConnectionsComponent.hover-
+            // handles.test.tsx).
+            <g
+              key={index}
+              onMouseEnter={() => setHoveredEdge(edgeKey)}
+              onMouseLeave={() => setHoveredEdge(null)}
+            >
               {/* Invisible thicker path for easier clicking */}
               <path
                 d={pathD}
@@ -586,8 +600,6 @@ export function ConnectionsComponent({
                   strokeWidth: '20px', // Much thicker for easier clicking
                   pointerEvents: hasHighlightedNodes && !isHighlighted ? 'none' : 'stroke',
                 }}
-                onMouseEnter={() => setHoveredEdge(edgeKey)}
-                onMouseLeave={() => setHoveredEdge(null)}
                 onClick={(e) => {
                   e.stopPropagation();
 
