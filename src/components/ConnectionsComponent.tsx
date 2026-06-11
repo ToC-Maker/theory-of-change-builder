@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
@@ -70,7 +70,10 @@ interface ConnectionsComponentProps {
     sourceNodeId: string,
     targetNodeId: string,
     waypointIndex: number,
-  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  ) => {
+    onPointerDown: (e: ReactPointerEvent) => void;
+    onDoubleClick: (e: ReactMouseEvent) => void;
+  };
   bindMidpoint?: (
     sourceNodeId: string,
     targetNodeId: string,

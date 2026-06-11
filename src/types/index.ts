@@ -4,13 +4,21 @@ export interface Connection {
   evidence?: string; // Evidence supporting this connection
   assumptions?: string; // Key assumptions underlying this connection
   /**
-   * PR 7: optional bezier waypoints in container-local coordinates
-   * (same coordinate space as `node.yPosition`). When present, the
+   * Optional bezier waypoints in container-local coordinates (same
+   * coordinate space as `node.yPosition`). When present, the
    * connection path runs source -> waypoints[0] -> ... -> target as a
    * single multi-segment cubic bezier (one `<path>` element, see
    * `src/utils/connectionPath.ts`). When absent or empty, the renderer
    * falls back to the existing auto-bezier shape (byte-identical for
    * existing graphs — see `connectionPath.waypoints.test.ts`).
+   *
+   * Single-waypoint model (PR #34 feedback 53): the array shape stays
+   * for backward compatibility, but the UI reads/writes AT MOST ONE
+   * entry. Legacy charts saved by the earlier multi-waypoint build
+   * (N > 1) still render through all N waypoints; the first drag of
+   * any of their handles collapses the array to the single dragged
+   * waypoint, and double-clicking a handle clears it entirely (see
+   * `useWaypointDrag`).
    */
   waypoints?: Array<{ x: number; y: number }>;
 }

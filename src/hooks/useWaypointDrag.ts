@@ -1,4 +1,4 @@
-// `useWaypointDrag` — pointer-events drag for connection waypoints.
+// `useWaypointDrag` — pointer-events drag for THE connection waypoint.
 //
 // Sibling of `useConnectionDrag` (PR 5) and `usePointerDrag` (PR 4).
 // Built on the same primitives: pointer capture, `isCanvasGestureActive`
@@ -6,37 +6,39 @@
 // subscription, hook-unmount safety.
 //
 // ---------------------------------------------------------------------------
-// Two gesture kinds
+// Single-waypoint model (PR #34 feedback 53)
 // ---------------------------------------------------------------------------
 //
-//   bindWaypoint(sourceId, targetId, waypointIndex)
-//     Drag an existing waypoint. On pointerdown, captures the pointer
-//     and records "moving waypoint K of connection (S→T)" intent. On
-//     pointermove, writes the new position via `mutateDebounced` so the
-//     UI sees a live preview but the parent isn't notified per move.
-//     On pointerup:
-//       - If the final position is within `MERGE_RADIUS_PX` of a
-//         NEIGHBOR waypoint (waypoint[K-1] or waypoint[K+1]), the
-//         dragged waypoint is REMOVED (collapses into the neighbor —
-//         the cleanest UX: the neighbor stays put, the dragged one
-//         disappears).
-//       - Otherwise the move commits at the final coords.
-//     A single `commit()` call fires on pointerup → one parent notify
-//     → one undo entry.
+// Each connection has AT MOST ONE user-editable waypoint. The reviewer
+// on the original N-waypoint design: "I don't think we really need to
+// be able to edit multiple waypoints (editing the midway point
+// shouldn't create two extra midway points)." So:
 //
 //   bindMidpoint(sourceId, targetId, segmentIndex)
-//     Drag a midpoint handle to CREATE a new waypoint. `segmentIndex`
-//     ∈ [0, N] enumerates the N+1 segments of a connection with N
-//     existing waypoints: segment 0 runs source -> waypoints[0] (or
-//     source -> target if N=0); segment k (1 ≤ k < N) runs
-//     waypoints[k-1] -> waypoints[k]; segment N runs waypoints[N-1] ->
-//     target. On pointerdown the hook inserts a new waypoint at
-//     position `segmentIndex` (shifting the rest right) and treats the
-//     rest of the gesture as a waypoint move on that index. The
-//     `Math.max(0, Math.min(...))` clamp inside `startInsertGesture` is
-//     defensive normalization, not a runtime sentinel — callers always
-//     pass in-range indices from `ConnectionWaypointHandles`. On
-//     pointerup the same commit semantics apply.
+//     Drag the at-rest midpoint affordance to CREATE the waypoint.
+//     `segmentIndex` is retained in the signature for caller symmetry
+//     but the gesture always produces a single-element `waypoints`
+//     array. Nothing is written until the pointer travels beyond
+//     DRAG_THRESHOLD_PX — a plain click must not create a waypoint
+//     (and must not leave a phantom preview in local state).
+//
+//   bindWaypoint(sourceId, targetId, waypointIndex)
+//     Drag the existing waypoint. Every write REPLACES the whole
+//     `waypoints` array with `[draggedPos]`.
+//
+//     Legacy-chart policy: charts saved by the earlier multi-waypoint
+//     build may carry N > 1 waypoints. They keep RENDERING with all N
+//     (see `computePathWithWaypoints`), and every legacy waypoint stays
+//     visible/draggable — but the first actual drag collapses the
+//     array to the single dragged waypoint. A sub-threshold click is
+//     NOT an edit and leaves the legacy shape untouched.
+//
+//   bindWaypoint(...).onDoubleClick
+//     Remove the waypoint(s) entirely — the connection returns to its
+//     automatic curve. One commit → one undo entry. (The old
+//     "drag onto a neighbor waypoint to merge" affordance died with
+//     the multi-waypoint model; with a single waypoint there is no
+//     neighbor, so reset needs its own affordance.)
 //
 // ---------------------------------------------------------------------------
 // Mutation model
@@ -49,9 +51,13 @@
 //
 // **Invariant: one gesture = one undo entry.** All writes during a drag
 // must go through `mutateDebounced` with the same `key`; the final
-// `commit(key)` is what makes the parent visible to undo/redo. Calling
-// `mutate` mid-drag (or with a different key) would split the gesture
-// across multiple history entries.
+// `commit(key)` is what makes the parent visible to undo/redo.
+//
+// **Invariant: sub-threshold gestures write nothing.** The first write
+// only happens once the pointer has moved ≥ DRAG_THRESHOLD_PX from the
+// press point. This keeps plain clicks (including the two clicks of a
+// double-click) from committing collapse/no-op edits or leaving
+// uncommitted preview state behind.
 //
 // On Escape / pointercancel / second-pointer we DO NOT commit; we also
 // call `discardBuffered(key)` so the `mutateDebounced` 200ms idle timer
@@ -68,7 +74,9 @@
 // Waypoint positions are stored in container-local coords (same space
 // as `node.yPosition`). The caller passes a `clientToContainer`
 // translator so the hook doesn't have to know about camera/zoom math.
-// Identity translator is fine for hosts without zoom.
+// Identity translator is fine for hosts without zoom. The drag
+// threshold is measured in CLIENT pixels so it tracks finger/mouse
+// travel rather than zoom-scaled chart distance.
 //
 // ---------------------------------------------------------------------------
 // Mutual exclusion
@@ -77,30 +85,28 @@
 // Red-team Important (plan/figma-redesign.md:203): waypoint drag and
 // connection drag must mutually exclude. `pointerdown` checks
 // `isCanvasGestureActive()` and short-circuits if true; on activation
-// sets it true; on release / cancel clears it.
+// sets it true; on release / cancel clears it. `useZoomPan` reads the
+// same flag in its mousedown handler so a waypoint drag can never be
+// shadowed by a canvas pan (PR #34 feedback 50).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { isCanvasGestureActive, setCanvasGestureActive } from './_canvasGestureState';
 import { loggingService } from '../services/loggingService';
 import type { ToCData, Connection } from '../types';
 
 /**
- * Maximum distance (px, container-local) for "drag onto neighbor → remove".
+ * Minimum pointer travel (client px) before a press becomes a drag.
  *
- * 16 px ≈ 2.5× the waypoint handle's visible radius (r=6, see
- * `ConnectionWaypointHandles`). Smaller (e.g. 8) makes merge feel
- * unreachable — users must land almost dead-center on the neighbor.
- * Larger (e.g. 32) fires merge from "near but not committed" drop
- * positions, removing waypoints the user wanted to keep. 16 trades one
- * false-merge per N drags for one missed-merge per N — empirically OK
- * for the handle size; revisit if handle size changes.
- *
- * Container-local, not viewport: a 16-px snap at zoom=2 would be 32
- * viewport-px, which would feel sticky. Keeping the radius in container
- * space holds the apparent snap distance constant across zoom levels.
+ * Below this, pointerup is treated as a click: nothing is written, no
+ * commit, no undo entry. 3px is the conventional dead-zone — small
+ * enough that intentional drags arm on the first meaningful move,
+ * large enough that the micro-jitter of a click (or of the two clicks
+ * in a double-click) never mutates the chart. This matters doubly for
+ * legacy multi-waypoint charts, where an armed drag COLLAPSES the
+ * waypoints to one: a plain click must not be destructive.
  */
-const MERGE_RADIUS_PX = 16;
+const DRAG_THRESHOLD_PX = 3;
 
 export type WaypointDragKind = 'move' | 'insert';
 
@@ -109,20 +115,12 @@ export interface WaypointDragState {
   sourceNodeId: string;
   targetNodeId: string;
   /**
-   * Index of the waypoint being dragged. For `kind: 'insert'`, this
-   * is the index the NEW waypoint will occupy in the post-insert array
-   * (which equals the `segmentIndex` clamped to the array length at
-   * gesture-start).
+   * For `kind: 'move'`, the index of the waypoint being dragged (only
+   * relevant for the stale-gesture validity check on pointerup; the
+   * write itself always collapses to a single waypoint). For
+   * `kind: 'insert'`, 0.
    */
   waypointIndex: number;
-  /**
-   * Snapshot of the connection's `waypoints` taken at gesture-start.
-   * Every updater REPLAYS the gesture intent (move or insert) on top
-   * of this snapshot, so each call is fully idempotent — `mutateDebounced`'s
-   * latest-wins semantics produce the same final result regardless of
-   * how many intermediate updaters fired.
-   */
-  initialWaypoints: Array<{ x: number; y: number }>;
 }
 
 export interface UseWaypointDragArgs {
@@ -146,7 +144,7 @@ export interface UseWaypointDragArgs {
   discardBuffered?: (key: string) => void;
   /**
    * Translate viewport client coords to container-local coords. Pure;
-   * the hook calls it on pointerdown and every pointermove.
+   * the hook calls it on every armed pointermove.
    */
   clientToContainer: (clientX: number, clientY: number) => { x: number; y: number };
 }
@@ -158,7 +156,10 @@ export interface UseWaypointDragResult {
     sourceNodeId: string,
     targetNodeId: string,
     waypointIndex: number,
-  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  ) => {
+    onPointerDown: (e: ReactPointerEvent) => void;
+    onDoubleClick: (e: ReactMouseEvent) => void;
+  };
   bindMidpoint: (
     sourceNodeId: string,
     targetNodeId: string,
@@ -269,6 +270,12 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   // gesture so commit() flushes the whole drag as ONE entry.
   const gestureKeyRef = useRef<string | null>(null);
 
+  // Drag-threshold bookkeeping: where the press landed (client coords)
+  // and whether the gesture has crossed DRAG_THRESHOLD_PX. Until armed,
+  // NOTHING is written — see "sub-threshold gestures write nothing".
+  const gestureStartClientRef = useRef<{ x: number; y: number } | null>(null);
+  const gestureArmedRef = useRef(false);
+
   const buildKey = useCallback(
     (sourceId: string, targetId: string): string => `waypoints-${sourceId}->${targetId}`,
     [],
@@ -301,97 +308,89 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       captureElRef.current = null;
       activePointerIdRef.current = null;
       gestureKeyRef.current = null;
+      gestureStartClientRef.current = null;
+      gestureArmedRef.current = false;
       setCanvasGestureActive(false);
       setDragState(null);
     },
     [setDragState],
   );
 
-  // Build a single, idempotent "replay" updater: takes the gesture's
-  // snapshot and replays the gesture intent (move-to-pos OR insert-
-  // at-index, with optional neighbor-merge) on top of it. Each emitted
-  // updater is fully self-contained, so `mutateDebounced`'s latest-wins
-  // semantics converge to the right end state regardless of intermediate
-  // updaters' apply order.
+  // The single write shape of the gesture: REPLACE the connection's
+  // waypoints with `[pos]`. Idempotent and self-contained, so
+  // `mutateDebounced`'s latest-wins semantics converge to the right end
+  // state regardless of intermediate updaters' apply order. This is
+  // also what implements the legacy-chart collapse policy: an old
+  // multi-waypoint array becomes the single dragged waypoint.
   const buildReplayUpdater = useCallback(
-    (
-      state: WaypointDragState,
-      pos: { x: number; y: number },
-      // `true` when the gesture should also evaluate neighbor-merge
-      // (pointerup only). pointermove never merges so intermediate
-      // hover-near-neighbor doesn't visually remove the waypoint
-      // before the user has committed to that intent.
-      evaluateMerge: boolean,
-    ): ((prev: ToCData) => ToCData) => {
+    (state: WaypointDragState, pos: { x: number; y: number }): ((prev: ToCData) => ToCData) => {
       return (prev: ToCData) =>
-        updateConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, () => {
-          // Start from the gesture's snapshot, replay intent.
-          const next = state.initialWaypoints.slice();
-          let activeIndex: number;
-          if (state.kind === 'insert') {
-            activeIndex = Math.max(0, Math.min(state.waypointIndex, next.length));
-            next.splice(activeIndex, 0, { x: pos.x, y: pos.y });
-          } else {
-            // move: replace the position at waypointIndex with `pos`.
-            if (state.waypointIndex < 0 || state.waypointIndex >= next.length) {
-              return next;
-            }
-            activeIndex = state.waypointIndex;
-            next[activeIndex] = { x: pos.x, y: pos.y };
-          }
-
-          if (!evaluateMerge) return next;
-
-          // Neighbor-merge: drop the active waypoint if its position is
-          // within MERGE_RADIUS_PX of an immediate neighbor (left or right).
-          const neighbors: number[] = [];
-          if (activeIndex - 1 >= 0) neighbors.push(activeIndex - 1);
-          if (activeIndex + 1 < next.length) neighbors.push(activeIndex + 1);
-          for (const nIdx of neighbors) {
-            const nw = next[nIdx];
-            const dx = pos.x - nw.x;
-            const dy = pos.y - nw.y;
-            if (Math.hypot(dx, dy) <= MERGE_RADIUS_PX) {
-              next.splice(activeIndex, 1);
-              break;
-            }
-          }
-          return next;
-        });
+        updateConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, () => [
+          { x: pos.x, y: pos.y },
+        ]);
     },
     [],
   );
 
-  // pointermove: write live preview via mutateDebounced. Note: we don't
-  // mirror `pos` into dragState because nothing reads it — the live
-  // position lives in `data` via writeLocal. Skipping the setState here
-  // saves one render per pointermove tick.
+  /**
+   * Threshold gate. Returns true once the pointer has traveled ≥
+   * DRAG_THRESHOLD_PX from the press point (and latches: a gesture
+   * that armed stays armed even if the pointer returns to the press
+   * point — releasing there is a legitimate "moved then changed my
+   * mind a little" drop, not a click).
+   */
+  const armIfPastThreshold = useCallback((clientX: number, clientY: number): boolean => {
+    if (gestureArmedRef.current) return true;
+    const start = gestureStartClientRef.current;
+    if (!start) return false;
+    const dist = Math.hypot(clientX - start.x, clientY - start.y);
+    if (dist >= DRAG_THRESHOLD_PX) {
+      gestureArmedRef.current = true;
+      return true;
+    }
+    return false;
+  }, []);
+
+  // pointermove: write live preview via mutateDebounced once armed.
+  // Note: we don't mirror `pos` into dragState because nothing reads
+  // it — the live position lives in `data` via writeLocal. Skipping
+  // the setState here saves one render per pointermove tick.
   const handlePointerMove = useCallback(
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
       const state = dragStateRef.current;
       if (!state) return;
+      if (!armIfPastThreshold(e.clientX, e.clientY)) return;
       const pos = clientToContainerRef.current(e.clientX, e.clientY);
 
       const key = gestureKeyRef.current!;
-      mutateDebouncedRef.current(buildReplayUpdater(state, pos, false), key);
+      mutateDebouncedRef.current(buildReplayUpdater(state, pos), key);
     },
-    [buildReplayUpdater],
+    [buildReplayUpdater, armIfPastThreshold],
   );
 
-  // pointerup: maybe merge with neighbor, then commit one entry. If the
-  // connection or waypoint vanished mid-gesture (cross-tab AI/collab
-  // edit) the replay updater no-ops gracefully; we log one
-  // `stale-waypoint-drop` per drop (NOT per pointermove — logging from
-  // the pure updater would flood under the same race). Mirrors PR 4
-  // `stale-node-drop` and PR 5 `stale-connection-source/target` so log
-  // facets stay consistent for ops.
+  // pointerup: commit one entry if the gesture armed; otherwise it was
+  // a click — clean up without writing anything. If the connection or
+  // waypoint vanished mid-gesture (cross-tab AI/collab edit) the replay
+  // updater no-ops gracefully; we log one `stale-waypoint-drop` per
+  // drop (NOT per pointermove — logging from the pure updater would
+  // flood under the same race). Mirrors PR 4 `stale-node-drop` and PR 5
+  // `stale-connection-source/target` so log facets stay consistent.
   const handlePointerUp = useCallback(
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
       const state = dragStateRef.current;
       const key = gestureKeyRef.current;
       if (!state || !key) {
+        cleanup();
+        return;
+      }
+
+      // Sub-threshold press+release = click, not drag. Nothing was
+      // written (pointermove gates on the same flag), so a plain
+      // cleanup suffices: no commit, no undo entry, and a legacy
+      // multi-waypoint chart keeps its shape.
+      if (!armIfPastThreshold(e.clientX, e.clientY)) {
         cleanup();
         return;
       }
@@ -419,11 +418,11 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       }
 
       const pos = clientToContainerRef.current(e.clientX, e.clientY);
-      mutateDebouncedRef.current(buildReplayUpdater(state, pos, true), key);
+      mutateDebouncedRef.current(buildReplayUpdater(state, pos), key);
       commitRef.current(key);
       cleanup();
     },
-    [cleanup, buildReplayUpdater],
+    [cleanup, buildReplayUpdater, armIfPastThreshold],
   );
 
   const handlePointerCancel = useCallback(
@@ -482,20 +481,26 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     };
   }, []);
 
-  // ----- bindWaypoint / bindMidpoint ----------------------------------
+  // ----- gesture starters ----------------------------------------------
 
-  const startMoveGesture = useCallback(
-    (sourceNodeId: string, targetNodeId: string, waypointIndex: number, e: ReactPointerEvent) => {
+  const startGesture = useCallback(
+    (
+      kind: WaypointDragKind,
+      sourceNodeId: string,
+      targetNodeId: string,
+      waypointIndex: number,
+      e: ReactPointerEvent,
+    ) => {
       if (!editModeRef.current) return;
       if (isCanvasGestureActive()) return;
       if (e.button != null && e.button !== 0) return;
 
-      // Snapshot the connection's current waypoints; the gesture
-      // replays its intent on top of this snapshot in every updater.
       const conn = findConnection(dataRef.current, sourceNodeId, targetNodeId);
       if (!conn) return; // defensive: connection vanished between hover and pointerdown
-      const initialWaypoints = (conn.waypoints ?? []).map((w) => ({ x: w.x, y: w.y }));
-      if (waypointIndex < 0 || waypointIndex >= initialWaypoints.length) return;
+      if (kind === 'move') {
+        const count = conn.waypoints?.length ?? 0;
+        if (waypointIndex < 0 || waypointIndex >= count) return;
+      }
 
       const target = e.target as HTMLElement | null;
       if (target) {
@@ -512,13 +517,14 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       activePointerIdRef.current = e.pointerId;
       setCanvasGestureActive(true);
       gestureKeyRef.current = buildKey(sourceNodeId, targetNodeId);
+      gestureStartClientRef.current = { x: e.clientX, y: e.clientY };
+      gestureArmedRef.current = false;
 
       setDragState({
-        kind: 'move',
+        kind,
         sourceNodeId,
         targetNodeId,
-        waypointIndex,
-        initialWaypoints,
+        waypointIndex: kind === 'move' ? waypointIndex : 0,
       });
 
       e.stopPropagation();
@@ -526,58 +532,41 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     [buildKey, setDragState],
   );
 
-  const startInsertGesture = useCallback(
-    (sourceNodeId: string, targetNodeId: string, segmentIndex: number, e: ReactPointerEvent) => {
+  /**
+   * Double-click on a waypoint handle: remove the waypoint(s) — the
+   * connection returns to its automatic curve. The two clicks that
+   * precede the dblclick are sub-threshold gestures and wrote nothing
+   * (see DRAG_THRESHOLD_PX), so this is the only mutation: one
+   * mutateDebounced + one commit → one undo entry.
+   */
+  const resetWaypoints = useCallback(
+    (sourceNodeId: string, targetNodeId: string, e: ReactMouseEvent) => {
       if (!editModeRef.current) return;
       if (isCanvasGestureActive()) return;
-      if (e.button != null && e.button !== 0) return;
-
       const conn = findConnection(dataRef.current, sourceNodeId, targetNodeId);
-      if (!conn) return; // defensive: connection vanished
-      const initialWaypoints = (conn.waypoints ?? []).map((w) => ({ x: w.x, y: w.y }));
+      if (!conn) return;
+      if ((conn.waypoints?.length ?? 0) === 0) return;
 
-      const target = e.target as HTMLElement | null;
-      if (target) {
-        try {
-          if (typeof target.setPointerCapture === 'function') {
-            target.setPointerCapture(e.pointerId);
-            captureElRef.current = target;
-          }
-        } catch {
-          // jsdom / detached — non-fatal.
-        }
-      }
-
-      activePointerIdRef.current = e.pointerId;
-      setCanvasGestureActive(true);
       const key = buildKey(sourceNodeId, targetNodeId);
-      gestureKeyRef.current = key;
-
-      const pos = clientToContainerRef.current(e.clientX, e.clientY);
-      const insertedIndex = Math.max(0, Math.min(segmentIndex, initialWaypoints.length));
-
-      const state: WaypointDragState = {
-        kind: 'insert',
-        sourceNodeId,
-        targetNodeId,
-        waypointIndex: insertedIndex,
-        initialWaypoints,
-      };
-      setDragState(state);
-
-      // Emit a first idempotent replay so the canvas shows the new
-      // waypoint right away (without merge evaluation — merge logic
-      // only fires on pointerup).
-      mutateDebouncedRef.current(buildReplayUpdater(state, pos, false), key);
-
+      mutateDebouncedRef.current(
+        (prev: ToCData) => updateConnectionWaypoints(prev, sourceNodeId, targetNodeId, () => []),
+        key,
+      );
+      commitRef.current(key);
       e.stopPropagation();
     },
-    [buildKey, buildReplayUpdater, setDragState],
+    [buildKey],
   );
 
-  const bindWaypointCache = useRef<Map<string, { onPointerDown: (e: ReactPointerEvent) => void }>>(
-    new Map(),
-  );
+  const bindWaypointCache = useRef<
+    Map<
+      string,
+      {
+        onPointerDown: (e: ReactPointerEvent) => void;
+        onDoubleClick: (e: ReactMouseEvent) => void;
+      }
+    >
+  >(new Map());
   const bindMidpointCache = useRef<Map<string, { onPointerDown: (e: ReactPointerEvent) => void }>>(
     new Map(),
   );
@@ -589,12 +578,13 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       if (cached) return cached;
       const entry = {
         onPointerDown: (e: ReactPointerEvent) =>
-          startMoveGesture(sourceNodeId, targetNodeId, waypointIndex, e),
+          startGesture('move', sourceNodeId, targetNodeId, waypointIndex, e),
+        onDoubleClick: (e: ReactMouseEvent) => resetWaypoints(sourceNodeId, targetNodeId, e),
       };
       bindWaypointCache.current.set(key, entry);
       return entry;
     },
-    [startMoveGesture],
+    [startGesture, resetWaypoints],
   );
 
   const bindMidpoint = useCallback(
@@ -604,12 +594,12 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       if (cached) return cached;
       const entry = {
         onPointerDown: (e: ReactPointerEvent) =>
-          startInsertGesture(sourceNodeId, targetNodeId, segmentIndex, e),
+          startGesture('insert', sourceNodeId, targetNodeId, 0, e),
       };
       bindMidpointCache.current.set(key, entry);
       return entry;
     },
-    [startInsertGesture],
+    [startGesture],
   );
 
   return useMemo(

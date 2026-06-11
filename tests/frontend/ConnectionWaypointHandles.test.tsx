@@ -1,20 +1,19 @@
-// PR 7 Task 7.3 tests for `ConnectionWaypointHandles`.
+// Tests for `ConnectionWaypointHandles` — single-waypoint model
+// (PR #34 feedback 53).
 //
 // Verifies:
 //   - `visible=false` → renders nothing.
-//   - 0 waypoints → 1 midpoint handle, 0 waypoint handles.
-//   - 1 waypoint  → 2 midpoint handles, 1 waypoint handle.
-//   - 2 waypoints → 3 midpoint handles, 2 waypoint handles.
-//   - Midpoint handle pointerdown binds via `bindMidpoint(s, t, segIdx)`.
-//   - Waypoint handle pointerdown binds via `bindWaypoint(s, t, wpIdx)`.
-//   - Click on either kind stops propagation (so it doesn't trigger the
-//     edge's `onClick` underneath).
-//
-// PR 7 feedback (A): midpoint positioning moved from chord-midpoint
-// (computed inside the component) to caller-supplied `segmentMidpoints`
-// (computed by `computeSegmentMidpoints` to land on the rendered
-// bezier). The test now passes one midpoint coord per segment via that
-// prop; the component just renders what it's given.
+//   - 0 waypoints → exactly 1 midpoint affordance (the "bend me" entry
+//     point), 0 waypoint handles.
+//   - 1 waypoint  → 0 midpoint affordances (no recursive splitting),
+//     1 waypoint handle.
+//   - N waypoints (legacy chart) → 0 midpoint affordances, N waypoint
+//     handles (legacy waypoints stay visible/draggable; dragging any
+//     one collapses to the single-waypoint model — hook-level test).
+//   - `dragInProgress` hides the midpoint affordance.
+//   - Midpoint pointerdown binds via `bindMidpoint(s, t, 0)`.
+//   - Waypoint pointerdown binds via `bindWaypoint(s, t, wpIdx)`.
+//   - Waypoint double-click calls the bound onDoubleClick (reset).
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
@@ -24,9 +23,10 @@ afterEach(() => {
   cleanup();
 });
 
-function makeBind(spy: ReturnType<typeof vi.fn>) {
+function makeBind(spy: ReturnType<typeof vi.fn>, dblSpy?: ReturnType<typeof vi.fn>) {
   return (s: string, t: string, idx: number) => ({
     onPointerDown: (e: React.PointerEvent) => spy(s, t, idx, e),
+    onDoubleClick: (e: React.MouseEvent) => dblSpy?.(s, t, idx, e),
   });
 }
 
@@ -92,8 +92,8 @@ describe('ConnectionWaypointHandles', () => {
     });
   });
 
-  describe('handle counts', () => {
-    it('0 waypoints → 1 midpoint, 0 waypoint handles', () => {
+  describe('handle counts (single-waypoint model)', () => {
+    it('0 waypoints → exactly 1 midpoint affordance, 0 waypoint handles', () => {
       const anchors = [
         { x: 0, y: 0 },
         { x: 100, y: 100 },
@@ -112,7 +112,7 @@ describe('ConnectionWaypointHandles', () => {
       expect(container.querySelectorAll('[data-tocb-waypoint-handle]').length).toBe(0);
     });
 
-    it('1 waypoint → 2 midpoint, 1 waypoint handle', () => {
+    it('1 waypoint → 0 midpoint affordances (no recursive splitting), 1 waypoint handle', () => {
       const anchors = [
         { x: 0, y: 0 },
         { x: 50, y: 50 }, // wp[0]
@@ -128,11 +128,11 @@ describe('ConnectionWaypointHandles', () => {
         bindWaypoint: makeBind(vi.fn()),
         bindMidpoint: makeBind(vi.fn()),
       });
-      expect(container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(2);
+      expect(container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(0);
       expect(container.querySelectorAll('[data-tocb-waypoint-handle]').length).toBe(1);
     });
 
-    it('2 waypoints → 3 midpoint, 2 waypoint handles', () => {
+    it('legacy 2-waypoint chart → 0 midpoint affordances, 2 waypoint handles', () => {
       const anchors = [
         { x: 0, y: 0 },
         { x: 33, y: 33 }, // wp[0]
@@ -149,14 +149,33 @@ describe('ConnectionWaypointHandles', () => {
         bindWaypoint: makeBind(vi.fn()),
         bindMidpoint: makeBind(vi.fn()),
       });
-      expect(container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(3);
+      expect(container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(0);
       expect(container.querySelectorAll('[data-tocb-waypoint-handle]').length).toBe(2);
+    });
+
+    it('dragInProgress hides the midpoint affordance', () => {
+      const anchors = [
+        { x: 0, y: 0 },
+        { x: 100, y: 100 },
+      ];
+      const { container } = renderHandles({
+        sourceNodeId: 's',
+        targetNodeId: 't',
+        anchors,
+        segmentMidpoints: chordMidpoints(anchors),
+        waypointCount: 0,
+        visible: true,
+        dragInProgress: true,
+        bindWaypoint: makeBind(vi.fn()),
+        bindMidpoint: makeBind(vi.fn()),
+      });
+      expect(container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(0);
     });
   });
 
   describe('handle positions', () => {
-    it('midpoint handle renders at the caller-supplied segmentMidpoint coords', () => {
-      // The component is now a pure renderer for `segmentMidpoints`;
+    it('midpoint affordance renders at the caller-supplied segmentMidpoint coords', () => {
+      // The component is a pure renderer for `segmentMidpoints[0]`;
       // the on-curve B(0.5) math lives in `computeSegmentMidpoints`
       // (see `tests/frontend/connectionPath.waypoints.test.ts`).
       const anchors = [
@@ -201,11 +220,10 @@ describe('ConnectionWaypointHandles', () => {
   });
 
   describe('binding correctness', () => {
-    it('midpoint pointerdown calls bindMidpoint with correct segmentIndex', () => {
+    it('midpoint pointerdown binds segment 0', () => {
       const midSpy = vi.fn();
       const anchors = [
         { x: 0, y: 0 },
-        { x: 50, y: 50 },
         { x: 100, y: 100 },
       ];
       const { container } = renderHandles({
@@ -213,7 +231,7 @@ describe('ConnectionWaypointHandles', () => {
         targetNodeId: 't',
         anchors,
         segmentMidpoints: chordMidpoints(anchors),
-        waypointCount: 1,
+        waypointCount: 0,
         visible: true,
         bindWaypoint: makeBind(vi.fn()),
         bindMidpoint: makeBind(midSpy),
@@ -221,8 +239,6 @@ describe('ConnectionWaypointHandles', () => {
       const midpoints = container.querySelectorAll('[data-tocb-midpoint-handle]');
       fireEvent.pointerDown(midpoints[0]);
       expect(midSpy).toHaveBeenCalledWith('s', 't', 0, expect.anything());
-      fireEvent.pointerDown(midpoints[1]);
-      expect(midSpy).toHaveBeenCalledWith('s', 't', 1, expect.anything());
     });
 
     it('waypoint pointerdown calls bindWaypoint with correct index', () => {
@@ -248,6 +264,28 @@ describe('ConnectionWaypointHandles', () => {
       expect(wpSpy).toHaveBeenCalledWith('s', 't', 0, expect.anything());
       fireEvent.pointerDown(waypoints[1]);
       expect(wpSpy).toHaveBeenCalledWith('s', 't', 1, expect.anything());
+    });
+
+    it('waypoint double-click calls the bound onDoubleClick (reset affordance)', () => {
+      const dblSpy = vi.fn();
+      const anchors = [
+        { x: 0, y: 0 },
+        { x: 50, y: 50 },
+        { x: 100, y: 100 },
+      ];
+      const { container } = renderHandles({
+        sourceNodeId: 's',
+        targetNodeId: 't',
+        anchors,
+        segmentMidpoints: chordMidpoints(anchors),
+        waypointCount: 1,
+        visible: true,
+        bindWaypoint: makeBind(vi.fn(), dblSpy),
+        bindMidpoint: makeBind(vi.fn()),
+      });
+      const wp = container.querySelector('[data-tocb-waypoint-handle]')!;
+      fireEvent.doubleClick(wp);
+      expect(dblSpy).toHaveBeenCalledWith('s', 't', 0, expect.anything());
     });
   });
 });

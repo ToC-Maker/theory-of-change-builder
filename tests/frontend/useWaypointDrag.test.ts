@@ -1,28 +1,30 @@
-// PR 7 Task 7.2 tests for `useWaypointDrag`.
+// Tests for `useWaypointDrag` — single-waypoint model (PR #34 feedback 53).
 //
-// The hook owns the gesture lifecycle for two kinds of drag:
+// The hook owns the gesture lifecycle for waypoint editing. PR #34
+// feedback (53) reduced the model from N editable waypoints to ONE:
 //
-//   - `bindWaypoint(connectionId, waypointIndex)` — drag an existing
-//     waypoint. On pointermove: update the waypoint position. On
-//     pointerup: if the final position is within `MERGE_RADIUS_PX` of a
-//     neighbor waypoint, remove this waypoint (or the neighbor — see
-//     impl note in `src/hooks/useWaypointDrag.ts`). Otherwise commit
-//     the new position.
-//   - `bindMidpoint(connectionId, segmentIndex)` — drag a midpoint to
-//     create a NEW waypoint. On pointerdown: insert a waypoint at the
-//     midpoint's position. On pointermove: update it like a regular
-//     waypoint. On pointerup: commit (or undo the insert if merged
-//     into a neighbor — defensive).
+//   - `bindMidpoint(sourceId, targetId, segmentIndex)` — drag the
+//     at-rest midpoint affordance to CREATE the connection's single
+//     waypoint. Nothing is written until the pointer travels beyond
+//     the drag threshold (a plain click must not create a waypoint).
+//   - `bindWaypoint(sourceId, targetId, waypointIndex)` — drag the
+//     existing waypoint. Every write REPLACES the whole waypoints
+//     array with `[draggedPos]`: legacy multi-waypoint charts (created
+//     before the single-waypoint redesign) collapse to the dragged
+//     waypoint on their first edit.
+//   - `bindWaypoint(...).onDoubleClick` — remove the waypoint(s)
+//     entirely (reset to the automatic curve). One commit, one undo
+//     entry.
 //
 // Mutation contract:
 //   - Live updates flow through `mutateDebounced` (no parent notify
 //     during the drag — same pattern as slider drags).
 //   - `commit` on pointerup fires exactly one parent notify, yielding
 //     one undo entry per gesture.
-//   - Escape / pointercancel: NO commit. Live state has already been
-//     touched via `mutateDebounced`, but the caller is expected to
-//     revert that via the `onCancel` callback (the hook surfaces the
-//     cancel signal so callers can clear the buffer).
+//   - A sub-threshold gesture (press + release without real movement)
+//     writes NOTHING: no mutateDebounced, no commit, no phantom
+//     waypoint in local state.
+//   - Escape / pointercancel: NO commit; buffered updater discarded.
 //
 // Mutual exclusion: pointerdown checks `isCanvasGestureActive` and
 // short-circuits if true (red-team Important, plan/figma-redesign.md:203).
@@ -122,6 +124,13 @@ function makePointerDownEvent(init: {
   } as unknown as React.PointerEvent;
 }
 
+function makeDoubleClickEvent(): React.MouseEvent {
+  return {
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  } as unknown as React.MouseEvent;
+}
+
 function pointerEvent(
   type: string,
   init: { clientX?: number; clientY?: number; pointerId?: number },
@@ -196,13 +205,20 @@ function setupHook(args: {
   return { ctx, result };
 }
 
+/** Apply the last buffered updater to `data` and return the connection. */
+function lastConnection(ctx: HookContext, data: ToCData) {
+  const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
+  const next = typeof updater === 'function' ? updater(data) : updater;
+  return next.sections[0].columns[0].nodes[0].connections![0];
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('useWaypointDrag', () => {
-  describe('bindMidpoint — insert new waypoint', () => {
-    it('inserts a waypoint at the drop position when no neighbor merge', () => {
+describe('useWaypointDrag (single-waypoint model)', () => {
+  describe('bindMidpoint — create THE waypoint', () => {
+    it('creates a single waypoint at the drop position', () => {
       const data = makeData([]); // no existing waypoints
       const { ctx, result } = setupHook({ data });
 
@@ -225,18 +241,36 @@ describe('useWaypointDrag', () => {
       expect(ctx.mutateDebounced).toHaveBeenCalled();
       expect(ctx.commit).toHaveBeenCalledTimes(1);
 
-      // Apply the final updater to verify the inserted waypoint lands
-      // at the drop position.
-      const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
-      const next = typeof updater === 'function' ? updater(data) : updater;
-      const connection = next.sections[0].columns[0].nodes[0].connections![0];
-      expect(connection.waypoints).toEqual([{ x: 150, y: 200 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 150, y: 200 }]);
     });
 
-    it('inserts at the correct segmentIndex (between existing waypoints)', () => {
-      // Existing waypoint at (100, 50). Inserting at segmentIndex 1
-      // means "between waypoint[0] and target" — should land at
-      // waypoints[1] after insert.
+    it('a sub-threshold press+release (plain click) creates NOTHING', () => {
+      const data = makeData([]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindMidpoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 50, clientY: 100 }));
+      });
+      // 1px jiggle, below the threshold.
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 51, clientY: 100 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 51, clientY: 100 }));
+      });
+
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(isCanvasGestureActive()).toBe(false);
+      expect(result.current.isActive).toBe(false);
+    });
+
+    it('collapses to the single dragged waypoint even if legacy waypoints exist', () => {
+      // The UI no longer offers midpoint affordances when waypoints
+      // exist, but the hook must stay consistent with the
+      // single-waypoint model if invoked that way (defensive).
       const data = makeData([{ x: 100, y: 50 }]);
       const { ctx, result } = setupHook({ data });
 
@@ -249,18 +283,12 @@ describe('useWaypointDrag', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 175, clientY: 75 }));
       });
 
-      const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
-      const next = typeof updater === 'function' ? updater(data) : updater;
-      const connection = next.sections[0].columns[0].nodes[0].connections![0];
-      expect(connection.waypoints).toEqual([
-        { x: 100, y: 50 },
-        { x: 175, y: 75 },
-      ]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 175, y: 75 }]);
     });
   });
 
-  describe('bindWaypoint — move existing waypoint', () => {
-    it('updates the waypoint position on pointerup (no merge)', () => {
+  describe('bindWaypoint — move THE waypoint', () => {
+    it('updates the waypoint position on pointerup', () => {
       const data = makeData([{ x: 100, y: 50 }]);
       const { ctx, result } = setupHook({ data });
 
@@ -276,64 +304,114 @@ describe('useWaypointDrag', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 160, clientY: 80 }));
       });
 
-      const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
-      const next = typeof updater === 'function' ? updater(data) : updater;
-      const connection = next.sections[0].columns[0].nodes[0].connections![0];
-      expect(connection.waypoints).toEqual([{ x: 160, y: 80 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 160, y: 80 }]);
       expect(ctx.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it('a sub-threshold press+release on a waypoint commits nothing', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 100, clientY: 50 }));
+      });
+
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
     });
   });
 
-  describe('bindWaypoint — merge with neighbor (remove waypoint)', () => {
-    it('removes the dragged waypoint when its final pos is within 16px of a neighbor waypoint', () => {
+  describe('legacy multi-waypoint charts (PR #34 feedback 53 compat policy)', () => {
+    it('dragging any waypoint of a legacy multi-waypoint connection collapses to the dragged one', () => {
       const data = makeData([
         { x: 60, y: 100 },
         { x: 140, y: 100 },
+        { x: 220, y: 100 },
       ]);
       const { ctx, result } = setupHook({ data });
 
-      // Drag waypoint[0] (at 60,100) to (130,100) — within 16px of
-      // waypoint[1] (at 140,100).
+      // Drag waypoint[1] (at 140,100) to (150,180).
       act(() => {
         result.current
-          .bindWaypoint(sourceId, targetId, 0)
-          .onPointerDown(makePointerDownEvent({ clientX: 60, clientY: 100 }));
+          .bindWaypoint(sourceId, targetId, 1)
+          .onPointerDown(makePointerDownEvent({ clientX: 140, clientY: 100 }));
       });
       act(() => {
-        document.dispatchEvent(pointerEvent('pointerup', { clientX: 130, clientY: 100 }));
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 150, clientY: 180 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 150, clientY: 180 }));
       });
 
-      const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
-      const next = typeof updater === 'function' ? updater(data) : updater;
-      const connection = next.sections[0].columns[0].nodes[0].connections![0];
-      expect(connection.waypoints).toEqual([{ x: 140, y: 100 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 150, y: 180 }]);
       expect(ctx.commit).toHaveBeenCalledTimes(1);
     });
 
-    it('does not merge when the final pos is just outside the 16px threshold', () => {
+    it('a sub-threshold click on a legacy waypoint does NOT collapse the others', () => {
+      // A plain click is not an edit: the legacy shape must survive.
       const data = makeData([
         { x: 60, y: 100 },
         { x: 140, y: 100 },
       ]);
       const { ctx, result } = setupHook({ data });
 
-      // Drag waypoint[0] to (120, 100) — distance 20 to waypoint[1].
       act(() => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)
           .onPointerDown(makePointerDownEvent({ clientX: 60, clientY: 100 }));
       });
       act(() => {
-        document.dispatchEvent(pointerEvent('pointerup', { clientX: 120, clientY: 100 }));
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 61, clientY: 101 }));
       });
 
-      const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
-      const next = typeof updater === 'function' ? updater(data) : updater;
-      const connection = next.sections[0].columns[0].nodes[0].connections![0];
-      expect(connection.waypoints).toEqual([
-        { x: 120, y: 100 },
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('bindWaypoint — double-click resets to the automatic curve', () => {
+    it('clears the waypoints array and commits once', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current.bindWaypoint(sourceId, targetId, 0).onDoubleClick(makeDoubleClickEvent());
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([]);
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears ALL waypoints of a legacy multi-waypoint connection', () => {
+      const data = makeData([
+        { x: 60, y: 100 },
         { x: 140, y: 100 },
       ]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current.bindWaypoint(sourceId, targetId, 1).onDoubleClick(makeDoubleClickEvent());
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([]);
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it('does nothing when editMode=false', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data, editMode: false });
+
+      act(() => {
+        result.current.bindWaypoint(sourceId, targetId, 0).onDoubleClick(makeDoubleClickEvent());
+      });
+
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
     });
   });
 
@@ -408,7 +486,7 @@ describe('useWaypointDrag', () => {
       // `mutateDebounced`'s 200ms idle timer would otherwise auto-commit
       // the in-flight drag position as if the user had released — making
       // Escape a 200ms-delayed commit rather than a true cancel. The
-      // hook now calls `discardBuffered(key)` on cancel paths.
+      // hook calls `discardBuffered(key)` on cancel paths.
       const data = makeData([{ x: 100, y: 50 }]);
       const { ctx, result } = setupHook({ data });
 
@@ -459,6 +537,9 @@ describe('useWaypointDrag', () => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)
           .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50, pointerId: 1 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 150, clientY: 70 }));
       });
       // Second pointer with a different pointerId → cancel.
       act(() => {
@@ -585,9 +666,7 @@ describe('useWaypointDrag', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 250, clientY: 300 }));
       });
 
-      const updater = ctx.mutateDebounced.mock.calls.at(-1)![0];
-      const next = typeof updater === 'function' ? updater(data) : updater;
-      const connection = next.sections[0].columns[0].nodes[0].connections![0];
+      const connection = lastConnection(ctx, ctx.data);
       // (250-50)/2, (300-100)/2 -> (100, 100).
       expect(connection.waypoints).toEqual([{ x: 100, y: 100 }]);
     });
