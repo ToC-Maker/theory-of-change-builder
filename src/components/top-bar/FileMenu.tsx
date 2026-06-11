@@ -585,7 +585,16 @@ export function FileMenu({
         type="button"
         onClick={() => setOpen((s) => !s)}
         onPointerEnter={onHoverOpen}
-        className="px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded transition-colors flex items-center gap-1"
+        // PR 7 feedback (43): native-menubar trigger. `h-full`
+        // stretches the hit target to the TopBar's full height (in
+        // MobileMenu the parent is auto-height, so `h-full` degrades
+        // to the content+py-1.5 height as before). The hover/open
+        // background is a full-height fill, not a rounded chip; the
+        // open state keeps the fill so the active menu reads as
+        // pressed while the dropdown shows.
+        className={`h-full px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-1 ${
+          open ? 'bg-gray-100' : ''
+        }`}
         aria-haspopup="menu"
         aria-expanded={open}
       >
@@ -614,7 +623,10 @@ export function FileMenu({
         <div
           role="menu"
           ref={menuPanelRef}
-          className="absolute top-full mt-1 left-0 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+          // `top-full` with no margin: the trigger is now full-bar-
+          // height (43), so the panel sits flush under the bar like a
+          // native menubar dropdown.
+          className="absolute top-full left-0 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
         >
           <a
             href="/"

@@ -108,8 +108,12 @@ export function FormatMenu({
         onClick={() => editMode && setOpen((s) => !s)}
         onPointerEnter={editMode ? onHoverOpen : undefined}
         disabled={!editMode}
-        className={`px-2 sm:px-3 py-1.5 text-sm font-medium rounded transition-colors flex items-center gap-1 ${
-          editMode ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+        // PR 7 feedback (43): full-height native-menubar trigger with
+        // a full-height fill (kept while open). See FileMenu.tsx.
+        className={`h-full px-2 sm:px-3 py-1.5 text-sm font-medium transition-colors flex items-center gap-1 ${
+          editMode
+            ? `text-gray-700 hover:bg-gray-100 ${open ? 'bg-gray-100' : ''}`
+            : 'text-gray-400 cursor-not-allowed'
         }`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -122,7 +126,7 @@ export function FormatMenu({
       {open && (
         <div
           role="menu"
-          className="absolute top-full mt-1 left-0 w-72 bg-white rounded-lg shadow-lg border border-gray-200 py-3 px-4 z-50 space-y-4"
+          className="absolute top-full left-0 w-72 bg-white rounded-lg shadow-lg border border-gray-200 py-3 px-4 z-50 space-y-4"
         >
           {/* Font family — styled to match the `Picker` trigger pattern
             used in `ChatInterface.tsx` (model + effort selectors):

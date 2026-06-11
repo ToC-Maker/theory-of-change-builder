@@ -165,8 +165,14 @@ export function TopBar(props: TopBarProps) {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
-      <div className="mx-auto py-2 px-2 sm:px-4">
-        <div className="flex items-center justify-between gap-2">
+      {/* PR 7 feedback (43): no vertical padding on the container —
+        the menubar triggers must reach the bar's top and bottom edges
+        (native-menubar hit target). The row keeps the previous visual
+        height via min-h (36px content + 2×8px former py-2 = 52px);
+        non-menubar children re-center through their own
+        `items-center` wrappers. */}
+      <div className="mx-auto px-2 sm:px-4">
+        <div className="flex items-stretch justify-between gap-2 min-h-[52px]">
           {/* Left cluster */}
           <div className="flex items-center gap-1 sm:gap-3 min-w-0">
             {bp === 'md' && !isViewer && (
@@ -175,7 +181,10 @@ export function TopBar(props: TopBarProps) {
               // without the cursor traversing dead space in between.
               // Visual separation comes from each button's `px-2/3`
               // padding rather than parent gap.
-              <div className="flex items-center">
+              // `self-stretch items-stretch` (43): the group escapes
+              // the cluster's `items-center` and passes the full row
+              // height down to the trigger buttons (`h-full`).
+              <div className="flex items-stretch self-stretch">
                 <FileMenu
                   isAuthenticated={isAuthenticated}
                   isOwner={isOwner}
@@ -213,12 +222,16 @@ export function TopBar(props: TopBarProps) {
             )}
             {bp === 'md' && isViewer && (
               <>
-                <HelpPanel
-                  isOpen={openMenuId === 'help'}
-                  onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
-                  // Viewer mode has only one menu — no sibling to
-                  // switch from. `onHoverOpen` is omitted (no-op).
-                />
+                {/* Same full-height stretch treatment as the
+                  edit-mode menubar group (43). */}
+                <div className="flex items-stretch self-stretch">
+                  <HelpPanel
+                    isOpen={openMenuId === 'help'}
+                    onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
+                    // Viewer mode has only one menu — no sibling to
+                    // switch from. `onHoverOpen` is omitted (no-op).
+                  />
+                </div>
                 <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded">
                   View-only
                 </span>

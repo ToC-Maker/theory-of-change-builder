@@ -86,7 +86,11 @@ export function HelpPanel({ isOpen, onOpenChange, onHoverOpen }: Props = {}) {
         type="button"
         onClick={() => setOpen((s) => !s)}
         onPointerEnter={onHoverOpen}
-        className="px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded transition-colors flex items-center gap-1"
+        // PR 7 feedback (43): full-height native-menubar trigger with
+        // a full-height fill (kept while open). See FileMenu.tsx.
+        className={`h-full px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-1 ${
+          open ? 'bg-gray-100' : ''
+        }`}
         aria-haspopup="menu"
         aria-expanded={open}
         title="Help"
@@ -99,7 +103,7 @@ export function HelpPanel({ isOpen, onOpenChange, onHoverOpen }: Props = {}) {
       {open && (
         <div
           role="menu"
-          className="absolute top-full mt-1 right-0 sm:right-auto sm:left-0 w-[min(22rem,calc(100vw-1rem))] max-h-[80vh] overflow-y-auto bg-white rounded-lg shadow-lg border border-gray-200 py-3 px-4 z-50"
+          className="absolute top-full right-0 sm:right-auto sm:left-0 w-[min(22rem,calc(100vw-1rem))] max-h-[80vh] overflow-y-auto bg-white rounded-lg shadow-lg border border-gray-200 py-3 px-4 z-50"
         >
           {/* Keyboard shortcuts */}
           <div className="mb-4">
