@@ -13,6 +13,16 @@ import { useEffect, useMemo, useState } from 'react';
 // reserve is kept unchanged).
 export const VIEWPORT_PAD_PX = 24;
 
+// `top` mirrors the TopBar's rendered height the same way `left`
+// mirrors the drawer's CSS contract: 52px row (`min-h-[52px]`,
+// TopBar.tsx — pinned by the round-2 menubar work, no vertical padding
+// on the container) + 1px border-b. Rodney-measured 53px at
+// 1024/1280/1600/1920. The legacy reserve said 64px, which skewed the
+// top band 11px wider than the bottom at every viewport size (PR #34
+// fb3 known-issue K2); scripts/test-viewport-bands.mjs pins the
+// mirror against the real DOM.
+export const TOP_BAR_HEIGHT_PX = 53;
+
 // The drawer clamp reads window.innerWidth, so the reserve must also
 // recompute when the window resizes (PR #34 fb3 known-issue K1: a
 // 1920 → 1280 live resize left the 1920-era reserve in place — 80px
@@ -39,7 +49,7 @@ export function computeViewportOffset(
       : Math.floor(innerWidth * 0.25);
   return {
     left: drawerWidth + VIEWPORT_PAD_PX,
-    top: 64 + VIEWPORT_PAD_PX, // Toolbar height + breathing room
+    top: TOP_BAR_HEIGHT_PX + VIEWPORT_PAD_PX,
     right: VIEWPORT_PAD_PX,
     bottom: VIEWPORT_PAD_PX,
   };

@@ -17,6 +17,7 @@ import { renderHook, act, cleanup } from '@testing-library/react';
 import {
   useViewportOffset,
   computeViewportOffset,
+  TOP_BAR_HEIGHT_PX,
   VIEWPORT_PAD_PX,
 } from '../../src/hooks/useViewportOffset';
 
@@ -50,6 +51,15 @@ describe('computeViewportOffset', () => {
 
   it('keeps the legacy quarter-width reserve below md (mobile overlay drawer)', () => {
     expect(computeViewportOffset(false, 640).left).toBe(Math.floor(640 * 0.25) + VIEWPORT_PAD_PX);
+  });
+
+  it('reserves the real TopBar height (52px min-h row + 1px border), not the legacy 64px', () => {
+    // K2: TopBar.tsx pins the bar at min-h-[52px] with no vertical
+    // padding on the bordered container; rodney-measured rendered
+    // height is 53px at 1024/1280/1600/1920.
+    expect(TOP_BAR_HEIGHT_PX).toBe(53);
+    const offset = computeViewportOffset(false, 1920);
+    expect(offset.top).toBe(TOP_BAR_HEIGHT_PX + VIEWPORT_PAD_PX);
   });
 
   it('pads right and bottom with the shared 24px breathing room', () => {
