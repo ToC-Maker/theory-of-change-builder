@@ -110,7 +110,29 @@ export function ColumnDeleteAffordance({
         onClick={handleClick}
         data-testid={testIdBase}
       >
-        <TrashIcon className="w-4 h-4" />
+        {/* K10: the column glyph sits over whatever node color the
+            user drags under the column's top-right corner; gray-400
+            strokes disappear on near-black fills. A white drop-shadow
+            halo on the ICON keeps the strokes legible on dark fills
+            and is invisible on light ones (white on white). It's a
+            filter following the glyph shape — NOT the bg/outline chip
+            issue 54 removed (that contract is pinned on the BUTTON's
+            classes, which stay bare). Two stacked shadows: a tight
+            near-opaque rim plus a wider soft glow. Written as an
+            arbitrary `[filter:...]` property because Tailwind v4.3's
+            `drop-shadow-[a,b]` arbitrary VALUE emits both shadows
+            inside one drop-shadow() function, which is invalid CSS —
+            Chrome computes `filter: none` (verified empirically; the
+            two-function form below computes correctly). Section scope
+            keeps its plain white-on-dark tone (matches the title
+            text's contrast assumption). */}
+        <TrashIcon
+          className={`w-4 h-4 ${
+            scope === 'column'
+              ? '[filter:drop-shadow(0_0_1px_rgba(255,255,255,0.95))_drop-shadow(0_0_3px_rgba(255,255,255,0.7))]'
+              : ''
+          }`}
+        />
       </button>
       <ConfirmModal
         open={confirmOpen}

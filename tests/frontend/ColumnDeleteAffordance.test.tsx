@@ -159,5 +159,38 @@ describe('ColumnDeleteAffordance', () => {
       expect(btn.className).toMatch(/focus-visible:ring-2/);
       expect(btn.className).toMatch(/focus-visible:opacity-100/);
     });
+
+    // K10 (round-2 parked issue): the column glyph (`text-gray-400`)
+    // loses contrast when a near-black user-colored node sits under
+    // the column's top-right corner. Contrast-safe treatment WITHOUT
+    // reintroducing the chip/background issue 54 removed: a white
+    // drop-shadow halo on the GLYPH (filter follows the icon strokes,
+    // not the button box) — invisible over light backgrounds (white on
+    // white), keeps the strokes legible over dark fills. The halo
+    // lives on the icon, not the button, so the bare-glyph button
+    // contract above (no bg-*/border/shadow-* classes) still holds.
+    it('column scope: glyph carries a white drop-shadow halo for dark-node contrast', () => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope="column" onDelete={vi.fn()} />);
+      const icon = screen.getByTestId('column-delete').querySelector('svg');
+      expect(icon).not.toBeNull();
+      const iconClass = icon!.getAttribute('class') ?? '';
+      // White halo via drop-shadow() FILTER functions on the glyph —
+      // NOT a box-shadow/background chip. Written as an arbitrary
+      // [filter:...] property: Tailwind v4.3's drop-shadow-[a,b]
+      // arbitrary value emits one drop-shadow(a,b) function, which is
+      // invalid CSS (Chrome computes `filter: none`).
+      expect(iconClass).toMatch(/\[filter:drop-shadow\(.*255,255,255.*\)\]/);
+      // Button itself stays chip-free (re-assert next to the new rule).
+      const btn = screen.getByTestId('column-delete');
+      expect(btn.className).not.toMatch(/bg-/);
+      expect(btn.className).not.toMatch(/shadow/);
+    });
+
+    it('section scope: glyph has no halo (white-on-dark title bar tone is the contrast)', () => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope="section" onDelete={vi.fn()} />);
+      const icon = screen.getByTestId('section-delete').querySelector('svg');
+      expect(icon).not.toBeNull();
+      expect(icon!.getAttribute('class') ?? '').not.toMatch(/drop-shadow/);
+    });
   });
 });
