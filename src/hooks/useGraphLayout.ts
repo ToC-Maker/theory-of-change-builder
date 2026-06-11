@@ -52,7 +52,11 @@ export interface LayoutSnapshot {
 
 export type Region =
   | { kind: 'node-slot'; sectionIdx: number; columnIdx: number; yPosition: number }
-  | { kind: 'over-node'; sectionIdx: number; columnIdx: number }
+  // over-node carries the cursor's column-local Y just like node-slot
+  // (PR #34 fb 45/46): consumers drop the node where it was released
+  // instead of falling back to a top-of-column default that overlapped
+  // the section title bar.
+  | { kind: 'over-node'; sectionIdx: number; columnIdx: number; yPosition: number }
   | { kind: 'new-column'; sectionIdx: number; columnIdx: number }
   | { kind: 'new-section'; sectionIdx: number };
 
@@ -115,7 +119,12 @@ export function classifyRegion(
           const nodes = snap.nodeRects[key] ?? [];
           const overNode = nodes.some((n) => point.y >= n.top && point.y <= n.bottom);
           if (overNode) {
-            return { kind: 'over-node', sectionIdx: sIdx, columnIdx: cIdx };
+            return {
+              kind: 'over-node',
+              sectionIdx: sIdx,
+              columnIdx: cIdx,
+              yPosition: point.y - col.top,
+            };
           }
           return {
             kind: 'node-slot',

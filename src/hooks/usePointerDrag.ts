@@ -51,7 +51,7 @@ import { nodeExistsInData } from '../utils/findNode';
  */
 export type DragOverLocation =
   | { kind: 'node-slot'; sectionIndex: number; columnIndex: number; yPosition: number }
-  | { kind: 'over-node'; sectionIndex: number; columnIndex: number }
+  | { kind: 'over-node'; sectionIndex: number; columnIndex: number; yPosition: number }
   | { kind: 'new-column'; sectionIndex: number; columnIndex: number }
   | { kind: 'new-section'; sectionIndex: number };
 
@@ -160,14 +160,15 @@ function regionToDragOverLocation(region: Region | null): DragOverLocation | nul
         yPosition: region.yPosition,
       };
     case 'over-node':
-      // Over an existing node: treat as a node-slot in the same column
-      // so the drop reorders within the column. We don't have a cursor
-      // y here (classifyRegion didn't pass it through for this variant);
-      // the consumer falls back to its default position.
+      // Over an existing node: like node-slot, the cursor's column-
+      // local Y rides along (PR #34 fb 45/46) so the consumer drops
+      // the node where it was released instead of a top-of-column
+      // fallback.
       return {
         kind: 'over-node',
         sectionIndex: region.sectionIdx,
         columnIndex: region.columnIdx,
+        yPosition: region.yPosition,
       };
     case 'new-column':
       return {

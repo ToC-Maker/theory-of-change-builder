@@ -67,6 +67,12 @@ describe('classifyRegion', () => {
     expect(r?.kind).toBe('over-node');
     expect(r?.sectionIdx).toBe(0);
     expect(r?.columnIdx).toBe(0);
+    // PR #34 fb 45/46: over-node carries the cursor's column-local Y
+    // (200 - col top 100), so drops released over an existing node land
+    // where the user dropped them instead of the consumer's
+    // top-of-column default (which teleported the node onto the
+    // section title bar).
+    expect(r).toEqual(expect.objectContaining({ yPosition: 100 }));
   });
 
   it('returns "new-column" when X is inside the column gutter inside a section', () => {

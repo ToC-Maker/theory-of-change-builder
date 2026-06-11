@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { getContrastTextColor } from '../utils';
+import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
@@ -258,14 +259,18 @@ export function ToC({
         newNodeWidth = Math.max(...columnNodeWidths);
       }
 
-      // yPosition is where the user clicked - this becomes the center Y of the node
+      // yPosition is where the user clicked - this becomes the center Y
+      // of the node, clamped so a double-click near the column top
+      // doesn't place the node over the section title bar (PR #34 fb
+      // 46). 76px is the typical rendered height of a fresh "New Node"
+      // (same default the renderer uses before measurement).
       const newNode: Node = {
         id: generateNodeId(),
         title: 'New Node',
         text: 'Details of New Node.',
         connectionIds: [],
         connections: [],
-        yPosition: yPosition, // Click position = center Y
+        yPosition: clampNodeCenterY(yPosition, 76), // Click position = center Y
         width: newNodeWidth, // Match column width
         color: nodeColor, // Use current color setting
       };
@@ -422,10 +427,15 @@ export function ToC({
                 // Use cached height or default
                 const actualHeight = nodeHeights[node.id] || 76;
 
-                // Calculate current center Y position
+                // Calculate current center Y position. Clamp so
+                // arrow-key moves can't push the node above the column
+                // body into the section title bar (PR #34 fb 46).
                 const defaultCenterY = nodeIndex * 180 + 30 + actualHeight / 2;
                 const currentCenterY = node.yPosition ?? defaultCenterY;
-                return { ...node, yPosition: currentCenterY + moveAmount };
+                return {
+                  ...node,
+                  yPosition: clampNodeCenterY(currentCenterY + moveAmount, actualHeight),
+                };
               }
               return node;
             }),
@@ -698,20 +708,22 @@ export function ToC({
       const isNewColumn = target.kind === 'new-column';
 
       // Adjust yPosition so the node appears where the user grabbed it.
-      // `target.yPosition` (node-slot only) is container-local; the
-      // hook already divided by zoomScale. `pointerOffset.y` is
-      // viewport-space (captured at drag-start with no zoom applied);
-      // divide by zoomScale to put both in the same coord system before
-      // subtracting. Other variants (over-node / new-column) fall back
-      // to the slot-center default.
-      let adjustedYPosition = 20;
-      if (target.kind === 'node-slot') {
-        const mouseLocalY = target.yPosition;
-        const dragOffsetLocalY = pointerOffset.y / zoomScale;
-        const nodeTopLocal = mouseLocalY - dragOffsetLocalY;
-        const actualHeight = nodeHeights[draggedNodeId] || 76;
-        adjustedYPosition = nodeTopLocal + actualHeight / 2;
-      }
+      // `target.yPosition` (node-slot and over-node, PR #34 fb 45/46)
+      // is container-local; the hook already divided by zoomScale.
+      // `pointerOffset.y` is viewport-space (captured at drag-start
+      // with no zoom applied); `computeDropCenterY` divides it by
+      // zoomScale to put both in the same coord system before
+      // subtracting. new-column carries no cursor Y and takes the
+      // top-of-column default. Every result is clamped below the
+      // section title bar (PR #34 fb 46).
+      const draggedNodeHeight = nodeHeights[draggedNodeId] || 76;
+      const adjustedYPosition = computeDropCenterY({
+        cursorColumnLocalY:
+          target.kind === 'node-slot' || target.kind === 'over-node' ? target.yPosition : null,
+        pointerOffsetY: pointerOffset.y,
+        zoomScale,
+        nodeHeight: draggedNodeHeight,
+      });
 
       console.log('Moving node', draggedNodeId, 'from', sourceLocation, 'to', {
         targetSectionIndex,
@@ -760,9 +772,8 @@ export function ToC({
       const sourceNodeIndex = sourceColumn?.nodes.findIndex((n) => n.id === draggedNodeId) ?? -1;
       const sourceNodeFromData = sourceNodeIndex >= 0 ? sourceColumn!.nodes[sourceNodeIndex] : null;
       if (sourceNodeFromData) {
-        const actualHeight = nodeHeights[draggedNodeId] || 76;
         preDropYCenter =
-          sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + actualHeight / 2;
+          sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + draggedNodeHeight / 2;
       }
       // Snapshot the pre-drop COLUMN center-x for the source and target
       // columns from the layout snapshot. The snapshot's `columnRects`
@@ -1570,15 +1581,25 @@ export function ToC({
                                 128,
                               );
                               const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2);
+                              // Cached measured height; 76px is the
+                              // typical height for "New Node".
+                              const nodeHeight = nodeHeights[node.id] || 76;
 
                               return (
                                 <div
                                   key={node.id}
                                   className="absolute"
                                   style={{
+                                    // Convert from center to top position.
+                                    // The center is clamped VISUALLY so
+                                    // out-of-range data (old charts, AI
+                                    // edits) renders inside the column
+                                    // body instead of over the section
+                                    // title bar (PR #34 fb 46) — the
+                                    // stored yPosition is not rewritten.
                                     top:
                                       node.yPosition !== undefined
-                                        ? `${node.yPosition - (nodeHeights[node.id] || 76) / 2}px` // Convert from center to top position using cached height (76px is typical height for "New Node")
+                                        ? `${clampNodeCenterY(node.yPosition, nodeHeight) - nodeHeight / 2}px`
                                         : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
                                     left: `${leftOffset}px`,
                                     width: `${nodeWidth}px`,

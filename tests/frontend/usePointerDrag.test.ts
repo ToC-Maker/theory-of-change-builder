@@ -304,6 +304,34 @@ describe('usePointerDrag', () => {
       expect(result.current.dragState?.ghostPos).toEqual({ x: 350, y: 400 });
     });
 
+    it('passes the cursor yPosition through for over-node targets', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      // Move within node n-1's snapshot rect (y 170..230, col 0-0,
+      // col top 100): classify is 'over-node' and must carry the
+      // column-local cursor Y (210 - 100 = 110) so the consumer can
+      // drop the node where it was released (PR #34 fb 45/46 — the
+      // old yPosition-less shape forced a top-of-column fallback).
+      const move = pointerEvent('pointermove', { clientX: 150, clientY: 210 });
+      act(() => {
+        document.dispatchEvent(move);
+      });
+
+      expect(result.current.dragState?.dragOverLocation).toEqual({
+        kind: 'over-node',
+        sectionIndex: 0,
+        columnIndex: 0,
+        yPosition: 110,
+      });
+    });
+
     it('classifies new-column gutter with kind="new-column"', () => {
       const onDrop = vi.fn();
       const { result } = setupHook({ data: sampleData(), onDrop });
