@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, cleanup, fireEvent, createEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { TopBar } from '../../src/components/top-bar/TopBar';
+import { TopBar, MENUBAR_GRACE_CLOSE_MS } from '../../src/components/top-bar/TopBar';
 
 const noop = () => {};
 
@@ -281,6 +281,41 @@ describe('TopBar menubar hover-switch (PR 7 feedback (37))', () => {
     expect(expanded('File')).toBe('false');
   });
 
+  it('closes Format and Help on Escape too (each menu owns its Escape)', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    await user.click(trigger('Format'));
+    expect(expanded('Format')).toBe('true');
+    await user.keyboard('{Escape}');
+    expect(expanded('Format')).toBe('false');
+
+    await user.click(trigger('Help'));
+    expect(expanded('Help')).toBe('true');
+    await user.keyboard('{Escape}');
+    expect(expanded('Help')).toBe('false');
+  });
+
+  it('Escape ladder survives the controlled path: first Esc closes the flyout only', async () => {
+    // Regression (pre-existing at ff25f99, surfaced while verifying
+    // (44)): TopBar's old centralized Escape listener fired alongside
+    // FileMenu's flyout-aware handler, so the first Esc closed the
+    // whole menu instead of just the flyout. Escape handling now
+    // lives with each menu (FileMenu keeps the two-step ladder).
+    const user = userEvent.setup();
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    await user.click(trigger('File'));
+    await user.click(screen.getByTestId('file-menu-export'));
+    expect(screen.getByTestId('file-menu-export-flyout')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    // Flyout closed, menu still open.
+    expect(screen.queryByTestId('file-menu-export-flyout')).toBeNull();
+    expect(expanded('File')).toBe('true');
+
+    await user.keyboard('{Escape}');
+    expect(expanded('File')).toBe('false');
+  });
+
   it('toggles closed when the open menu trigger is clicked again', async () => {
     const user = userEvent.setup();
     renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
@@ -289,5 +324,142 @@ describe('TopBar menubar hover-switch (PR 7 feedback (37))', () => {
 
     await user.click(trigger('Format'));
     expect(expanded('Format')).toBe('false');
+  });
+});
+
+describe('TopBar menubar grace-close on pointer exit (PR 7 feedback (44))', () => {
+  // Same trigger helper as the hover-switch suite above.
+  const trigger = (label: 'File' | 'Format' | 'Help') => {
+    const matches = screen.getAllByRole('button', { name: new RegExp(`^${label}$`, 'i') });
+    const haspopup = matches.find((el) => el.getAttribute('aria-haspopup') === 'menu');
+    if (!haspopup) throw new Error(`no aria-haspopup trigger for "${label}"`);
+    return haspopup;
+  };
+  const expanded = (label: 'File' | 'Format' | 'Help') =>
+    trigger(label).getAttribute('aria-expanded');
+
+  // userEvent's internal delays deadlock under vi.useFakeTimers(), so
+  // these tests drive React's enter/leave synthesis directly: React
+  // derives onPointerEnter/onPointerLeave from pointerover/pointerout
+  // + relatedTarget. `pointerOut(el, {relatedTarget: document.body})`
+  // = the pointer left `el`'s whole ancestor chain for the page;
+  // `pointerOver(el, {relatedTarget: document.body})` = it came back.
+  const leaveToPage = (el: Element) => fireEvent.pointerOut(el, { relatedTarget: document.body });
+  const enterFromPage = (el: Element) =>
+    fireEvent.pointerOver(el, { relatedTarget: document.body });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('closes the open menu after the grace delay once the pointer leaves the menubar', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+
+    fireEvent.click(trigger('File'));
+    expect(expanded('File')).toBe('true');
+
+    leaveToPage(trigger('File'));
+    // Still open within the grace window…
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS - 100));
+    expect(expanded('File')).toBe('true');
+    // …closed after it.
+    act(() => vi.advanceTimersByTime(150));
+    expect(expanded('File')).toBe('false');
+  });
+
+  it('closes when the pointer leaves from inside the open dropdown panel', () => {
+    // The dropdown is a DOM descendant of the menubar wrapper, so
+    // leaving from a menu item (not the trigger) must arm the same
+    // grace close.
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    fireEvent.click(trigger('File'));
+    const item = screen.getByTestId('file-menu-open-recent');
+
+    leaveToPage(item);
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS + 50));
+    expect(expanded('File')).toBe('false');
+  });
+
+  it('keeps the menu open when the pointer re-enters within the grace delay', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+
+    fireEvent.click(trigger('File'));
+    leaveToPage(trigger('File'));
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS - 150));
+
+    // Accidental exit: the cursor comes back before the timer fires.
+    enterFromPage(trigger('File'));
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('File')).toBe('true');
+  });
+
+  it('does not misfire on hover-switch between siblings (pointer never leaves the bar)', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+
+    fireEvent.click(trigger('File'));
+    // Move from the File trigger to the Format trigger. A browser
+    // reports this as `pointerout` on File with relatedTarget=Format;
+    // React synthesizes the leave chain (File up to the common
+    // ancestor — the menubar wrapper, exclusive) and the enter chain
+    // (wrapper down to Format). The wrapper's onPointerLeave must NOT
+    // fire. (React ignores the paired `pointerover` when its
+    // relatedTarget is an in-root node, so the `out` carries both.)
+    fireEvent.pointerOut(trigger('File'), { relatedTarget: trigger('Format') });
+    expect(expanded('Format')).toBe('true');
+    expect(expanded('File')).toBe('false');
+
+    // No grace timer should be pending: the switch must survive well
+    // past the grace window.
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('Format')).toBe('true');
+  });
+
+  it('survives a leave-then-switch: exit the bar, re-enter on a sibling within the grace delay', () => {
+    // Moving from File's dropdown up to Format's button can cross
+    // outside the menubar subtree for a moment. The re-entry cancels
+    // the pending close and the hover-switch takes over.
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+
+    fireEvent.click(trigger('File'));
+    leaveToPage(trigger('File'));
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS - 150));
+
+    enterFromPage(trigger('Format'));
+    expect(expanded('Format')).toBe('true');
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('Format')).toBe('true');
+    expect(expanded('File')).toBe('false');
+  });
+
+  it('a pointer pass-through with no menu open arms nothing', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+
+    enterFromPage(trigger('File'));
+    leaveToPage(trigger('File'));
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('File')).toBe('false');
+    expect(expanded('Format')).toBe('false');
+    expect(expanded('Help')).toBe('false');
+  });
+
+  it('a stale grace timer cannot kill a menu reopened after Escape', () => {
+    // Escape closes while the timer is pending; reopening (keyboard
+    // path — no pointerenter to cancel the timer) must not be cut
+    // short by the old timer.
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+
+    fireEvent.click(trigger('File'));
+    leaveToPage(trigger('File'));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(expanded('File')).toBe('false');
+
+    // Reopen via keyboard activation (no pointer movement).
+    fireEvent.click(trigger('File'));
+    expect(expanded('File')).toBe('true');
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('File')).toBe('true');
   });
 });

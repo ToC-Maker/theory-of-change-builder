@@ -66,9 +66,19 @@ export function HelpPanel({ isOpen, onOpenChange, onHoverOpen }: Props = {}) {
         setOpen(false);
       }
     };
+    // Escape closes the menu. Handled per-menu (not in TopBar) so
+    // FileMenu's two-step flyout ladder isn't raced by a parent-level
+    // listener — see the note in TopBar.tsx.
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     if (open) {
       document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('keydown', handleKeyDown);
+      };
     }
   }, [open, setOpen]);
 

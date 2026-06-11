@@ -27,7 +27,7 @@
 // buttons that broke `pointerenter` switching). See `handleHoverOpen`
 // below for the standard menubar rule: hover only switches when a
 // sibling is already open — a casual mouse-over does NOT open menus.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ShareIcon } from '@heroicons/react/24/outline';
 import type { ToCData } from '../../types';
 import { FileMenu } from './FileMenu';
@@ -125,6 +125,14 @@ function useBreakpoint(forced?: Breakpoint): Breakpoint {
 
 type MenuId = 'file' | 'format' | 'help';
 
+// PR 7 feedback (44): once the pointer leaves the menubar AND its open
+// dropdown/flyout entirely, everything closes after this grace delay.
+// Generous enough that accidental exits (crossing the gap between the
+// dropdown and a sibling trigger, overshooting an item) don't slam the
+// menu shut; short enough that the menu doesn't linger once the user
+// has visibly moved on.
+export const MENUBAR_GRACE_CLOSE_MS = 350;
+
 export function TopBar(props: TopBarProps) {
   const bp = useBreakpoint(props.breakpoint);
 
@@ -150,18 +158,50 @@ export function TopBar(props: TopBarProps) {
     // we'd be opening menus they didn't ask for.
     if (openMenuId !== null && openMenuId !== id) setOpenMenuId(id);
   };
-  // Escape closes whatever menu is open. Kept centralized here (rather
-  // than per-menu) because TopBar already owns the open state. The
-  // per-menu click-outside handlers continue to fire for mouse
-  // dismissal; this only adds keyboard parity for menubar items.
-  useEffect(() => {
+  // Escape handling lives with each menu, NOT centralized here: a
+  // TopBar-level "Escape closes openMenuId" listener fires on the
+  // same keydown as FileMenu's flyout-aware handler and slams the
+  // whole menu shut, breaking the two-step ladder (first Esc closes
+  // the flyout, second closes the menu). Each menu closes itself via
+  // `setOpen(false)`, which routes through `onOpenChange` back into
+  // `openMenuId` on the controlled path.
+
+  // PR 7 feedback (44): grace-delayed close when the pointer leaves
+  // the menubar subtree entirely. The dropdown panels and side
+  // flyouts are DOM descendants of the menubar wrapper (absolutely
+  // positioned, but still children), so a single pointerenter/leave
+  // pair on the wrapper covers trigger + dropdown + flyout. Moving
+  // between siblings, or from a trigger into its dropdown, stays
+  // inside the subtree and never arms the timer; genuinely leaving
+  // arms it, and re-entering within the grace window cancels it (this
+  // is also what keeps hover-switch safe when the cursor briefly dips
+  // out of the subtree while travelling from a dropdown to a sibling
+  // trigger).
+  const graceCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelGraceClose = useCallback(() => {
+    if (graceCloseTimerRef.current !== null) {
+      clearTimeout(graceCloseTimerRef.current);
+      graceCloseTimerRef.current = null;
+    }
+  }, []);
+  const handleMenubarPointerLeave = () => {
+    // Nothing open -> nothing to close. A casual pass-through over
+    // the bar must not arm timers.
     if (openMenuId === null) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpenMenuId(null);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [openMenuId]);
+    cancelGraceClose();
+    graceCloseTimerRef.current = setTimeout(() => {
+      graceCloseTimerRef.current = null;
+      setOpenMenuId(null);
+    }, MENUBAR_GRACE_CLOSE_MS);
+  };
+  // When all menus close by other means (Escape, click-outside, item
+  // click), drop any pending grace timer so it can't kill a menu the
+  // user re-opens without moving the pointer back in (keyboard path).
+  // Also cancels on unmount.
+  useEffect(() => {
+    if (openMenuId === null) cancelGraceClose();
+  }, [openMenuId, cancelGraceClose]);
+  useEffect(() => cancelGraceClose, [cancelGraceClose]);
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
@@ -180,11 +220,16 @@ export function TopBar(props: TopBarProps) {
               // edge (no `gap-*`) so `pointerenter` on a sibling fires
               // without the cursor traversing dead space in between.
               // Visual separation comes from each button's `px-2/3`
-              // padding rather than parent gap.
+              // padding rather than parent gap. Pointer enter/leave on
+              // this wrapper drive the grace-delayed full close (44).
               // `self-stretch items-stretch` (43): the group escapes
               // the cluster's `items-center` and passes the full row
               // height down to the trigger buttons (`h-full`).
-              <div className="flex items-stretch self-stretch">
+              <div
+                className="flex items-stretch self-stretch"
+                onPointerEnter={cancelGraceClose}
+                onPointerLeave={handleMenubarPointerLeave}
+              >
                 <FileMenu
                   isAuthenticated={isAuthenticated}
                   isOwner={isOwner}
@@ -222,9 +267,15 @@ export function TopBar(props: TopBarProps) {
             )}
             {bp === 'md' && isViewer && (
               <>
-                {/* Same full-height stretch treatment as the
-                  edit-mode menubar group (43). */}
-                <div className="flex items-stretch self-stretch">
+                {/* Same grace-close treatment as the edit-mode
+                  menubar group (44) — the wrapper covers the trigger
+                  and its dropdown panel — and the same full-height
+                  stretch (43). */}
+                <div
+                  className="flex items-stretch self-stretch"
+                  onPointerEnter={cancelGraceClose}
+                  onPointerLeave={handleMenubarPointerLeave}
+                >
                   <HelpPanel
                     isOpen={openMenuId === 'help'}
                     onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
