@@ -127,7 +127,13 @@ function NodeComponentInner({
         {...{ [NODE_DOM_ATTR]: node.id }}
         onPointerDown={editMode ? onPointerDown : undefined}
         className={clsx(
-          'flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
+          // PR #34 feedback (47): transition the hover/drag affordances
+          // only (box-shadow for hover shadow + selection ring,
+          // transform for hover:scale, opacity for drag/dim states) —
+          // NOT `transition-all`, which also animated the inline
+          // `width` and `backgroundColor` styles and made the
+          // NodeEditor's width slider / color picker visibly lag.
+          'flex flex-col border-0 rounded-xl cursor-pointer transition-[box-shadow,transform,opacity] duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
           // PR 7 feedback (#5): `select-none` so clicking on the node
           // title (or anywhere on the node body) starts the drag instead
           // of initiating a text selection. The title is read-only here
