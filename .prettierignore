@@ -20,3 +20,6 @@ reviews/
 # uses `rodney start --local` to drive the app. Browser-managed
 # files, not project source.
 .rodney/
+
+# Working notes (feedback tracking, agent scratch) — not CI-gated
+.workspace/
