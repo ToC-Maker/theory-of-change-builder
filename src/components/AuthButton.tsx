@@ -359,12 +359,30 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
   }
 
   if (isAuthenticated && user) {
+    // Auth0 database-connection (email/password) users get `name` defaulted
+    // to the literal email, so rendering `{user.name}` + `{user.email}`
+    // unconditionally showed the same address twice in the dropdown header.
+    // Treat the name as a display name only when it's a real, distinct
+    // value; otherwise the email is the single primary line. Social logins
+    // (e.g. Google) carry a proper display name and keep both lines.
+    const displayName = user.name && user.name !== user.email ? user.name : undefined;
+    const primaryLine = displayName ?? user.email ?? user.name;
+    const secondaryLine = displayName ? user.email : undefined;
+
     return (
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setShowDropdown(!showDropdown)}
-          className="w-9 h-9 rounded-full overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
-          title={user.name || 'Account'}
+          // `flex` (not the button's UA default inline-block) is load-
+          // bearing for vertical centering: an inline-block with
+          // overflow-hidden baselines at its bottom edge, so the plain-
+          // block wrapper div gains the line-box strut descent (~7px)
+          // under the button and grows to 43px around the 36px circle,
+          // mis-centering it against the Share button in the TopBar's
+          // items-center row. Block-level flex keeps the wrapper exactly
+          // 36px, same as the anonymous variant below.
+          className="w-9 h-9 rounded-full flex items-center justify-center overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+          title={primaryLine || 'Account'}
         >
           {user.picture ? (
             <div
@@ -412,8 +430,28 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-gray-900 truncate">{user.name}</div>
-                  <div className="text-sm text-gray-500 truncate">{user.email}</div>
+                  {primaryLine && (
+                    <div
+                      // When the email is the only line, render it at
+                      // text-sm: at 16px it ellipsizes inside the w-72
+                      // dropdown (hiding which account you're signed in
+                      // to), while the same address fits whole at 14px.
+                      // `title` recovers the full value on hover either way.
+                      className={
+                        displayName
+                          ? 'font-medium text-gray-900 truncate'
+                          : 'text-sm font-medium text-gray-900 truncate'
+                      }
+                      title={primaryLine}
+                    >
+                      {primaryLine}
+                    </div>
+                  )}
+                  {secondaryLine && (
+                    <div className="text-sm text-gray-500 truncate" title={secondaryLine}>
+                      {secondaryLine}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
