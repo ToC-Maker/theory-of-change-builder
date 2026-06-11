@@ -5,8 +5,9 @@
 // by `ConnectionsComponent` when `connection.waypoints` is defined.
 //
 // Why a single multi-segment path (not many small `<path>` elements):
-//   Dashed/dotted strokes (confidence < 80) compute their dash phase
-//   along the WHOLE path. Splitting a connection into multiple SVG
+//   Dashed strokes (confidence < 95, continuous dash geometry — see
+//   `computeConfidenceDash`) compute their dash phase along the WHOLE
+//   path. Splitting a connection into multiple SVG
 //   `<path>` elements causes each segment's dasharray to restart at
 //   phase 0, producing visible double-dots / skipped-dashes at every
 //   waypoint corner. The red-team Critical (plan/figma-redesign.md:160-

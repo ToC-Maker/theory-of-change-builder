@@ -65,7 +65,7 @@ Theory of Change graphs use nested structure: `sections[] → columns[] → node
 - New format: `connections: [{ targetId, confidence, evidence, assumptions, waypoints? }]`
 - Old format still supported: `connectionIds: string[]`
 - Always use new format for new code
-- Confidence (0-100) determines visual style: solid (80+), dashed (40-79), dotted (0-39)
+- Confidence (0-100) determines visual style CONTINUOUSLY: solid at 95+, below that dash length shrinks and gap length grows smoothly as confidence drops (see `computeConfidenceDash` in `src/utils/index.ts`; no hard style buckets)
 - `waypoints` is an array for backward compatibility, but the UI edits AT MOST ONE waypoint per connection (single-waypoint model). Legacy charts with N>1 waypoints still render; the first drag of any handle collapses to the single dragged waypoint; double-click on the handle resets to the automatic curve.
 
 ### AI Edit System

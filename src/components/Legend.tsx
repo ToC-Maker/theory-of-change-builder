@@ -1,4 +1,31 @@
 import React, { useCallback, useEffect } from 'react';
+import { getConfidenceStrokeStyle } from '../utils';
+
+/**
+ * Sample confidences rendered in the legend. The dash geometry is
+ * CONTINUOUS in confidence (PR #34 feedback 51) — there are no style
+ * buckets to enumerate — so the legend shows representative stops
+ * along the scale, drawn by the exact same `getConfidenceStrokeStyle`
+ * the canvas uses (single source of truth; the legend can't drift).
+ */
+const LEGEND_SAMPLES = [100, 75, 50, 25] as const;
+
+function LegendSampleLine({ confidence }: { confidence: number }) {
+  const style = getConfidenceStrokeStyle(confidence);
+  return (
+    <svg width="40" height="2" className="flex-shrink-0">
+      <line
+        x1="0"
+        y1="1"
+        x2="40"
+        y2="1"
+        stroke={style.stroke}
+        strokeWidth="2"
+        strokeDasharray={style.strokeDasharray === 'none' ? undefined : style.strokeDasharray}
+      />
+    </svg>
+  );
+}
 
 interface LegendProps {
   legendPosition: { x: number; y: number };
@@ -78,45 +105,16 @@ export function Legend({
         Connection Confidence
       </div>
       <div className="space-y-2">
-        <div className="flex items-center gap-3">
-          <svg width="24" height="2" className="flex-shrink-0">
-            <line x1="0" y1="1" x2="24" y2="1" stroke="#000000" strokeWidth="2" />
-          </svg>
-          <span className="text-xs text-gray-600" style={{ fontFamily }}>
-            High
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <svg width="24" height="2" className="flex-shrink-0">
-            <line
-              x1="0"
-              y1="1"
-              x2="24"
-              y2="1"
-              stroke="#000000"
-              strokeWidth="2"
-              strokeDasharray="8 4"
-            />
-          </svg>
-          <span className="text-xs text-gray-600" style={{ fontFamily }}>
-            Medium
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <svg width="24" height="2" className="flex-shrink-0">
-            <line
-              x1="0"
-              y1="1"
-              x2="24"
-              y2="1"
-              stroke="#000000"
-              strokeWidth="2"
-              strokeDasharray="2 4"
-            />
-          </svg>
-          <span className="text-xs text-gray-600" style={{ fontFamily }}>
-            Low
-          </span>
+        {LEGEND_SAMPLES.map((confidence) => (
+          <div key={confidence} className="flex items-center gap-3">
+            <LegendSampleLine confidence={confidence} />
+            <span className="text-xs text-gray-600" style={{ fontFamily }}>
+              {confidence}%
+            </span>
+          </div>
+        ))}
+        <div className="text-[10px] text-gray-400 max-w-[120px]" style={{ fontFamily }}>
+          Gaps grow as confidence drops
         </div>
       </div>
     </div>
