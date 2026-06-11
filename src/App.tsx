@@ -816,6 +816,20 @@ function ToCViewer() {
   useEffect(() => {
     const setToken = async () => {
       if (isAuthenticated && !authLoading) {
+        // PR 7 round-2 fix (signed-in 401s + silent save failures):
+        // register a request-time token provider BEFORE the one-shot
+        // fetch below. The static snapshot alone breaks in two real
+        // states — (a) the silent-refresh fallback below clears it
+        // while `isAuthenticated` stays true, and (b) it expires
+        // mid-session with nothing refreshing it. The worker now
+        // rejects both states (401 on getUserCharts, 403 on
+        // updateChart for owned restricted charts), so every
+        // ChartService call resolves a fresh ID token at request time
+        // instead. getFreshIdToken returns the cached token until it
+        // nears expiry, so the per-request cost is a local claims read.
+        ChartService.setAuthTokenProvider(() =>
+          getFreshIdToken(getAccessTokenSilently, getIdTokenClaims),
+        );
         console.log('[App] Fetching Auth0 ID token...');
         const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
         if (idToken) {
@@ -834,6 +848,10 @@ function ToCViewer() {
           // Silent refresh failed (refresh token revoked/expired or network
           // hiccup). Fall back to anonymous mode so the UI keeps working
           // instead of sending stale tokens that 401 server-side.
+          // The request-time provider registered above intentionally
+          // STAYS registered: it retries the refresh on each request,
+          // so a transient failure here self-heals instead of pinning
+          // the whole session to anonymous mode.
           console.warn('[App] No fresh ID token available, falling back to anonymous mode');
           ChartService.setAuthToken(null);
           chatService.setAuthToken(null);
@@ -843,6 +861,7 @@ function ToCViewer() {
       } else if (!authLoading) {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
+        ChartService.setAuthTokenProvider(null);
         ChartService.setAuthToken(null);
         chatService.setAuthToken(null);
         LoggingServiceClass.setAuthToken(null);

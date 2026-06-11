@@ -492,6 +492,50 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
   });
 });
 
+describe('FileMenu — Open recent sends the auth token (PR 7 round-2 401 fix)', () => {
+  // Reviewer evidence: `/api/getUserCharts?userId=auth0|… → 401` +
+  // `[FileMenu] failed to load user charts` while signed in. The worker
+  // (hardened in this PR series) requires a Bearer JWT; the request
+  // must carry the token resolved at request time from the provider
+  // App registers (ChartService.setAuthTokenProvider). This test walks
+  // the real component path: flyout open → ChartService.getUserCharts
+  // → fetch, and asserts on the wire shape.
+  it('fetches /api/getUserCharts with the Authorization header when authenticated', async () => {
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ charts: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    // What App's auth effect registers when isAuthenticated: a provider
+    // returning a fresh ID token at request time.
+    ChartService.setAuthTokenProvider(async () => 'fresh-id-token');
+
+    try {
+      const user = userEvent.setup();
+      renderMenu({ isAuthenticated: true, isOwner: false, currentEditToken: 'tok-abc' });
+      await user.click(screen.getByRole('button', { name: /file/i }));
+      await user.click(screen.getByText(/open recent/i));
+
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(String(url)).toContain('/api/getUserCharts');
+      expect((init.headers as Record<string, string>)['Authorization']).toBe(
+        'Bearer fresh-id-token',
+      );
+      // Loaded, not errored: the empty-state copy renders (not the
+      // "Couldn't load" row the reviewer saw).
+      expect(await screen.findByText(/no saved charts yet/i)).toBeInTheDocument();
+    } finally {
+      ChartService.setAuthTokenProvider(null);
+      ChartService.setAuthToken(null);
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('FileMenu — Error modal titles distinguish export vs import (I2)', () => {
   it('shows "Import failed" title (not "Export failed") for an invalid-import error', async () => {
     const user = userEvent.setup();
