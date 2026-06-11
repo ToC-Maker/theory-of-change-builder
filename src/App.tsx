@@ -654,6 +654,21 @@ function ToCViewer() {
   // when a subsequent save succeeds. SaveIndicator debounces its
   // `reportError` ping per state-fingerprint so re-renders don't spam.
   const [saveError, setSaveError] = useState<SaveError | null>(null);
+  // PR 7 fb (57): state mirror of `pendingChangesRef` (declared below),
+  // because a ref write doesn't re-render and the SaveIndicator must
+  // show "Unsaved changes" whenever local edits haven't been persisted
+  // — most importantly when a save FAILS (the save catch blocks leave
+  // the pending data in place; pre-fix the pill silently fell back to
+  // "Saved"). Always write through `setPendingChanges` so the ref (the
+  // synchronous source of truth for beforeunload/unmount flush) and
+  // this state can't drift. Declared up here (not next to the ref)
+  // because the save/undo/redo callbacks list it in their dependency
+  // arrays, which evaluate during render in source order.
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const setPendingChanges = useCallback((next: ToCData | null) => {
+    pendingChangesRef.current = next;
+    setHasPendingChanges(next !== null);
+  }, []);
   // PR 1 task 1.7: sync button gone, "Last synced X ago" display gone.
   // setLastSyncTime kept (auto-sync still writes it) for future
   // observability hooks, but the helpers that read it are stripped.
@@ -971,7 +986,7 @@ function ToCViewer() {
 
       // Set the uploaded data
       setData(validData);
-      pendingChangesRef.current = validData;
+      setPendingChanges(validData);
       saveToLocalStorage(validData);
 
       // Trigger debounced database save for JSON upload
@@ -985,7 +1000,7 @@ function ToCViewer() {
             console.log('Saving uploaded JSON to database');
             ChartService.updateChart(currentEditToken, pendingChangesRef.current)
               .then(() => {
-                pendingChangesRef.current = null;
+                setPendingChanges(null);
                 setIsSaving(false);
                 setSaveError(null);
               })
@@ -1003,7 +1018,7 @@ function ToCViewer() {
 
       console.log('JSON data uploaded successfully');
     },
-    [data, saveToHistory, saveToLocalStorage, currentEditToken],
+    [data, saveToHistory, saveToLocalStorage, currentEditToken, setPendingChanges],
   );
 
   const handleGraphUpdate = (newGraphData: ToCData) => {
@@ -1017,6 +1032,9 @@ function ToCViewer() {
 
   // Debounced save to database
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pending (not yet persisted) edits. Mutate via `setPendingChanges`
+  // only — see the hasPendingChanges mirror declared with the other
+  // save state above.
   const pendingChangesRef = useRef<ToCData | null>(null);
   const dataRef = useRef<ToCData | null>(data);
   useEffect(() => {
@@ -1036,7 +1054,7 @@ function ToCViewer() {
       setRedoHistory([]);
 
       setData(newData);
-      pendingChangesRef.current = newData;
+      setPendingChanges(newData);
 
       // Save debounced snapshot for logging (manual edits)
       logGraphChange(newData, 'manual_edit');
@@ -1063,7 +1081,7 @@ function ToCViewer() {
           ChartService.updateChart(currentEditToken, pendingChangesRef.current)
             .then(() => {
               console.log('Database save successful');
-              pendingChangesRef.current = null;
+              setPendingChanges(null);
               setIsSaving(false);
               setSaveError(null);
             })
@@ -1082,7 +1100,7 @@ function ToCViewer() {
         saveTimeoutRef.current = null;
       }, 300); // 300ms debounce
     },
-    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange],
+    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges],
   );
 
   const handleUndo = useCallback(() => {
@@ -1116,7 +1134,7 @@ function ToCViewer() {
 
       // Use handleDataChange to trigger debounced save, but skip history management
       setData(previousState);
-      pendingChangesRef.current = previousState;
+      setPendingChanges(previousState);
       saveToLocalStorage(previousState);
 
       // Save undo snapshot for logging
@@ -1133,7 +1151,7 @@ function ToCViewer() {
             console.log('Saving undo state to database');
             ChartService.updateChart(currentEditToken, pendingChangesRef.current)
               .then(() => {
-                pendingChangesRef.current = null;
+                setPendingChanges(null);
                 setIsSaving(false);
                 setSaveError(null);
               })
@@ -1151,7 +1169,7 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
+  }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges]);
 
   const handleRedo = useCallback(() => {
     // L2 mitigation symmetric to handleUndo — see comment there.
@@ -1179,7 +1197,7 @@ function ToCViewer() {
 
       // Use debounced save for redo as well
       setData(nextState);
-      pendingChangesRef.current = nextState;
+      setPendingChanges(nextState);
       saveToLocalStorage(nextState);
 
       // Save redo snapshot for logging
@@ -1196,7 +1214,7 @@ function ToCViewer() {
             console.log('Saving redo state to database');
             ChartService.updateChart(currentEditToken, pendingChangesRef.current)
               .then(() => {
-                pendingChangesRef.current = null;
+                setPendingChanges(null);
                 setIsSaving(false);
                 setSaveError(null);
               })
@@ -1214,7 +1232,7 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
+  }, [redoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -1773,6 +1791,11 @@ function ToCViewer() {
         handleRedo={handleRedo}
         isSaving={isSaving}
         saveError={saveError}
+        // PR 7 fb (57): drives the SaveIndicator "Unsaved changes"
+        // state — mirrors pendingChangesRef, so a failed autosave (the
+        // round-2 silent-save bug) shows as unsaved instead of a stale
+        // "Saved".
+        hasPendingChanges={hasPendingChanges}
         currentEditToken={currentEditToken}
         // Format-menu setters write through `handleDataChange` so the
         // canonical state lives in `data.*` (TheoryOfChangeGraph's

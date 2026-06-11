@@ -54,6 +54,10 @@ export interface TopBarProps {
   // Save status.
   isSaving: boolean;
   saveError: SaveError | null;
+  // PR 7 fb (57): true while local edits haven't been persisted —
+  // drives the SaveIndicator "Unsaved changes" state (including after
+  // a failed save, where edits silently survive only locally).
+  hasPendingChanges: boolean;
   currentEditToken: string | null;
 
   // Format menu pass-through.
@@ -353,6 +357,7 @@ export function TopBar(props: TopBarProps) {
                   isSaving={props.isSaving}
                   hasEditToken={Boolean(props.currentEditToken)}
                   saveError={props.saveError}
+                  hasPendingChanges={props.hasPendingChanges}
                 />
                 {!isViewer && (
                   <button
@@ -396,6 +401,7 @@ export function TopBar(props: TopBarProps) {
                 isSaving={props.isSaving}
                 hasEditToken={Boolean(props.currentEditToken)}
                 saveError={props.saveError}
+                hasPendingChanges={props.hasPendingChanges}
                 isAuthenticated={isAuthenticated}
                 isOwner={isOwner}
                 currentEditToken={props.currentEditToken}

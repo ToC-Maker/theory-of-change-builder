@@ -22,6 +22,7 @@ interface Props {
   isSaving: boolean;
   hasEditToken: boolean;
   saveError: SaveError | null;
+  hasPendingChanges: boolean;
   // File menu pass-through.
   isAuthenticated: boolean;
   isOwner: boolean;
@@ -124,6 +125,7 @@ export function MobileMenu(props: Props) {
                 isSaving={props.isSaving}
                 hasEditToken={props.hasEditToken}
                 saveError={props.saveError}
+                hasPendingChanges={props.hasPendingChanges}
               />
             </section>
 

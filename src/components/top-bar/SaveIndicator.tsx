@@ -1,11 +1,25 @@
 // SaveIndicator — small pill in the right side of the TopBar.
 //
-// Three states:
-//   - Saving:  spinner + "Saving"   (transient)
-//   - Saved:   green check + "Saved"
-//   - Error:   red dot + "Error" + tooltip carrying the message
+// States (PR 7 round-2 feedback (57): "it should be clear when the
+// chart is not saved, not just when it's saving or saved"):
+//   - Saving:           spinner + "Saving"   (a save attempt in flight)
+//   - Unsaved changes:  amber dot + "Unsaved changes" (local edits not
+//                       persisted yet)
+//   - Unsaved changes,  red dot + "Unsaved changes" + tooltip with the
+//     failed save:      failure message. A failed save must NEVER show
+//                       a stale "Saved" — the round-2 signed-in 401/403
+//                       report was exactly this: every autosave 403'd
+//                       while the pill suggested all was well.
+//   - Error:            red dot + "Error" + tooltip — failures that do
+//                       NOT leave unsaved edits behind (e.g. a failed
+//                       chart delete reported via the same channel).
+//   - Saved:            green check + "Saved".
 //
-// When in the Error state, we fire `loggingService.reportError` exactly
+// Priority: error/unsaved-failed > saving > unsaved > saved. The
+// failure state outranks "Saving" so a retry attempt doesn't blink the
+// warning away; success clears `saveError` and the pill recovers.
+//
+// When in a failure state, we fire `loggingService.reportError` exactly
 // once per transition into error (debounced via a ref of the previous
 // fingerprint). Re-renders that keep the same error don't re-report;
 // a recovery clears the fingerprint, so a *new* failure later does
@@ -14,7 +28,8 @@
 // display").
 //
 // The pill returns null when no edit token exists and no error is set —
-// pre-share state has no save status to report.
+// pre-share state has no DB save target to report on (edits persist to
+// localStorage until the chart is created).
 import { useEffect, useRef } from 'react';
 import { Tooltip } from 'react-tooltip';
 import { loggingService } from '../../services/loggingService';
@@ -27,9 +42,16 @@ interface Props {
   isSaving: boolean;
   hasEditToken: boolean;
   saveError: SaveError | null;
+  /**
+   * True while local edits exist that have not been persisted to the
+   * server (App mirrors its `pendingChangesRef` into state). Drives the
+   * "Unsaved changes" state — including after a FAILED save, when the
+   * edits silently survive only in memory/localStorage.
+   */
+  hasPendingChanges: boolean;
 }
 
-export function SaveIndicator({ isSaving, hasEditToken, saveError }: Props) {
+export function SaveIndicator({ isSaving, hasEditToken, saveError, hasPendingChanges }: Props) {
   // Fingerprint of the last reported error transition. We re-fire only
   // when the fingerprint changes (so re-renders with the *same* error
   // don't spam logging).
@@ -55,16 +77,21 @@ export function SaveIndicator({ isSaving, hasEditToken, saveError }: Props) {
 
   if (saveError) {
     const tooltipId = 'save-indicator-error-tooltip';
+    // Failed save with edits still pending: say what it means for the
+    // user's data ("Unsaved changes"), not just that something errored.
+    // Failures without pending edits (e.g. delete) keep the generic
+    // "Error" label — the chart content itself is not at risk.
+    const label = hasPendingChanges ? 'Unsaved changes' : 'Error';
     return (
       <div
         role="status"
-        data-state="error"
+        data-state={hasPendingChanges ? 'unsaved' : 'error'}
         className="flex items-center gap-1 px-1 sm:px-2 py-1 text-red-700 text-sm cursor-help"
         data-tooltip-id={tooltipId}
         data-tooltip-content={saveError.message}
       >
         <span className="inline-block w-2 h-2 rounded-full bg-red-500" aria-hidden="true" />
-        <span className="hidden md:inline">Error</span>
+        <span className="hidden md:inline">{label}</span>
         <Tooltip id={tooltipId} place="bottom" />
       </div>
     );
@@ -99,6 +126,22 @@ export function SaveIndicator({ isSaving, hasEditToken, saveError }: Props) {
           />
         </svg>
         <span className="hidden md:inline">Saving</span>
+      </div>
+    );
+  }
+
+  if (hasPendingChanges) {
+    // Dirty but no save in flight and no error: the debounce window,
+    // or any future code path that defers persistence. Amber — a
+    // heads-up, not an alarm.
+    return (
+      <div
+        role="status"
+        data-state="unsaved"
+        className="flex items-center gap-1 px-1 sm:px-2 py-1 text-amber-700 text-sm"
+      >
+        <span className="inline-block w-2 h-2 rounded-full bg-amber-500" aria-hidden="true" />
+        <span className="hidden md:inline">Unsaved changes</span>
       </div>
     );
   }
