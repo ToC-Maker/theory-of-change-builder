@@ -18,6 +18,12 @@
 // dismisses everything) and Escape continue to work without a back
 // button. macOS Finder / Windows context-menu UX.
 //
+// K3 (mobile): with `inlineSubmenus` (passed by MobileMenu) the same
+// submenu contents render IN FLOW below their parent item as a
+// tap-toggled accordion instead — side flyouts are a hover/desktop
+// idiom and physically don't fit a phone viewport (see the prop doc
+// on Props.inlineSubmenus).
+//
 // Hover-area handling: the main menu items schedule open/close on
 // pointerenter/leave. The flyout panel itself also clears the close
 // timer on pointerenter and re-arms it on pointerleave, so the user
@@ -102,6 +108,22 @@ interface Props {
    * already open" so a casual mouse-over doesn't open menus.
    */
   onHoverOpen?: () => void;
+
+  // K3 — mobile drawer accordion. When true, the Open recent / Export
+  // submenus render IN FLOW below their parent item (accordion
+  // disclosure, the standard mobile pattern) instead of as absolute
+  // side flyouts. MobileMenu passes this: inside its w-72 drawer the
+  // `left-56`-anchored flyouts land mostly outside a phone viewport
+  // (measured at 390px wide: Open recent at x 335..655, 265px
+  // off-screen), and hover — which the side flyouts are built
+  // around — doesn't exist on touch. Tap toggles the accordion.
+  //
+  // This is an explicit prop rather than (a) a viewport/matchMedia
+  // query inside FileMenu — the breakpoint decision is centralized in
+  // TopBar ("children stay simple, no per-component matchMedia") — or
+  // (b) keying off uncontrolled mode, because tests use uncontrolled
+  // FileMenu to exercise the desktop flyout geometry.
+  inlineSubmenus?: boolean;
 }
 
 // PR 7 feedback (38): submenus are now side flyouts that render
@@ -156,6 +178,7 @@ export function FileMenu({
   isOpen,
   onOpenChange,
   onHoverOpen,
+  inlineSubmenus = false,
 }: Props) {
   // Controlled vs uncontrolled. When the parent passes `isOpen` the
   // component is fully controlled (this is the menubar-with-hover-
@@ -343,8 +366,11 @@ export function FileMenu({
   // Queue a delayed flyout open. Cancels any prior pending open
   // timer and any pending close timer (the user just expressed
   // intent to open, so a stale close from a previous flyout would
-  // race and immediately undo this).
+  // race and immediately undo this). No-op in inline (accordion)
+  // mode: hover intent doesn't exist on touch, and a tap's synthetic
+  // pointerenter must not race the click toggle.
   const scheduleHoverOpen = (target: Exclude<Flyout, null>) => {
+    if (inlineSubmenus) return;
     cancelHoverOpen();
     cancelHoverClose();
     hoverOpenTimerRef.current = setTimeout(() => {
@@ -355,8 +381,12 @@ export function FileMenu({
 
   // Queue a delayed flyout close. Cancels any prior pending open
   // (the cursor moved off the parent before the open fired, so the
-  // open is no longer wanted) before arming the close.
+  // open is no longer wanted) before arming the close. No-op in
+  // inline (accordion) mode: the expanded section stays open until
+  // toggled, Escape, or menu close — tapping a leaf item (Import
+  // JSON, Delete) must not silently collapse it 250ms later.
   const scheduleHoverClose = () => {
+    if (inlineSubmenus) return;
     cancelHoverOpen();
     cancelHoverClose();
     hoverCloseTimerRef.current = setTimeout(() => {
@@ -377,8 +407,10 @@ export function FileMenu({
   // flyout height) is independent of the `top` set on the flyout
   // itself. Pattern matches `useClampedPopoverX` (round-2 composer X
   // clamp), which re-measures on resize the same way.
+  // Inline (accordion) submenus are in normal flow — nothing to
+  // measure or clamp, so the effect is skipped entirely.
   useLayoutEffect(() => {
-    if (flyout === null) {
+    if (flyout === null || inlineSubmenus) {
       setFlyoutTop(null);
       return;
     }
@@ -401,7 +433,7 @@ export function FileMenu({
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [flyout, recent, loadingRecent, errorRecent]);
+  }, [flyout, recent, loadingRecent, errorRecent, inlineSubmenus]);
 
   // Lazy-load recent charts when the flyout opens.
   useEffect(() => {
@@ -591,6 +623,90 @@ export function FileMenu({
     setPendingImport(null);
   };
 
+  // Submenu contents — shared verbatim between the desktop side-
+  // flyout panels and the mobile inline accordion (K3) so the two
+  // render modes can't drift apart.
+  const exportMenuItems = (
+    <>
+      <button
+        type="button"
+        onClick={() => void handleExportJson()}
+        disabled={!canExport}
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+          canExport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
+        }`}
+        role="menuitem"
+        data-testid="file-menu-export-json"
+      >
+        <span>JSON</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleExportImage('PNG')}
+        disabled={!canExport || busyFormat !== null}
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+          canExport && busyFormat === null
+            ? 'text-gray-700 hover:bg-gray-100'
+            : 'text-gray-400 cursor-not-allowed'
+        }`}
+        role="menuitem"
+        data-testid="file-menu-export-png"
+      >
+        <span>PNG</span>
+        {busyFormat === 'PNG' && <span className="text-xs italic">Generating…</span>}
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleExportImage('PDF')}
+        disabled={!canExport || busyFormat !== null}
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
+          canExport && busyFormat === null
+            ? 'text-gray-700 hover:bg-gray-100'
+            : 'text-gray-400 cursor-not-allowed'
+        }`}
+        role="menuitem"
+        data-testid="file-menu-export-pdf"
+      >
+        <span>PDF</span>
+        {busyFormat === 'PDF' && <span className="text-xs italic">Generating…</span>}
+      </button>
+    </>
+  );
+
+  const recentMenuContent = loadingRecent ? (
+    <div className="px-3 py-4 text-center text-xs text-gray-500">Loading…</div>
+  ) : errorRecent ? (
+    <div className="px-3 py-3 text-xs text-red-700">
+      <div>Couldn’t load recent charts.</div>
+      <button
+        type="button"
+        onClick={() => setRetryNonce((n) => n + 1)}
+        className="mt-1 underline text-red-700 hover:text-red-800"
+      >
+        Retry
+      </button>
+    </div>
+  ) : recent.length === 0 ? (
+    <div className="px-3 py-3 text-xs text-gray-500">
+      {isAuthenticated ? 'No saved charts yet.' : 'No local charts found.'}
+    </div>
+  ) : (
+    <div className="max-h-72 overflow-y-auto py-1">
+      {recent.map((chart, idx) => (
+        <a
+          key={chart.chartId || idx}
+          href={chart.editUrl}
+          className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+        >
+          <div className="font-medium truncate">{chart.title}</div>
+          <div className="text-xs text-gray-500">
+            {new Date(chart.updatedAt).toLocaleDateString()}
+          </div>
+        </a>
+      ))}
+    </div>
+  );
+
   return (
     <div className="relative" ref={ref}>
       <button
@@ -658,7 +774,10 @@ export function FileMenu({
               // timer (e.g. user hovered briefly then clicked).
               cancelHoverOpen();
               cancelHoverClose();
-              setFlyout('recent');
+              // Inline (accordion) mode: tapping the open parent
+              // collapses it. Desktop keeps open-only click (the
+              // flyout closes via hover-leave / Esc / click-outside).
+              setFlyout(inlineSubmenus && flyout === 'recent' ? null : 'recent');
             }}
             onPointerEnter={() => scheduleHoverOpen('recent')}
             onPointerLeave={() => {
@@ -682,8 +801,27 @@ export function FileMenu({
               <ClockIcon className="w-4 h-4 text-gray-500" />
               Open recent
             </span>
-            <ChevronDownIcon className="w-3 h-3 -rotate-90" />
+            {/* Side flyout: chevron points right. Inline accordion:
+              disclosure convention — right when collapsed, down when
+              expanded. */}
+            <ChevronDownIcon
+              className={inlineSubmenus && flyout === 'recent' ? 'w-3 h-3' : 'w-3 h-3 -rotate-90'}
+            />
           </button>
+          {/* K3 inline accordion: the submenu expands IN FLOW below
+            its parent item, so it can never be clipped by the drawer
+            or viewport edge. Light bg tint + hairline borders mark
+            the nesting. Same testid as the desktop flyout — it is
+            the same logical surface, different container. */}
+          {inlineSubmenus && flyout === 'recent' && (
+            <div
+              role="menu"
+              className="bg-gray-50 border-y border-gray-100"
+              data-testid="file-menu-recent-flyout"
+            >
+              {recentMenuContent}
+            </div>
+          )}
           <button
             type="button"
             onClick={handleImportClick}
@@ -710,7 +848,8 @@ export function FileMenu({
             onClick={() => {
               cancelHoverOpen();
               cancelHoverClose();
-              setFlyout('export');
+              // Accordion toggle in inline mode (see Open recent).
+              setFlyout(inlineSubmenus && flyout === 'export' ? null : 'export');
             }}
             onPointerEnter={() => scheduleHoverOpen('export')}
             onPointerLeave={() => {
@@ -728,8 +867,20 @@ export function FileMenu({
               <ArrowDownTrayIcon className="w-4 h-4 text-gray-500" />
               Export
             </span>
-            <ChevronDownIcon className="w-3 h-3 -rotate-90" />
+            <ChevronDownIcon
+              className={inlineSubmenus && flyout === 'export' ? 'w-3 h-3' : 'w-3 h-3 -rotate-90'}
+            />
           </button>
+          {/* K3 inline accordion — see Open recent above. */}
+          {inlineSubmenus && flyout === 'export' && (
+            <div
+              role="menu"
+              className="bg-gray-50 border-y border-gray-100"
+              data-testid="file-menu-export-flyout"
+            >
+              {exportMenuItems}
+            </div>
+          )}
 
           {canDelete && (
             <>
@@ -764,8 +915,9 @@ export function FileMenu({
         the measured `flyoutTop` (PR 7 feedback (62)): aligned with
         the parent "Export" item, clamped to the viewport. Until the
         pre-paint measurement lands, `top` is unset for one unpainted
-        frame. */}
-      {open && flyout === 'export' && (
+        frame. Desktop only — in inline mode (K3) the same items
+        render as an accordion inside the main panel instead. */}
+      {!inlineSubmenus && open && flyout === 'export' && (
         <div
           role="menu"
           ref={flyoutPanelRef}
@@ -779,55 +931,14 @@ export function FileMenu({
           className="absolute left-56 ml-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
           data-testid="file-menu-export-flyout"
         >
-          <button
-            type="button"
-            onClick={() => void handleExportJson()}
-            disabled={!canExport}
-            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-              canExport ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-400 cursor-not-allowed'
-            }`}
-            role="menuitem"
-            data-testid="file-menu-export-json"
-          >
-            <span>JSON</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleExportImage('PNG')}
-            disabled={!canExport || busyFormat !== null}
-            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-              canExport && busyFormat === null
-                ? 'text-gray-700 hover:bg-gray-100'
-                : 'text-gray-400 cursor-not-allowed'
-            }`}
-            role="menuitem"
-            data-testid="file-menu-export-png"
-          >
-            <span>PNG</span>
-            {busyFormat === 'PNG' && <span className="text-xs italic">Generating…</span>}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleExportImage('PDF')}
-            disabled={!canExport || busyFormat !== null}
-            className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm ${
-              canExport && busyFormat === null
-                ? 'text-gray-700 hover:bg-gray-100'
-                : 'text-gray-400 cursor-not-allowed'
-            }`}
-            role="menuitem"
-            data-testid="file-menu-export-pdf"
-          >
-            <span>PDF</span>
-            {busyFormat === 'PDF' && <span className="text-xs italic">Generating…</span>}
-          </button>
+          {exportMenuItems}
         </div>
       )}
 
       {/* Side flyout: Open recent. Wider (w-80) than Export because
         chart titles + timestamps need horizontal room (PR 7
-        feedback (39)). */}
-      {open && flyout === 'recent' && (
+        feedback (39)). Desktop only — see Export flyout above. */}
+      {!inlineSubmenus && open && flyout === 'recent' && (
         <div
           role="menu"
           ref={flyoutPanelRef}
@@ -837,39 +948,7 @@ export function FileMenu({
           className="absolute left-56 ml-1 w-80 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
           data-testid="file-menu-recent-flyout"
         >
-          {loadingRecent ? (
-            <div className="px-3 py-4 text-center text-xs text-gray-500">Loading…</div>
-          ) : errorRecent ? (
-            <div className="px-3 py-3 text-xs text-red-700">
-              <div>Couldn’t load recent charts.</div>
-              <button
-                type="button"
-                onClick={() => setRetryNonce((n) => n + 1)}
-                className="mt-1 underline text-red-700 hover:text-red-800"
-              >
-                Retry
-              </button>
-            </div>
-          ) : recent.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-gray-500">
-              {isAuthenticated ? 'No saved charts yet.' : 'No local charts found.'}
-            </div>
-          ) : (
-            <div className="max-h-72 overflow-y-auto py-1">
-              {recent.map((chart, idx) => (
-                <a
-                  key={chart.chartId || idx}
-                  href={chart.editUrl}
-                  className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                >
-                  <div className="font-medium truncate">{chart.title}</div>
-                  <div className="text-xs text-gray-500">
-                    {new Date(chart.updatedAt).toLocaleDateString()}
-                  </div>
-                </a>
-              ))}
-            </div>
-          )}
+          {recentMenuContent}
         </div>
       )}
       <ConfirmModal

@@ -85,6 +85,11 @@ export function MobileMenu(props: Props) {
                 onDeleteChart={props.onDeleteChart}
                 data={props.data}
                 onImportJson={props.onImportJson}
+                // K3: inside this w-72 drawer the desktop side
+                // flyouts (left-56 anchor, Open recent w-80 = 320px)
+                // land mostly outside a phone viewport. Accordion
+                // submenus expand in flow instead.
+                inlineSubmenus
               />
             </section>
 
