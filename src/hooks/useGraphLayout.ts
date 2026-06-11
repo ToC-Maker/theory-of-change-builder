@@ -38,6 +38,21 @@ export interface Rect {
   bottom: number;
 }
 
+/**
+ * Coordinate space invariant (PR #34 zoom fix): every rect and length
+ * in the snapshot is CONTENT-space — container-relative CSS px with the
+ * zoom transform factored OUT. `refresh()` reads viewport rects via
+ * `getBoundingClientRect` (which include the canvas scale transform)
+ * and divides the deltas by the current zoom scale. This is the same
+ * space as:
+ *   - the classify points `usePointerDrag` produces
+ *     (`(clientX - containerRect.left) / zoomScale`),
+ *   - `node.yPosition` / node-wrapper `style.top` data coordinates,
+ *   - connection waypoint coordinates.
+ * Content-space rects are zoom-invariant, so a zoom change alone never
+ * requires a rect reseed (the next refresh just divides by the new
+ * scale and lands on the same numbers).
+ */
 export interface LayoutSnapshot {
   sectionPadding: number;
   columnPadding: number;
@@ -253,6 +268,13 @@ export interface UseGraphLayoutArgs {
   columnPadding: number;
   sectionPadding: number;
   editMode: boolean;
+  /**
+   * Current canvas zoom scale (1 = no zoom). `refresh()` divides every
+   * viewport rect delta by this so the snapshot is content-space — see
+   * the LayoutSnapshot invariant comment. Read through a ref at refresh
+   * time, so passing a new value never re-creates the observers.
+   */
+  zoomScale?: number;
 }
 
 export interface UseGraphLayoutResult {
@@ -271,11 +293,21 @@ export function useGraphLayout({
   columnPadding,
   sectionPadding,
   editMode,
+  zoomScale = 1,
 }: UseGraphLayoutArgs): UseGraphLayoutResult {
   const sectionWidths = useMemo(
     () => computeSectionWidths(data, { columnPadding, editMode }),
     [data, columnPadding, editMode],
   );
+
+  // Zoom behind a ref so `refresh` (and everything downstream of it —
+  // requestRefresh, the observer effect) stays referentially stable
+  // across zoom changes. Content-space rects are zoom-invariant, so a
+  // zoom change alone doesn't even need a reseed; the ref just
+  // guarantees any later refresh divides by the scale that matches the
+  // DOM it reads.
+  const zoomScaleRef = useRef(zoomScale);
+  zoomScaleRef.current = zoomScale;
 
   // Rect cache lives in a ref so consumers can poll without re-rendering.
   const snapshotRef = useRef<LayoutSnapshot>({
@@ -297,10 +329,19 @@ export function useGraphLayout({
   }, [sectionPadding, columnPadding]);
 
   // Reads the DOM and writes the cache. Called inside rAF.
+  //
+  // PR #34 zoom fix: `getBoundingClientRect` values include the canvas
+  // scale transform, so the raw deltas are viewport-scaled px. Divide
+  // by the zoom scale to store CONTENT-space rects (the LayoutSnapshot
+  // invariant). Pre-fix, the raw deltas were compared against the drag
+  // hook's zoom-divided points: at fit-zoom ~0.633 every drop landed
+  // ~30-300px off and often classified into the adjacent column.
   const refresh = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
     const containerRect = container.getBoundingClientRect();
+    const zoom = zoomScaleRef.current || 1;
+    const toContent = (viewportDelta: number) => viewportDelta / zoom;
     const cols = Array.from(container.querySelectorAll<HTMLElement>('[data-column]'));
     // Group by sectionIdx (from data-column = "${sIdx}-${cIdx}")
     const grouped: Record<number, { cIdx: number; rect: Rect }[]> = {};
@@ -313,10 +354,10 @@ export function useGraphLayout({
       const cIdx = Number(cStr);
       const r = el.getBoundingClientRect();
       const rect: Rect = {
-        left: r.left - containerRect.left,
-        right: r.right - containerRect.left,
-        top: r.top - containerRect.top,
-        bottom: r.bottom - containerRect.top,
+        left: toContent(r.left - containerRect.left),
+        right: toContent(r.right - containerRect.left),
+        top: toContent(r.top - containerRect.top),
+        bottom: toContent(r.bottom - containerRect.top),
       };
       if (!grouped[sIdx]) grouped[sIdx] = [];
       grouped[sIdx].push({ cIdx, rect });
@@ -326,10 +367,10 @@ export function useGraphLayout({
       const nrects: Rect[] = innerNodes.map((nodeEl) => {
         const nr = nodeEl.getBoundingClientRect();
         return {
-          left: nr.left - containerRect.left,
-          right: nr.right - containerRect.left,
-          top: nr.top - containerRect.top,
-          bottom: nr.bottom - containerRect.top,
+          left: toContent(nr.left - containerRect.left),
+          right: toContent(nr.right - containerRect.left),
+          top: toContent(nr.top - containerRect.top),
+          bottom: toContent(nr.bottom - containerRect.top),
         };
       });
       nodeRects[`${sIdx}-${cIdx}`] = nrects;
@@ -345,8 +386,8 @@ export function useGraphLayout({
       sectionPadding,
       columnPadding,
       columnRects,
-      containerWidth: containerRect.width,
-      containerHeight: containerRect.height,
+      containerWidth: toContent(containerRect.width),
+      containerHeight: toContent(containerRect.height),
       nodeRects,
     };
   }, [containerRef, sectionPadding, columnPadding]);

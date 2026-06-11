@@ -24,9 +24,12 @@
 // Coordinate translation:
 //   `clientX/Y` is viewport coordinates. The container may sit inside
 //   a CSS-transform stack (zoom/pan from `useZoomPan`). We translate
-//   to container-local by subtracting the container's bounding-rect
-//   origin and dividing by `zoomScale`. Snapshot rects from
-//   `classifyRegion` live in the same container-local space.
+//   to CONTENT-space (container-local, zoom factored out) by
+//   subtracting the container's bounding-rect origin and dividing by
+//   `zoomScale`. Snapshot rects live in the same content-space:
+//   `useGraphLayout.refresh()` divides its viewport rect deltas by the
+//   zoom (the LayoutSnapshot invariant), so classifyRegion compares
+//   like with like at any zoom level.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // (Document listeners are installed imperatively in `startDrag`, not via

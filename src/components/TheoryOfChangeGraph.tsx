@@ -549,6 +549,10 @@ export function ToC({
     columnPadding,
     sectionPadding,
     editMode,
+    // PR #34 zoom fix: the hook divides viewport rect deltas by the
+    // zoom so the snapshot is content-space, matching the zoom-divided
+    // classify points `usePointerDrag` feeds to `classifyRegion`.
+    zoomScale,
   });
 
   const areNodesConnected = useCallback(
@@ -777,21 +781,21 @@ export function ToC({
       }
       // Snapshot the pre-drop COLUMN center-x for the source and target
       // columns from the layout snapshot. The snapshot's `columnRects`
-      // are viewport-coords (read via `getBoundingClientRect`); we
-      // convert to container-local by subtracting the container's own
-      // viewport offset and dividing by zoom — same space waypoints
-      // live in.
+      // are CONTENT-space (zoom-normalized container-local px — see the
+      // LayoutSnapshot invariant in useGraphLayout), which is the same
+      // space waypoints live in, so the centers are usable directly.
+      // (Pre-zoom-fix this block ran the raw viewport deltas through a
+      // `(x - containerRect.left) / zoomScale` conversion; the constant
+      // canceled in the dx subtraction below and the division is now
+      // done once in the snapshot producer.)
       let preDropXCenter: number | null = null;
       let postDropXCenter: number | null = null;
       const layoutSnap = getSnapshot();
-      const graphContainerEl = graphContainerRef.current;
-      if (graphContainerEl && layoutSnap.columnRects.length > 0) {
-        const containerRect = graphContainerEl.getBoundingClientRect();
-        const toLocalX = (clientX: number) => (clientX - containerRect.left) / zoomScale;
+      if (layoutSnap.columnRects.length > 0) {
         const srcCol =
           layoutSnap.columnRects[sourceLocation.sectionIndex]?.[sourceLocation.columnIndex];
         if (srcCol) {
-          preDropXCenter = toLocalX((srcCol.left + srcCol.right) / 2);
+          preDropXCenter = (srcCol.left + srcCol.right) / 2;
         }
         if (isSameColumnMove) {
           // Same column → post-drop x equals pre-drop x.
@@ -807,23 +811,22 @@ export function ToC({
             const leftCol = sec[targetColumnIndex - 1];
             const rightCol = sec[targetColumnIndex];
             if (leftCol && rightCol) {
-              const gutterMid = (leftCol.right + rightCol.left) / 2;
-              postDropXCenter = toLocalX(gutterMid);
+              postDropXCenter = (leftCol.right + rightCol.left) / 2;
             } else if (leftCol) {
               // Drop past the last column → new column lands to the
               // right of the current rightmost; approximate one
               // column-width to the right.
-              postDropXCenter = toLocalX(leftCol.right + (leftCol.right - leftCol.left) / 2);
+              postDropXCenter = leftCol.right + (leftCol.right - leftCol.left) / 2;
             } else if (rightCol) {
               // Drop before the first column → mirror.
-              postDropXCenter = toLocalX(rightCol.left - (rightCol.right - rightCol.left) / 2);
+              postDropXCenter = rightCol.left - (rightCol.right - rightCol.left) / 2;
             }
           }
         } else {
           // Existing target column — its rect is already known.
           const tgtCol = layoutSnap.columnRects[targetSectionIndex]?.[targetColumnIndex];
           if (tgtCol) {
-            postDropXCenter = toLocalX((tgtCol.left + tgtCol.right) / 2);
+            postDropXCenter = (tgtCol.left + tgtCol.right) / 2;
           }
         }
       }
