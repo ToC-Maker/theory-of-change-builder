@@ -369,26 +369,38 @@ export function FileMenu({
   // Layout effect (not plain effect) so the measured position lands
   // before paint. Re-runs when the flyout's content changes (the
   // recent list loads async and changes the flyout's height, which
-  // feeds the viewport-bottom clamp).
+  // feeds the viewport-bottom clamp). Also re-measures on window
+  // resize while the flyout is open (K4): the clamp reads
+  // `window.innerHeight` at measure time, so a shrinking window would
+  // otherwise leave the flyout overflowing the new viewport bottom.
+  // Re-measuring is idempotent — every input (offsetTops, anchor rect,
+  // flyout height) is independent of the `top` set on the flyout
+  // itself. Pattern matches `useClampedPopoverX` (round-2 composer X
+  // clamp), which re-measures on resize the same way.
   useLayoutEffect(() => {
     if (flyout === null) {
       setFlyoutTop(null);
       return;
     }
-    const panel = menuPanelRef.current;
-    const item = flyout === 'recent' ? recentItemRef.current : exportItemRef.current;
-    const flyoutEl = flyoutPanelRef.current;
-    const root = ref.current;
-    if (!panel || !item || !flyoutEl || !root) return;
-    setFlyoutTop(
-      computeFlyoutTop({
-        panelOffsetTop: panel.offsetTop,
-        itemOffsetTop: item.offsetTop,
-        flyoutHeight: flyoutEl.getBoundingClientRect().height,
-        anchorTop: root.getBoundingClientRect().top,
-        viewportHeight: window.innerHeight,
-      }),
-    );
+    const measure = () => {
+      const panel = menuPanelRef.current;
+      const item = flyout === 'recent' ? recentItemRef.current : exportItemRef.current;
+      const flyoutEl = flyoutPanelRef.current;
+      const root = ref.current;
+      if (!panel || !item || !flyoutEl || !root) return;
+      setFlyoutTop(
+        computeFlyoutTop({
+          panelOffsetTop: panel.offsetTop,
+          itemOffsetTop: item.offsetTop,
+          flyoutHeight: flyoutEl.getBoundingClientRect().height,
+          anchorTop: root.getBoundingClientRect().top,
+          viewportHeight: window.innerHeight,
+        }),
+      );
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
   }, [flyout, recent, loadingRecent, errorRecent]);
 
   // Lazy-load recent charts when the flyout opens.

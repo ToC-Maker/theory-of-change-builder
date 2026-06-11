@@ -9,7 +9,7 @@
 // the wiring tests mock those per-element. The math itself is covered
 // by the pure-function tests.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { FileMenu } from '../../src/components/top-bar/FileMenu';
@@ -148,6 +148,60 @@ describe('FileMenu flyout alignment wiring (PR 7 feedback (62))', () => {
     const flyout = screen.getByTestId('file-menu-export-flyout');
     // desired = 144, maxTop = 300 - 8 - 200 - 0 = 92 -> clamped.
     expect(flyout.style.top).toBe('92px');
+
+    rectSpy.mockRestore();
+    innerHeightSpy.mockRestore();
+  });
+
+  it('re-clamps the flyout when the window resizes while it is open (K4)', async () => {
+    const user = userEvent.setup();
+    renderMenu({ data: { sections: [] } });
+    await user.click(screen.getByRole('button', { name: /file/i }));
+
+    const panel = screen.getByRole('menu');
+    const exportItem = screen.getByTestId('file-menu-export');
+    Object.defineProperty(panel, 'offsetTop', { value: 36, configurable: true });
+    Object.defineProperty(exportItem, 'offsetTop', { value: 112, configurable: true });
+
+    // The flyout renders 200px tall. The viewport starts tall enough
+    // (768px) that the desired position (144) needs no clamping; then
+    // the window shrinks to 300px while the flyout is open.
+    let innerHeight = 768;
+    const innerHeightSpy = vi
+      .spyOn(window, 'innerHeight', 'get')
+      .mockImplementation(() => innerHeight);
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const height = this.dataset?.testid === 'file-menu-export-flyout' ? 200 : 0;
+        return {
+          x: 0,
+          y: 0,
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: height,
+          width: 0,
+          height,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+
+    await user.click(exportItem);
+    const flyout = screen.getByTestId('file-menu-export-flyout');
+    expect(flyout.style.top).toBe('144px'); // unclamped at 768px tall
+
+    // Shrink: maxTop = 300 - 8 - 200 - 0 = 92. Before the fix the
+    // layout effect never re-ran on resize, so top stayed 144px and
+    // the flyout overflowed the new viewport bottom.
+    innerHeight = 300;
+    fireEvent(window, new Event('resize'));
+    expect(flyout.style.top).toBe('92px');
+
+    // Grow again: the flyout returns to its item-aligned position.
+    innerHeight = 768;
+    fireEvent(window, new Event('resize'));
+    expect(flyout.style.top).toBe('144px');
 
     rectSpy.mockRestore();
     innerHeightSpy.mockRestore();
