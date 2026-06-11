@@ -13,6 +13,126 @@ import { extractToken, verifyToken } from '../_shared/auth';
 // consulted here because count_tokens doesn't accrue cost for either side,
 // and centralising it keeps the UI estimate independent of BYOK state.
 
+// Make the forwarded payload satisfy count_tokens's shape validator, which
+// is stricter than /v1/messages (CLAUDE.md § count_tokens Assistant-Turn
+// Validation). Violating shapes — each confirmed against the live endpoint
+// 2026-06-11 — used to be collapsed into 503 "estimation_unavailable"
+// (PR #34 feedback #61):
+//   - a FINAL assistant turn whose string content ends with whitespace
+//     → 400 "final assistant content cannot end with trailing whitespace";
+//   - messages whose content arrays are empty (or empty-text-only), e.g.
+//     when the Files-API document stripping above removes every block
+//     → 400 "user messages must have non-empty content" /
+//       "text content blocks must be non-empty";
+//   - whitespace-only string content → 400 "text content blocks must
+//     contain non-whitespace text";
+//   - an empty messages list → 400 "at least one message is required".
+//
+// Reachability caveat (verified end-to-end 2026-06-11): the CURRENT
+// first-party UI does not produce these shapes. App.tsx hard-gates
+// rendering on chart data (`if (loading)` / `if (!data)`), so the composer
+// never mounts with a null graph, and the chat estimate always appends the
+// [CURRENT_GRAPH_DATA] JSON to the draft text block — files-only attach
+// flows (PDF/txt × chat/generate, no prompt text, no history, fresh
+// profile) all returned 200 against the pre-sanitizer handler. This
+// sanitizer is endpoint-contract hardening (older/external clients, and
+// future UI states where graph data stops riding along), not the fix for
+// a confirmed UI repro. The reviewer-reported attach-flow 503 was NOT
+// reproducible as a payload shape through the UI; remaining candidates are
+// transient upstream failures or deployment-env upstream errors (e.g. bad
+// ANTHROPIC_API_KEY → upstream 401), which still surface as 503 with
+// upstream_status / upstream_message in the body for diagnosis. An attach
+// is typically the FIRST estimate-triggering action of a session, so an
+// env-wide failure surfaces exactly there.
+//
+// Upstream-confirmed non-issues: consecutive same-role and assistant-first
+// lists are accepted (dropping messages needs no alternation repair);
+// valid signed thinking blocks pass cross-model; count_tokens does not
+// enforce the context-window ceiling (a 1.4M-token payload counts fine).
+// Token impact of the fixups is ≤ ~1 token per repaired turn.
+//
+// Mirrors the four rules of buildAssistantBlocksForCountTokens
+// (worker/api/anthropic-stream.ts) at the payload level; that helper is
+// coupled to the streaming SseTeeContext so it can't be reused directly.
+export function sanitizeMessagesForCountTokens(messages: unknown): unknown {
+  if (!Array.isArray(messages)) return messages;
+
+  const out: Array<Record<string, unknown>> = [];
+  for (const msg of messages as Array<Record<string, unknown>>) {
+    const content = msg?.content;
+    if (typeof content === 'string') {
+      // Rule: messages must have non-empty, non-whitespace content.
+      if (content.trim().length === 0) continue;
+      out.push(msg);
+      continue;
+    }
+    if (Array.isArray(content)) {
+      // Rule: text blocks must be non-empty and contain non-whitespace.
+      const filtered = (content as Array<Record<string, unknown>>).filter((b) => {
+        if (b?.type !== 'text') return true;
+        return typeof b.text === 'string' && b.text.trim().length > 0;
+      });
+      // Rule: two thinking blocks cannot be adjacent. Dropping an empty
+      // text block above can expose adjacency — splice a "." text block.
+      const spaced: Array<Record<string, unknown>> = [];
+      for (const b of filtered) {
+        if (b?.type === 'thinking' && spaced[spaced.length - 1]?.type === 'thinking') {
+          spaced.push({ type: 'text', text: '.' });
+        }
+        spaced.push(b);
+      }
+      if (spaced.length === 0) continue; // rule: non-empty content
+      out.push({ ...msg, content: spaced });
+      continue;
+    }
+    // Unknown content shape: forward untouched; upstream's error (surfaced
+    // with upstream_message below) beats a silent local guess.
+    out.push(msg);
+  }
+
+  // Rules on the FINAL assistant turn only: content cannot end with
+  // trailing whitespace, and the final block cannot be `thinking`.
+  // Non-final turns are left untouched so their counted bytes stay exact.
+  const last = out[out.length - 1];
+  if (last && last.role === 'assistant') {
+    if (typeof last.content === 'string') {
+      const trimmed = last.content.replace(/\s+$/u, '');
+      if (trimmed.length === 0) out.pop();
+      else if (trimmed !== last.content) out[out.length - 1] = { ...last, content: trimmed };
+    } else if (Array.isArray(last.content)) {
+      const blocks = [...(last.content as Array<Record<string, unknown>>)];
+      while (blocks.length > 0) {
+        const tail = blocks[blocks.length - 1];
+        if (tail?.type === 'text' && typeof tail.text === 'string') {
+          const trimmed = tail.text.replace(/\s+$/u, '');
+          if (trimmed.length === 0) {
+            // Whitespace-only tail: drop it and re-examine the new tail
+            // (it may be a thinking block needing the "." pad).
+            blocks.pop();
+            continue;
+          }
+          if (trimmed !== tail.text) {
+            blocks[blocks.length - 1] = { ...tail, text: trimmed };
+          }
+          break;
+        }
+        if (tail?.type === 'thinking') {
+          blocks.push({ type: 'text', text: '.' });
+        }
+        break;
+      }
+      if (blocks.length === 0) out.pop();
+      else out[out.length - 1] = { ...last, content: blocks };
+    }
+  }
+
+  // Rule: at least one message is required. Everything got dropped (e.g.
+  // a files-only draft whose document blocks were stripped) — count the
+  // system prompt + tools against a minimal stub turn instead of 400ing.
+  if (out.length === 0) return [{ role: 'user', content: '.' }];
+  return out;
+}
+
 export async function handler(request: Request, env: Env): Promise<Response> {
   let body: {
     model?: unknown;
@@ -83,6 +203,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     });
   }
   const strippedFileIds = [...draftFileIds, ...historyFileIds];
+
+  // Repair the shape violations count_tokens rejects (incl. empty messages
+  // the document stripping above can leave behind). Must run AFTER the
+  // stripping so files-only turns are handled; see the helper's doc block.
+  body.messages = sanitizeMessagesForCountTokens(body.messages);
 
   // Whitelist the fields we forward to Anthropic. Previously we sent the
   // full request body verbatim, which meant extra fields (e.g. chartId,
