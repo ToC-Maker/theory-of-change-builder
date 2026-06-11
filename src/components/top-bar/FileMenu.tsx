@@ -37,7 +37,7 @@
 //     edit token IS the credential).
 //   - Authenticated user: shown only when `isOwner=true`.
 //   - No edit token / no chart ID: hidden (nothing to delete).
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ChevronDownIcon,
   TrashIcon,
@@ -51,6 +51,7 @@ import { ChartService, type UserChart } from '../../services/chartService';
 import { ConfirmModal } from '../ConfirmModal';
 import type { ToCData } from '../../types';
 import { validateChartImport } from '../../utils/validateChartImport';
+import { computeFlyoutTop } from './flyoutPosition';
 // `src/utils/exportChart.ts` is dynamic-imported inside handlers, not
 // statically imported here. The library it pulls in (html-to-image,
 // jspdf) is large; Vite chunks it into its own bundle so the user
@@ -209,6 +210,18 @@ export function FileMenu({
   const [importError, setImportError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // PR 7 feedback (62): refs used to measure flyout alignment — the
+  // main panel, the two flyout-parent items, and the open flyout
+  // panel (only one flyout renders at a time, so a single ref).
+  const menuPanelRef = useRef<HTMLDivElement>(null);
+  const recentItemRef = useRef<HTMLButtonElement>(null);
+  const exportItemRef = useRef<HTMLButtonElement>(null);
+  const flyoutPanelRef = useRef<HTMLDivElement>(null);
+  // Resolved `top` (px) for the open flyout, within the `relative`
+  // containing block. `null` until the layout effect below measures —
+  // the effect runs before paint, so the unmeasured frame is never
+  // visible.
+  const [flyoutTop, setFlyoutTop] = useState<number | null>(null);
   // PR 7 feedback (10)/(12)/(38): hover open/close timers for the
   // side-flyout submenus. At most one of each is pending at any
   // moment, so a single ref per direction is enough — moving from
@@ -351,6 +364,32 @@ export function FileMenu({
       hoverCloseTimerRef.current = null;
     }, HOVER_CLOSE_DELAY_MS);
   };
+
+  // PR 7 feedback (62): align the open flyout with its parent item.
+  // Layout effect (not plain effect) so the measured position lands
+  // before paint. Re-runs when the flyout's content changes (the
+  // recent list loads async and changes the flyout's height, which
+  // feeds the viewport-bottom clamp).
+  useLayoutEffect(() => {
+    if (flyout === null) {
+      setFlyoutTop(null);
+      return;
+    }
+    const panel = menuPanelRef.current;
+    const item = flyout === 'recent' ? recentItemRef.current : exportItemRef.current;
+    const flyoutEl = flyoutPanelRef.current;
+    const root = ref.current;
+    if (!panel || !item || !flyoutEl || !root) return;
+    setFlyoutTop(
+      computeFlyoutTop({
+        panelOffsetTop: panel.offsetTop,
+        itemOffsetTop: item.offsetTop,
+        flyoutHeight: flyoutEl.getBoundingClientRect().height,
+        anchorTop: root.getBoundingClientRect().top,
+        viewportHeight: window.innerHeight,
+      }),
+    );
+  }, [flyout, recent, loadingRecent, errorRecent]);
 
   // Lazy-load recent charts when the flyout opens.
   useEffect(() => {
@@ -574,6 +613,7 @@ export function FileMenu({
       {open && (
         <div
           role="menu"
+          ref={menuPanelRef}
           className="absolute top-full mt-1 left-0 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
         >
           <a
@@ -587,6 +627,7 @@ export function FileMenu({
           </a>
           <button
             type="button"
+            ref={recentItemRef}
             onClick={() => {
               // Click is the immediate-open path. Cancel any pending
               // open/close so the click doesn't race with a stale
@@ -641,6 +682,7 @@ export function FileMenu({
           </button>
           <button
             type="button"
+            ref={exportItemRef}
             onClick={() => {
               cancelHoverOpen();
               cancelHoverClose();
@@ -694,18 +736,23 @@ export function FileMenu({
         gap. We can't use `left-full` here because the `relative`
         container is sized by the File trigger button (not the
         absolute-positioned menu), so `left-full` would put the
-        flyout on top of the menu's right half. `top-full mt-1`
-        vertically aligns the flyout with the main menu's top edge. */}
+        flyout on top of the menu's right half. Vertical position is
+        the measured `flyoutTop` (PR 7 feedback (62)): aligned with
+        the parent "Export" item, clamped to the viewport. Until the
+        pre-paint measurement lands, `top` is unset for one unpainted
+        frame. */}
       {open && flyout === 'export' && (
         <div
           role="menu"
+          ref={flyoutPanelRef}
           // Re-enter cancels the pending close (cursor reached the
           // flyout). Leave arms a delayed close, giving the user time
           // to move back to the parent or another flyout-targeted
           // item.
           onPointerEnter={cancelHoverClose}
           onPointerLeave={scheduleHoverClose}
-          className="absolute top-full mt-1 left-56 ml-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+          style={{ top: flyoutTop !== null ? `${flyoutTop}px` : undefined }}
+          className="absolute left-56 ml-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
           data-testid="file-menu-export-flyout"
         >
           <button
@@ -759,9 +806,11 @@ export function FileMenu({
       {open && flyout === 'recent' && (
         <div
           role="menu"
+          ref={flyoutPanelRef}
           onPointerEnter={cancelHoverClose}
           onPointerLeave={scheduleHoverClose}
-          className="absolute top-full mt-1 left-56 ml-1 w-80 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+          style={{ top: flyoutTop !== null ? `${flyoutTop}px` : undefined }}
+          className="absolute left-56 ml-1 w-80 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
           data-testid="file-menu-recent-flyout"
         >
           {loadingRecent ? (
