@@ -1458,6 +1458,14 @@ export function ChatInterface({
       );
       if (draftChars === 0 && messages.length === 0 && !hasUploadedFiles) {
         setComposerEstimateUsd(0);
+        // Mirror the Generate guard below: an empty composer must not sit
+        // under leftovers from the previous draft. Resetting only the dollar
+        // figure stranded the "Estimation failed" banner (and the "N files
+        // couldn't be priced" notice) indefinitely — e.g. a network-failed
+        // estimate followed by clearing the draft showed $0.00 with a
+        // permanent failure banner and no request in flight to resolve it.
+        setComposerEstimateError(null);
+        setComposerUncountedFileIds([]);
         setEstimatingCost(false);
         return;
       }
