@@ -396,6 +396,113 @@ describe('usePointerDrag', () => {
     });
   });
 
+  // PR #34 feedback (45): "Sometimes clicking a node moves it to the top
+  // of the column." Two cooperating defects:
+  //   1. `handlePointerUp` fired `onDrop` whenever `dragOverLocation`
+  //      was non-null — and `startDrag` seeds `dragOverLocation` from
+  //      the pointerdown position, so a no-movement click dropped the
+  //      node onto itself ('over-node' → consumer's default position =
+  //      top of column).
+  //   2. The document listeners were installed via `useEffect`, i.e.
+  //      only after React flushed passive effects. A pointerup arriving
+  //      in the same task as pointerdown (trackpad tap) was unheard,
+  //      leaving the gesture stuck (`isCanvasGestureActive` true,
+  //      dragState non-null); the NEXT heard pointerup then dropped the
+  //      stale node at wherever the cursor had moved to.
+  describe('tap vs drag (click-teleport regression, PR #34 fb 45)', () => {
+    it('does not fire onDrop for a tap (pointerdown→pointerup, no move)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      // (100, 200) is over node n-1's snapshot rect (y 170..230 in col
+      // 0-0) — the initial classify is 'over-node', exactly the
+      // click-in-place case.
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      const up = pointerEvent('pointerup', { clientX: 100, clientY: 200 });
+      act(() => {
+        document.dispatchEvent(up);
+      });
+
+      expect(onDrop).not.toHaveBeenCalled();
+      expect(result.current.dragState).toBeNull();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+
+    it('does not fire onDrop for a click with sub-threshold jitter (1-2px)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+
+      // Humans rarely click perfectly still — 2px of wobble must stay
+      // below the 4px tap dead-zone.
+      const move = pointerEvent('pointermove', { clientX: 102, clientY: 201 });
+      act(() => {
+        document.dispatchEvent(move);
+      });
+      const up = pointerEvent('pointerup', { clientX: 102, clientY: 201 });
+      act(() => {
+        document.dispatchEvent(up);
+      });
+
+      expect(onDrop).not.toHaveBeenCalled();
+      expect(result.current.dragState).toBeNull();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+
+    it('hears a pointerup dispatched before passive effects flush (no stuck gesture)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      // Down + up inside ONE act() callback: the passive effect that
+      // used to install the document listeners has not run when the
+      // pointerup dispatches — modelling a trackpad tap whose up lands
+      // before React's effect flush.
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 100, clientY: 200 }));
+      });
+
+      expect(onDrop).not.toHaveBeenCalled();
+      // The gesture must complete, not jam: a stuck gesture blocks
+      // every subsequent drag (isCanvasGestureActive stays true) and
+      // its eventual drop teleports the node.
+      expect(result.current.dragState).toBeNull();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+
+    it('processes a same-task down→move→up as a real drag (onDrop fires)', () => {
+      const onDrop = vi.fn();
+      const { result } = setupHook({ data: sampleData(), onDrop });
+
+      const nodeEl = makeMockElement();
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 350, clientY: 400 }));
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 350, clientY: 400 }));
+      });
+
+      expect(onDrop).toHaveBeenCalledTimes(1);
+      expect(onDrop.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ kind: 'node-slot', sectionIndex: 0, columnIndex: 1 }),
+      );
+      expect(result.current.dragState).toBeNull();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+  });
+
   describe('pointer-cancel', () => {
     it('clears state on pointercancel without firing onDrop', () => {
       const onDrop = vi.fn();

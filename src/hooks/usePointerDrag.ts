@@ -29,6 +29,8 @@
 //   `classifyRegion` live in the same container-local space.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// (Document listeners are installed imperatively in `startDrag`, not via
+// useEffect — see the comment on `installDocListeners` below.)
 import type { RefObject, PointerEvent as ReactPointerEvent } from 'react';
 import type { LayoutSnapshot, Region } from './useGraphLayout';
 import { classifyRegion } from './useGraphLayout';
@@ -65,21 +67,28 @@ export interface DragState {
   dragOverLocation: DragOverLocation | null;
   /**
    * False until the cursor has moved beyond a small threshold from
-   * the pointerdown position. Consumers gate visual drag affordances
-   * (ghost overlays, half-opacity-on-source) on this so a single tap
-   * (pointerdown→pointerup with no intervening move) doesn't render a
-   * one-frame ghost flicker.
+   * the pointerdown position. Two consumers:
+   *   - Visual drag affordances (ghost overlay, half-opacity-on-source)
+   *     are gated on this so a single tap (pointerdown→pointerup with
+   *     no intervening move) doesn't render a one-frame ghost flicker.
+   *   - The drop path itself: `handlePointerUp` only fires `onDrop`
+   *     when the gesture crossed the threshold. A tap is a click
+   *     (selection), never a drop — PR #34 feedback (45) traced
+   *     "clicking a node sometimes moves it to the top of the column"
+   *     to taps entering the drop path with the pointerdown-seeded
+   *     `dragOverLocation`.
    */
   hasMoved: boolean;
 }
 
 /**
  * Pixel threshold below which a gesture is treated as a tap rather
- * than a drag for rendering purposes. The state machine itself still
- * engages on pointerdown (we need to claim the mutex + pointer capture
- * before knowing whether it's a tap or a drag); this threshold only
- * controls when visual ghost affordances appear. 4px is a common UA
- * dead-zone for "click vs drag" distinction.
+ * than a drag. The state machine itself still engages on pointerdown
+ * (we need to claim the mutex + pointer capture before knowing whether
+ * it's a tap or a drag); this threshold controls when visual ghost
+ * affordances appear AND whether pointerup fires `onDrop` at all (taps
+ * and sub-threshold jitter never drop). 4px is a common UA dead-zone
+ * for "click vs drag" distinction.
  */
 const MOVE_THRESHOLD_PX = 4;
 
@@ -238,13 +247,63 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   // which tracks the live cursor and gets overwritten on each move.
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Cleanup: release pointer capture (if any), reset module-scope flag,
-  // and clear local state. Safe to call multiple times.
+  // Mirror render-time props/callbacks behind refs so the handlers and
+  // the per-id pointerdown handler can stay referentially stable across
+  // renders. `React.memo(NodeComponent)` requires stable callback props;
+  // if `bindNode(id).onPointerDown` returned a fresh function every
+  // parent render, the memo would always invalidate. Handlers read
+  // current values via these refs at call time instead of closing over
+  // them. (Declared up here, before the handlers, because
+  // `handlePointerMove` reads `getSnapshotRef`.)
+  const editModeRef = useRef(editMode);
+  editModeRef.current = editMode;
+  const getSnapshotRef = useRef(getSnapshot);
+  getSnapshotRef.current = getSnapshot;
+  const onDragStartRef = useRef(onDragStart);
+  onDragStartRef.current = onDragStart;
+
+  // The exact handler references currently subscribed on `document`.
+  // PR #34 feedback (45): listeners used to be installed in a
+  // `useEffect` keyed on `dragState`, i.e. only after React flushed
+  // passive effects. A pointerup arriving in the same task as the
+  // pointerdown (trackpad tap, fast click) was therefore unheard: the
+  // gesture jammed (`isCanvasGestureActive` stuck true, dragState
+  // non-null) and the NEXT heard pointerup dropped the stale node at
+  // wherever the cursor had moved to — the "click teleports a node"
+  // bug. Installing imperatively inside `startDrag` (and removing in
+  // `cleanup`) closes the race: the listeners exist before `startDrag`
+  // returns, so even a same-task pointerup completes the gesture.
+  // Storing the installed references (rather than re-deriving them at
+  // removal time) guarantees add/remove symmetry even if a handler's
+  // identity were ever to change mid-gesture.
+  const docListenersRef = useRef<{
+    move: (e: PointerEvent) => void;
+    up: (e: PointerEvent) => void;
+    cancel: (e: PointerEvent) => void;
+    keydown: (e: KeyboardEvent) => void;
+    down: (e: PointerEvent) => void;
+  } | null>(null);
+
+  const removeDocListeners = useCallback(() => {
+    const l = docListenersRef.current;
+    if (!l) return;
+    document.removeEventListener('pointermove', l.move);
+    document.removeEventListener('pointerup', l.up);
+    document.removeEventListener('pointercancel', l.cancel);
+    document.removeEventListener('keydown', l.keydown);
+    document.removeEventListener('pointerdown', l.down);
+    docListenersRef.current = null;
+  }, []);
+
+  // Cleanup: unsubscribe document listeners, release pointer capture
+  // (if any), reset module-scope flag, and clear local state. Safe to
+  // call multiple times.
   //
   // Per the Pointer Events spec, `releasePointerCapture` is a no-op when
   // no capture is held, so we don't precheck `hasPointerCapture`. The
   // try/catch still covers jsdom (no method) and detached elements.
   const cleanup = useCallback(() => {
+    removeDocListeners();
     const el = captureElRef.current;
     const pointerId = activePointerIdRef.current;
     if (el && pointerId != null) {
@@ -259,7 +318,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
     startPosRef.current = null;
     setCanvasGestureActive(false);
     setDragState(null);
-  }, [setDragState]);
+  }, [removeDocListeners, setDragState]);
 
   // pointermove handler — translate to container-local, classify, update state.
   const handlePointerMove = useCallback(
@@ -272,7 +331,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       const containerRect = container.getBoundingClientRect();
       const localX = (e.clientX - containerRect.left) / zoomRef.current;
       const localY = (e.clientY - containerRect.top) / zoomRef.current;
-      const snap = getSnapshot();
+      const snap = getSnapshotRef.current();
       const region = classifyRegion(snap, { x: localX, y: localY });
       const dragOverLocation = regionToDragOverLocation(region);
       setDragState((prev) => {
@@ -295,7 +354,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
         };
       });
     },
-    [containerRef, getSnapshot, setDragState],
+    [containerRef, setDragState],
   );
 
   // pointerup handler — stale-node guard, then fire onDrop if valid.
@@ -317,7 +376,15 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
       const state = dragStateRef.current;
       try {
-        if (state) {
+        // `hasMoved` gate (PR #34 fb 45): a gesture that never crossed
+        // the tap dead-zone is a click (selection), not a drag — never
+        // fire onDrop (nor the stale-drop signal: a tap on a
+        // cross-tab-deleted node is not a discarded *drag*). Without
+        // this gate, a no-move click dropped the node onto itself: the
+        // pointerdown-seeded `dragOverLocation` is 'over-node', whose
+        // consumer fallback position teleported the node to the top of
+        // its column.
+        if (state && state.hasMoved) {
           // Stale-node guard: cross-tab delete race.
           if (!nodeExistsInData(dataRef.current, state.nodeId)) {
             loggingService.reportError({
@@ -373,24 +440,30 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
     [cleanup],
   );
 
-  // Subscribe document listeners while a drag is in flight. We tear
-  // them down on cleanup so they don't fire spuriously between drags.
-  useEffect(() => {
-    if (dragState == null) return;
+  // Subscribe document listeners for the lifetime of a gesture. Done
+  // imperatively inside `startDrag` (NOT via useEffect keyed on
+  // dragState) so the listeners exist before the pointerdown handler
+  // returns — see the `docListenersRef` comment for the race this
+  // closes. `cleanup()` removes them, so they don't fire spuriously
+  // between drags.
+  const installDocListeners = useCallback(() => {
+    // Defensive: never double-subscribe (removeDocListeners is a no-op
+    // when nothing is installed).
+    removeDocListeners();
+    docListenersRef.current = {
+      move: handlePointerMove,
+      up: handlePointerUp,
+      cancel: handlePointerCancel,
+      keydown: handleKeyDown,
+      down: handleSecondPointer,
+    };
     document.addEventListener('pointermove', handlePointerMove);
     document.addEventListener('pointerup', handlePointerUp);
     document.addEventListener('pointercancel', handlePointerCancel);
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('pointerdown', handleSecondPointer);
-    return () => {
-      document.removeEventListener('pointermove', handlePointerMove);
-      document.removeEventListener('pointerup', handlePointerUp);
-      document.removeEventListener('pointercancel', handlePointerCancel);
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('pointerdown', handleSecondPointer);
-    };
   }, [
-    dragState,
+    removeDocListeners,
     handlePointerMove,
     handlePointerUp,
     handlePointerCancel,
@@ -399,8 +472,9 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   ]);
 
   // Hook-unmount safety: if the consumer unmounts mid-drag (e.g. route
-  // change while a finger is down), make sure the gesture flag doesn't
-  // leak to PR 5/7's pointer handlers.
+  // change while a finger is down), make sure the document listeners
+  // don't leak and the gesture flag doesn't block PR 5/7's pointer
+  // handlers.
   //
   // We only clear the flag if WE set it (i.e. our own dragStateRef is
   // populated). The earlier shape cleared unconditionally on any
@@ -409,25 +483,12 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
   // ref check makes ownership explicit.
   useEffect(() => {
     return () => {
+      removeDocListeners();
       if (dragStateRef.current !== null && isCanvasGestureActive()) {
         setCanvasGestureActive(false);
       }
     };
-  }, []);
-
-  // Mirror render-time props/callbacks behind refs so the per-id
-  // pointerdown handler can stay referentially stable across renders.
-  // `React.memo(NodeComponent)` requires stable callback props; if
-  // `bindNode(id).onPointerDown` returned a fresh function every parent
-  // render, the memo would always invalidate. The per-id handler reads
-  // current values via these refs at call time instead of closing over
-  // them.
-  const editModeRef = useRef(editMode);
-  editModeRef.current = editMode;
-  const getSnapshotRef = useRef(getSnapshot);
-  getSnapshotRef.current = getSnapshot;
-  const onDragStartRef = useRef(onDragStart);
-  onDragStartRef.current = onDragStart;
+  }, [removeDocListeners]);
 
   // Per-id handler cache so the returned object identity is stable
   // for a given node id across re-renders. Cleared on unmount only
@@ -458,6 +519,12 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       activePointerIdRef.current = e.pointerId;
       startPosRef.current = { x: e.clientX, y: e.clientY };
       setCanvasGestureActive(true);
+      // Subscribe document listeners NOW, synchronously: a trackpad tap
+      // can deliver pointerup within the same task, before any effect
+      // would have run. (The bubbling pointerdown that triggered this
+      // very handler will reach the just-added `handleSecondPointer`,
+      // which ignores it via the same-pointer-id guard.)
+      installDocListeners();
       onDragStartRef.current?.(nodeId, { metaKey: e.metaKey, ctrlKey: e.ctrlKey });
 
       const nodeEl = e.currentTarget as HTMLElement;
@@ -485,7 +552,10 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
         hasMoved: false,
       });
     },
-    [containerRef, setDragState],
+    // All of these are referentially stable (refs / ref-reading
+    // useCallbacks), so `startDrag` — and therefore the `bindNode`
+    // cache entries that close over it — never changes identity.
+    [containerRef, setDragState, installDocListeners],
   );
 
   const bindNode = useCallback(
