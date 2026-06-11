@@ -92,8 +92,13 @@ export interface DragState {
  * affordances appear AND whether pointerup fires `onDrop` at all (taps
  * and sub-threshold jitter never drop). 4px is a common UA dead-zone
  * for "click vs drag" distinction.
+ *
+ * Exported: `ConnectionsComponent` applies the same tap-vs-drag
+ * dead-zone to the connection fat hit-path's click → EdgeEditor
+ * handler (K7), so "what counts as a click" stays consistent across
+ * canvas surfaces.
  */
-const MOVE_THRESHOLD_PX = 4;
+export const MOVE_THRESHOLD_PX = 4;
 
 export interface UsePointerDragArgs {
   /** Current graph data; consulted on drop for stale-node guard. */

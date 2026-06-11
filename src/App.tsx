@@ -751,6 +751,15 @@ function ToCViewer() {
       target.closest('[data-tocb-waypoint-handle]') !== null ||
       target.closest('[data-tocb-midpoint-handle]') !== null ||
       target.closest('[data-tocb-waypoint-handles]') !== null;
+    // K7: a press that starts on a connection's invisible fat hit-path
+    // must not start a canvas pan. Pre-fix, dragging from a connection
+    // panned the canvas AND the trailing click (browsers fire it when
+    // down/up share a target — and panned content moves WITH the
+    // cursor, so they always do) popped the EdgeEditor. The path's
+    // click handler has the matching tap-vs-drag dead-zone in
+    // `ConnectionsComponent`; this exclusion makes the drag itself
+    // inert. Attribute is set on the hit path next to that handler.
+    const isConnectionHitPath = target.closest('[data-tocb-connection-hitpath]') !== null;
     const activeElement = document.activeElement;
     const isTextEditing =
       activeElement &&
@@ -785,7 +794,8 @@ function ToCViewer() {
       isEditableElement ||
       isChatPanel ||
       isJsonPanel ||
-      isWaypointHandle
+      isWaypointHandle ||
+      isConnectionHitPath
     );
   }, []);
 

@@ -7,6 +7,7 @@ import { computePathWithWaypoints, computeSegmentMidpoints } from '../utils/conn
 import { EdgeEditor } from './edge-editor/EdgeEditor';
 import { buildConnectionPath } from './canvas/connectionPath';
 import type { WaypointDragState } from '../hooks/useWaypointDrag';
+import { MOVE_THRESHOLD_PX } from '../hooks/usePointerDrag';
 import { ConnectionWaypointHandles } from './canvas/ConnectionWaypointHandles';
 
 // PR 3: `EdgePopupState` was the modal's full state copy (with x/y for
@@ -107,6 +108,17 @@ export function ConnectionsComponent({
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
+  // K7: pointerdown position on a connection's fat hit-path, consumed
+  // by that path's click handler to tell taps from drags. Browsers
+  // fire `click` after a drag whenever mousedown/mouseup share a
+  // target — and during a canvas pan the content used to move WITH
+  // the cursor, so the path always stayed under it and every pan
+  // ending on a connection popped the EdgeEditor. One shared ref (not
+  // per-connection): a click on path P implies both down and up hit P,
+  // so the most recent pointerdown is necessarily this gesture's.
+  // Cleared on consume so an abandoned press (down on path, up
+  // elsewhere → no click) can suppress at most nothing.
+  const hitPathPointerDownRef = useRef<{ x: number; y: number } | null>(null);
   // PR 3: `edgePopup` (full EdgePopupState modal copy) collapsed to
   // `selectedEdge` (source+target pair + midpoint anchor). The anchored
   // EdgeEditor reads property values from `data` directly.
@@ -595,13 +607,44 @@ export function ConnectionsComponent({
               <path
                 d={pathD}
                 className="fill-none cursor-pointer"
+                // K7: matched by App.tsx's `excludeFromPan` so a press
+                // that starts on a connection can never start a canvas
+                // pan (same mechanism as the waypoint handles, PR 7
+                // feedback 18). Dragging from a connection does
+                // nothing; only a true click (sub-threshold movement,
+                // see onClick) opens the EdgeEditor.
+                data-tocb-connection-hitpath=""
                 style={{
                   stroke: 'transparent',
                   strokeWidth: '20px', // Much thicker for easier clicking
                   pointerEvents: hasHighlightedNodes && !isHighlighted ? 'none' : 'stroke',
                 }}
+                onPointerDown={(e) => {
+                  // K7: record where the press started; the click
+                  // handler measures movement against this. No mutex
+                  // claim and no stopPropagation — a press on the path
+                  // is not (yet) a gesture.
+                  hitPathPointerDownRef.current = { x: e.clientX, y: e.clientY };
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
+
+                  // K7: tap-vs-drag dead-zone, mirroring
+                  // `usePointerDrag.hasMoved` (PR #34 fb 45). A click
+                  // event lands here after ANY down+up pair on this
+                  // path, however far apart; only open the editor when
+                  // the gesture stayed within the tap threshold.
+                  // Clicks with no recorded pointerdown (programmatic
+                  // / synthesized) open unconditionally.
+                  const downPos = hitPathPointerDownRef.current;
+                  hitPathPointerDownRef.current = null;
+                  if (
+                    downPos &&
+                    (Math.abs(e.clientX - downPos.x) > MOVE_THRESHOLD_PX ||
+                      Math.abs(e.clientY - downPos.y) > MOVE_THRESHOLD_PX)
+                  ) {
+                    return; // Drag, not a click — no editor.
+                  }
 
                   // Only allow clicking on highlighted edges when nodes are selected
                   // Or allow all edges when no nodes are selected
