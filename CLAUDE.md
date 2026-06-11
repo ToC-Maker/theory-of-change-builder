@@ -200,7 +200,7 @@ Auth0 tokens refresh automatically, but invalid tokens silently fall back to ano
 - Token validated in backend via `verifyToken()` in `worker/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
 
-ChartService resolves the token **per request** via `ChartService.setAuthTokenProvider()` (registered in the App auth effect as `() => getFreshIdToken(...)`, which refreshes near expiry). The static `setAuthToken()` is only a fallback for callers without a provider. Don't reintroduce mount-time-only token capture: the worker requires a live Bearer JWT on `getUserCharts` (401 otherwise) and on `updateChart` for owned charts with `link_sharing_level != 'editor'` (403 otherwise), so a stale snapshot turns into signed-in 401s and silent autosave failures.
+ChartService, chatService, and LoggingService all resolve the token **per request** via `setAuthTokenProvider()` (one shared resolver, `src/services/requestTokenSource.ts`; the App auth effect registers `() => getFreshIdToken(...)` on all three, which refreshes near expiry). The static `setAuthToken()` is only a fallback for callers without a provider. Don't reintroduce mount-time-only token capture: the worker fails closed on stale tokens — 401 on `getUserCharts`, 403 on `updateChart` for owned charts with `link_sharing_level != 'editor'`, 401 `invalid_token` on `/api/anthropic-stream` (and a NULL token silently demotes the stream to anonymous: BYOK ignored, anon caps + Turnstile gate), 401 on the `logging-*` writes (which trips LoggingService's circuit breaker and silently kills logging). A stale snapshot therefore means signed-in 401s, silent autosave failures, broken AI chat, and lost logs.
 
 ### Anonymous Identity and Turnstile Session
 

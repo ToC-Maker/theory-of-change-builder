@@ -1,7 +1,9 @@
 import { ToCData } from '../types';
 import type { LinkSharingLevel, Permission } from '../../shared/permissions';
+import { RequestTokenSource, type AuthTokenProvider } from './requestTokenSource';
 
 export type { LinkSharingLevel, Permission, PermissionStatus } from '../../shared/permissions';
+export type { AuthTokenProvider } from './requestTokenSource';
 
 const API_BASE = '/api';
 
@@ -33,40 +35,29 @@ export interface UserChart {
   permissionLevel: 'owner' | 'edit';
 }
 
-/**
- * Resolves the Bearer token for the next API request. Registered by the
- * App-level auth effect as `() => getFreshIdToken(...)`, which returns
- * the cached Auth0 ID token and transparently refreshes it when it is
- * near/after expiry. Resolving `null` means "no session right now" —
- * the request goes out anonymous.
- */
-export type AuthTokenProvider = () => Promise<string | null>;
-
 export class ChartService {
-  // Last-known token snapshot. Kept for two reasons: (1) legacy callers
-  // (ToCViewerOnly's make-a-copy flow, tests) that set a token without
-  // registering a provider, and (2) a fallback when the provider
-  // itself throws.
-  private static authToken: string | null = null;
-
-  // Request-time token source. PR 7 round-2 fix: the worker now
-  // requires a valid Bearer JWT on getUserCharts (and on updateChart
-  // for owned, restricted charts), and the mount-time static snapshot
-  // alone proved unreliable — it is intentionally nulled when Auth0
-  // silent refresh fails, and it silently expires mid-session. The
-  // signed-in 401s + "chart isn't saved" report came from exactly
-  // those states. Resolving the token per request via this provider
-  // keeps it fresh for as long as the Auth0 session can be refreshed.
-  private static authTokenProvider: AuthTokenProvider | null = null;
+  // Request-time token source (shared resolver — see
+  // src/services/requestTokenSource.ts for the resolution semantics:
+  // provider-first, static fallback, provider-throw → last-known).
+  //
+  // PR 7 round-2 fix: the worker now requires a valid Bearer JWT on
+  // getUserCharts (and on updateChart for owned, restricted charts),
+  // and the mount-time static snapshot alone proved unreliable — it is
+  // intentionally nulled when Auth0 silent refresh fails, and it
+  // silently expires mid-session. The signed-in 401s + "chart isn't
+  // saved" report came from exactly those states. Resolving the token
+  // per request via the registered provider keeps it fresh for as long
+  // as the Auth0 session can be refreshed.
+  private static tokenSource = new RequestTokenSource('ChartService');
 
   // Set the auth token (called from components with useAuth0 hook)
   static setAuthToken(token: string | null) {
-    this.authToken = token;
+    this.tokenSource.setToken(token);
   }
 
   // Check if auth token is set
   static hasAuthToken(): boolean {
-    return this.authToken !== null;
+    return this.tokenSource.hasToken();
   }
 
   /**
@@ -74,44 +65,14 @@ export class ChartService {
    * Called from the App auth effect alongside `setAuthToken`.
    */
   static setAuthTokenProvider(provider: AuthTokenProvider | null) {
-    this.authTokenProvider = provider;
-  }
-
-  /**
-   * Token to attach to the request being built right now.
-   *
-   * Provider registered: its result is authoritative — a fresh token
-   * when the session is alive, `null` when it is not (sending a
-   * known-stale static would just trade a clean anonymous request for
-   * a misleading "expired token" 401). The static snapshot is kept in
-   * sync so `hasAuthToken()` reflects reality. If the provider throws
-   * (Auth0 SDK hiccup), fall back to the last-known token: possibly
-   * stale beats definitely absent.
-   *
-   * No provider: legacy behavior, the static snapshot.
-   */
-  private static async resolveAuthToken(): Promise<string | null> {
-    if (this.authTokenProvider) {
-      try {
-        const fresh = await this.authTokenProvider();
-        this.authToken = fresh;
-        return fresh;
-      } catch (err) {
-        console.warn(
-          '[ChartService] auth token provider failed; falling back to last-known token:',
-          err,
-        );
-        return this.authToken;
-      }
-    }
-    return this.authToken;
+    this.tokenSource.setProvider(provider);
   }
 
   /** Build request headers, attaching Authorization when a token resolves. */
   private static async buildHeaders(
     base: Record<string, string> = {},
   ): Promise<Record<string, string>> {
-    const token = await this.resolveAuthToken();
+    const token = await this.tokenSource.resolve();
     if (token) {
       base['Authorization'] = `Bearer ${token}`;
     }

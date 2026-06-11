@@ -842,9 +842,17 @@ function ToCViewer() {
         // ChartService call resolves a fresh ID token at request time
         // instead. getFreshIdToken returns the cached token until it
         // nears expiry, so the per-request cost is a local claims read.
-        ChartService.setAuthTokenProvider(() =>
-          getFreshIdToken(getAccessTokenSilently, getIdTokenClaims),
-        );
+        //
+        // The same provider goes to chatService (a STALE token hard-
+        // 401s /api/anthropic-stream — fail-closed resolveActor; a
+        // NULLED one silently demotes the request to anonymous: BYOK
+        // header ignored, anon caps + Turnstile gate apply) and
+        // LoggingService (stale-token 401s on logging-* trip the
+        // circuit breaker and silently kill logging for the session).
+        const tokenProvider = () => getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+        ChartService.setAuthTokenProvider(tokenProvider);
+        chatService.setAuthTokenProvider(tokenProvider);
+        LoggingServiceClass.setAuthTokenProvider(tokenProvider);
         console.log('[App] Fetching Auth0 ID token...');
         const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
         if (idToken) {
@@ -877,6 +885,8 @@ function ToCViewer() {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
         ChartService.setAuthTokenProvider(null);
+        chatService.setAuthTokenProvider(null);
+        LoggingServiceClass.setAuthTokenProvider(null);
         ChartService.setAuthToken(null);
         chatService.setAuthToken(null);
         LoggingServiceClass.setAuthToken(null);
