@@ -200,6 +200,8 @@ Auth0 tokens refresh automatically, but invalid tokens silently fall back to ano
 - Token validated in backend via `verifyToken()` in `worker/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
 
+ChartService resolves the token **per request** via `ChartService.setAuthTokenProvider()` (registered in the App auth effect as `() => getFreshIdToken(...)`, which refreshes near expiry). The static `setAuthToken()` is only a fallback for callers without a provider. Don't reintroduce mount-time-only token capture: the worker requires a live Bearer JWT on `getUserCharts` (401 otherwise) and on `updateChart` for owned charts with `link_sharing_level != 'editor'` (403 otherwise), so a stale snapshot turns into signed-in 401s and silent autosave failures.
+
 ### Anonymous Identity and Turnstile Session
 
 Anon users are identified by a cookie-pinned UUID, not by IP. Three cookies coordinate this:
