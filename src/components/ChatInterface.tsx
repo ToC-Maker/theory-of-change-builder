@@ -36,6 +36,7 @@ import {
   preserveCapClassOnly,
 } from './chat/composerBlocker';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
+import { useClampedPopoverX } from './chat/useClampedPopoverX';
 import { ConfirmModal } from './ConfirmModal';
 import type { ToCData } from '../types';
 import {
@@ -207,6 +208,11 @@ function Picker<T extends string>({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Measured horizontal clamp: the menu opens inside the chat panel's
+  // overflow-hidden content wrapper, so a static `left-0` anchor clips at
+  // the panel edge when the trigger sits close to it (e.g. the Effort
+  // picker inside the composer-options popover). See useClampedPopoverX.
+  const menuClamp = useClampedPopoverX(open);
   useEffect(() => {
     if (!open) return;
     const handle = (e: MouseEvent) => {
@@ -230,7 +236,9 @@ function Picker<T extends string>({
       </button>
       {open && (
         <div
-          className={`absolute bottom-full mb-1 left-0 ${menuWidthClass} bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50`}
+          ref={menuClamp.ref}
+          style={menuClamp.style}
+          className={`absolute bottom-full mb-1 ${menuWidthClass} bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50`}
         >
           {options.map((value) => (
             <button
@@ -714,6 +722,14 @@ export function ChatInterface({
   // window.confirm). Same pattern as FileMenu's delete-chart retrofit.
   const [confirmClearChatOpen, setConfirmClearChatOpen] = useState(false);
   const composerOptionsRef = useRef<HTMLDivElement>(null);
+  // Measured horizontal clamp for the ⚙ popover (PR #34 feedback #60).
+  // The popover lives inside the panel's overflow-hidden content wrapper,
+  // so static side anchors clip at a panel edge: `right-0` clipped off the
+  // panel's left, and round 1's `left-0` (4c3f484) clipped at the panel's
+  // right. One shared instance is safe: the Chat and Generate composers
+  // are mutually exclusive (`currentMode` branches), so only one popover
+  // mounts at a time. See useClampedPopoverX for the mechanics.
+  const composerOptionsClamp = useClampedPopoverX(showComposerOptions);
   useEffect(() => {
     if (!showComposerOptions) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -3878,14 +3894,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <Cog6ToothIcon className="w-5 h-5" />
                           </button>
                           {showComposerOptions && (
-                            // Anchor to the LEFT of the cog so the popover
-                            // extends rightward into the canvas area instead
-                            // of off-screen-left when the chat panel sits at
-                            // the viewport's left edge. Each row is a single
-                            // line: label left, control right.
+                            // Horizontal position is measured + clamped
+                            // (useClampedPopoverX), NOT a static side
+                            // anchor: the popover sits inside the panel's
+                            // overflow-hidden wrapper, so `left-0` clipped
+                            // at the panel's right edge and `right-0` at
+                            // its left (PR #34 feedback #60). Each row is
+                            // a single line: label left, control right.
                             <div
                               role="menu"
-                              className="absolute bottom-full mb-2 left-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
+                              ref={composerOptionsClamp.ref}
+                              style={composerOptionsClamp.style}
+                              className="absolute bottom-full mb-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <div className="text-xs font-medium text-gray-700">Web search</div>
@@ -4114,9 +4134,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                             <Cog6ToothIcon className="w-5 h-5" />
                           </button>
                           {showComposerOptions && (
+                            // Measured + clamped horizontal position — see
+                            // the Chat-composer popover above (feedback #60).
                             <div
                               role="menu"
-                              className="absolute bottom-full mb-2 left-0 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
+                              ref={composerOptionsClamp.ref}
+                              style={composerOptionsClamp.style}
+                              className="absolute bottom-full mb-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <div className="text-xs font-medium text-gray-700">Web search</div>
