@@ -710,15 +710,29 @@ function ToCViewer() {
   // pads on right/bottom restore the centered look reported as "not
   // centered as it should be anymore — top, left, and bottom borders;
   // right border looks correct" by the reviewer.
-  const viewportOffset = useMemo(
-    () => ({
-      left: (isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25)) + 24,
+  //
+  // Round-2 feedback (55): the reserved width must mirror the *rendered*
+  // drawer width (ChatInterface root: `w-12` collapsed; `md:w-1/4
+  // md:min-w-[280px] md:max-w-[400px]` expanded). The old formula used
+  // unclamped `innerWidth * 0.25`, so viewports wider than 1600px
+  // over-reserved (480 at 1920 vs the panel's real 400px max-w), leaving
+  // an ~80px dead band between the drawer and the canvas; below 1120px it
+  // under-reserved (min-w side) and the canvas tucked under the panel
+  // edge. Below md (768px) the drawer is a mobile overlay; keep the
+  // legacy reserve there unchanged.
+  const viewportOffset = useMemo(() => {
+    const drawerWidth = isLeftPanelCollapsed
+      ? 48
+      : window.innerWidth >= 768
+        ? Math.min(400, Math.max(280, window.innerWidth * 0.25))
+        : Math.floor(window.innerWidth * 0.25);
+    return {
+      left: drawerWidth + 24,
       top: 64 + 24, // Toolbar height + breathing room
       right: 24,
       bottom: 24,
-    }),
-    [isLeftPanelCollapsed],
-  );
+    };
+  }, [isLeftPanelCollapsed]);
 
   // Exclude interactive elements from panning in edit mode.
   // PR 4: node selector switched from `[draggable="true"]` to
