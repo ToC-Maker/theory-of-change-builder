@@ -36,7 +36,30 @@
 // dot sits ON the visible line regardless of curvature or chord
 // asymmetry.
 
+import React from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
+
+/**
+ * PR #34 round-4 feedback 69: minimum press-target radius, in SCREEN
+ * (CSS) pixels. The visible dots are deliberately small (r=4 / r=6 —
+ * measured 6.7px / 10.1px effective at the default fit zoom), so each
+ * handle renders an additional INVISIBLE hit circle: same center, same
+ * handlers, `fill: transparent`, radius `HIT_RADIUS_SCREEN_PX /
+ * zoomScale` so the effective on-screen target stays ≥ 24px however
+ * far the canvas is zoomed out (never smaller than the visible dot at
+ * high zoom). Standard SVG enlarged-hit-area pattern; the visible
+ * circle becomes purely decorative (`pointerEvents: 'none'`).
+ *
+ * The data attributes ride on the HIT circle — it is the element that
+ * receives the press, which is what `excludeFromPan` (App.tsx) and the
+ * gesture tests hit-test against.
+ */
+const HIT_RADIUS_SCREEN_PX = 12;
+
+function hitRadius(visibleR: number, zoomScale: number): number {
+  const z = zoomScale > 0 ? zoomScale : 1;
+  return Math.max(visibleR, HIT_RADIUS_SCREEN_PX / z);
+}
 
 interface WaypointBindResult {
   onPointerDown: (e: ReactPointerEvent) => void;
@@ -81,6 +104,12 @@ export interface ConnectionWaypointHandlesProps {
    * pointer).
    */
   dragInProgress?: boolean;
+  /**
+   * Current canvas zoom (camera.z). The invisible hit circles divide
+   * by it so the effective on-screen press target stays ≥ 24px at any
+   * zoom-out level (feedback 69). Defaults to 1.
+   */
+  zoomScale?: number;
   bindWaypoint: (
     sourceNodeId: string,
     targetNodeId: string,
@@ -101,6 +130,7 @@ export function ConnectionWaypointHandles({
   waypointCount,
   visible,
   dragInProgress,
+  zoomScale = 1,
   bindWaypoint,
   bindMidpoint,
 }: ConnectionWaypointHandlesProps) {
@@ -122,26 +152,40 @@ export function ConnectionWaypointHandles({
 
   return (
     <g data-tocb-waypoint-handles={`${sourceNodeId}->${targetNodeId}`}>
-      {/* Midpoint affordance: smaller, translucent, on the curve. */}
+      {/* Midpoint affordance: smaller, translucent, on the curve.
+          Two circles per handle (feedback 69): the small decorative
+          dot, and an invisible enlarged hit circle that owns the
+          handlers + data attribute. */}
       {midpoint && midpointBound && (
-        <circle
-          cx={midpoint.x}
-          cy={midpoint.y}
-          r={4}
-          data-tocb-midpoint-handle={`${sourceNodeId}->${targetNodeId}|0`}
-          onPointerDown={midpointBound.onPointerDown}
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            fill: 'rgba(99, 102, 241, 0.5)', // indigo-500 @ 50%
-            stroke: 'white',
-            strokeWidth: 1.5,
-            cursor: 'crosshair',
-            pointerEvents: 'auto',
-            touchAction: 'none',
-          }}
-        >
-          <title>Drag to bend this connection</title>
-        </circle>
+        <>
+          <circle
+            cx={midpoint.x}
+            cy={midpoint.y}
+            r={4}
+            style={{
+              fill: 'rgba(99, 102, 241, 0.5)', // indigo-500 @ 50%
+              stroke: 'white',
+              strokeWidth: 1.5,
+              pointerEvents: 'none', // decorative — the hit circle presses
+            }}
+          />
+          <circle
+            cx={midpoint.x}
+            cy={midpoint.y}
+            r={hitRadius(4, zoomScale)}
+            data-tocb-midpoint-handle={`${sourceNodeId}->${targetNodeId}|0`}
+            onPointerDown={midpointBound.onPointerDown}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              fill: 'transparent',
+              cursor: 'crosshair',
+              pointerEvents: 'auto',
+              touchAction: 'none',
+            }}
+          >
+            <title>Drag to bend this connection</title>
+          </circle>
+        </>
       )}
 
       {/* Waypoint handles: filled, opaque. More than one only for
@@ -149,26 +193,36 @@ export function ConnectionWaypointHandles({
       {waypoints.map(({ x, y, index }) => {
         const bound = bindWaypoint(sourceNodeId, targetNodeId, index);
         return (
-          <circle
-            key={`waypoint-${index}`}
-            cx={x}
-            cy={y}
-            r={6}
-            data-tocb-waypoint-handle={`${sourceNodeId}->${targetNodeId}|${index}`}
-            onPointerDown={bound.onPointerDown}
-            onDoubleClick={bound.onDoubleClick}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              fill: 'rgb(99, 102, 241)', // indigo-500
-              stroke: 'white',
-              strokeWidth: 2,
-              cursor: 'move',
-              pointerEvents: 'auto',
-              touchAction: 'none',
-            }}
-          >
-            <title>Drag to adjust; double-click to straighten</title>
-          </circle>
+          <React.Fragment key={`waypoint-${index}`}>
+            <circle
+              cx={x}
+              cy={y}
+              r={6}
+              style={{
+                fill: 'rgb(99, 102, 241)', // indigo-500
+                stroke: 'white',
+                strokeWidth: 2,
+                pointerEvents: 'none', // decorative — the hit circle presses
+              }}
+            />
+            <circle
+              cx={x}
+              cy={y}
+              r={hitRadius(6, zoomScale)}
+              data-tocb-waypoint-handle={`${sourceNodeId}->${targetNodeId}|${index}`}
+              onPointerDown={bound.onPointerDown}
+              onDoubleClick={bound.onDoubleClick}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                fill: 'transparent',
+                cursor: 'move',
+                pointerEvents: 'auto',
+                touchAction: 'none',
+              }}
+            >
+              <title>Drag to adjust; double-click to straighten</title>
+            </circle>
+          </React.Fragment>
         );
       })}
     </g>

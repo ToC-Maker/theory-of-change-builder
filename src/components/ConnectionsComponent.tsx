@@ -767,6 +767,7 @@ export function ConnectionsComponent({
                   waypointCount={waypointCount}
                   visible={handlesVisible}
                   dragInProgress={isThisConnectionBeingDragged}
+                  zoomScale={camera?.z}
                   bindWaypoint={bindWaypoint}
                   bindMidpoint={bindMidpoint}
                 />

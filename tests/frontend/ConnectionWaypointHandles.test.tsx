@@ -219,6 +219,105 @@ describe('ConnectionWaypointHandles', () => {
     });
   });
 
+  // PR #34 round-4 feedback 69: the visible dots are tiny (measured
+  // live: 6.7px midpoint, 10.1px waypoint effective diameter), so the
+  // press target must be a separate invisible hit circle — standard
+  // SVG pattern: keep the small visible circle purely decorative
+  // (pointerEvents none), put the handlers + data attribute on a
+  // transparent sibling with r >= 11 (>= 22px diameter). The hit
+  // radius divides by zoomScale so the EFFECTIVE on-screen target
+  // stays >= 22-24px when the canvas is zoomed out.
+  describe('enlarged hit areas (feedback 69)', () => {
+    const anchorsNoWp = [
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+    ];
+    const anchorsOneWp = [
+      { x: 0, y: 0 },
+      { x: 50, y: 50 },
+      { x: 100, y: 100 },
+    ];
+
+    function renderMidpoint(zoomScale?: number) {
+      return renderHandles({
+        sourceNodeId: 's',
+        targetNodeId: 't',
+        anchors: anchorsNoWp,
+        segmentMidpoints: chordMidpoints(anchorsNoWp),
+        waypointCount: 0,
+        visible: true,
+        zoomScale,
+        bindWaypoint: makeBind(vi.fn()),
+        bindMidpoint: makeBind(vi.fn()),
+      });
+    }
+
+    function renderWaypoint(zoomScale?: number) {
+      return renderHandles({
+        sourceNodeId: 's',
+        targetNodeId: 't',
+        anchors: anchorsOneWp,
+        segmentMidpoints: chordMidpoints(anchorsOneWp),
+        waypointCount: 1,
+        visible: true,
+        zoomScale,
+        bindWaypoint: makeBind(vi.fn()),
+        bindMidpoint: makeBind(vi.fn()),
+      });
+    }
+
+    it('midpoint: interactive circle has r >= 11 (>= 22px diameter), visible dot stays r=4', () => {
+      const { container } = renderMidpoint();
+      const hit = container.querySelector('[data-tocb-midpoint-handle]') as SVGCircleElement;
+      expect(Number(hit.getAttribute('r'))).toBeGreaterThanOrEqual(11);
+      // The decorative circle keeps the small visual and never
+      // intercepts events.
+      const circles = [...container.querySelectorAll('circle')];
+      const visible = circles.find((c) => c !== hit)!;
+      expect(visible.getAttribute('r')).toBe('4');
+      expect(visible.style.pointerEvents).toBe('none');
+      // Hit circle is invisible and co-located with the visual.
+      expect(hit.style.fill).toBe('transparent');
+      expect(hit.getAttribute('cx')).toBe(visible.getAttribute('cx'));
+      expect(hit.getAttribute('cy')).toBe(visible.getAttribute('cy'));
+    });
+
+    it('waypoint: interactive circle has r >= 11, visible dot stays r=6', () => {
+      const { container } = renderWaypoint();
+      const hit = container.querySelector('[data-tocb-waypoint-handle]') as SVGCircleElement;
+      expect(Number(hit.getAttribute('r'))).toBeGreaterThanOrEqual(11);
+      const circles = [...container.querySelectorAll('circle')];
+      const visible = circles.find((c) => c !== hit)!;
+      expect(visible.getAttribute('r')).toBe('6');
+      expect(visible.style.pointerEvents).toBe('none');
+      expect(hit.style.fill).toBe('transparent');
+      expect(hit.getAttribute('cx')).toBe(visible.getAttribute('cx'));
+      expect(hit.getAttribute('cy')).toBe(visible.getAttribute('cy'));
+    });
+
+    it('hit radius compensates for zoom-out (zoomScale 0.5 → r=24 → 24px effective)', () => {
+      const { container } = renderMidpoint(0.5);
+      const hit = container.querySelector('[data-tocb-midpoint-handle]') as SVGCircleElement;
+      expect(Number(hit.getAttribute('r'))).toBe(24);
+    });
+
+    it('hit radius shrinks at zoom-in but never below the visible dot (zoomScale 2 → r=6)', () => {
+      const { container } = renderWaypoint(2);
+      const hit = container.querySelector('[data-tocb-waypoint-handle]') as SVGCircleElement;
+      // 12 / 2 = 6 content px → 12px on screen is wrong; effective
+      // diameter = r * 2 * zoom = 24px. Never smaller than the visual.
+      expect(Number(hit.getAttribute('r'))).toBe(6);
+    });
+
+    it('only the interactive circle carries the data attribute (one logical handle)', () => {
+      const mid = renderMidpoint();
+      expect(mid.container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(1);
+      cleanup();
+      const wp = renderWaypoint();
+      expect(wp.container.querySelectorAll('[data-tocb-waypoint-handle]').length).toBe(1);
+    });
+  });
+
   describe('binding correctness', () => {
     it('midpoint pointerdown binds segment 0', () => {
       const midSpy = vi.fn();
