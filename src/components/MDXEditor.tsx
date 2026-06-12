@@ -152,6 +152,26 @@ export function MDXEditorComponent({
           font-family: inherit !important;
         }
 
+        /* Popup layering (PR 34 feedback #66). The library portals its
+           popups (block-type select dropdown, toolbar tooltips, link
+           dialog) into a div.mdxeditor-popup-container appended to
+           document.body, shipped with position: relative; z-index: 2.
+           That body-level stacking context loses to the NodeEditor
+           panel (fixed z-[150], also a body child), so the block-type
+           select opened invisibly BEHIND the panel. Raise the container
+           via its documented stable class — v4 exposes no z-index var —
+           to sit just above the anchored editors (NodeEditor/EdgeEditor
+           at 150) and below the full-screen overlays (auth modal /
+           tutorial at 9999). Nothing else lives in (150, 9999). This
+           selector intentionally has no .mdx-editor-wrapper prefix: the
+           container is not a descendant of the wrapper. It wins the
+           specificity tie with the library rule by document order
+           (this <style> element renders in <body>, after the imported
+           stylesheet in <head>). */
+        .mdxeditor-popup-container {
+          z-index: 160;
+        }
+
         /* Toolbar: two rows, never a horizontal scrollbar.
            The library's _toolbarRoot has overflow-x: auto, which
            shows a scrollbar inside the 288px NodeEditor. With the
