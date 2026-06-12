@@ -145,6 +145,58 @@ describe('TheoryOfChangeGraph (PR 5 Task 5.1 always-on gutters)', () => {
     });
   });
 
+  // PR #34 fb4 issue 64: the add affordances must not spill outside the
+  // canvas card. The gutters previously carried a hardcoded
+  // `svgSize.height - 124` inline height that overshot the card bottom
+  // (~17px column / ~6px section with a title; worse without). The
+  // contract now: gutters carry NO inline height — they flex-stretch to
+  // their row, whose height is set by the column bodies (the canvas
+  // content edge). The graph container likewise drops its edit-mode
+  // inline height so the section gutters' stretch line is the section
+  // content, not an oversized fixed budget.
+  describe('add affordances stay inside the canvas bounds (fb4 issue 64)', () => {
+    it('gutters carry no inline height in edit mode (flex stretch governs)', () => {
+      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      const gutters = document.querySelectorAll(
+        '[data-testid^="add-section"], [data-testid^="add-column"]',
+      );
+      expect(gutters.length).toBeGreaterThan(0);
+      gutters.forEach((g) => {
+        expect((g as HTMLElement).style.height).toBe('');
+      });
+    });
+
+    it('graph container has no inline height in edit mode (content-driven)', async () => {
+      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      // updateSize fires in an effect; wait a microtask for the state flush.
+      await Promise.resolve();
+      const container = document.querySelector('div.min-w-fit') as HTMLElement;
+      expect(container).not.toBeNull();
+      expect(container.style.height).toBe('');
+    });
+
+    it('graph container keeps its explicit height in view mode', () => {
+      render(<ToC data={makeBaseData()} showEditButton={false} />);
+      const container = document.querySelector('div.min-w-fit') as HTMLElement;
+      expect(container).not.toBeNull();
+      expect(container.style.height).not.toBe('');
+    });
+
+    it('column bodies budget the edit-mode title placeholder even when data.title is empty', async () => {
+      // Without a chart title, edit mode still renders the
+      // "Click to add title" block (~80px). The body height must
+      // subtract it (svgSize.height - 62 - 80 = 658px for the 800px
+      // minimum canvas), else the double-click-to-add zone spills
+      // ~80px below the card (measured 79px pre-fix).
+      const data = { ...makeBaseData(), title: '' };
+      render(<ToC data={data} showEditButton={true} />);
+      await Promise.resolve();
+      const body = document.querySelector('[data-column="0-0"]') as HTMLElement;
+      expect(body).not.toBeNull();
+      expect(body.style.height).toBe('658px');
+    });
+  });
+
   it('empty column body in edit mode shows the cursor-cell affordance class', () => {
     render(<ToC data={makeBaseData()} showEditButton={true} />);
     // Section 1, column 0 is empty → its column div should carry

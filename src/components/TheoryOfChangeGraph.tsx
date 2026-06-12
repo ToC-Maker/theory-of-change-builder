@@ -1301,7 +1301,22 @@ export function ToC({
           // keeps the explicit gap (no gutter divs render).
           gap: editMode ? '0px' : `${sectionPadding}px`,
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
-          height: svgSize.height > 0 ? `${svgSize.height - 55}px` : '100vh', // I don't understand why I need to subtract 55, but it works
+          // PR #34 fb4 issue 64: in edit mode the container takes its
+          // height from content (the section wrappers, whose column
+          // bodies carry the explicit height below). This makes the
+          // flex line the section-content height, so the stretch-sized
+          // section gutters end exactly at the column bodies' bottom —
+          // the canvas content edge — instead of overshooting the card
+          // via the old fixed `svgSize.height - 55` budget. View mode
+          // keeps the explicit height: its column bodies are
+          // auto-height (nodes are absolutely positioned), so without
+          // it the container — and the click-to-deselect area — would
+          // collapse to the title bars.
+          ...(editMode
+            ? {}
+            : {
+                height: svgSize.height > 0 ? `${svgSize.height - 55}px` : '100vh', // I don't understand why I need to subtract 55, but it works
+              }),
         }}
         onClick={(e) => {
           // Clear selections when clicking empty space in both view and edit mode
@@ -1334,7 +1349,6 @@ export function ToC({
                 <GutterAffordance
                   kind="section"
                   width={sectionPadding}
-                  height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
                   testId="add-section-before"
                   onClick={() => {
                     setDataAndNotify((prevData) => {
@@ -1521,7 +1535,6 @@ export function ToC({
                             <GutterAffordance
                               kind="column"
                               width={columnPadding}
-                              height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
                               testId={`add-column-before-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 setDataAndNotify((prevData) => {
@@ -1563,9 +1576,23 @@ export function ToC({
                             )}
                             style={{
                               width: `${Math.max(...column.nodes.map((node) => node.width || 192), 128)}px`,
+                              // 62 = section header budget; 80 = title
+                              // block budget. PR #34 fb4 issue 64: edit
+                              // mode ALWAYS renders the title block (the
+                              // "Click to add title" placeholder when
+                              // `data.title` is empty), so the 80px is
+                              // unconditional here — the old
+                              // `data.title ? 80 : 0` ignored the
+                              // placeholder, pushing the column bodies
+                              // (and the gutters that stretch to match
+                              // them) ~79px past the canvas card on
+                              // no-title edit charts.
+                              // ConnectionsComponent.updateSize adds the
+                              // same 80px under `data.title || editMode`,
+                              // so body bottom and card bottom stay glued.
                               height: editMode
                                 ? svgSize.height > 0
-                                  ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px`
+                                  ? `${svgSize.height - 62 - 80}px`
                                   : '740px'
                                 : 'auto',
                             }}
@@ -1668,7 +1695,6 @@ export function ToC({
                             <GutterAffordance
                               kind="column"
                               width={columnPadding}
-                              height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
                               testId={`add-column-after-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 // Add new column
@@ -1696,7 +1722,6 @@ export function ToC({
                 <GutterAffordance
                   kind="section"
                   width={sectionPadding}
-                  height={svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px'}
                   testId="add-section-after-last"
                   onClick={() => {
                     setDataAndNotify((prevData) => {

@@ -243,7 +243,14 @@ export function ConnectionsComponent({
 
     // Add header height, title height, and padding
     const headerHeight = 62; // Section header height (matches the -62px offset in columns)
-    const titleHeight = data.title ? 80 : 0; // Graph title height when present (includes margin)
+    // Graph title block height (includes margin). PR #34 fb4 issue 64:
+    // edit mode renders the title block even when `data.title` is empty
+    // (the "Click to add title" placeholder), so the budget must count
+    // it then too — otherwise the canvas card comes out 80px shorter
+    // than the rendered content and the column bodies / add affordances
+    // spill below it. Mirrors the unconditional 80 in the edit-mode
+    // column body height (TheoryOfChangeGraph).
+    const titleHeight = data.title || editMode ? 80 : 0;
     const padding = 0; // No extra padding needed
     const dynamicHeight = Math.max(maxHeight + headerHeight + titleHeight + padding, 800); // Minimum 800px
 
