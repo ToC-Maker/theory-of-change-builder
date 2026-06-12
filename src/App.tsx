@@ -26,6 +26,12 @@ import type { SaveError } from './components/top-bar/SaveIndicator';
 import { ShareDialog } from './components/share/ShareDialog';
 import { usePermissionsRefresh } from './hooks/usePermissionsRefresh';
 import { getFreshIdToken } from './utils/auth';
+import {
+  reportAuthTokenFailure,
+  reportAuthTokenSuccess,
+  resetAuthSessionHealth,
+} from './services/authSessionHealth';
+import { SessionExpiredBanner } from './components/SessionExpiredBanner';
 import { isInputFocused } from './utils/isInputFocused';
 import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
@@ -839,12 +845,29 @@ function ToCViewer() {
         // header ignored, anon caps + Turnstile gate apply) and
         // LoggingService (stale-token 401s on logging-* trip the
         // circuit breaker and silently kill logging for the session).
-        const tokenProvider = () => getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+        // Round-4: the provider also feeds authSessionHealth so a
+        // PERSISTENTLY dead session (revoked refresh-token grant —
+        // "Unknown or invalid refresh token" — where every resolution
+        // returns null while `isAuthenticated` stays true) surfaces the
+        // SessionExpiredBanner instead of silently demoting every
+        // request to anonymous. invalid_grant-family errors degrade
+        // immediately; transient ones need 3 consecutive failures.
+        const tokenProvider = async () => {
+          let refreshError: unknown;
+          const token = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims, (err) => {
+            refreshError = err;
+          });
+          if (token) reportAuthTokenSuccess();
+          else reportAuthTokenFailure(refreshError);
+          return token;
+        };
         ChartService.setAuthTokenProvider(tokenProvider);
         chatService.setAuthTokenProvider(tokenProvider);
         LoggingServiceClass.setAuthTokenProvider(tokenProvider);
         console.log('[App] Fetching Auth0 ID token...');
-        const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+        // Through tokenProvider (not bare getFreshIdToken) so a dead
+        // grant trips the banner at mount, not on the first API call.
+        const idToken = await tokenProvider();
         if (idToken) {
           ChartService.setAuthToken(idToken);
           chatService.setAuthToken(idToken);
@@ -874,6 +897,7 @@ function ToCViewer() {
       } else if (!authLoading) {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
+        resetAuthSessionHealth();
         ChartService.setAuthTokenProvider(null);
         chatService.setAuthTokenProvider(null);
         LoggingServiceClass.setAuthTokenProvider(null);
@@ -1834,6 +1858,10 @@ function ToCViewer() {
         pendingRequestCountStale={pendingRequestCountStale}
         profileSlot={<AuthButton onLoggingEnabled={handleLoggingEnabled} />}
       />
+
+      {/* Round-4: visible + recoverable signal when the signed-in session
+        can no longer mint tokens (otherwise: silent anon demotion). */}
+      <SessionExpiredBanner />
 
       <ShareDialog
         open={shareOpen}
