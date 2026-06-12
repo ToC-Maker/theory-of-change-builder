@@ -66,6 +66,7 @@ Theory of Change graphs use nested structure: `sections[] → columns[] → node
 - Old format still supported: `connectionIds: string[]`
 - Always use new format for new code
 - Confidence (0-100) determines visual style CONTINUOUSLY: solid at 95+, below that dash length shrinks and gap length grows smoothly as confidence drops (see `computeConfidenceDash` in `src/utils/index.ts`; no hard style buckets)
+- The connection-strength Legend is view-mode chrome only: `ToCViewerOnly` mounts it as a fixed bottom-left overlay outside the zoom/pan transform; the editor renders no legend (confidence is numeric in the EdgeEditor) and the legend is not draggable
 - `waypoints` is an array for backward compatibility, but the UI edits AT MOST ONE waypoint per connection (single-waypoint model). Legacy charts with N>1 waypoints still render; the first drag of any handle collapses to the single dragged waypoint; double-click on the handle resets to the automatic curve.
 
 ### AI Edit System

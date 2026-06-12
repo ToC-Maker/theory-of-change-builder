@@ -8,7 +8,6 @@ import { computeAlignedSections } from '../utils/alignNodes';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
-import { Legend } from './Legend';
 import { NodeEditor } from './node-editor/NodeEditor';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
@@ -133,9 +132,6 @@ export function ToC({
   // alongside the selected node) and edge editing in `<EdgeEditor>`
   // (owned by `ConnectionsComponent`'s `selectedEdge` state).
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
-  const [legendPosition, setLegendPosition] = useState({ x: 340, y: 70 });
-  const [isDraggingLegend, setIsDraggingLegend] = useState(false);
-  const [legendDragOffset, setLegendDragOffset] = useState({ x: 0, y: 0 });
   const graphContainerRef = useRef<HTMLDivElement>(null);
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
@@ -185,33 +181,6 @@ export function ToC({
     }, 50); // Slightly longer delay to ensure DOM updates
   }, [nodeRefs]);
 
-  const handleLegendMouseMove = useCallback(
-    (e: MouseEvent) => {
-      if (isDraggingLegend) {
-        setLegendPosition({
-          x: e.clientX - legendDragOffset.x,
-          y: e.clientY - legendDragOffset.y,
-        });
-      }
-    },
-    [isDraggingLegend, legendDragOffset],
-  );
-
-  const handleLegendMouseUp = useCallback(() => {
-    setIsDraggingLegend(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDraggingLegend) {
-      document.addEventListener('mousemove', handleLegendMouseMove);
-      document.addEventListener('mouseup', handleLegendMouseUp);
-      return () => {
-        document.removeEventListener('mousemove', handleLegendMouseMove);
-        document.removeEventListener('mouseup', handleLegendMouseUp);
-      };
-    }
-  }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp]);
-
   // Update internal data state when prop changes
   useEffect(() => {
     console.log('ToC component received new initialData:', initialData);
@@ -244,16 +213,6 @@ export function ToC({
     initialData.sectionPadding,
     initialData.fontFamily,
   ]);
-
-  // Position legend in bottom-right corner when svgSize changes
-  useEffect(() => {
-    if (svgSize.width > 0 && svgSize.height > 0) {
-      setLegendPosition({
-        x: svgSize.width - 158, // 153px from right edge
-        y: svgSize.height - 178, // 178px from bottom edge
-      });
-    }
-  }, [svgSize.width, svgSize.height]);
 
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
@@ -1864,17 +1823,12 @@ export function ToC({
             return <ConnectButton />;
           })()}
 
-        {/* Draggable Legend */}
-        <Legend
-          legendPosition={legendPosition}
-          setLegendPosition={setLegendPosition}
-          isDraggingLegend={isDraggingLegend}
-          setIsDraggingLegend={setIsDraggingLegend}
-          legendDragOffset={legendDragOffset}
-          setLegendDragOffset={setLegendDragOffset}
-          editMode={editMode}
-          fontFamily={fontFamily}
-        />
+        {/* The connection-strength Legend is no longer rendered here
+          (PR #34 round-7 feedback 76): it's view-mode chrome now,
+          mounted by `ToCViewerOnly` OUTSIDE the zoom/pan transform so
+          it neither scales with zoom nor covers canvas content. The
+          editor surface gets no legend at all — editors read
+          confidence numerically in the EdgeEditor. */}
 
         {/* Anchored NodeEditor — replaces NodePopup (modal) and the
           per-selection toolbar. Single-click on a node opens it; it

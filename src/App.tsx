@@ -4,6 +4,7 @@ import { useViewportOffset } from './hooks/useViewportOffset';
 import { Routes, Route, useParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { ToC } from './components/TheoryOfChangeGraph';
+import { Legend } from './components/Legend';
 import { NODE_DOM_ATTR } from './components/NodeComponent';
 import { ChatInterface } from './components/ChatInterface';
 import { GraphTutorial } from './components/GraphTutorial';
@@ -633,6 +634,16 @@ function ToCViewerOnly() {
         </div>
       )}
 
+      {/* Connection-strength key (PR #34 round-7 feedback 76):
+        view-mode-only chrome — viewers have no EdgeEditor to read
+        confidence from. Mounted HERE, outside the zoom/pan transform,
+        as a fixed bottom-left overlay (bottom-right belongs to the
+        zoom controls): it never scales with zoom and can't permanently
+        cover content, since panning moves content out from under it.
+        Hidden in iframes like the rest of the fixed chrome so small
+        embeds stay clean. */}
+      {!isInIframe && <Legend fontFamily={data.fontFamily} />}
+
       <GraphTutorial />
     </div>
   );
@@ -736,7 +747,9 @@ function ToCViewer() {
   // silently drift.
   const excludeFromPan = useCallback((target: HTMLElement) => {
     const isNode = target.closest(`[${NODE_DOM_ATTR}]`);
-    const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing');
+    // (fb7 issue 76: the `.cursor-grab` legend exclusion is gone — the
+    // draggable legend was the only element carrying those classes,
+    // and the legend no longer renders on the editor canvas at all.)
     const isChatPanel = target.closest('.fixed.left-0.z-40') !== null;
     const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null;
     // PR 7 feedback (18): waypoint + midpoint handles for connection
@@ -797,7 +810,6 @@ function ToCViewer() {
 
     return !!(
       isNode ||
-      isLegend ||
       isEditableElement ||
       isChatPanel ||
       isJsonPanel ||
