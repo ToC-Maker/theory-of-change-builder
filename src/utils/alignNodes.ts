@@ -84,15 +84,28 @@ export function computeAlignedSections(
     }
   });
 
-  // ---- Target center per node: the rounded group average, for groups
-  // with at least two members. ----
-  const targetCenterById = new Map<string, number>();
+  // ---- Target center + delta per node: the rounded group average,
+  // for groups with at least two members. The delta feeds the waypoint
+  // translation below. ----
+  const movesById = new Map<string, { targetCenterY: number; deltaY: number }>();
   groups.forEach((group) => {
     if (group.length < 2) return;
     const avgCenterY = Math.round(group.reduce((sum, n) => sum + n.centerY, 0) / group.length);
-    group.forEach(({ id }) => targetCenterById.set(id, avgCenterY));
+    group.forEach(({ id, centerY }) =>
+      movesById.set(id, { targetCenterY: avgCenterY, deltaY: avgCenterY - centerY }),
+    );
   });
-  if (targetCenterById.size === 0) return sections;
+  if (movesById.size === 0) return sections;
+
+  // Feedback 68: custom waypoints follow the alignment. Each endpoint
+  // contributes HALF its delta to the connection's waypoints — the
+  // generalization of the drag path's half-delta rule
+  // (`shiftWaypointsForNode` in TheoryOfChangeGraph.handleDrop, where
+  // exactly one endpoint moves per gesture). Alignment only changes Y,
+  // so only waypoint Y shifts. Symmetric two-node groups cancel
+  // (deltas are equal and opposite → shift 0), which is correct: the
+  // endpoints' mean line is unchanged.
+  const deltaYFor = (id: string): number => movesById.get(id)?.deltaY ?? 0;
 
   // ---- Apply immutably; preserve identity wherever nothing changed. ----
   let anyChange = false;
@@ -101,10 +114,33 @@ export function computeAlignedSections(
     const columns = section.columns.map((column) => {
       let columnChanged = false;
       const nodes = column.nodes.map((node) => {
-        const target = targetCenterById.get(node.id);
-        if (target === undefined) return node;
+        const move = movesById.get(node.id);
+
+        // Translate waypoints on this node's outgoing connections when
+        // either endpoint moved.
+        let connections = node.connections;
+        if (node.connections && node.connections.length > 0) {
+          let connectionsChanged = false;
+          const nextConnections = node.connections.map((conn) => {
+            if (!conn.waypoints || conn.waypoints.length === 0) return conn;
+            const waypointShiftY = (deltaYFor(node.id) + deltaYFor(conn.targetId)) / 2;
+            if (waypointShiftY === 0) return conn;
+            connectionsChanged = true;
+            return {
+              ...conn,
+              waypoints: conn.waypoints.map((w) => ({ x: w.x, y: w.y + waypointShiftY })),
+            };
+          });
+          if (connectionsChanged) connections = nextConnections;
+        }
+
+        if (move === undefined && connections === node.connections) return node;
         columnChanged = true;
-        return { ...node, yPosition: target };
+        return {
+          ...node,
+          ...(move !== undefined ? { yPosition: move.targetCenterY } : null),
+          ...(connections !== node.connections ? { connections } : null),
+        };
       });
       if (!columnChanged) return column;
       sectionChanged = true;
