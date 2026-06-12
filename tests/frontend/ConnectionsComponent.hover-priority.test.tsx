@@ -177,3 +177,63 @@ describe('connection hover priority on overlapping fat paths (K8)', () => {
     expect(fatPaths[1].style.pointerEvents).toBe('none');
   });
 });
+
+// Round-4 feedback 63 (K8 residual): a SELECTED connection shows its
+// waypoint/midpoint handles even when the pointer is far away
+// (handlesVisible = hovered OR selected). Round 3 muted sibling fat
+// paths only while `hoveredEdge` was set, so coming BACK to the
+// selected connection's handle through an overlap, the press fell on
+// the overlapping connection's fat band (reproduced live: with a→d
+// selected and the pointer away, elementFromPoint at a→d's own
+// midpoint handle returned b→c's hit path). The muting rule is now
+// keyed on `hoveredEdge ?? selectedEdge`: while an edge is selected
+// (EdgeEditor open) and nothing is hovered, every OTHER fat band goes
+// inert, so the selected connection's handles win the hit test
+// everywhere. Hover, when present, takes precedence (it is the more
+// immediate intent signal).
+describe('connection selection priority on overlapping fat paths (fb4 63)', () => {
+  it("selecting a connection disables the OTHERS' fat paths while un-hovered", () => {
+    const { fatPaths } = setup();
+
+    // Click opens the EdgeEditor → selectedEdge = a→d. No hover is in
+    // play (no mouseOver fired).
+    fireEvent.click(fatPaths[0]);
+
+    expect(fatPaths[0].style.pointerEvents).toBe('stroke');
+    expect(fatPaths[1].style.pointerEvents).toBe('none');
+
+    // The selected connection's handles are mounted (reachable by the
+    // next press — the live repro's failure mode).
+    expect(document.querySelector('[data-tocb-midpoint-handle="a->d|0"]')).not.toBeNull();
+  });
+
+  it('hover takes precedence over selection (hoveredEdge ?? selectedEdge)', () => {
+    const { fatPaths } = setup();
+
+    fireEvent.click(fatPaths[0]); // select a→d
+    fireEvent.mouseOver(fatPaths[1], { relatedTarget: document.body }); // hover b→c
+
+    expect(fatPaths[1].style.pointerEvents).toBe('stroke');
+    expect(fatPaths[0].style.pointerEvents).toBe('none');
+
+    // Hover release falls back to the selection's priority.
+    fireEvent.mouseOut(fatPaths[1], { relatedTarget: document.body });
+    expect(fatPaths[0].style.pointerEvents).toBe('stroke');
+    expect(fatPaths[1].style.pointerEvents).toBe('none');
+  });
+
+  it('dismissing the editor (outside mousedown) re-arms every fat path', () => {
+    const { fatPaths } = setup();
+
+    fireEvent.click(fatPaths[0]);
+    expect(fatPaths[1].style.pointerEvents).toBe('none');
+
+    // The EdgeEditor dismisses on document-level mousedown outside the
+    // editor; selection clears → all bands re-arm → any connection is
+    // selectable with the next click.
+    fireEvent.mouseDown(document.body);
+
+    expect(fatPaths[0].style.pointerEvents).toBe('stroke');
+    expect(fatPaths[1].style.pointerEvents).toBe('stroke');
+  });
+});

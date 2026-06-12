@@ -440,6 +440,13 @@ export function ConnectionsComponent({
   // `waypointDragState` props on this component for context.
 
   const strokeWidth = 3;
+  // K8 + fb4 63: the connection whose handles must win overlapping hit
+  // tests. Hover is the most immediate intent signal; with no hover, a
+  // SELECTED connection (EdgeEditor open) keeps priority — its handles
+  // are visible without hover, and a press on them must not fall on an
+  // overlapping sibling's fat band.
+  const selectedEdgeKey = selectedEdge ? `${selectedEdge.sourceId}-${selectedEdge.targetId}` : null;
+  const activeEdgeKey = hoveredEdge ?? selectedEdgeKey;
   return (
     <>
       <svg
@@ -643,9 +650,23 @@ export function ConnectionsComponent({
                   // reachable. Release (group mouseleave → hoveredEdge
                   // null) re-arms all bands; the next pointer move
                   // re-acquires whatever is under the cursor.
+                  //
+                  // fb4 63 (K8 residual): the same muting applies while
+                  // a connection is SELECTED (EdgeEditor open) — its
+                  // handles are visible without hover, and a press on
+                  // them used to fall on an overlapping sibling's band
+                  // (reproduced live: with a→d selected and the pointer
+                  // away, elementFromPoint at a→d's own midpoint handle
+                  // returned b→c's hit path). `activeEdgeKey` is
+                  // `hoveredEdge ?? selectedEdge`: hover, when present,
+                  // takes precedence. While an editor is open, a click
+                  // on a sibling band therefore first dismisses the
+                  // editor (document-mousedown), which re-arms all
+                  // bands; the sibling is selectable with the next
+                  // click — standard popover dismissal semantics.
                   pointerEvents:
                     (hasHighlightedNodes && !isHighlighted) ||
-                    (hoveredEdge !== null && !isEdgeHovered)
+                    (activeEdgeKey !== null && edgeKey !== activeEdgeKey)
                       ? 'none'
                       : 'stroke',
                 }}
