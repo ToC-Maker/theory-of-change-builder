@@ -15,9 +15,13 @@
 // shadow in any state — reviewer: "the delete icons shouldn't have a
 // background and outline, just the cross, and maybe we should just use
 // a bin". The padded hit area stays generous (28×28px) but is fully
-// transparent. Tone is scope-dependent for contrast: the section
-// button lives on the dark title bar (white icon, matching the title
-// text), the column button on the light canvas (gray, hover-to-red).
+// transparent. Resting tone is scope-dependent for contrast: the
+// section button lives on the dark title bar (white icon, matching the
+// title text), the column button on the light canvas (gray). Hover is
+// red for BOTH (fb4 issue 65 — consistent danger signal): column
+// red-500 on the light canvas, section red-400 on the dark bar
+// (#f87171 is ~3.7:1 against the #374151 default — passes the 3:1
+// non-text contrast bar — where red-500 is only ~2.7:1).
 // Keyboard focus keeps a visible indicator via `focus-visible:ring-2`
 // + `focus-visible:opacity-100` — a focus ring is not the resting
 // outline the reviewer objected to.
@@ -102,7 +106,7 @@ export function ColumnDeleteAffordance({
           scope === 'column' ? 'group-hover/column:opacity-100' : 'group-hover/section:opacity-100'
         } focus-visible:opacity-100 transition absolute top-0.5 right-0.5 z-30 flex items-center justify-center p-1.5 rounded ${
           scope === 'section'
-            ? 'text-white/70 hover:text-white focus-visible:ring-white/60'
+            ? 'text-white/70 hover:text-red-400 focus-visible:ring-white/60'
             : 'text-gray-400 hover:text-red-500 focus-visible:ring-gray-300'
         } focus:outline-none focus-visible:ring-2`}
         aria-label={`Delete ${scope}`}

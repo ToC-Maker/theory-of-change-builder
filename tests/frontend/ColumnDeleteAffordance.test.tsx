@@ -135,7 +135,27 @@ describe('ColumnDeleteAffordance', () => {
       expect(btn.className).not.toMatch(/border/);
       expect(btn.className).not.toMatch(/shadow/);
       expect(btn.className).toContain('text-white/70');
-      expect(btn.className).toContain('hover:text-white');
+      // fb4 issue 65: hover turns red like the column bin. red-400 (not
+      // red-500) because the section bin sits on the dark title bar
+      // (#374151 default): #f87171 is ~3.7:1 there (passes the 3:1
+      // non-text contrast bar), #ef4444 only ~2.7:1.
+      expect(btn.className).toContain('hover:text-red-400');
+    });
+
+    // fb4 issue 65: "Hover bin icons should be consistent (red hover?)".
+    // Both canvas delete bins signal danger the same way — a red glyph
+    // on hover. Shades differ per surface (column red-500 on the light
+    // canvas, section red-400 on the dark title bar) so each stays
+    // legible against its own background.
+    it('both scopes turn red on hover (issue 65 consistency)', () => {
+      render(
+        <>
+          <ColumnDeleteAffordance nodeCount={0} scope="column" onDelete={vi.fn()} />
+          <ColumnDeleteAffordance nodeCount={0} scope="section" onDelete={vi.fn()} />
+        </>,
+      );
+      expect(screen.getByTestId('column-delete').className).toMatch(/hover:text-red-\d+/);
+      expect(screen.getByTestId('section-delete').className).toMatch(/hover:text-red-\d+/);
     });
 
     it('preserves the named-group hover-reveal scoping per scope', () => {
