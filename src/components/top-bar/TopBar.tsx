@@ -211,12 +211,28 @@ export function TopBar(props: TopBarProps) {
     <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
       {/* PR 7 feedback (43): no vertical padding on the container —
         the menubar triggers must reach the bar's top and bottom edges
-        (native-menubar hit target). The row keeps the previous visual
-        height via min-h (36px content + 2×8px former py-2 = 52px);
-        non-menubar children re-center through their own
-        `items-center` wrappers. */}
-      <div className="mx-auto px-2 sm:px-4">
-        <div className="flex items-stretch justify-between gap-2 min-h-[52px]">
+        (native-menubar hit target). Non-menubar children re-center
+        through their own `items-center` wrappers.
+
+        PR #34 fb4 (70): 40px row (native menubars run ~38-40px; the
+        old 52px read tall against its content) — fixed-height controls
+        are 32px (undo/redo p-1.5, Share py-1.5, profile badge w-8) so
+        each keeps 4px breathing room. The rendered bar is 40 + 1px
+        border-b = 41px; TOP_BAR_HEIGHT_PX (useViewportOffset.ts) and
+        the chat drawer's `top` (ChatInterface.tsx) mirror that — keep
+        all three in sync (TopBar.responsive.test.tsx pins it).
+
+        Also (70): no left padding at md, so the menubar cluster —
+        and its full-height hover fill — starts at the screen edge
+        like a native menubar. Below md the leftmost content is
+        undo/redo (edit) or the hamburger bar (the menubar moves into
+        the drawer), so the inset stays. Right side keeps its padding
+        at every breakpoint. */}
+      <div className="mx-auto pl-2 sm:pl-4 md:pl-0 pr-2 sm:pr-4">
+        <div
+          data-testid="top-bar-row"
+          className="flex items-stretch justify-between gap-2 min-h-[40px]"
+        >
           {/* Left cluster */}
           <div className="flex items-center gap-1 sm:gap-3 min-w-0">
             {bp === 'md' && !isViewer && (
@@ -304,7 +320,10 @@ export function TopBar(props: TopBarProps) {
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={props.handleUndo}
                   disabled={props.undoHistory.length === 0}
-                  className="p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  // p-1.5 at every breakpoint (70): with the sm:w-5
+                  // icon that's a 32px button — the old sm:p-2 (36px)
+                  // left 2px breathing room in the 40px row.
+                  className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   title={`Undo (${shortcuts.undoDisplay()})`}
                   aria-label="Undo"
                 >
@@ -327,7 +346,7 @@ export function TopBar(props: TopBarProps) {
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={props.handleRedo}
                   disabled={props.redoHistory.length === 0}
-                  className="p-1.5 sm:p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   title={`Redo (${shortcuts.redoDisplay()})`}
                   aria-label="Redo"
                 >
@@ -349,8 +368,10 @@ export function TopBar(props: TopBarProps) {
             )}
           </div>
 
-          {/* Right cluster */}
-          <div className="flex items-center gap-1 sm:gap-2">
+          {/* Right cluster. sm:gap-3 (70): a touch more air between
+            Share and the profile badge, matching the left cluster's
+            gap rhythm. */}
+          <div className="flex items-center gap-1 sm:gap-3">
             {bp === 'md' && (
               <>
                 <SaveIndicator
@@ -363,7 +384,11 @@ export function TopBar(props: TopBarProps) {
                   <button
                     type="button"
                     onClick={onShareClick}
-                    className="relative px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors flex items-center gap-1 sm:gap-2"
+                    // py-1.5 at every breakpoint (70): 32px tall, same
+                    // as undo/redo and the profile badge, with 4px
+                    // breathing room in the 40px row (old sm:py-2 was
+                    // 36px).
+                    className="relative px-2 sm:px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors flex items-center gap-1 sm:gap-2"
                   >
                     <ShareIcon className="w-4 h-4" />
                     Share

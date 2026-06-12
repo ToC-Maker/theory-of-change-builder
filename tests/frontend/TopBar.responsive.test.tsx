@@ -14,6 +14,7 @@ import { act, render, screen, cleanup, fireEvent, createEvent } from '@testing-l
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { TopBar, MENUBAR_GRACE_CLOSE_MS } from '../../src/components/top-bar/TopBar';
+import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
 
 const noop = () => {};
 
@@ -206,6 +207,87 @@ describe('TopBar responsive layout', () => {
     expect(screen.queryByLabelText(/may be stale/i)).toBeNull();
     // Original badge still present and non-stale.
     expect(screen.getByLabelText(/3 pending access requests$/i)).toBeInTheDocument();
+  });
+});
+
+describe('TopBar geometry contract (PR #34 fb4 (70))', () => {
+  // jsdom does no layout, so these are class-string contracts: they make
+  // bar-geometry changes deliberate (update the test AND the mirror
+  // constants) rather than silent. The live-layout counterpart is
+  // scripts/test-topbar-geometry.mjs (rodney/CDP, real rects).
+  //
+  // DOM shape contract (stable since round 2): the testid'd row's parent
+  // is the padded frame; the row's first child is the left cluster
+  // (whose first child is the menubar group at md), and its last child
+  // is the right cluster.
+  const row = () => screen.getByTestId('top-bar-row');
+  const frame = () => row().parentElement as HTMLElement;
+  const leftCluster = () => row().firstElementChild as HTMLElement;
+  const rightCluster = () => row().lastElementChild as HTMLElement;
+
+  it('pins the 40px row height, and TOP_BAR_HEIGHT_PX mirrors it (+1px border-b)', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    const minH = row().className.match(/min-h-\[(\d+)px\]/);
+    expect(minH, 'row must carry a min-h-[..px] height contract').not.toBeNull();
+    expect(Number(minH![1])).toBe(40);
+    // K2 mirror (useViewportOffset): the canvas top reserve must track
+    // the real rendered bar height — row min-h + the container's 1px
+    // border-b. If this fails you changed one side without the other.
+    expect(TOP_BAR_HEIGHT_PX).toBe(Number(minH![1]) + 1);
+  });
+
+  it('drops the frame left padding at md so the menubar cluster sits flush left (70)', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    // No all-breakpoint horizontal padding (px-*) — that's what inset
+    // the File trigger 8-16px from the screen edge.
+    expect(frame().className).not.toMatch(/(?:^|\s)(?:sm:)?px-/);
+    // Flush left at md (where the menubar renders)…
+    expect(frame().className).toContain('md:pl-0');
+    // …but below md the leftmost content is undo/redo, not a menubar —
+    // keep the inset so buttons don't collapse against the edge.
+    expect(frame().className).toMatch(/(?:^|\s)pl-2(?:\s|$)/);
+    // Right side keeps its padding at every breakpoint (profile badge
+    // should not touch the screen edge).
+    expect(frame().className).toMatch(/(?:^|\s)pr-2(?:\s|$)/);
+    expect(frame().className).toContain('sm:pr-4');
+  });
+
+  it('right cluster matches the left cluster gap rhythm (gap-1 sm:gap-3)', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    expect(leftCluster().className).toContain('sm:gap-3');
+    expect(rightCluster().className).toContain('sm:gap-3');
+  });
+
+  it('keeps the round-2 full-height menubar treatment (fb 43) after the shrink', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    // Menubar group escapes the cluster's items-center and stretches.
+    const menubarGroup = leftCluster().firstElementChild as HTMLElement;
+    expect(menubarGroup.className).toContain('items-stretch');
+    expect(menubarGroup.className).toContain('self-stretch');
+    // Row stretches children; triggers fill the full bar height.
+    expect(row().className).toContain('items-stretch');
+    const fileTrigger = screen
+      .getAllByRole('button', { name: /^file$/i })
+      .find((el) => el.getAttribute('aria-haspopup') === 'menu') as HTMLElement;
+    expect(fileTrigger.className).toContain('h-full');
+  });
+
+  it('fixed-height controls fit the 40px row: 32px max (p-1.5 / py-1.5, no sm: upsize)', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    // Undo/redo: p-1.5 + w-5 icon = 32px. The old `sm:p-2` made them
+    // 36px — only 2px breathing room in a 40px row.
+    const undo = screen.getByRole('button', { name: /^undo$/i });
+    const redo = screen.getByRole('button', { name: /^redo$/i });
+    for (const btn of [undo, redo]) {
+      expect(btn.className).toMatch(/(?:^|\s)p-1\.5(?:\s|$)/);
+      expect(btn.className).not.toContain('sm:p-2');
+    }
+    // Share: py-1.5 + text-sm (20px line) = 32px; old `sm:py-2` = 36px.
+    const share = screen.getByRole('button', { name: /share/i });
+    expect(share.className).toMatch(/(?:^|\s)py-1\.5(?:\s|$)/);
+    expect(share.className).not.toContain('sm:py-2');
+    // (The 36px → 32px profile badge is pinned in AuthButton.test.tsx —
+    // SHARE_ROW_CONTRACT — since the badge lives there.)
   });
 });
 

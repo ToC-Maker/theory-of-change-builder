@@ -355,7 +355,7 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
   }, []);
 
   if (isLoading) {
-    return <div className="w-9 h-9 rounded-full bg-gray-200 animate-pulse" />;
+    return <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />;
   }
 
   if (isAuthenticated && user) {
@@ -377,11 +377,13 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
           // bearing for vertical centering: an inline-block with
           // overflow-hidden baselines at its bottom edge, so the plain-
           // block wrapper div gains the line-box strut descent (~7px)
-          // under the button and grows to 43px around the 36px circle,
-          // mis-centering it against the Share button in the TopBar's
-          // items-center row. Block-level flex keeps the wrapper exactly
-          // 36px, same as the anonymous variant below.
-          className="w-9 h-9 rounded-full flex items-center justify-center overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+          // under the button, mis-centering it against the Share button
+          // in the TopBar's items-center row. Block-level flex keeps the
+          // wrapper exactly button-sized, same as the anonymous variant
+          // below. 32px (`w-8 h-8`) since PR #34 fb4 (70): the bar
+          // shrank to a 40px row, and 32px matches the py-1.5 Share
+          // button with 4px breathing room.
+          className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
           title={primaryLine || 'Account'}
         >
           {user.picture ? (
@@ -518,15 +520,15 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
 
   // Anonymous user - show dropdown with sign in and privacy settings.
   // The badge intentionally mirrors the authenticated variant's
-  // footprint (36×36, items-center) so the TopBar row keeps a single
+  // footprint (32×32, items-center) so the TopBar row keeps a single
   // baseline. The earlier flex-col + "Account" text label made this
   // chip ~46px tall, which pushed it visibly off-center against the
-  // Share button (36px) and the round avatar in the auth state.
+  // Share button and the round avatar in the auth state.
   return (
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setShowDropdown(!showDropdown)}
-        className="w-9 h-9 rounded-full flex items-center justify-center text-gray-600 hover:text-gray-900 hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="w-8 h-8 rounded-full flex items-center justify-center text-gray-600 hover:text-gray-900 hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
         aria-label="Account"
         title="Account"
       >

@@ -14,14 +14,17 @@ import { useEffect, useMemo, useState } from 'react';
 export const VIEWPORT_PAD_PX = 24;
 
 // `top` mirrors the TopBar's rendered height the same way `left`
-// mirrors the drawer's CSS contract: 52px row (`min-h-[52px]`,
-// TopBar.tsx — pinned by the round-2 menubar work, no vertical padding
-// on the container) + 1px border-b. Rodney-measured 53px at
-// 1024/1280/1600/1920. The legacy reserve said 64px, which skewed the
-// top band 11px wider than the bottom at every viewport size (PR #34
-// fb3 known-issue K2); scripts/test-viewport-bands.mjs pins the
-// mirror against the real DOM.
-export const TOP_BAR_HEIGHT_PX = 53;
+// mirrors the drawer's CSS contract: 40px row (`min-h-[40px]`,
+// TopBar.tsx — shortened by PR #34 fb4 (70) from the round-2 52px; no
+// vertical padding on the container) + 1px border-b. The legacy
+// reserve said 64px, which skewed the top band 11px wider than the
+// bottom at every viewport size (PR #34 fb3 known-issue K2);
+// scripts/test-viewport-bands.mjs pins the mirror against the real
+// DOM, scripts/test-topbar-geometry.mjs pins the bar height itself,
+// and TopBar.responsive.test.tsx cross-checks this constant against
+// the row's min-h class. ChatInterface's drawer `top` derives from
+// this constant too.
+export const TOP_BAR_HEIGHT_PX = 41;
 
 // The drawer clamp reads window.innerWidth, so the reserve must also
 // recompute when the window resizes (PR #34 fb3 known-issue K1: a

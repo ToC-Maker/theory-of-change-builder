@@ -8,8 +8,9 @@
 // below the button. Measured: wrapper 43px around a 36px button, so the
 // badge mis-centered against the 36px Share button in the TopBar's
 // `items-center` row. Contract: every badge variant is a block-level
-// 36×36 flex box (`w-9 h-9 rounded-full flex items-center justify-center`),
-// which keeps the wrapper exactly button-sized.
+// square flex box (`rounded-full flex items-center justify-center`),
+// which keeps the wrapper exactly button-sized. (32×32 via `w-8 h-8`
+// since PR #34 fb4 (70) — see SHARE_ROW_CONTRACT below.)
 //
 // PR 7 feedback (59): Auth0 database-connection users get `name` defaulted
 // to the literal email, so the dropdown header's unconditional
@@ -73,11 +74,14 @@ afterEach(() => {
 const getBadge = () => screen.getByRole('button');
 
 // The Share-row alignment contract (TopBar right cluster is
-// `flex items-center`): the badge must be a 36×36 *block-level* flex box.
+// `flex items-center`): the badge must be a *block-level* flex box.
 // An inline-block button makes the wrapper taller than the button
 // (line-box strut descent below the baseline-pinned bottom edge), which
-// breaks vertical centering against the 36px Share button.
-const SHARE_ROW_CONTRACT = ['w-9', 'h-9', 'rounded-full', 'flex', 'items-center', 'justify-center'];
+// breaks vertical centering against the Share button.
+// Size: 32×32 (`w-8 h-8`) since PR #34 fb4 (70) — the bar shrank to a
+// 40px row, and the old 36px badge left only 2px breathing room. Same
+// 32px height as the py-1.5 Share button, so the row keeps one rhythm.
+const SHARE_ROW_CONTRACT = ['w-8', 'h-8', 'rounded-full', 'flex', 'items-center', 'justify-center'];
 
 const expectShareRowContract = (badge: HTMLElement) => {
   for (const cls of SHARE_ROW_CONTRACT) {
@@ -88,7 +92,7 @@ const expectShareRowContract = (badge: HTMLElement) => {
 };
 
 describe('AuthButton badge geometry contract (58)', () => {
-  it('authenticated badge with an avatar picture is a 36×36 block-level flex box', () => {
+  it('authenticated badge with an avatar picture is a 32×32 block-level flex box', () => {
     mockUseAuth0.mockReturnValue(
       auth0State({
         name: EMAIL,

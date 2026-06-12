@@ -58,7 +58,9 @@ export function MobileMenu(props: Props) {
       <button
         type="button"
         onClick={() => setOpen((s) => !s)}
-        className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-colors"
+        // p-1.5 (PR #34 fb4 (70)): 32px chip in the shortened 40px bar
+        // row, matching the other fixed-height TopBar controls.
+        className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded transition-colors"
         aria-label={open ? 'Close menu' : 'Open menu'}
         aria-expanded={open}
       >

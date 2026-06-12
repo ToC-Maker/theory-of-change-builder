@@ -25,6 +25,7 @@ import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
 import { parseFile } from '../utils/fileParser';
 import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
+import { TOP_BAR_HEIGHT_PX } from '../hooks/useViewportOffset';
 import { getFreshIdToken } from '../utils/auth';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
@@ -3314,9 +3315,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             : 'w-full sm:w-80 md:w-1/4 md:min-w-[280px] md:max-w-[400px]'
         }`}
         style={{
-          top: '52px',
+          // The drawer starts at the TopBar row's bottom edge and
+          // tucks 1px under the bar's border-b (bar is z-50, drawer
+          // z-40, so the border paints on top — no white seam).
+          // TOP_BAR_HEIGHT_PX is row + border, hence the -1.
+          top: `${TOP_BAR_HEIGHT_PX - 1}px`,
           bottom: 0,
-          height: 'calc(100vh - 52px)',
+          height: `calc(100vh - ${TOP_BAR_HEIGHT_PX - 1}px)`,
         }}
       >
         {/* Drawer Header. Title sits left; Clear (chat mode with history

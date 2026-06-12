@@ -10,8 +10,10 @@
 // rightBand 24) until a collapse-toggle or reload.
 //
 // K2: the top reserve claimed 64px for a TopBar whose real rendered
-// height is 53px (`min-h-[52px]` row, TopBar.tsx + 1px border-b) —
-// an 11px top/bottom band asymmetry at every viewport size.
+// height was 53px (`min-h-[52px]` row, TopBar.tsx + 1px border-b) —
+// an 11px top/bottom band asymmetry at every viewport size. PR #34
+// fb4 (70) then shortened the bar to a 40px row (41px rendered); the
+// reserve mirrors whatever TopBar.tsx's min-h says, +1px border.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
 import {
@@ -53,11 +55,13 @@ describe('computeViewportOffset', () => {
     expect(computeViewportOffset(false, 640).left).toBe(Math.floor(640 * 0.25) + VIEWPORT_PAD_PX);
   });
 
-  it('reserves the real TopBar height (52px min-h row + 1px border), not the legacy 64px', () => {
-    // K2: TopBar.tsx pins the bar at min-h-[52px] with no vertical
-    // padding on the bordered container; rodney-measured rendered
-    // height is 53px at 1024/1280/1600/1920.
-    expect(TOP_BAR_HEIGHT_PX).toBe(53);
+  it('reserves the real TopBar height (40px min-h row + 1px border), not the legacy 64px', () => {
+    // K2 established the mirror against the round-2 52px row; fb4 (70)
+    // shortened the bar to min-h-[40px] (no vertical padding on the
+    // bordered container), so the constant follows: 40 + 1 = 41.
+    // TopBar.responsive.test.tsx cross-checks this against the actual
+    // min-h class; scripts/test-topbar-geometry.mjs measures the DOM.
+    expect(TOP_BAR_HEIGHT_PX).toBe(41);
     const offset = computeViewportOffset(false, 1920);
     expect(offset.top).toBe(TOP_BAR_HEIGHT_PX + VIEWPORT_PAD_PX);
   });
