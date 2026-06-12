@@ -68,11 +68,19 @@ export type ComposerBlocker =
     };
 
 /**
- * Render-time blocker: event blockers plus the derived `would_exceed_cap`
- * variant computed from the current draft's estimate. `selectBlocker`
- * returns this; consumers (banner, send gate) match against it.
+ * Render-time blocker: event blockers plus two derived variants —
+ * `would_exceed_cap` (computed from the current draft's estimate) and
+ * `session_expired_quota` (the degraded-session deferral: any quota-class
+ * result is replaced by it while the SessionExpiredBanner state is active,
+ * because the quota being enforced belongs to the anon actor the dead
+ * session silently demoted us to). `selectBlocker` returns this; consumers
+ * (banner, send gate) match against it.
  */
-export type RenderedBlocker = ComposerBlocker | { type: 'would_exceed_cap' } | null;
+export type RenderedBlocker =
+  | ComposerBlocker
+  | { type: 'would_exceed_cap' }
+  | { type: 'session_expired_quota' }
+  | null;
 
 /**
  * Cap-class predicate. Used in three places: `selectBlocker` tier-filter,
@@ -224,19 +232,62 @@ export function costErrorToBlocker(error: CostError): ComposerBlocker | undefine
 }
 
 /**
+ * Quota-class predicate over RENDERED variants: every blocker whose copy
+ * and remedies are about the free-tier allowance of a specific identity.
+ * Used by the session-expired deferral below — when the session is
+ * degraded, the allowance being enforced belongs to the anon actor, not
+ * the account the UI shows, so quota messaging (and its "add an API key"
+ * remedy, which needs a live session anyway) must yield to re-login.
+ *
+ * Distinct from `isCapClassBlocker` (event-slot stickiness) and from the
+ * BYOK tier-flip filter (inlined in selectBlocker): this one includes the
+ * derived `would_exceed_cap` because it operates post-derivation.
+ */
+function isQuotaClassRendered(rendered: NonNullable<RenderedBlocker>): boolean {
+  return (
+    rendered.type === 'cap_reached' ||
+    rendered.type === 'last_send_exceeded' ||
+    rendered.type === 'request_cut_off' ||
+    rendered.type === 'would_exceed_cap'
+  );
+}
+
+/**
  * Compose the render-time blocker from event-driven state + derived inputs.
  * Pure function — call inline at render (cheap). Returns:
  *   - Event blocker if any (filtered for cap-class on byok tier flip)
  *   - Derived `would_exceed_cap` if estimate would push usage over limit
  *   - `null` otherwise
+ * Then, when `authSessionDegraded` is set, quota-class results are replaced
+ * by `session_expired_quota` (precedence rule for the SessionExpiredBanner
+ * state — see isQuotaClassRendered above).
  */
 export function selectBlocker(params: {
   eventBlocker: ComposerBlocker | null;
   usage: UsageSnapshot | null;
   composerEstimateUsd: number;
+  /**
+   * True while the SessionExpiredBanner condition holds (isAuthenticated
+   * && degraded token provider — see authSessionHealth.ts). The caller
+   * applies the same `isAuthenticated &&` gate the banner uses, so
+   * genuinely-anon users never get the deferral.
+   */
+  authSessionDegraded?: boolean;
 }): RenderedBlocker {
-  const { eventBlocker, usage, composerEstimateUsd } = params;
+  const { eventBlocker, usage, composerEstimateUsd, authSessionDegraded = false } = params;
 
+  const rendered = selectBlockerBase(eventBlocker, usage, composerEstimateUsd);
+  if (authSessionDegraded && rendered && isQuotaClassRendered(rendered)) {
+    return { type: 'session_expired_quota' };
+  }
+  return rendered;
+}
+
+function selectBlockerBase(
+  eventBlocker: ComposerBlocker | null,
+  usage: UsageSnapshot | null,
+  composerEstimateUsd: number,
+): RenderedBlocker {
   // BYOK tier-flip clear: cap-related event blockers become irrelevant
   // when the user has BYOK active (free-tier cap doesn't apply). Includes
   // last_send_exceeded — the past rejection was about the free-tier cap;
@@ -311,6 +362,8 @@ export function preserveCapClassOnly(prev: ComposerBlocker | null): ComposerBloc
  * gates.
  *
  * Blocks: cap_reached, request_cut_off, global_budget, would_exceed_cap,
+ * session_expired_quota (the deferred quota condition would reject the
+ * send, and sending while degraded silently burns the anon allowance),
  * AND advisory with cost_error_type='unknown' (FM-Q4 defensive over-block
  * for client/server bundle skew).
  *
@@ -326,6 +379,7 @@ export function shouldBlockSend(rendered: RenderedBlocker): boolean {
     case 'request_cut_off':
     case 'global_budget':
     case 'would_exceed_cap':
+    case 'session_expired_quota':
       return true;
     case 'last_send_exceeded':
       // Past-tense informational. User is under cap; editing down may let

@@ -8,7 +8,23 @@
 // The component reads `usage.limit_usd` and `usage.used_usd` at render
 // time — single source of truth for limit values is the live usage
 // snapshot rather than the (potentially stale) event payload.
+//
+// Quota-variant copy principles (fb5 issue 73, round-5 reviewer feedback —
+// the at-cap state read as "estimation is broken"):
+//   - name the identity whose allowance ran out ("the free anonymous
+//     allowance" vs "your account's free allowance"), keyed off the
+//     server-reported `usage.tier` (the server knows whose quota row
+//     answered), falling back to isAuthenticated when usage is null;
+//   - name what's blocked ("sending messages is paused", not the app);
+//   - name the truthful action. Anon users must sign in BEFORE a key can
+//     be added (BYOK binds to an Auth0 sub), and signing in does NOT grant
+//     a fresh allowance (anon spend folds into the account row via
+//     mergeAnonUsageIntoAuth), so the anon action is "sign in and add your
+//     own key", never "sign in for more quota".
+// Copy strings are single template expressions so tests can pin them
+// verbatim via textContent equality.
 import React from 'react';
+import { useAuth0 } from '@auth0/auth0-react';
 import { KeyIcon } from '@heroicons/react/24/outline';
 import { DonateCta } from '../ByokPanel';
 import { formatCostUsd } from '../../utils/cost';
@@ -18,6 +34,8 @@ import type { RenderedBlocker } from './composerBlocker';
 // than imported to keep this component self-contained (no circular
 // imports back into ChatInterface). The button just dispatches a custom
 // event that ChatInterface listens for to open the key-entry modal.
+// (For anon users that modal asks them to sign in first; the banner copy
+// sets that expectation so the two-step flow isn't a surprise.)
 function AddApiKeyButton() {
   return (
     <button
@@ -27,6 +45,27 @@ function AddApiKeyButton() {
     >
       <KeyIcon className="w-4 h-4" aria-hidden />
       Add an Anthropic API key
+    </button>
+  );
+}
+
+// Re-login affordance for the session_expired_quota deferral. Same
+// returnTo contract as SessionExpiredBanner / ByokPanel's sign-in: land
+// back on the chart being edited, not at `/` (Auth0RedirectHandler in
+// App.tsx consumes auth0_returnTo).
+function SignInAgainButton() {
+  const { loginWithRedirect } = useAuth0();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const returnTo = window.location.pathname + window.location.search;
+        localStorage.setItem('auth0_returnTo', returnTo);
+        void loginWithRedirect({ appState: { returnTo } });
+      }}
+      className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
+    >
+      Sign in again
     </button>
   );
 }
@@ -41,10 +80,14 @@ interface ComposerBlockerBannerProps {
    *  (BYOK user vs free-tier copy) and which CTAs render. */
   hasKey: boolean;
   /** The active draft's estimate in USD; rendered in the would_exceed_cap
-   *  copy as "Your next send is estimated at $X". Pass the Chat or
+   *  copy as "This message is estimated at $X". Pass the Chat or
    *  Generate estimate based on current mode (the parent component does
    *  the mode-aware selection). */
   composerEstimateUsd: number;
+  /** Auth0 client-side auth state. Quota-variant copy uses it to (a) fall
+   *  back on identity naming when `usage` is null and (b) pick the action
+   *  sentence — signed-out users must sign in before a key can be added. */
+  isAuthenticated: boolean;
 }
 
 function ComposerBlockerBannerImpl({
@@ -52,18 +95,38 @@ function ComposerBlockerBannerImpl({
   usage,
   hasKey,
   composerEstimateUsd,
+  isAuthenticated,
 }: ComposerBlockerBannerProps) {
   if (!blocker) return null;
+
+  // Identity naming for quota copy. The server's tier is authoritative for
+  // WHOSE allowance answered the usage probe ('anon' = anon actor row,
+  // 'free' = account row — including the signed-out-with-auth-link case
+  // where the cap follows the account per Policy B). With no snapshot
+  // (usage fetch failed; event-driven blocker), fall back to the client's
+  // auth state.
+  const anonAllowance = usage ? usage.tier === 'anon' : !isAuthenticated;
+  const allowanceNoun = anonAllowance
+    ? 'the free anonymous allowance'
+    : "your account's free allowance";
+  // Action sentence keys off isAuthenticated (NOT tier): adding a key
+  // requires a signed-in session whatever row the allowance lives in.
+  const addKeyAction = isAuthenticated
+    ? 'Add your own Anthropic API key to keep going.'
+    : 'Sign in and add your own Anthropic API key to keep going.';
+  const shortenAction = isAuthenticated
+    ? 'Shorten it, or add your own Anthropic API key to keep going.'
+    : 'Shorten it, or sign in and add your own Anthropic API key to keep going.';
 
   switch (blocker.type) {
     case 'request_cut_off':
       // Mid-stream kill — the user's last message used the rest of their
-      // quota and got cut off. Red because the message they sent is gone.
+      // quota and got cut off. Red because the response they got is
+      // truncated and no further send can succeed.
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            Message cut off — your last message used the rest of the free quota. Add an Anthropic
-            API key to keep going.
+            {`The response was cut short because it used the last of ${allowanceNoun}, so sending messages is paused. ${addKeyAction}`}
           </div>
           <AddApiKeyButton />
         </div>
@@ -72,7 +135,8 @@ function ComposerBlockerBannerImpl({
     case 'global_budget':
       // Anthropic Console budget cap OR BYOK billing error. Two different
       // failure modes share this variant because the wire shape is the
-      // same; conditional copy distinguishes them.
+      // same; conditional copy distinguishes them. Identity-independent
+      // (the shared cap is exhausted for everyone), so no allowance noun.
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2 space-y-1">
@@ -108,7 +172,7 @@ function ComposerBlockerBannerImpl({
         </div>
       );
 
-    case 'cap_reached':
+    case 'cap_reached': {
       // Server-confirmed preflight rejection AND user genuinely at-or-over
       // the lifetime cap (used >= limit). Sticky red blocking banner —
       // editing the draft can't help because any send would still fail.
@@ -117,18 +181,19 @@ function ComposerBlockerBannerImpl({
       // Copy intentionally shows only the displayed limit, not the actual
       // used figure: thanks to the kill-switch + preflight buffer, used
       // can sit slightly above limit (e.g. $5.10 of $5.00), and rendering
-      // both would read as a literal contradiction.
+      // both would read as a literal contradiction. With no usage
+      // snapshot the figure is omitted rather than hardcoded.
+      const limitText = usage ? ` (${formatCostUsd(usage.limit_usd)})` : '';
       return (
         <div className="space-y-2">
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
-            You&apos;ve reached the free-tier limit of{' '}
-            {usage ? formatCostUsd(usage.limit_usd) : '$5.00'}. Add an Anthropic API key to keep
-            going.
+            {`You've used all of ${allowanceNoun}${limitText}, so sending messages is paused. ${addKeyAction}`}
           </div>
           <AddApiKeyButton />
           <DonateCta />
         </div>
       );
+    }
 
     case 'last_send_exceeded': {
       // Server-confirmed preflight rejection BUT user is under the cap
@@ -143,45 +208,54 @@ function ComposerBlockerBannerImpl({
       // for remaining quota" problem since the user is under cap.
       // Editing or BYOK are the actionable recovery paths.
       const remainingText = usage
-        ? `${formatCostUsd(Math.max(0, usage.limit_usd - usage.used_usd))}/${formatCostUsd(usage.limit_usd)}`
-        : null;
+        ? `the ${formatCostUsd(Math.max(0, usage.limit_usd - usage.used_usd))} left`
+        : "what's left";
       return (
         <div className="space-y-2">
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            Your last send would have exceeded the free-tier limit
-            {remainingText && (
-              <>
-                {' '}
-                (<strong>{remainingText}</strong> left)
-              </>
-            )}
-            . Edit to fit, or add an Anthropic API key to continue.
+            {`That message would have cost more than ${remainingText} of ${allowanceNoun}, so it wasn't sent. ${shortenAction}`}
           </div>
           <AddApiKeyButton />
         </div>
       );
     }
 
-    case 'would_exceed_cap':
+    case 'would_exceed_cap': {
       // Derived: user's draft estimate would push them past the cap on
       // send. Amber (not red) because they can still trim the draft.
       // Renders the remaining quota so users see what they have to work
       // with. Both unblock affordances (add key OR donate) — same shape
       // as cap_reached since the user's options are identical in both.
+      // selectBlocker only derives this variant from a non-null usage
+      // snapshot; the fallback phrase is defensive for prop drift.
+      const remainingText = usage
+        ? `only ${formatCostUsd(Math.max(0, usage.limit_usd - usage.used_usd))}`
+        : "only what's left";
       return (
         <div className="space-y-2">
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            Your next send (includes chat history and attached files) is estimated at{' '}
-            <strong>{formatCostUsd(composerEstimateUsd)}</strong>, but only{' '}
-            <strong>
-              {usage
-                ? `${formatCostUsd(Math.max(0, usage.limit_usd - usage.used_usd))}/${formatCostUsd(usage.limit_usd)}`
-                : ''}
-            </strong>{' '}
-            left. Add an Anthropic API key to continue.
+            {`This message is estimated at ${formatCostUsd(composerEstimateUsd)} (chat history and files included), but ${remainingText} of ${allowanceNoun} is left. ${shortenAction}`}
           </div>
           <AddApiKeyButton />
           <DonateCta />
+        </div>
+      );
+    }
+
+    case 'session_expired_quota':
+      // Degraded-session deferral (selectBlocker precedence rule): a
+      // quota-class blocker fired while the SessionExpiredBanner state is
+      // active, meaning the allowance being enforced belongs to the anon
+      // actor the dead session demoted us to. Quota remedies would be
+      // wrong here — adding a key needs a live session, and the account's
+      // own allowance may be untouched — so the only CTA is the same
+      // re-login the top banner offers. Amber, matching that banner.
+      return (
+        <div className="space-y-2">
+          <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            {`Your session has expired, so sending is paused (you're temporarily on the free anonymous allowance). Sign in again to use your account.`}
+          </div>
+          <SignInAgainButton />
         </div>
       );
 
@@ -207,7 +281,7 @@ function ComposerBlockerBannerImpl({
 
 // React.memo absorbs reference-equality churn on parent re-renders. The
 // banner shouldn't re-render unless one of its props (blocker reference,
-// usage values, hasKey, composerEstimateUsd) actually changed. Default
-// shallow comparison is enough since blocker objects are replaced (not
-// mutated) by setComposerBlocker.
+// usage values, hasKey, composerEstimateUsd, isAuthenticated) actually
+// changed. Default shallow comparison is enough since blocker objects are
+// replaced (not mutated) by setComposerBlocker.
 export const ComposerBlockerBanner = React.memo(ComposerBlockerBannerImpl);

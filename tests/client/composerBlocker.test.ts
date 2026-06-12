@@ -429,6 +429,132 @@ describe('selectBlocker', () => {
 });
 
 // ---------------------------------------------------------------------------
+// selectBlocker — session-expired precedence (fb5 issue 73)
+// ---------------------------------------------------------------------------
+//
+// When the signed-in session can no longer mint tokens (SessionExpiredBanner
+// active: isAuthenticated && degraded), /api/usage and sends silently answer
+// for the ANON actor. Any quota-class blocker computed in that state is a
+// downstream symptom of the dead session, and its "add an API key" remedy is
+// wrong (key ops need a live session; the real fix is re-login). The selector
+// therefore replaces quota-class results with `session_expired_quota`, whose
+// copy defers to the session banner's "sign in again" action. Non-quota
+// blockers (global_budget, advisory) are identity-independent and pass
+// through unchanged.
+
+describe('selectBlocker — authSessionDegraded precedence', () => {
+  const atCapAnon = { used_usd: 5, limit_usd: 5, tier: 'anon' };
+
+  it('event cap_reached + degraded → session_expired_quota', () => {
+    const result = selectBlocker({
+      eventBlocker: { type: 'cap_reached' },
+      usage: atCapAnon,
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual({ type: 'session_expired_quota' });
+  });
+
+  it('event request_cut_off + degraded → session_expired_quota', () => {
+    const result = selectBlocker({
+      eventBlocker: { type: 'request_cut_off' },
+      usage: atCapAnon,
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual({ type: 'session_expired_quota' });
+  });
+
+  it('event last_send_exceeded + degraded → session_expired_quota', () => {
+    const result = selectBlocker({
+      eventBlocker: { type: 'last_send_exceeded' },
+      usage: { used_usd: 4.5, limit_usd: 5, tier: 'anon' },
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual({ type: 'session_expired_quota' });
+  });
+
+  it('derived cap_reached (usage at cap, no event) + degraded → session_expired_quota', () => {
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: atCapAnon,
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual({ type: 'session_expired_quota' });
+  });
+
+  it('derived would_exceed_cap + degraded → session_expired_quota', () => {
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 4.99, limit_usd: LIFETIME_CAP_USD, tier: 'anon' },
+      composerEstimateUsd: JUST_OVER_EFFECTIVE(4.99),
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual({ type: 'session_expired_quota' });
+  });
+
+  it('global_budget + degraded → passes through unchanged (not quota-class)', () => {
+    const result = selectBlocker({
+      eventBlocker: { type: 'global_budget', upstream_message: 'billing error' },
+      usage: atCapAnon,
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual({ type: 'global_budget', upstream_message: 'billing error' });
+  });
+
+  it('advisory + degraded → passes through unchanged', () => {
+    const adv: ComposerBlocker = {
+      type: 'advisory',
+      cost_error_type: 'chart_deleted',
+      detail: 'some detail',
+    };
+    const result = selectBlocker({
+      eventBlocker: adv,
+      usage: atCapAnon,
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toEqual(adv);
+  });
+
+  it('degraded with no quota condition → null (nothing to defer)', () => {
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: { used_usd: 1, limit_usd: 5, tier: 'free' },
+      composerEstimateUsd: 0.1,
+      authSessionDegraded: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('degraded + stale byok snapshot → null (BYOK filter wins; nothing to defer)', () => {
+    // A byok-tier snapshot can only be pre-degradation (tier=byok requires a
+    // verified JWT, which a degraded session cannot produce). The BYOK
+    // tier-flip filter clears cap-class events first, leaving nothing for
+    // the degraded rule to replace.
+    const result = selectBlocker({
+      eventBlocker: { type: 'cap_reached' },
+      usage: { used_usd: 5, limit_usd: 5, tier: 'byok' },
+      composerEstimateUsd: 0,
+      authSessionDegraded: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('authSessionDegraded omitted → existing behavior (defaults false)', () => {
+    const result = selectBlocker({
+      eventBlocker: null,
+      usage: atCapAnon,
+      composerEstimateUsd: 0,
+    });
+    expect(result).toEqual({ type: 'cap_reached' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // shouldBlockSend
 // ---------------------------------------------------------------------------
 
@@ -489,6 +615,12 @@ describe('shouldBlockSend', () => {
     // would_exceed_cap derived state gates if their CURRENT draft is
     // still too big — this variant alone shouldn't block.
     expect(shouldBlockSend({ type: 'last_send_exceeded' })).toBe(false);
+  });
+
+  it('session_expired_quota → true (the deferred quota condition would reject the send)', () => {
+    // The variant only replaces blockers that themselves block; sending
+    // while degraded would also silently burn the anon allowance.
+    expect(shouldBlockSend({ type: 'session_expired_quota' })).toBe(true);
   });
 });
 

@@ -37,6 +37,7 @@ import {
   preserveCapClassOnly,
 } from './chat/composerBlocker';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
+import { useAuthSessionDegraded } from '../hooks/useAuthSessionDegraded';
 import { useClampedPopoverX } from './chat/useClampedPopoverX';
 import { ConfirmModal } from './ConfirmModal';
 import type { ToCData } from '../types';
@@ -812,13 +813,23 @@ export function ChatInterface({
   // estimate, which is 0 in Generate mode → no derived block fires).
   const activeEstimate = currentMode === 'generate' ? generateEstimateUsd : composerEstimateUsd;
 
+  // SessionExpiredBanner state (round-4): the signed-in session can no
+  // longer mint tokens, so quota probes and sends answer for the ANON
+  // actor. Gated on isAuthenticated to mirror the banner's own render
+  // gate; selectBlocker uses it to replace quota-class blockers with the
+  // re-login deferral (fb5 issue 73 precedence rule).
+  const authSessionDegraded = useAuthSessionDegraded();
+
   // Render-time blocker: event blocker (composerBlocker) plus derived
   // would_exceed_cap, with cap-class blockers filtered out when tier is
-  // byok. Pure function, called inline at render — cheap.
+  // byok and quota-class results deferred to the session-expired banner
+  // while that state is active. Pure function, called inline at render —
+  // cheap.
   const renderedBlocker: RenderedBlocker = selectBlocker({
     eventBlocker: composerBlocker,
     usage,
     composerEstimateUsd: activeEstimate,
+    authSessionDegraded: isAuthenticated && authSessionDegraded,
   });
 
   // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
@@ -3806,12 +3817,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       a single React.memo'd component reading from
                       renderedBlocker (see src/components/chat/composerBlocker.ts).
                       Variants: cap_reached, request_cut_off, global_budget,
-                      would_exceed_cap, advisory. */}
+                      would_exceed_cap, session_expired_quota, advisory. */}
                     <ComposerBlockerBanner
                       blocker={renderedBlocker}
                       usage={usage}
                       hasKey={hasKey}
                       composerEstimateUsd={activeEstimate}
+                      isAuthenticated={isAuthenticated}
                     />
                     {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
@@ -4066,6 +4078,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       usage={usage}
                       hasKey={hasKey}
                       composerEstimateUsd={activeEstimate}
+                      isAuthenticated={isAuthenticated}
                     />
                     {/* Unified attachment tray. Shows both Files-API PDFs
                         (`generateAttachedChips`) and inlined text files
