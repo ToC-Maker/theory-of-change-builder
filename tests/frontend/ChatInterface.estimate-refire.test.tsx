@@ -16,7 +16,7 @@
 //   1. Draft present → model switch re-estimates with the NEW model.
 //   2. Truly empty composer → model switch fires no request, figure $0.00.
 //   3. Emptying the draft clears the WHOLE estimate display, not just the
-//      dollar figure: the "Estimation failed" banner and the "N files
+//      dollar figure: the estimate-failure note and the "N files
 //      couldn't be priced" notice from the previous draft must not
 //      survive into the empty state. (This was the real defect found:
 //      the chat guard reset only the figure, while the generate guard
@@ -179,23 +179,29 @@ describe('composer estimate × model switch', () => {
     expect(estimateLine()).toContain('$0.00');
   }, 15_000);
 
-  it('clears the failure banner (not just the figure) when the draft is emptied', async () => {
+  it('clears the failure note (not just the figure) when the draft is emptied', async () => {
     renderChat();
     const textarea = await getComposer();
 
-    // Estimate fails → fallback figure + failure banner.
+    // Estimate fails → fallback figure + failure note. (Copy updated in
+    // fb6 issue 74: the note now comes from estimateUnavailableNote — a
+    // network-level failure has no upstream detail, so it renders the
+    // generic "Cost estimates are unavailable right now." line plus the
+    // rough-fallback disclosure.)
     estimateImpl = () => Promise.reject(new TypeError('Failed to fetch (simulated)'));
     setDraft(textarea, 'this estimate will fail');
-    await screen.findByText(/Estimation failed:/, undefined, { timeout: 3000 });
+    await screen.findByText(/Cost estimates are unavailable right now\./, undefined, {
+      timeout: 3000,
+    });
     expect(estimateCalls).toHaveLength(1);
 
     // Empty the draft. The guard path must reset the whole display —
-    // figure to $0.00, banner gone — WITHOUT issuing a new request
+    // figure to $0.00, note gone — WITHOUT issuing a new request
     // (nothing is sendable, so there is nothing to re-estimate).
     estimateImpl = () => okEstimate();
     setDraft(textarea, '');
     await waitFor(() => expect(estimateLine()).toContain('$0.00'), { timeout: 3000 });
-    expect(screen.queryByText(/Estimation failed:/)).toBeNull();
+    expect(screen.queryByText(/Cost estimates are unavailable/)).toBeNull();
     expect(estimateCalls).toHaveLength(1); // no refetch on the empty state
   }, 15_000);
 

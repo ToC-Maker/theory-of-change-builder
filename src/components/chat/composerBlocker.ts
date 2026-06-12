@@ -340,6 +340,108 @@ function selectBlockerBase(
 }
 
 /**
+ * Structured failure state for the composer's count_tokens estimate
+ * (fb6 issue 74). `upstreamStatus`/`upstreamMessage` mirror the
+ * `upstream_status`/`upstream_message` fields of the worker's
+ * `estimation_unavailable` body (worker/api/count-tokens-estimate.ts);
+ * both absent = a failure with no upstream detail (network error, local
+ * 503). A `null` slot means the estimate is healthy.
+ */
+export type EstimateFailure = {
+  upstreamStatus?: number;
+  upstreamMessage?: string;
+};
+
+/**
+ * Map an estimate failure to ONE quiet human sentence (fb6 issue 74).
+ *
+ * Status meanings are doc-grounded (Anthropic error types):
+ *   - 401 authentication_error: OUR server key was rejected — a server
+ *     problem, never the user's.
+ *   - 402 billing_error: server-side billing issue.
+ *   - 403 permission_error: the terse "Request not allowed" variant is
+ *     empirically a request-origin/region block (confirmed in the field:
+ *     the same request 200s from the EU and 403s from a blocked region).
+ *     NOT quota — billing is a separate 402 type. The block gates ALL AI
+ *     endpoints, so the copy names the full blast radius; the round-6
+ *     reviewer was misled into thinking only estimation was broken.
+ *     (Smart Placement — see the wrangler.jsonc note — should make this
+ *     rare; this copy is the safety net.)
+ *   - 429 rate_limit_error: transient; the estimate re-fires on the next
+ *     draft edit. NOTE: the worker re-shapes upstream 429s into its own
+ *     429 `{error:'rate_limited'}` WITHOUT upstream_* fields — the client
+ *     parse maps that shape to upstreamStatus 429 before calling this.
+ *   - 500/504/529: transient upstream errors.
+ *   - anything else: generic line with the raw detail appended, so
+ *     unrecognized failures stay diagnosable from the composer.
+ */
+export function estimateUnavailableNote(failure: EstimateFailure): string {
+  switch (failure.upstreamStatus) {
+    case 401:
+      return (
+        "Cost estimates are unavailable: the server's AI credentials were rejected. " +
+        'This is a server problem, not yours.'
+      );
+    case 402:
+      return 'Cost estimates are unavailable: the AI service reported a billing problem on our side.';
+    case 403:
+      return (
+        'Cost estimates are unavailable: the AI service refused the request from this region. ' +
+        'Chat and generation are affected too.'
+      );
+    case 429:
+      return (
+        'Cost estimates are briefly unavailable: the AI service is rate-limiting. ' +
+        'It retries automatically.'
+      );
+    case 500:
+    case 504:
+    case 529:
+      return 'Cost estimates are temporarily unavailable upstream. Estimates resume automatically.';
+    default: {
+      const { upstreamStatus, upstreamMessage } = failure;
+      if (upstreamStatus != null && upstreamMessage) {
+        return `Cost estimates are unavailable right now (upstream error ${upstreamStatus}: ${upstreamMessage}).`;
+      }
+      if (upstreamStatus != null) {
+        return `Cost estimates are unavailable right now (upstream error ${upstreamStatus}).`;
+      }
+      if (upstreamMessage) {
+        return `Cost estimates are unavailable right now (${upstreamMessage}).`;
+      }
+      return 'Cost estimates are unavailable right now.';
+    }
+  }
+}
+
+/**
+ * Which rendered variants carry the estimate status INSIDE the banner
+ * (fb6 issue 74). Field incident: with a quota blocker up, the
+ * under-textarea estimate cluster clips below the fold on common laptop
+ * viewports (reproduced at 1366x662 — the composer column doesn't
+ * scroll), so the quota-exhausted reviewer saw no estimate-related
+ * message at all. For these variants ComposerBlockerBanner renders the
+ * estimate status as a quiet line within the banner, and ChatInterface
+ * suppresses the under-textarea cluster — one source of truth at a time,
+ * co-visible with the blocker by construction.
+ *
+ * Scope: the quota-class variants plus the session-expired deferral.
+ * NOT advisory (its service-error copy — including the stream-side
+ * `estimation_unavailable` — would double up) and NOT global_budget
+ * (identity-independent; already renders its own upstream line).
+ */
+export function bannerCarriesEstimateStatus(rendered: RenderedBlocker): boolean {
+  if (!rendered) return false;
+  return (
+    rendered.type === 'cap_reached' ||
+    rendered.type === 'request_cut_off' ||
+    rendered.type === 'last_send_exceeded' ||
+    rendered.type === 'would_exceed_cap' ||
+    rendered.type === 'session_expired_quota'
+  );
+}
+
+/**
  * Send-start clear semantics. Preserve sticky cap-class blockers across
  * send attempts (the cap gate blocks the send anyway, so the banner must
  * stay visible); clear advisory blockers so they don't linger after the

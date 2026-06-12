@@ -14,7 +14,7 @@
 //     us to; "add an API key" would fight the real fix).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ChatInterface } from '../../src/components/ChatInterface';
 import { ApiKeyContext, type ApiKeyContextValue } from '../../src/contexts/useApiKey';
@@ -51,16 +51,51 @@ const apiKeyStub: ApiKeyContextValue = {
 };
 
 let usageResponse: { used_usd: number; limit_usd: number; tier: string };
+// Per-test behavior of POST /api/count-tokens-estimate (fb6 issue 74 wiring
+// tests). Defaults to a healthy estimate; tests override with the field-
+// incident 503 body to exercise the failure path.
+let estimateImpl: () => Promise<Response>;
+
+const healthyEstimate = () =>
+  Promise.resolve(
+    Response.json({
+      input_tokens: 10000,
+      estimated_cost_usd: 0.07,
+      stripped_file_blocks: 0,
+      uncounted_file_ids: [],
+      cached_file_tokens: 0,
+      cached_file_tokens_draft: 0,
+      cached_file_tokens_history: 0,
+    }),
+  );
+
+// Verbatim field-incident body (fb6 issue 74): the reviewer found this in
+// the Network tab while the UI showed nothing.
+const fieldIncident503 = () =>
+  Promise.resolve(
+    Response.json(
+      {
+        error: 'estimation_unavailable',
+        upstream_status: 403,
+        upstream_message: 'Request not allowed',
+      },
+      { status: 503 },
+    ),
+  );
 
 beforeEach(() => {
   resetAuthSessionHealth();
   usageResponse = { used_usd: 5, limit_usd: 5, tier: 'anon' };
+  estimateImpl = healthyEstimate;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.includes('/api/usage')) {
         return Response.json(usageResponse);
+      }
+      if (url.includes('/api/count-tokens-estimate')) {
+        return estimateImpl();
       }
       return Response.json({});
     }),
@@ -142,5 +177,110 @@ describe('ChatInterface quota blocker wiring', () => {
 
     expect(await screen.findByText(ANON_CAP_COPY, undefined, { timeout: 3000 })).toBeVisible();
     expect(screen.queryByText(SESSION_EXPIRED_COPY)).toBeNull();
+  }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
+// Estimate visibility while quota-blocked (fb6 issue 74)
+// ---------------------------------------------------------------------------
+//
+// Field incident, second occurrence: a quota-exhausted reviewer with an
+// upstream estimate failure saw NO estimate-related message anywhere — the
+// under-textarea estimate cluster (figure + failure note) clips below the
+// fold once the blocker stack is up (reproduced in-browser at 1366x662;
+// the composer column does not scroll). The fix carries the estimate
+// status INSIDE the blocker banner for quota variants and suppresses the
+// under-textarea cluster there (single source of truth at a time). These
+// tests pin that wiring end-to-end: stubbed /api/usage at-cap + stubbed
+// /api/count-tokens-estimate + a typed draft.
+
+const REGION_NOTE_COPY =
+  /Cost estimates are unavailable: the AI service refused the request from this region\. Chat and generation are affected too\./;
+const STILL_WORK_COPY =
+  /Estimates still work: your current draft is about \$\d+\.\d+ of input cost\./;
+const PLACEHOLDER = 'Ask about your Theory of Change...';
+
+async function typeDraft(text: string) {
+  const textarea = await screen.findByPlaceholderText(PLACEHOLDER);
+  fireEvent.change(textarea, { target: { value: text } });
+}
+
+describe('estimate visibility while quota-blocked (fb6 issue 74)', () => {
+  it('failure note (with mapped upstream reason) is visible alongside the blocker; under-textarea cluster suppressed', async () => {
+    usageResponse = { used_usd: 5, limit_usd: 5, tier: 'anon' };
+    estimateImpl = fieldIncident503;
+    mockUseAuth0.mockReturnValue(auth0State(false));
+    renderChat();
+
+    expect(await screen.findByText(ANON_CAP_COPY, undefined, { timeout: 3000 })).toBeVisible();
+    await typeDraft('draft that will fail to estimate');
+
+    // The mapped note appears (debounced estimate → 503 → failure state).
+    expect(await screen.findByText(REGION_NOTE_COPY, undefined, { timeout: 3000 })).toBeVisible();
+    // Exactly once: the banner carries it; the under-textarea duplicate is
+    // suppressed while a quota blocker is rendered.
+    expect(screen.getAllByText(REGION_NOTE_COPY)).toHaveLength(1);
+    // The old under-textarea cluster is gone in the blocked state: no
+    // estimate row (its "output shown live during streaming" promise is
+    // incoherent while sending is paused).
+    expect(screen.queryByText(/Estimated input cost:/)).toBeNull();
+    // Blocker copy still up — the note rides alongside it, not instead.
+    expect(screen.getByText(ANON_CAP_COPY)).toBeVisible();
+  }, 15_000);
+
+  it('healthy estimate stays visible while quota-blocked (capped users see what a send WOULD cost)', async () => {
+    usageResponse = { used_usd: 5, limit_usd: 5, tier: 'anon' };
+    estimateImpl = healthyEstimate;
+    mockUseAuth0.mockReturnValue(auth0State(false));
+    renderChat();
+
+    expect(await screen.findByText(ANON_CAP_COPY, undefined, { timeout: 3000 })).toBeVisible();
+    await typeDraft('healthy estimate draft');
+
+    expect(await screen.findByText(STILL_WORK_COPY, undefined, { timeout: 3000 })).toBeVisible();
+    // No duplicated figure: the under-textarea estimate row is suppressed.
+    expect(screen.queryByText(/Estimated input cost:/)).toBeNull();
+    expect(screen.queryByText(/Cost estimates are/)).toBeNull();
+  }, 15_000);
+
+  it('session-expired keeps top precedence; estimate failure rides inside the single deferral banner', async () => {
+    usageResponse = { used_usd: 5, limit_usd: 5, tier: 'anon' };
+    estimateImpl = fieldIncident503;
+    mockUseAuth0.mockReturnValue(auth0State(true));
+    reportAuthTokenFailure(
+      Object.assign(new Error('Unknown or invalid refresh token.'), { error: 'invalid_grant' }),
+    );
+    renderChat();
+
+    expect(
+      await screen.findByText(SESSION_EXPIRED_COPY, undefined, { timeout: 3000 }),
+    ).toBeVisible();
+    await typeDraft('draft while session expired and estimates down');
+
+    expect(await screen.findByText(REGION_NOTE_COPY, undefined, { timeout: 3000 })).toBeVisible();
+    // Precedence unchanged: quota copy stays deferred.
+    expect(screen.queryByText(ANON_CAP_COPY)).toBeNull();
+    expect(screen.queryByText(ACCOUNT_CAP_COPY)).toBeNull();
+    // No pileup: one deferral banner, one quiet note, no under-textarea
+    // duplicates.
+    expect(screen.getAllByText(REGION_NOTE_COPY)).toHaveLength(1);
+    expect(screen.getAllByText(SESSION_EXPIRED_COPY)).toHaveLength(1);
+    expect(screen.queryByText(/Estimated input cost:/)).toBeNull();
+  }, 15_000);
+
+  it('unblocked control: under-cap usage keeps the under-textarea cluster (estimate row + failure note)', async () => {
+    usageResponse = { used_usd: 0.5, limit_usd: 5, tier: 'anon' };
+    estimateImpl = fieldIncident503;
+    mockUseAuth0.mockReturnValue(auth0State(false));
+    renderChat();
+
+    await typeDraft('under-cap draft with failing estimate');
+
+    // The mapped note shows under the textarea, with the rough-fallback
+    // disclosure appended, and the estimate row stays.
+    expect(await screen.findByText(REGION_NOTE_COPY, undefined, { timeout: 3000 })).toBeVisible();
+    expect(screen.getByText(/Fell back to a rough local estimate/)).toBeVisible();
+    expect(screen.getByText(/Estimated input cost:/)).toBeVisible();
+    expect(screen.queryByText(ANON_CAP_COPY)).toBeNull();
   }, 15_000);
 });

@@ -21,6 +21,8 @@ import {
   isCapClassBlocker,
   preserveCapClassOnly,
   SERVICE_ERROR_TYPES,
+  estimateUnavailableNote,
+  bannerCarriesEstimateStatus,
 } from '../../src/components/chat/composerBlocker';
 import { LIFETIME_CAP_USD, EFFECTIVE_LIFETIME_CAP_USD } from '../../worker/_shared/tiers';
 
@@ -901,6 +903,120 @@ describe('SERVICE_ERROR_TYPES', () => {
     expect(SERVICE_ERROR_TYPES.has('body_too_large')).toBe(false);
     expect(SERVICE_ERROR_TYPES.has('chart_deleted')).toBe(false);
     expect(SERVICE_ERROR_TYPES.has('file_unavailable')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// estimateUnavailableNote — upstream status → human copy map (fb6 issue 74)
+// ---------------------------------------------------------------------------
+//
+// Field incident: /api/count-tokens-estimate failed with
+// {"error":"estimation_unavailable","upstream_status":403,
+//  "upstream_message":"Request not allowed"} and the UI showed nothing.
+// The note must translate upstream statuses into doc-grounded explanations
+// (Anthropic error types) rather than echoing raw status/message. 403's
+// terse "Request not allowed" is empirically a request-origin/region block
+// (NOT quota — billing is a separate 402 type), and it gates ALL AI
+// endpoints, so the copy must say chat/generation are affected too.
+
+describe('estimateUnavailableNote', () => {
+  it('401 → server-credentials copy (authentication_error is OUR key, not the user)', () => {
+    expect(estimateUnavailableNote({ upstreamStatus: 401 })).toBe(
+      "Cost estimates are unavailable: the server's AI credentials were rejected. " +
+        'This is a server problem, not yours.',
+    );
+  });
+
+  it('402 → server-side billing copy', () => {
+    expect(estimateUnavailableNote({ upstreamStatus: 402 })).toBe(
+      'Cost estimates are unavailable: the AI service reported a billing problem on our side.',
+    );
+  });
+
+  it('403 → region-block copy that names the full blast radius (chat + generation)', () => {
+    expect(
+      estimateUnavailableNote({ upstreamStatus: 403, upstreamMessage: 'Request not allowed' }),
+    ).toBe(
+      'Cost estimates are unavailable: the AI service refused the request from this region. ' +
+        'Chat and generation are affected too.',
+    );
+  });
+
+  it('429 → rate-limit copy', () => {
+    expect(estimateUnavailableNote({ upstreamStatus: 429 })).toBe(
+      'Cost estimates are briefly unavailable: the AI service is rate-limiting. ' +
+        'It retries automatically.',
+    );
+  });
+
+  it.each([500, 504, 529])('%i → transient-upstream copy', (status) => {
+    expect(estimateUnavailableNote({ upstreamStatus: status })).toBe(
+      'Cost estimates are temporarily unavailable upstream. Estimates resume automatically.',
+    );
+  });
+
+  it('unknown status + message → generic line with the raw reason appended', () => {
+    expect(estimateUnavailableNote({ upstreamStatus: 418, upstreamMessage: 'teapot' })).toBe(
+      'Cost estimates are unavailable right now (upstream error 418: teapot).',
+    );
+  });
+
+  it('unknown status without message → generic line with the raw status', () => {
+    expect(estimateUnavailableNote({ upstreamStatus: 418 })).toBe(
+      'Cost estimates are unavailable right now (upstream error 418).',
+    );
+  });
+
+  it('message without status → generic line with the message', () => {
+    expect(estimateUnavailableNote({ upstreamMessage: 'shape mismatch' })).toBe(
+      'Cost estimates are unavailable right now (shape mismatch).',
+    );
+  });
+
+  it('no upstream detail (network error, local 503) → bare generic line', () => {
+    expect(estimateUnavailableNote({})).toBe('Cost estimates are unavailable right now.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bannerCarriesEstimateStatus — which rendered variants surface the
+// estimate status INSIDE the blocker banner (fb6 issue 74)
+// ---------------------------------------------------------------------------
+//
+// The under-textarea estimate cluster sits at the bottom of the composer
+// stack; when a quota blocker is up, that cluster clips below the fold on
+// common laptop viewports (reproduced at 1366x662). For quota-class
+// variants the banner itself carries the estimate status, and ChatInterface
+// suppresses the under-textarea cluster to avoid duplication. This
+// predicate is the single source of truth for that variant set.
+
+describe('bannerCarriesEstimateStatus', () => {
+  it.each([
+    'cap_reached',
+    'request_cut_off',
+    'last_send_exceeded',
+    'would_exceed_cap',
+    'session_expired_quota',
+  ] as const)('%s carries estimate status', (type) => {
+    expect(bannerCarriesEstimateStatus({ type } as RenderedBlocker)).toBe(true);
+  });
+
+  it('null carries nothing (no blocker → under-textarea cluster owns the display)', () => {
+    expect(bannerCarriesEstimateStatus(null)).toBe(false);
+  });
+
+  it('advisory does not carry (service-error copy would double up)', () => {
+    expect(
+      bannerCarriesEstimateStatus({
+        type: 'advisory',
+        cost_error_type: 'estimation_unavailable',
+        detail: 'Service temporarily unavailable. Please try again shortly.',
+      }),
+    ).toBe(false);
+  });
+
+  it('global_budget does not carry (identity-independent, has its own upstream line)', () => {
+    expect(bannerCarriesEstimateStatus({ type: 'global_budget' })).toBe(false);
   });
 });
 

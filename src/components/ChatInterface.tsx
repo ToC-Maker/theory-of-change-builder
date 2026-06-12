@@ -30,8 +30,11 @@ import { getFreshIdToken } from '../utils/auth';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
   type ComposerBlocker,
+  type EstimateFailure,
   type RenderedBlocker,
+  bannerCarriesEstimateStatus,
   costErrorToBlocker,
+  estimateUnavailableNote,
   selectBlocker,
   shouldBlockSend,
   preserveCapClassOnly,
@@ -770,10 +773,14 @@ export function ChatInterface({
   // estimate can update independently; both are debounced to avoid
   // hammering /api/count-tokens-estimate on every keystroke.
   const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
-  // Last upstream message from /api/count-tokens-estimate when it fails.
-  // Rendered inline so shape issues (file_id unresolvable, etc.) surface
-  // to the user instead of silently falling back to a char-based estimate.
-  const [composerEstimateError, setComposerEstimateError] = useState<string | null>(null);
+  // Failure state of the last /api/count-tokens-estimate fetch (fb6 issue
+  // 74). Structured (upstream status + message) rather than a prebaked
+  // string because two consumers format it differently: the under-textarea
+  // note (unblocked flow) and the in-banner quiet line (quota-blocked flow)
+  // both run it through estimateUnavailableNote. null = healthy.
+  const [composerEstimateFailure, setComposerEstimateFailure] = useState<EstimateFailure | null>(
+    null,
+  );
   // file_ids that /api/count-tokens-estimate couldn't price (e.g. Anthropic's
   // count_tokens endpoint rejected them, or they're awaiting upload). Surfaced
   // so the user knows the estimate excludes those files and the real billed
@@ -1472,11 +1479,11 @@ export function ChatInterface({
         setComposerEstimateUsd(0);
         // Mirror the Generate guard below: an empty composer must not sit
         // under leftovers from the previous draft. Resetting only the dollar
-        // figure stranded the "Estimation failed" banner (and the "N files
+        // figure stranded the "estimates unavailable" note (and the "N files
         // couldn't be priced" notice) indefinitely — e.g. a network-failed
         // estimate followed by clearing the draft showed $0.00 with a
-        // permanent failure banner and no request in flight to resolve it.
-        setComposerEstimateError(null);
+        // permanent failure note and no request in flight to resolve it.
+        setComposerEstimateFailure(null);
         setComposerUncountedFileIds([]);
         setEstimatingCost(false);
         return;
@@ -1546,6 +1553,12 @@ export function ChatInterface({
 
       setEstimatingCost(true);
       void (async () => {
+        // Carried past the throw below so the catch can preserve upstream
+        // detail. The old shape set the error state in the !ok branch and
+        // then unconditionally overwrote it in the catch — the upstream
+        // reason (e.g. 403 "Request not allowed") never reached the UI
+        // (fb6 issue 74 clobber).
+        let upstreamFailure: EstimateFailure | null = null;
         try {
           const response = await fetch('/api/count-tokens-estimate', {
             method: 'POST',
@@ -1560,21 +1573,34 @@ export function ChatInterface({
           });
           if (!response.ok) {
             // Surface upstream detail so shape issues (e.g. file_id
-            // unresolvable in count_tokens, beta header mismatch) are
-            // diagnosable from the composer instead of silently falling
-            // back to the local char estimate.
-            let upstreamMessage: string | null = null;
+            // unresolvable in count_tokens, beta header mismatch) and
+            // origin blocks (403 "Request not allowed") are diagnosable
+            // from the composer instead of silently falling back to the
+            // local char estimate. The worker re-shapes upstream 429s into
+            // its own 429 {error:'rate_limited'} WITHOUT upstream_* fields
+            // (count-tokens-estimate.ts), so map that back explicitly.
             try {
-              const body = (await response.json()) as { upstream_message?: string };
-              if (typeof body.upstream_message === 'string')
-                upstreamMessage = body.upstream_message;
+              const body = (await response.json()) as {
+                error?: string;
+                upstream_status?: number;
+                upstream_message?: string;
+              };
+              upstreamFailure = {
+                upstreamStatus:
+                  typeof body.upstream_status === 'number'
+                    ? body.upstream_status
+                    : body.error === 'rate_limited'
+                      ? 429
+                      : undefined,
+                upstreamMessage:
+                  typeof body.upstream_message === 'string' ? body.upstream_message : undefined,
+              };
             } catch {
-              /* non-JSON body */
+              /* non-JSON body — fall through to the detail-less failure */
             }
-            setComposerEstimateError(upstreamMessage);
             throw new Error(`status ${response.status}`);
           }
-          setComposerEstimateError(null);
+          setComposerEstimateFailure(null);
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
@@ -1628,11 +1654,12 @@ export function ChatInterface({
           setComposerEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          // Network-level failure (CORS, offline, DNS). Mirror the !response.ok
-          // branch by setting composerEstimateError so the UI shows a
-          // degraded-estimate banner instead of presenting the local char
-          // fallback as if it were precise.
-          setComposerEstimateError('Estimate unavailable; showing rough value');
+          // !response.ok lands here with upstreamFailure populated; network-
+          // level failures (CORS, offline, DNS) land here with it still null
+          // → detail-less failure ({}). Either way the UI shows a degraded-
+          // estimate note instead of presenting the local char fallback as
+          // if it were precise.
+          setComposerEstimateFailure(upstreamFailure ?? {});
           const historyChars = messages.reduce((sum, m) => sum + m.content.length, 0);
           const tokens = roughInputTokensFromChars(
             systemPrompt.length + historyChars + draftChars,
@@ -1667,10 +1694,10 @@ export function ChatInterface({
         !additionalInstructions.trim()
       ) {
         setGenerateEstimateUsd(0);
-        // Clear any stale error from a previous draft so the empty
-        // composer doesn't sit under a leftover "Estimate unavailable"
-        // banner.
-        setComposerEstimateError(null);
+        // Clear any stale failure from a previous draft so the empty
+        // composer doesn't sit under a leftover "estimates unavailable"
+        // note.
+        setComposerEstimateFailure(null);
         return;
       }
 
@@ -1702,6 +1729,9 @@ export function ChatInterface({
 
       setEstimatingCost(true);
       void (async () => {
+        // Same clobber-fix shape as the Chat estimate effect above: carry
+        // upstream detail past the throw so the catch preserves it.
+        let upstreamFailure: EstimateFailure | null = null;
         try {
           const response = await fetch('/api/count-tokens-estimate', {
             method: 'POST',
@@ -1715,22 +1745,32 @@ export function ChatInterface({
             }),
           });
           if (!response.ok) {
-            // Surface upstream detail so shape issues (e.g. file_id
-            // unresolvable in count_tokens, beta header mismatch) are
+            // Surface upstream detail so shape issues and origin blocks are
             // diagnosable from the composer instead of silently falling
-            // back to the local char estimate.
-            let upstreamMessage: string | null = null;
+            // back to the local char estimate. Worker re-shapes upstream
+            // 429s into {error:'rate_limited'} without upstream_* fields.
             try {
-              const body = (await response.json()) as { upstream_message?: string };
-              if (typeof body.upstream_message === 'string')
-                upstreamMessage = body.upstream_message;
+              const body = (await response.json()) as {
+                error?: string;
+                upstream_status?: number;
+                upstream_message?: string;
+              };
+              upstreamFailure = {
+                upstreamStatus:
+                  typeof body.upstream_status === 'number'
+                    ? body.upstream_status
+                    : body.error === 'rate_limited'
+                      ? 429
+                      : undefined,
+                upstreamMessage:
+                  typeof body.upstream_message === 'string' ? body.upstream_message : undefined,
+              };
             } catch {
-              /* non-JSON body */
+              /* non-JSON body — fall through to the detail-less failure */
             }
-            setComposerEstimateError(upstreamMessage);
             throw new Error(`status ${response.status}`);
           }
-          setComposerEstimateError(null);
+          setComposerEstimateFailure(null);
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
@@ -1747,10 +1787,11 @@ export function ChatInterface({
           setGenerateEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          // Network-level failure. Mirror the !response.ok branch so the UI
-          // shows a degraded-estimate indicator rather than silently falling
-          // back to the char-based estimate and presenting it as precise.
-          setComposerEstimateError('Estimate unavailable; showing rough value');
+          // !response.ok lands here with upstreamFailure populated; network-
+          // level failures land here with it still null → detail-less
+          // failure ({}). Either way the UI shows a degraded-estimate note
+          // rather than presenting the char-based fallback as precise.
+          setComposerEstimateFailure(upstreamFailure ?? {});
           const chars =
             systemPromptForEstimate.length +
             assembled.length +
@@ -3817,12 +3858,15 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       a single React.memo'd component reading from
                       renderedBlocker (see src/components/chat/composerBlocker.ts).
                       Variants: cap_reached, request_cut_off, global_budget,
-                      would_exceed_cap, session_expired_quota, advisory. */}
+                      would_exceed_cap, session_expired_quota, advisory.
+                      Quota variants also carry the estimate status (fb6
+                      issue 74) — see estimateFailure prop. */}
                     <ComposerBlockerBanner
                       blocker={renderedBlocker}
                       usage={usage}
                       hasKey={hasKey}
                       composerEstimateUsd={activeEstimate}
+                      estimateFailure={composerEstimateFailure}
                       isAuthenticated={isAuthenticated}
                     />
                     {/* File attachment tray + drop target. Stays mounted so
@@ -3875,23 +3919,35 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         target.style.height = newHeight + 'px';
                       }}
                     />
-                    <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                      {estimatingCost && (
-                        <span
-                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                          aria-label="Recalculating estimate"
-                        />
-                      )}
-                      <span>
-                        Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
-                        live during streaming.
-                      </span>
-                    </div>
-                    {composerEstimateError && (
-                      <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                        Estimation failed: {composerEstimateError}. Fell back to a rough local
-                        estimate; the actual reservation may differ.
-                      </div>
+                    {/* Under-textarea estimate cluster. Suppressed while a
+                      quota blocker is rendered (fb6 issue 74): the banner
+                      carries the estimate status for those variants, and
+                      this cluster clips below the fold once the blocker
+                      stack is up (reproduced at 1366x662 — the composer
+                      column doesn't scroll). Its "output shown live during
+                      streaming" promise is also incoherent while sending
+                      is paused. */}
+                    {!bannerCarriesEstimateStatus(renderedBlocker) && (
+                      <>
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                          {estimatingCost && (
+                            <span
+                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                              aria-label="Recalculating estimate"
+                            />
+                          )}
+                          <span>
+                            Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
+                            live during streaming.
+                          </span>
+                        </div>
+                        {composerEstimateFailure && (
+                          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                            {estimateUnavailableNote(composerEstimateFailure)} Fell back to a rough
+                            local estimate; the actual reservation may differ.
+                          </div>
+                        )}
+                      </>
                     )}
                     {composerUncountedFileIds.length > 0 && (
                       <div
@@ -4078,6 +4134,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       usage={usage}
                       hasKey={hasKey}
                       composerEstimateUsd={activeEstimate}
+                      estimateFailure={composerEstimateFailure}
                       isAuthenticated={isAuthenticated}
                     />
                     {/* Unified attachment tray. Shows both Files-API PDFs
@@ -4129,23 +4186,31 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         target.style.height = newHeight + 'px';
                       }}
                     />
-                    <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                      {estimatingCost && (
-                        <span
-                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                          aria-label="Recalculating estimate"
-                        />
-                      )}
-                      <span>
-                        Estimated input cost: {formatCostUsd(generateEstimateUsd)}; output shown
-                        live during streaming.
-                      </span>
-                    </div>
-                    {composerEstimateError && (
-                      <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                        Estimation failed: {composerEstimateError}. Fell back to a rough local
-                        estimate; the actual reservation may differ.
-                      </div>
+                    {/* Under-textarea estimate cluster — same suppression
+                      rule as the Chat composer (fb6 issue 74): the banner
+                      carries the estimate status while a quota blocker is
+                      rendered. */}
+                    {!bannerCarriesEstimateStatus(renderedBlocker) && (
+                      <>
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                          {estimatingCost && (
+                            <span
+                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                              aria-label="Recalculating estimate"
+                            />
+                          )}
+                          <span>
+                            Estimated input cost: {formatCostUsd(generateEstimateUsd)}; output shown
+                            live during streaming.
+                          </span>
+                        </div>
+                        {composerEstimateFailure && (
+                          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                            {estimateUnavailableNote(composerEstimateFailure)} Fell back to a rough
+                            local estimate; the actual reservation may differ.
+                          </div>
+                        )}
+                      </>
                     )}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1">

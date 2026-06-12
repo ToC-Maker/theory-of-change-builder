@@ -28,7 +28,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ComposerBlockerBanner } from '../../src/components/chat/ComposerBlockerBanner';
-import type { RenderedBlocker } from '../../src/components/chat/composerBlocker';
+import type { EstimateFailure, RenderedBlocker } from '../../src/components/chat/composerBlocker';
 
 const mockUseAuth0 = vi.fn();
 vi.mock('@auth0/auth0-react', () => ({
@@ -49,6 +49,7 @@ function renderBanner(params: {
   isAuthenticated?: boolean;
   hasKey?: boolean;
   composerEstimateUsd?: number;
+  estimateFailure?: EstimateFailure | null;
   loginWithRedirect?: ReturnType<typeof vi.fn>;
 }) {
   mockUseAuth0.mockReturnValue({
@@ -61,6 +62,7 @@ function renderBanner(params: {
       usage={params.usage ?? null}
       hasKey={params.hasKey ?? false}
       composerEstimateUsd={params.composerEstimateUsd ?? 0}
+      estimateFailure={params.estimateFailure ?? null}
       isAuthenticated={params.isAuthenticated ?? false}
     />,
   );
@@ -246,6 +248,154 @@ describe('session_expired_quota (degraded-session deferral)', () => {
     expect(localStorage.getItem('auth0_returnTo')).toBe(
       window.location.pathname + window.location.search,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// In-banner estimate status (fb6 issue 74)
+// ---------------------------------------------------------------------------
+//
+// Field incident (second occurrence): a quota-exhausted reviewer with a
+// failing estimate endpoint saw NO estimate-related message — the
+// under-textarea estimate cluster clips below the fold once the blocker
+// stack is up (reproduced at 1366x662). Quota variants therefore carry the
+// estimate status INSIDE the banner:
+//   - estimate failed → one quiet line with the upstream reason in human
+//     form (status→copy map in estimateUnavailableNote);
+//   - estimate healthy and > $0 → one quiet line acknowledging estimates
+//     still work plus the current draft figure (capped users should still
+//     see what a message WOULD cost — estimates are free upstream);
+//   - would_exceed_cap skips the ok-line (its main copy already contains
+//     the figure) but still surfaces a failure;
+//   - non-quota variants (advisory, global_budget) carry nothing — the
+//     under-textarea cluster still owns the display there.
+
+const FIELD_403: EstimateFailure = { upstreamStatus: 403, upstreamMessage: 'Request not allowed' };
+const REGION_NOTE =
+  'Cost estimates are unavailable: the AI service refused the request from this region. ' +
+  'Chat and generation are affected too.';
+const STILL_WORK = (figure: string) =>
+  `Estimates still work: your current draft is about ${figure} of input cost.`;
+
+describe('in-banner estimate status', () => {
+  it('cap_reached + failed estimate: quiet line with the mapped upstream reason', () => {
+    renderBanner({
+      blocker: { type: 'cap_reached' },
+      usage: anonAtCap,
+      estimateFailure: FIELD_403,
+    });
+    expectBannerText(REGION_NOTE);
+  });
+
+  it('cap_reached + healthy estimate: acknowledges estimates still work, shows the figure', () => {
+    renderBanner({
+      blocker: { type: 'cap_reached' },
+      usage: anonAtCap,
+      composerEstimateUsd: 0.07,
+    });
+    expectBannerText(STILL_WORK('$0.07'));
+  });
+
+  it('cap_reached + healthy estimate at $0 (empty draft): no estimate line at all', () => {
+    renderBanner({ blocker: { type: 'cap_reached' }, usage: anonAtCap, composerEstimateUsd: 0 });
+    expect(screen.queryByText(/Estimates still work/)).toBeNull();
+    expect(screen.queryByText(/Cost estimates are/)).toBeNull();
+  });
+
+  it('failure wins over the ok-line when both could apply (figure is a rough fallback)', () => {
+    renderBanner({
+      blocker: { type: 'cap_reached' },
+      usage: anonAtCap,
+      composerEstimateUsd: 0.07,
+      estimateFailure: FIELD_403,
+    });
+    expectBannerText(REGION_NOTE);
+    expect(screen.queryByText(/Estimates still work/)).toBeNull();
+  });
+
+  it('request_cut_off carries both forms', () => {
+    renderBanner({
+      blocker: { type: 'request_cut_off' },
+      usage: anonAtCap,
+      composerEstimateUsd: 0.12,
+    });
+    expectBannerText(STILL_WORK('$0.12'));
+    cleanup();
+    renderBanner({
+      blocker: { type: 'request_cut_off' },
+      usage: anonAtCap,
+      estimateFailure: { upstreamStatus: 429 },
+    });
+    expectBannerText(
+      'Cost estimates are briefly unavailable: the AI service is rate-limiting. ' +
+        'It retries automatically.',
+    );
+  });
+
+  it('last_send_exceeded carries the ok-line (current-draft figure helps trimming)', () => {
+    renderBanner({
+      blocker: { type: 'last_send_exceeded' },
+      usage: { used_usd: 4.74, limit_usd: 5, tier: 'anon' },
+      composerEstimateUsd: 0.4,
+    });
+    expectBannerText(STILL_WORK('$0.40'));
+  });
+
+  it('would_exceed_cap: NO ok-line (main copy already shows the figure), but failures surface', () => {
+    renderBanner({
+      blocker: { type: 'would_exceed_cap' },
+      usage: { used_usd: 4.74, limit_usd: 5, tier: 'anon' },
+      composerEstimateUsd: 0.4,
+    });
+    expect(screen.queryByText(/Estimates still work/)).toBeNull();
+    cleanup();
+    renderBanner({
+      blocker: { type: 'would_exceed_cap' },
+      usage: { used_usd: 4.74, limit_usd: 5, tier: 'anon' },
+      composerEstimateUsd: 0.4,
+      estimateFailure: FIELD_403,
+    });
+    expectBannerText(REGION_NOTE);
+  });
+
+  it('session_expired_quota: estimate status rides INSIDE the single banner (no pileup), deferral copy and sole CTA unchanged', () => {
+    renderBanner({
+      blocker: { type: 'session_expired_quota' },
+      usage: anonAtCap,
+      isAuthenticated: true,
+      estimateFailure: FIELD_403,
+    });
+    expectBannerText(
+      "Your session has expired, so sending is paused (you're temporarily on the free " +
+        'anonymous allowance). Sign in again to use your account.',
+    );
+    expectBannerText(REGION_NOTE);
+    expect(screen.getByRole('button', { name: /sign in again/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /add an anthropic api key/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('advisory carries nothing even when a failure is active', () => {
+    renderBanner({
+      blocker: { type: 'advisory', cost_error_type: 'chart_deleted', detail: 'Chart gone.' },
+      usage: anonAtCap,
+      composerEstimateUsd: 0.07,
+      estimateFailure: FIELD_403,
+    });
+    expect(screen.queryByText(/Cost estimates are/)).toBeNull();
+    expect(screen.queryByText(/Estimates still work/)).toBeNull();
+  });
+
+  it('global_budget carries nothing (keeps its own upstream line)', () => {
+    renderBanner({
+      blocker: { type: 'global_budget' },
+      usage: anonAtCap,
+      composerEstimateUsd: 0.07,
+      estimateFailure: FIELD_403,
+    });
+    expect(screen.queryByText(/Cost estimates are/)).toBeNull();
+    expect(screen.queryByText(/Estimates still work/)).toBeNull();
   });
 });
 

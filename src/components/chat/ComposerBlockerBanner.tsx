@@ -28,7 +28,8 @@ import { useAuth0 } from '@auth0/auth0-react';
 import { KeyIcon } from '@heroicons/react/24/outline';
 import { DonateCta } from '../ByokPanel';
 import { formatCostUsd } from '../../utils/cost';
-import type { RenderedBlocker } from './composerBlocker';
+import type { EstimateFailure, RenderedBlocker } from './composerBlocker';
+import { estimateUnavailableNote } from './composerBlocker';
 
 // Local copy of the AddApiKeyButton from ChatInterface — duplicated rather
 // than imported to keep this component self-contained (no circular
@@ -84,6 +85,12 @@ interface ComposerBlockerBannerProps {
    *  Generate estimate based on current mode (the parent component does
    *  the mode-aware selection). */
   composerEstimateUsd: number;
+  /** Failure state of the composer's count_tokens estimate (fb6 issue 74).
+   *  Non-null = the last estimate fetch failed; quota variants render it
+   *  as one quiet line (via estimateUnavailableNote) INSIDE the banner so
+   *  it stays co-visible with the blocker. Pass the state object itself
+   *  (stable identity) so React.memo's shallow compare holds. */
+  estimateFailure: EstimateFailure | null;
   /** Auth0 client-side auth state. Quota-variant copy uses it to (a) fall
    *  back on identity naming when `usage` is null and (b) pick the action
    *  sentence — signed-out users must sign in before a key can be added. */
@@ -95,6 +102,7 @@ function ComposerBlockerBannerImpl({
   usage,
   hasKey,
   composerEstimateUsd,
+  estimateFailure,
   isAuthenticated,
 }: ComposerBlockerBannerProps) {
   if (!blocker) return null;
@@ -118,6 +126,35 @@ function ComposerBlockerBannerImpl({
     ? 'Shorten it, or add your own Anthropic API key to keep going.'
     : 'Shorten it, or sign in and add your own Anthropic API key to keep going.';
 
+  // In-banner estimate status (fb6 issue 74): quota variants carry the
+  // estimate state inside the banner so it stays co-visible with the
+  // blocker (the under-textarea cluster clips below the fold once the
+  // blocker stack is up; ChatInterface suppresses it for these variants —
+  // see bannerCarriesEstimateStatus). One quiet muted line, not an alarm:
+  //   - failure (wins over the figure, which would be a rough local
+  //     fallback): human-form upstream reason via estimateUnavailableNote;
+  //   - healthy and > $0: the current draft's figure, prefixed with an
+  //     "estimates still work" acknowledgment so it reads coherently next
+  //     to "sending messages is paused";
+  //   - healthy at $0 (empty draft): nothing — a $0.00 line is noise.
+  // `omitOkLine` is for would_exceed_cap, whose main copy already states
+  // the figure.
+  const estimateStatusLine = (opts?: { omitOkLine?: boolean }) => {
+    if (estimateFailure) {
+      return (
+        <div className="text-xs text-gray-600">{estimateUnavailableNote(estimateFailure)}</div>
+      );
+    }
+    if (!opts?.omitOkLine && composerEstimateUsd > 0) {
+      return (
+        <div className="text-xs text-gray-600">
+          {`Estimates still work: your current draft is about ${formatCostUsd(composerEstimateUsd)} of input cost.`}
+        </div>
+      );
+    }
+    return null;
+  };
+
   switch (blocker.type) {
     case 'request_cut_off':
       // Mid-stream kill — the user's last message used the rest of their
@@ -128,6 +165,7 @@ function ComposerBlockerBannerImpl({
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
             {`The response was cut short because it used the last of ${allowanceNoun}, so sending messages is paused. ${addKeyAction}`}
           </div>
+          {estimateStatusLine()}
           <AddApiKeyButton />
         </div>
       );
@@ -189,6 +227,7 @@ function ComposerBlockerBannerImpl({
           <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2">
             {`You've used all of ${allowanceNoun}${limitText}, so sending messages is paused. ${addKeyAction}`}
           </div>
+          {estimateStatusLine()}
           <AddApiKeyButton />
           <DonateCta />
         </div>
@@ -215,6 +254,7 @@ function ComposerBlockerBannerImpl({
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
             {`That message would have cost more than ${remainingText} of ${allowanceNoun}, so it wasn't sent. ${shortenAction}`}
           </div>
+          {estimateStatusLine()}
           <AddApiKeyButton />
         </div>
       );
@@ -236,6 +276,7 @@ function ComposerBlockerBannerImpl({
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
             {`This message is estimated at ${formatCostUsd(composerEstimateUsd)} (chat history and files included), but ${remainingText} of ${allowanceNoun} is left. ${shortenAction}`}
           </div>
+          {estimateStatusLine({ omitOkLine: true })}
           <AddApiKeyButton />
           <DonateCta />
         </div>
@@ -255,6 +296,7 @@ function ComposerBlockerBannerImpl({
           <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
             {`Your session has expired, so sending is paused (you're temporarily on the free anonymous allowance). Sign in again to use your account.`}
           </div>
+          {estimateStatusLine()}
           <SignInAgainButton />
         </div>
       );
