@@ -60,7 +60,7 @@ describe('computeViewportOffset', () => {
     // shortened the bar to min-h-[40px] (no vertical padding on the
     // bordered container), so the constant follows: 40 + 1 = 41.
     // TopBar.responsive.test.tsx cross-checks this against the actual
-    // min-h class; scripts/test-topbar-geometry.mjs measures the DOM.
+    // min-h class so the constant and the CSS can't drift apart.
     expect(TOP_BAR_HEIGHT_PX).toBe(41);
     const offset = computeViewportOffset(false, 1920);
     expect(offset.top).toBe(TOP_BAR_HEIGHT_PX + VIEWPORT_PAD_PX);

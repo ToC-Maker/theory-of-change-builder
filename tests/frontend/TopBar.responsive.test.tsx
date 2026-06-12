@@ -213,8 +213,9 @@ describe('TopBar responsive layout', () => {
 describe('TopBar geometry contract (PR #34 fb4 (70))', () => {
   // jsdom does no layout, so these are class-string contracts: they make
   // bar-geometry changes deliberate (update the test AND the mirror
-  // constants) rather than silent. The live-layout counterpart is
-  // scripts/test-topbar-geometry.mjs (rodney/CDP, real rects).
+  // constants) rather than silent. Real-rect verification was done with
+  // a CDP harness during PR #34 review; re-verify in a browser when
+  // changing bar geometry.
   //
   // DOM shape contract (stable since round 2): the testid'd row's parent
   // is the padded frame; the row's first child is the left cluster

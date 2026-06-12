@@ -18,12 +18,12 @@ export const VIEWPORT_PAD_PX = 24;
 // TopBar.tsx — shortened by PR #34 fb4 (70) from the round-2 52px; no
 // vertical padding on the container) + 1px border-b. The legacy
 // reserve said 64px, which skewed the top band 11px wider than the
-// bottom at every viewport size (PR #34 fb3 known-issue K2);
-// scripts/test-viewport-bands.mjs pins the mirror against the real
-// DOM, scripts/test-topbar-geometry.mjs pins the bar height itself,
-// and TopBar.responsive.test.tsx cross-checks this constant against
-// the row's min-h class. ChatInterface's drawer `top` derives from
-// this constant too.
+// bottom at every viewport size (PR #34 fb3 known-issue K2).
+// TopBar.responsive.test.tsx cross-checks this constant against the
+// row's min-h class so the two can't drift apart silently; if you
+// change the bar height, update both together (and re-verify the
+// rendered DOM in a real browser — jsdom does no layout).
+// ChatInterface's drawer `top` derives from this constant too.
 export const TOP_BAR_HEIGHT_PX = 41;
 
 // The drawer clamp reads window.innerWidth, so the reserve must also
