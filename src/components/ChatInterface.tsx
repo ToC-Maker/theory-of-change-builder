@@ -3324,10 +3324,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             toggles (clicking the title text does NOT). When collapsed the
             title and Clear are hidden and the chevron is centered as the
             sole control. No bottom padding: the chat header below brings
-            its own p-3, keeping the title→tabs gap tight (round-2
-            feedback 42 — the old layout stacked p-2 + p-3 + an orphaned
-            mb-3 spacer row into a 32px dead gap). */}
-        <div className="flex-shrink-0 px-2 pt-2">
+            its own p-3 (round-2 feedback 42 — the old layout stacked
+            p-2 + p-3 + an orphaned mb-3 spacer row into a 32px dead gap).
+            Spacing contract (round-4 feedback 71): one 12px box gap at
+            every step — drawer top → title row (pt-3 here), title row →
+            tab strip (the chat header's p-3), tab strip → usage line
+            (space-y-3 there), usage line → border (p-3 again). The title
+            glyphs start at 12px (px-2 here + pl-1 on the span) so they
+            sit on the same left line as the tab strip / usage bar (p-3),
+            and the chevron svg's right edge mirrors it (px-2 + p-1
+            button). Keep px-2 symmetric: the collapsed rail centers the
+            chevron in it. */}
+        <div className="flex-shrink-0 px-2 pt-3">
           <div
             className={`h-8 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}
           >
@@ -3380,8 +3388,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 spacer that inflated the title→tabs gap, round-2 feedback
                 42.) */}
             <div className="p-3 border-b border-gray-200">
-              {/* Mode Switcher and Model Selector */}
-              <div className="space-y-2">
+              {/* Mode Switcher and Model Selector. space-y-3 keeps the
+                  tab strip → usage line gap on the same 12px rhythm as
+                  the rest of the header (round-4 feedback 71). */}
+              <div className="space-y-3">
                 <div className="flex bg-gray-100 rounded-lg p-1">
                   <button
                     onClick={() => setCurrentMode('chat')}
@@ -3412,9 +3422,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 (change/remove) lives in the profile dropdown's "Anthropic
                 API key" modal. The per-chart spend figure is a best-effort
                 client-side tally (localStorage); Anthropic's dashboard is
-                the source of truth for billing. */}
+                the source of truth for billing. (Spacing comes from the
+                parent's space-y-3 — don't add a competing margin here.) */}
                 {usage && (
-                  <div className="mt-2">
+                  <div>
                     {usage.tier === 'byok' ? (
                       <span className="inline-flex items-center gap-1 text-xs text-gray-700">
                         <span aria-hidden>🔑</span>
