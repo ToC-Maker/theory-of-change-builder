@@ -25,6 +25,7 @@ import { validateChartImport } from './utils/validateChartImport';
 import type { SaveError } from './components/top-bar/SaveIndicator';
 import { ShareDialog } from './components/share/ShareDialog';
 import { usePermissionsRefresh } from './hooks/usePermissionsRefresh';
+import { useChartSync } from './hooks/useChartSync';
 import { getFreshIdToken } from './utils/auth';
 import {
   reportAuthTokenFailure,
@@ -1590,122 +1591,26 @@ function ToCViewer() {
     }
   }, [data?.title]);
 
-  // Smart periodic sync with idle detection for edit mode
-  useEffect(() => {
-    if (!editToken || !authTokenReady) return;
-
-    let interval: ReturnType<typeof setInterval>;
-    let lastSyncedData: string | null = null;
-    let isTabVisible = true;
-    let lastActivity = Date.now();
-    let syncInterval = 10000; // Start with 10 seconds
-    let consecutiveUnchanged = 0;
-
-    const syncData = async () => {
-      // Don't sync if tab is hidden or user is idle
-      if (!isTabVisible || Date.now() - lastActivity > 300000) {
-        // 5 min idle timeout
-        console.log('Skipping sync - tab hidden or user idle');
-        return;
-      }
-      // PR 4: don't sync mid-drag. A server snapshot landing while
-      // a pointer-drag is in flight could yank the dragged node out
-      // from under the user (cross-tab delete race). The drop handler
-      // is itself stale-node-guarded; this prevents the race upstream.
-      if (isDragInFlightRef.current) {
-        console.log('Skipping sync - drag in flight');
-        return;
-      }
-
-      // Don't sync if currently saving to prevent conflicts
-      if (isSaving) {
-        console.log('Skipping sync - save in progress');
-        return;
-      }
-
-      try {
-        console.log(`Syncing chart in edit mode (interval: ${syncInterval}ms)`);
-        const result = await ChartService.getChartByEditToken(editToken);
-        const newDataStr = JSON.stringify(result.chartData);
-
-        // Only update if the data has changed (to preserve undo/redo history)
-        if (lastSyncedData !== newDataStr) {
-          lastSyncedData = newDataStr;
-          setData(result.chartData);
-          console.log('Chart data updated from sync');
-          setLastSyncTime(new Date());
-          consecutiveUnchanged = 0;
-          syncInterval = 10000; // Reset to 10 seconds
-        } else {
-          consecutiveUnchanged++;
-          // Exponential backoff: 10s -> 15s -> 22s -> 33s -> 50s -> 60s max
-          if (consecutiveUnchanged > 2) {
-            const newInterval = Math.min(Math.floor(syncInterval * 1.5), 60000);
-            if (newInterval !== syncInterval) {
-              syncInterval = newInterval;
-              console.log(
-                `No changes for ${consecutiveUnchanged} syncs, interval now ${syncInterval}ms`,
-              );
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error syncing chart data:', err);
-      }
-    };
-
-    // Handle visibility change
-    const handleVisibilityChange = () => {
-      isTabVisible = !document.hidden;
-      if (isTabVisible) {
-        console.log('Tab became visible, syncing immediately');
-        syncData(); // Sync immediately when tab becomes visible
-        lastActivity = Date.now();
-      }
-    };
-
-    // Handle user activity
-    const handleActivity = () => {
-      const timeSinceLastActivity = Date.now() - lastActivity;
-      lastActivity = Date.now();
-
-      // If user was idle and becomes active, sync immediately
-      if (timeSinceLastActivity > 300000) {
-        console.log('User became active after being idle, syncing');
-        syncData();
-      }
-    };
-
-    // Listen for events
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    document.addEventListener('mousemove', handleActivity);
-    document.addEventListener('keydown', handleActivity);
-    document.addEventListener('click', handleActivity);
-    document.addEventListener('scroll', handleActivity);
-
-    // Initial sync after a short delay
-    const initialTimer = setTimeout(syncData, 1000);
-
-    // Dynamic interval
-    const runSync = () => {
-      syncData();
-      clearInterval(interval);
-      if (syncInterval < 60000 || consecutiveUnchanged < 10) {
-        interval = setInterval(runSync, syncInterval);
-      }
-    };
-    interval = setInterval(runSync, syncInterval);
-
-    return () => {
-      clearTimeout(initialTimer);
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      document.removeEventListener('mousemove', handleActivity);
-      document.removeEventListener('keydown', handleActivity);
-      document.removeEventListener('click', handleActivity);
-      document.removeEventListener('scroll', handleActivity);
-    };
-  }, [editToken, isSaving, authTokenReady]);
+  // Smart periodic sync with idle detection for edit mode. Extracted to
+  // `useChartSync` (round-7 issue 80): the inline effect's in-flight GET
+  // could land after a newer local edit and setData the stale snapshot
+  // over it (the "slider reverts after release" bug). The hook carries
+  // apply-time guards (dead-epoch drop, local-pending drop, own-echo
+  // skip) and the regression tests; see the header of
+  // `src/hooks/useChartSync.ts` for the measured timeline.
+  const handleRemoteData = useCallback((chartData: ToCData) => {
+    setData(chartData);
+    setLastSyncTime(new Date());
+  }, []);
+  useChartSync({
+    editToken,
+    authTokenReady,
+    isSaving,
+    isDragInFlightRef,
+    pendingChangesRef,
+    dataRef,
+    onRemoteData: handleRemoteData,
+  });
 
   if (loading) {
     return (
