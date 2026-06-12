@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
+import { computeAlignedSections } from '../utils/alignNodes';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
@@ -463,83 +464,22 @@ export function ToC({
     [setDataAndNotify, nodeHeights],
   );
 
+  // Feedback 67: the alignment math lives in `computeAlignedSections`
+  // (`src/utils/alignNodes.ts`) — a PURE function. The previous inline
+  // implementation shallow-copied `prevData` and then assigned into the
+  // shared nested `sections[i].columns[j].nodes[k]` arrays, mutating
+  // the previous state in place. App.tsx's undo history deep-clones
+  // exactly that previous object (`saveToHistory(dataRef.current)`),
+  // so the undo entry already carried the aligned positions and Ctrl+Z
+  // after "Align nodes" was a no-op. Regression tests:
+  // `tests/frontend/TheoryOfChangeGraph.alignment.test.tsx`.
   const straightenEdges = useCallback(() => {
     if (!editMode) return;
 
     setDataAndNotify((prevData) => {
-      // Collect all nodes with their actual center positions
-      const allNodes: {
-        node: Node;
-        sectionIndex: number;
-        columnIndex: number;
-        nodeIndex: number;
-        centerY: number;
-        topY: number;
-        height: number;
-      }[] = [];
-
-      prevData.sections.forEach((section, sectionIndex) => {
-        section.columns.forEach((column, columnIndex) => {
-          column.nodes.forEach((node, nodeIndex) => {
-            // Use cached height or default
-            const actualHeight = nodeHeights[node.id] || 76;
-
-            // yPosition now represents the center Y
-            const centerY = node.yPosition ?? nodeIndex * 180 + 30 + actualHeight / 2;
-            const topY = centerY - actualHeight / 2;
-            allNodes.push({
-              node,
-              sectionIndex,
-              columnIndex,
-              nodeIndex,
-              centerY,
-              topY,
-              height: actualHeight,
-            });
-          });
-        });
-      });
-
-      // Group nodes by similar center Y positions.
-      const groups: (typeof allNodes)[] = [];
-      const tolerance = 40;
-
-      allNodes.forEach((nodeData) => {
-        let addedToGroup = false;
-        for (const group of groups) {
-          const avgCenterY = group.reduce((sum, n) => sum + n.centerY, 0) / group.length;
-          if (Math.abs(nodeData.centerY - avgCenterY) <= tolerance) {
-            group.push(nodeData);
-            addedToGroup = true;
-            break;
-          }
-        }
-        if (!addedToGroup) {
-          groups.push([nodeData]);
-        }
-      });
-
-      // Calculate the average center Y position for each group and update nodes
-      const newData = { ...prevData };
-      groups.forEach((group) => {
-        if (group.length > 1) {
-          // Only straighten groups with multiple nodes
-          const avgCenterY = Math.round(
-            group.reduce((sum, n) => sum + n.centerY, 0) / group.length,
-          );
-
-          group.forEach(({ sectionIndex, columnIndex, nodeIndex }) => {
-            const node = newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex];
-            // yPosition now represents the center Y, so set it directly
-            newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex] = {
-              ...node,
-              yPosition: avgCenterY,
-            };
-          });
-        }
-      });
-
-      return newData;
+      const nextSections = computeAlignedSections(prevData.sections, nodeHeights);
+      if (nextSections === prevData.sections) return prevData; // nothing to align
+      return { ...prevData, sections: nextSections };
     });
   }, [editMode, setDataAndNotify, nodeHeights]);
 

@@ -932,6 +932,12 @@ function ToCViewer() {
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Feedback 67: the snapshot waiting out the 300ms grouping window.
+  // Undo/redo FLUSH this into the history instead of dropping it —
+  // previously an undo within 300ms of an edit cancelled the pending
+  // push outright, silently losing that edit's boundary (Ctrl+Z then
+  // restored the state from one operation EARLIER).
+  const pendingUndoSnapshotRef = useRef<ToCData | null>(null);
 
   const saveToHistory = useCallback((currentData: ToCData) => {
     if (!currentData) return;
@@ -943,11 +949,31 @@ function ToCViewer() {
     if (undoTimeoutRef.current) {
       clearTimeout(undoTimeoutRef.current);
     }
+    pendingUndoSnapshotRef.current = clonedData;
 
     // Set new timeout to save to history after a brief delay
     undoTimeoutRef.current = setTimeout(() => {
+      undoTimeoutRef.current = null;
+      pendingUndoSnapshotRef.current = null;
       setUndoHistory((prev) => [...prev, clonedData]);
     }, 300); // 300ms delay to group rapid operations
+  }, []);
+
+  // Flush (not drop) the pending history snapshot. Returns the history
+  // array undo/redo should operate on. Shared by handleUndo/handleRedo
+  // so an undo issued inside the 300ms grouping window still sees the
+  // most recent boundary.
+  const flushPendingHistory = useCallback((history: ToCData[]): ToCData[] => {
+    if (undoTimeoutRef.current) {
+      clearTimeout(undoTimeoutRef.current);
+      undoTimeoutRef.current = null;
+    }
+    if (pendingUndoSnapshotRef.current) {
+      const flushed = [...history, pendingUndoSnapshotRef.current];
+      pendingUndoSnapshotRef.current = null;
+      return flushed;
+    }
+    return history;
   }, []);
 
   const saveToLocalStorage = useCallback(
@@ -1136,15 +1162,14 @@ function ToCViewer() {
     // doesn't shift focus to the button before this check runs.
     if (isInputFocused()) return;
 
-    // Clear any pending saves first
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
-    }
+    // Feedback 67: flush — never drop — a snapshot still inside the
+    // 300ms grouping window, so the operation the user is undoing is
+    // the one that actually gets undone.
+    const effectiveUndoHistory = flushPendingHistory(undoHistory);
 
-    if (undoHistory.length > 0 && data) {
-      const previousState = undoHistory[undoHistory.length - 1];
-      const newUndoHistory = undoHistory.slice(0, -1);
+    if (effectiveUndoHistory.length > 0 && data) {
+      const previousState = effectiveUndoHistory[effectiveUndoHistory.length - 1];
+      const newUndoHistory = effectiveUndoHistory.slice(0, -1);
 
       // Validate the previous state has required structure
       if (!previousState || !previousState.sections || !Array.isArray(previousState.sections)) {
@@ -1193,16 +1218,27 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges]);
+  }, [
+    undoHistory,
+    data,
+    flushPendingHistory,
+    saveToLocalStorage,
+    currentEditToken,
+    logGraphChange,
+    setPendingChanges,
+  ]);
 
   const handleRedo = useCallback(() => {
     // L2 mitigation symmetric to handleUndo — see comment there.
     if (isInputFocused()) return;
 
-    // Clear any pending saves first
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
+    // Feedback 67: same flush-not-drop rule as handleUndo. (A pending
+    // snapshot here implies a data change after the last undo, which
+    // also cleared redoHistory — so this is unreachable in practice;
+    // kept for invariant safety.)
+    const flushedUndoHistory = flushPendingHistory(undoHistory);
+    if (flushedUndoHistory !== undoHistory) {
+      setUndoHistory(flushedUndoHistory);
     }
 
     if (redoHistory.length > 0 && data) {
@@ -1256,7 +1292,16 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges]);
+  }, [
+    redoHistory,
+    undoHistory,
+    data,
+    flushPendingHistory,
+    saveToLocalStorage,
+    currentEditToken,
+    logGraphChange,
+    setPendingChanges,
+  ]);
 
   // Keyboard shortcut handler
   useEffect(() => {
