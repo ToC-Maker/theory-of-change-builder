@@ -1,19 +1,27 @@
 // PR #34 feedback (51): "Ideally, connection strength has a variable
 // dash size rather than hard stops."
+// PR #34 round-7 feedback (79): "Why is there a hard change between
+// 95+ and 94 [...] it looks too visually different between 94 and 100."
 //
 // `getConfidenceStrokeStyle` previously bucketed confidence into three
-// hard stops (solid / '8 6' / '2 6'). The continuous mapping:
+// hard stops (solid / '8 6' / '2 6'); feedback 51 made the mapping
+// continuous but LINEAR (dash 2→14, gap 8→2), which still left ~13%
+// of the stroke as gaps just under the solid threshold — a visible
+// cliff at 94↔95. Feedback 79 makes the approach to solid asymptotic:
 //
 //   - confidence ≥ 95  → solid stroke (no dasharray),
-//   - below 95         → dash length GROWS and gap length SHRINKS
-//                        smoothly as confidence rises, approaching a
-//                        near-solid look just under the threshold and
-//                        a sparse dotted look at 0,
+//   - below 95         → dash length grows CUBICALLY (2px → ~46.6px at
+//                        94) while gap shrinks linearly (8px → ~1.6px),
+//                        so just under the threshold the stroke is
+//                        ~97% ink and the 95 boundary is imperceptible,
+//                        while the low end keeps sparse dots and the
+//                        middle still clearly reads dashed,
 //   - opacity rises continuously 0.8 → 1.0 with confidence.
 //
 // These tests pin the contract: solid at the top end, monotonicity of
-// every channel, sensible extremes, clamping, and no large jumps
-// (continuity) anywhere below the solid threshold.
+// every channel, sensible extremes, clamping, bounded steps between
+// adjacent integers, near-solid ink coverage just under the threshold,
+// and a clearly weak low end.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -55,11 +63,16 @@ describe('computeConfidenceDash (continuous dash mapping)', () => {
     }
   });
 
-  it('is continuous: no channel jumps by more than 0.3 between adjacent integers', () => {
+  it('is continuous: bounded steps between adjacent integers (no bucket cliffs)', () => {
+    // fb7 (79): the dash bound is deliberately looser than the old 0.3 —
+    // the cubic ramp grows ~1.4px/point near the threshold, which is
+    // invisible there (gaps are hairline) but must stay bounded so a
+    // future edit can't reintroduce a bucket-style jump. The gap channel
+    // stays linear and tight.
     for (let c = 1; c < CONFIDENCE_SOLID_THRESHOLD; c++) {
       const a = computeConfidenceDash(c - 1)!;
       const b = computeConfidenceDash(c)!;
-      expect(Math.abs(b.dash - a.dash)).toBeLessThanOrEqual(0.3);
+      expect(Math.abs(b.dash - a.dash)).toBeLessThanOrEqual(1.5);
       expect(Math.abs(b.gap - a.gap)).toBeLessThanOrEqual(0.3);
     }
   });
@@ -70,8 +83,29 @@ describe('computeConfidenceDash (continuous dash mapping)', () => {
     expect(low.gap).toBeGreaterThanOrEqual(7); // sparse
 
     const high = computeConfidenceDash(CONFIDENCE_SOLID_THRESHOLD - 1)!;
-    expect(high.dash).toBeGreaterThanOrEqual(12); // long dashes
-    expect(high.gap).toBeLessThanOrEqual(2.5); // tiny gaps → reads near-solid
+    expect(high.dash).toBeGreaterThanOrEqual(40); // very long dashes
+    expect(high.gap).toBeLessThanOrEqual(1.8); // hairline gaps → reads near-solid
+  });
+
+  it('approach to solid is asymptotic: ≥96% ink coverage just under the threshold (fb7 issue 79)', () => {
+    // Ink coverage = dash / (dash + gap). The 94↔95 boundary is only
+    // imperceptible if a 94-confidence stroke is almost entirely ink.
+    const { dash, gap } = computeConfidenceDash(CONFIDENCE_SOLID_THRESHOLD - 1)!;
+    expect(dash / (dash + gap)).toBeGreaterThanOrEqual(0.96);
+  });
+
+  it('low end still clearly reads weak: short dots, wide gaps for 5–20 (fb7 issue 79)', () => {
+    for (const c of [5, 10, 20]) {
+      const { dash, gap } = computeConfidenceDash(c)!;
+      expect(dash, `dash at ${c}`).toBeLessThanOrEqual(3);
+      expect(gap, `gap at ${c}`).toBeGreaterThanOrEqual(6.5);
+    }
+  });
+
+  it('mid-range still clearly reads dashed, not near-solid (fb7 issue 79)', () => {
+    const { dash, gap } = computeConfidenceDash(50)!;
+    expect(dash).toBeLessThanOrEqual(12);
+    expect(gap).toBeGreaterThanOrEqual(4);
   });
 
   it('clamps negative confidence to 0', () => {

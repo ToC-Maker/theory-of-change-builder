@@ -46,19 +46,24 @@ export const CONFIDENCE_SOLID_THRESHOLD = 95;
  * Continuous dash geometry for a confidence value (0-100).
  *
  * Returns `null` for the solid range (≥ CONFIDENCE_SOLID_THRESHOLD).
- * Below it, both channels vary linearly with confidence:
+ * Below it, with t = c / 95 ∈ [0, 1):
  *
- *   - dash length: 2px at confidence 0 → 14px just under the threshold
- *     (long dashes read as "almost solid");
- *   - gap length:  8px at confidence 0 → 2px just under the threshold
- *     (longer gaps as confidence drops).
+ *   - dash length: 2 + 46·t³ px  (2px dots at c=0 → ~46.6px at c=94);
+ *   - gap length:  8 − 6.5·t px  (8px sparse gaps → ~1.6px at c=94).
+ *
+ * The dash channel is deliberately CUBIC (PR #34 round-7 feedback 79:
+ * "it looks too visually different between 94 and 100"). The previous
+ * linear ramp (dash 2→14, gap 8→2) left a 94-confidence stroke ~87%
+ * ink — visibly dashed against the solid 95 — so the threshold read as
+ * a cliff. With the cubic ramp the approach to solid is asymptotic:
+ * at 94 the stroke is ~97% ink (hairline 1.6px breaks every ~46px),
+ * so crossing 95 is imperceptible, while the low end keeps sparse
+ * dots (c≤20 → dash ≤ 2.4 against gaps ≥ 6.6) and the middle still
+ * clearly reads dashed (c=50 → `8.7 4.6`, close to the previous
+ * linear map's `8.3 4.8` and the old "dashed" bucket's `8 6`).
  *
  * Both channels are monotonic and rounded to 0.1px so the emitted
- * stroke-dasharray strings stay stable. The c=0 extreme (`2 8`) reads
- * as sparse dots — close to the old "dotted" bucket; c≈50 (`8.3 4.8`)
- * is close to the old "dashed" bucket (`8 6`); just under the
- * threshold (`14 2`) is visually near-solid so crossing into the solid
- * range isn't a jarring jump. Unit-pinned in
+ * stroke-dasharray strings stay stable. Unit-pinned in
  * `tests/frontend/confidenceStroke.test.ts`.
  */
 export function computeConfidenceDash(confidence: number): { dash: number; gap: number } | null {
@@ -67,8 +72,8 @@ export function computeConfidenceDash(confidence: number): { dash: number; gap: 
   const t = c / CONFIDENCE_SOLID_THRESHOLD; // 0..1 across the dashed range
   const round1 = (v: number) => Math.round(v * 10) / 10;
   return {
-    dash: round1(2 + t * 12),
-    gap: round1(8 - t * 6),
+    dash: round1(2 + 46 * t * t * t),
+    gap: round1(8 - 6.5 * t),
   };
 }
 
