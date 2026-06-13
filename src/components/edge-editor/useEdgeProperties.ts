@@ -45,6 +45,13 @@ export interface UseEdgePropertiesResult {
   confidence: number;
   evidence: string;
   assumptions: string;
+  /**
+   * True when the connection has at least one custom waypoint (the
+   * single-waypoint model edits one; legacy charts may carry more).
+   * Gates the EdgeEditor's "Reset path" button (PR #34 round-7
+   * issue 78).
+   */
+  hasWaypoints: boolean;
   setConfidence: (next: number) => void;
   setEvidence: (next: string) => void;
   setAssumptions: (next: string) => void;
@@ -206,6 +213,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
     confidence: sourceConfidence,
     evidence: evidenceBuffer,
     assumptions: assumptionsBuffer,
+    hasWaypoints: (conn?.waypoints?.length ?? 0) > 0,
     setConfidence,
     setEvidence,
     setAssumptions,

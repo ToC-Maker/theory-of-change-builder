@@ -95,6 +95,12 @@ interface ConnectionsComponentProps {
    * to keep drags from opening the EdgeEditor (see onClick below).
    */
   consumePathGestureArmed?: () => boolean;
+  /**
+   * Round-7 issue 78: clears the connection's custom waypoint(s) —
+   * the EdgeEditor's "Reset path" button. Same seam as the
+   * dblclick-on-handle reset (`useWaypointDrag.resetWaypoints`).
+   */
+  resetWaypoints?: (sourceNodeId: string, targetNodeId: string) => void;
   waypointDragState?: WaypointDragState | null;
 }
 
@@ -121,6 +127,7 @@ export function ConnectionsComponent({
   bindMidpoint,
   bindPath,
   consumePathGestureArmed,
+  resetWaypoints,
   waypointDragState,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
@@ -965,6 +972,11 @@ export function ConnectionsComponent({
           containerRef={containerRef}
           fontFamily={fontFamily}
           onRequestClose={() => setSelectedEdge(null)}
+          onResetPath={
+            resetWaypoints
+              ? () => resetWaypoints(selectedEdge.sourceId, selectedEdge.targetId)
+              : undefined
+          }
         />
       )}
     </>
@@ -988,6 +1000,7 @@ function EdgeAnchorMount({
   containerRef,
   fontFamily,
   onRequestClose,
+  onResetPath,
 }: {
   selectedEdge: SelectedEdge;
   data: ToCData;
@@ -998,6 +1011,7 @@ function EdgeAnchorMount({
   containerRef: React.RefObject<HTMLDivElement | null>;
   fontFamily?: string;
   onRequestClose: () => void;
+  onResetPath?: () => void;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
   // The container is the canvas; appending a child to it places the
@@ -1029,6 +1043,7 @@ function EdgeAnchorMount({
         anchorRef={anchorRef}
         camera={camera}
         onRequestClose={onRequestClose}
+        onResetPath={onResetPath}
         fontFamily={fontFamily}
       />
     </>

@@ -920,6 +920,44 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
   });
 
+  describe('resetWaypoints — shared reset seam (dblclick + EdgeEditor button)', () => {
+    it('is callable without an event (EdgeEditor "Reset path" button) and commits once', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current.resetWaypoints(sourceId, targetId);
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([]);
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it('no-ops when the connection has no waypoints', () => {
+      const data = makeData([]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current.resetWaypoints(sourceId, targetId);
+      });
+
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
+    });
+
+    it('no-ops when editMode=false', () => {
+      const data = makeData([{ x: 100, y: 50 }]);
+      const { ctx, result } = setupHook({ data, editMode: false });
+
+      act(() => {
+        result.current.resetWaypoints(sourceId, targetId);
+      });
+
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
+    });
+  });
+
   describe('clientToContainer coordinate translation', () => {
     it('writes the translated (not raw client) coords to the waypoint', () => {
       const data = makeData([]);

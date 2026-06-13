@@ -29,7 +29,7 @@ function makeMutationApi(initial: ToCData) {
   };
 }
 
-function makeData(): ToCData {
+function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
   return {
     sections: [
       {
@@ -48,6 +48,7 @@ function makeData(): ToCData {
                     confidence: 60,
                     evidence: '',
                     assumptions: '',
+                    ...(waypoints !== undefined ? { waypoints } : {}),
                   },
                 ],
               },
@@ -64,6 +65,7 @@ function renderEdgeEditor(props: {
   data?: ToCData;
   api?: ReturnType<typeof makeMutationApi>;
   onRequestClose?: () => void;
+  onResetPath?: () => void;
 }) {
   const data = props.data ?? makeData();
   const api = props.api ?? makeMutationApi(data);
@@ -82,6 +84,7 @@ function renderEdgeEditor(props: {
       anchorRef={anchorRef}
       camera={{ x: 0, y: 0, z: 1 }}
       onRequestClose={props.onRequestClose ?? (() => {})}
+      onResetPath={props.onResetPath}
     />,
   );
   return { ...utils, api, anchor };
@@ -135,6 +138,50 @@ describe('EdgeEditor', () => {
     expect(commitKeys.some((k) => typeof k === 'string' && k.startsWith('assumptions-'))).toBe(
       true,
     );
+  });
+
+  describe('Reset path button (PR #34 round-7 issue 78)', () => {
+    // Discoverable counterpart of the dblclick-on-handle reset. Only
+    // offered when the connection actually HAS a custom waypoint; the
+    // action goes through the same `useWaypointDrag.resetWaypoints`
+    // seam (threaded in as `onResetPath`), and the editor stays open.
+
+    it('is hidden when the connection has no custom waypoint', () => {
+      renderEdgeEditor({ onResetPath: vi.fn() });
+      expect(screen.queryByRole('button', { name: /reset path/i })).toBeNull();
+    });
+
+    it('is hidden when no onResetPath handler is provided (read-only hosts)', () => {
+      renderEdgeEditor({ data: makeData([{ x: 10, y: 20 }]) });
+      expect(screen.queryByRole('button', { name: /reset path/i })).toBeNull();
+    });
+
+    it('shows with a custom waypoint, calls onResetPath, and does NOT close the editor', () => {
+      const onResetPath = vi.fn();
+      const onRequestClose = vi.fn();
+      renderEdgeEditor({
+        data: makeData([{ x: 10, y: 20 }]),
+        onResetPath,
+        onRequestClose,
+      });
+
+      const btn = screen.getByRole('button', { name: /reset path/i });
+      fireEvent.click(btn);
+
+      expect(onResetPath).toHaveBeenCalledTimes(1);
+      expect(onRequestClose).not.toHaveBeenCalled();
+    });
+
+    it('shows for legacy multi-waypoint connections too', () => {
+      renderEdgeEditor({
+        data: makeData([
+          { x: 10, y: 20 },
+          { x: 30, y: 40 },
+        ]),
+        onResetPath: vi.fn(),
+      });
+      expect(screen.getByRole('button', { name: /reset path/i })).toBeTruthy();
+    });
   });
 
   it('deletes the connection and fires onRequestClose', () => {

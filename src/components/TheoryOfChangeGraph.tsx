@@ -1673,6 +1673,7 @@ export function ToC({
           bindMidpoint={waypointDrag.bindMidpoint}
           bindPath={waypointDrag.bindPath}
           consumePathGestureArmed={waypointDrag.consumePathGestureArmed}
+          resetWaypoints={waypointDrag.resetWaypoints}
           waypointDragState={waypointDrag.dragState}
         />
 

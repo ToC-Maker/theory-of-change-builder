@@ -3,11 +3,18 @@
 //
 // Anchored to the connection midpoint via `useAnchorPosition` (the
 // caller provides an anchor ref pointing at an invisible 1x1 element
-// at the midpoint, or a sibling element). Renders three controls:
+// at the midpoint, or a sibling element). Renders these controls:
 //   - Confidence slider (live via mutateDebounced + commit on pointerup).
 //   - Evidence textarea (buffered local; commit on blur).
 //   - Assumptions textarea (buffered local; commit on blur).
 //   - Delete button (removes the connection from the source node).
+//   - "Reset path" text button (PR #34 round-7 issue 78): visible only
+//     when the connection has a custom waypoint AND the host supplied
+//     `onResetPath`. Calls through `useWaypointDrag.resetWaypoints`
+//     (the same seam as the dblclick-on-handle reset → one undo
+//     entry) and keeps the editor open; the button disappears once
+//     the waypoint is gone because `hasWaypoints` re-derives from
+//     `data`.
 //
 // Single-edge only by design — edges are addressed by (source, target)
 // and there's no top-level collection of edges, so a multi-edge UI
@@ -51,6 +58,12 @@ interface EdgeEditorProps {
   mutateDebounced: (updater: GraphUpdater, key: string) => void;
   commit: (key?: string) => void;
   onRequestClose: () => void;
+  /**
+   * Clears the connection's custom waypoint(s). Provided by hosts
+   * that own a `useWaypointDrag` instance; when absent the "Reset
+   * path" button is not offered.
+   */
+  onResetPath?: () => void;
   fontFamily?: string;
 }
 
@@ -65,6 +78,7 @@ export function EdgeEditor(props: EdgeEditorProps) {
     mutateDebounced,
     commit,
     onRequestClose,
+    onResetPath,
     fontFamily,
   } = props;
 
@@ -140,15 +154,31 @@ export function EdgeEditor(props: EdgeEditorProps) {
     >
       <div className="edge-editor__header flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
         <span className="text-xs font-semibold text-gray-700">Connection</span>
-        <button
-          type="button"
-          onClick={handleDelete}
-          className="p-1 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-          title="Delete connection"
-          aria-label="Delete connection"
-        >
-          <TrashIcon className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Reset path: discoverable counterpart of the dblclick-on-
+              handle reset. Only offered while a custom waypoint
+              exists; clearing it is one undo entry and the editor
+              stays open (the button unmounts as `hasWaypoints` flips). */}
+          {props_.hasWaypoints && onResetPath && (
+            <button
+              type="button"
+              onClick={onResetPath}
+              className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline rounded transition-colors"
+              title="Remove the custom bend and restore the automatic curve"
+            >
+              Reset path
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="p-1 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+            title="Delete connection"
+            aria-label="Delete connection"
+          >
+            <TrashIcon className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Confidence */}

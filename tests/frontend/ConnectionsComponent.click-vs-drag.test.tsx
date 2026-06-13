@@ -43,7 +43,7 @@ import { ConnectionsComponent } from '../../src/components/ConnectionsComponent'
 import { MOVE_THRESHOLD_PX } from '../../src/hooks/usePointerDrag';
 import type { ToCData } from '../../src/types';
 
-function makeData(): ToCData {
+function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
   return {
     sections: [
       {
@@ -56,7 +56,13 @@ function makeData(): ToCData {
                 title: 'A',
                 text: '',
                 connectionIds: [],
-                connections: [{ targetId: 'b', confidence: 75 }],
+                connections: [
+                  {
+                    targetId: 'b',
+                    confidence: 75,
+                    ...(waypoints !== undefined ? { waypoints } : {}),
+                  },
+                ],
               },
             ],
           },
@@ -76,8 +82,10 @@ function setup(extraProps?: {
     targetNodeId: string,
   ) => { onPointerDown: (e: React.PointerEvent) => void };
   consumePathGestureArmed?: () => boolean;
+  resetWaypoints?: (sourceNodeId: string, targetNodeId: string) => void;
+  waypoints?: Array<{ x: number; y: number }>;
 }) {
-  const data = makeData();
+  const data = makeData(extraProps?.waypoints);
   const container = document.createElement('div');
   document.body.appendChild(container);
   const nodeA = document.createElement('div');
@@ -104,6 +112,7 @@ function setup(extraProps?: {
     camera: { x: 0, y: 0, z: 1 },
     bindPath: extraProps?.bindPath,
     consumePathGestureArmed: extraProps?.consumePathGestureArmed,
+    resetWaypoints: extraProps?.resetWaypoints,
   };
 
   render(<ConnectionsComponent {...props} />, { container });
@@ -207,6 +216,32 @@ describe('connection fat-path waypoint drag (round-7 issue 78)', () => {
     fireEvent.pointerDown(fatPath, { clientX: 100, clientY: 100 });
     fireEvent.click(fatPath, { clientX: 101, clientY: 100 });
 
+    expect(document.querySelector('.edge-editor')).not.toBeNull();
+  });
+});
+
+describe('EdgeEditor reset-path wiring (round-7 issue 78)', () => {
+  it('the editor "Reset path" button calls resetWaypoints(sourceId, targetId) and stays open', () => {
+    const resetWaypoints = vi.fn();
+    const { fatPath } = setup({
+      resetWaypoints,
+      waypoints: [{ x: 150, y: 120 }],
+    });
+
+    // Open the editor with a plain click.
+    fireEvent.pointerDown(fatPath, { clientX: 100, clientY: 100 });
+    fireEvent.click(fatPath, { clientX: 100, clientY: 100 });
+    const editor = document.querySelector('.edge-editor');
+    expect(editor).not.toBeNull();
+
+    const reset = [...editor!.querySelectorAll('button')].find((b) =>
+      /reset path/i.test(b.textContent ?? ''),
+    );
+    expect(reset).toBeTruthy();
+    fireEvent.click(reset!);
+
+    expect(resetWaypoints).toHaveBeenCalledWith('a', 'b');
+    // Keeps the editor open.
     expect(document.querySelector('.edge-editor')).not.toBeNull();
   });
 });

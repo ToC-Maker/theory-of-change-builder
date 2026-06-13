@@ -33,12 +33,15 @@
 //     array to the single dragged waypoint. A sub-threshold click is
 //     NOT an edit and leaves the legacy shape untouched.
 //
-//   bindWaypoint(...).onDoubleClick
+//   bindWaypoint(...).onDoubleClick / resetWaypoints(sourceId, targetId)
 //     Remove the waypoint(s) entirely — the connection returns to its
 //     automatic curve. One commit → one undo entry. (The old
 //     "drag onto a neighbor waypoint to merge" affordance died with
 //     the multi-waypoint model; with a single waypoint there is no
-//     neighbor, so reset needs its own affordance.)
+//     neighbor, so reset needs its own affordance.) `resetWaypoints`
+//     is exposed on the result so the EdgeEditor's "Reset path"
+//     button (PR #34 round-7 issue 78) shares the exact same code
+//     path as the dblclick reset.
 //
 //   bindPath(sourceId, targetId)  — PR #34 round-7 issue 78
 //     Drag starting anywhere on the connection's fat hit-path. Enters
@@ -209,6 +212,13 @@ export interface UseWaypointDragResult {
    * the flag.
    */
   consumePathGestureArmed: () => boolean;
+  /**
+   * Clear the connection's waypoints → automatic curve. Same code
+   * path as `bindWaypoint(...).onDoubleClick`; also wired to the
+   * EdgeEditor's "Reset path" button (round-7 issue 78), which calls
+   * it without an event. One commit → one undo entry.
+   */
+  resetWaypoints: (sourceNodeId: string, targetNodeId: string, e?: ReactMouseEvent) => void;
 }
 
 function findConnection(
@@ -596,14 +606,18 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   );
 
   /**
-   * Double-click on a waypoint handle: remove the waypoint(s) — the
-   * connection returns to its automatic curve. The two clicks that
-   * precede the dblclick are sub-threshold gestures and wrote nothing
-   * (see DRAG_THRESHOLD_PX), so this is the only mutation: one
-   * mutateDebounced + one commit → one undo entry.
+   * Remove the waypoint(s) — the connection returns to its automatic
+   * curve. Two callers share this seam (round-7 issue 78):
+   *   - double-click on a waypoint handle (passes the mouse event so
+   *     the dblclick doesn't bubble into canvas handlers); the two
+   *     clicks that precede the dblclick are sub-threshold gestures
+   *     and wrote nothing (see DRAG_THRESHOLD_PX);
+   *   - the EdgeEditor's "Reset path" button (no event — button
+   *     clicks live inside the portal, nothing to stop).
+   * Either way: one mutateDebounced + one commit → one undo entry.
    */
   const resetWaypoints = useCallback(
-    (sourceNodeId: string, targetNodeId: string, e: ReactMouseEvent) => {
+    (sourceNodeId: string, targetNodeId: string, e?: ReactMouseEvent) => {
       if (!editModeRef.current) return;
       if (isCanvasGestureActive()) return;
       const conn = findConnection(dataRef.current, sourceNodeId, targetNodeId);
@@ -616,7 +630,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
         key,
       );
       commitRef.current(key);
-      e.stopPropagation();
+      e?.stopPropagation();
     },
     [buildKey],
   );
@@ -705,7 +719,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       bindMidpoint,
       bindPath,
       consumePathGestureArmed,
+      resetWaypoints,
     }),
-    [dragState, bindWaypoint, bindMidpoint, bindPath, consumePathGestureArmed],
+    [dragState, bindWaypoint, bindMidpoint, bindPath, consumePathGestureArmed, resetWaypoints],
   );
 }
