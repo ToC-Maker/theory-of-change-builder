@@ -87,6 +87,7 @@ import { useNodeProperties } from './useNodeProperties';
 import { useAnchorPosition } from './useAnchorPosition';
 import { DetailsEditor } from './DetailsEditor';
 import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
+import { isEditorSwitchTarget } from '../canvas/editorSwitchTargets';
 import { NODE_DOM_ATTR } from '../NodeComponent';
 
 type GraphUpdater = SetStateAction<ToCData>;
@@ -198,7 +199,9 @@ export function NodeEditor(props: NodeEditorProps) {
   //   - Only when the click target is inside a node element (closest
   //     ancestor with `[data-tocb-node]`).
   // The plain "click another node to switch anchor" flow keeps working
-  // (no modifier → dismiss → React's onClick selects the new node).
+  // (no modifier → dismiss → React's onClick selects the new node; the
+  // hook's swallow guard lets it through because nodes are switch
+  // targets — see `allowClickThroughOnDismiss` below).
   // Escape is intentionally NOT gated by this predicate.
   const shouldSkipDismiss = useCallback((event: MouseEvent) => {
     if (!event.metaKey && !event.ctrlKey) return false;
@@ -211,6 +214,11 @@ export function NodeEditor(props: NodeEditorProps) {
     onDismiss: onRequestClose,
     extraSafeRefs: safeRefs,
     shouldSkipDismiss,
+    // fb7 issue 77: the dismissing gesture's click is consumed (closing
+    // the editor must not also fire a gutter / double-click-create),
+    // EXCEPT when the press lands on a selection target — clicking
+    // another node or a connection switches editors in one gesture.
+    allowClickThroughOnDismiss: isEditorSwitchTarget,
   });
 
   if (selectedNodeIds.length === 0) return null;

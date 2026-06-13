@@ -45,6 +45,7 @@ import type { ToCData } from '../../types';
 import { useEdgeProperties } from './useEdgeProperties';
 import { useAnchorPosition } from '../node-editor/useAnchorPosition';
 import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
+import { isEditorSwitchTarget } from '../canvas/editorSwitchTargets';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
@@ -134,6 +135,12 @@ export function EdgeEditor(props: EdgeEditorProps) {
     containerRef,
     onDismiss: onRequestClose,
     extraSafeRefs: safeRefs,
+    // fb7 issue 77: the dismissing gesture's click is consumed (closing
+    // the editor must not also fire a gutter / double-click-create),
+    // EXCEPT when the press lands on a selection target — clicking a
+    // node, another connection, or this connection's own waypoint
+    // handles keeps its click (switch / manipulate in one gesture).
+    allowClickThroughOnDismiss: isEditorSwitchTarget,
   });
 
   const handleDelete = () => {
