@@ -40,6 +40,29 @@
 //     the multi-waypoint model; with a single waypoint there is no
 //     neighbor, so reset needs its own affordance.)
 //
+//   bindPath(sourceId, targetId)  — PR #34 round-7 issue 78
+//     Drag starting anywhere on the connection's fat hit-path. Enters
+//     the SAME gesture flow as bindMidpoint/bindWaypoint (identical
+//     threshold/cancel/undo semantics; the waypoint goes where the
+//     cursor goes), superseding K7's "drag from a connection does
+//     nothing" decision. Whether the connection already has a
+//     waypoint is irrelevant to the write (it always REPLACES the
+//     array with [cursorPos]); kind 'path' only affects the
+//     pointerup validity check (connection-exists, like 'insert') and
+//     the trailing-click suppression flag below.
+//
+//   consumePathGestureArmed()
+//     One-shot signal for the fat path's click handler. Browsers fire
+//     `click` after every down/up pair on the path (pointer capture
+//     keeps the target stable through the drag), so the component
+//     must distinguish "that gesture was a drag — suppress the
+//     EdgeEditor" from "that was a click — open it". The positional
+//     dead-zone the component already had (K7) cannot tell an
+//     out-and-back drag from a click, so the hook records whether the
+//     most recent path-initiated gesture armed; consuming clears it,
+//     and the next path pointerdown resets it (cancel paths can set
+//     the flag without any click ever firing).
+//
 // ---------------------------------------------------------------------------
 // Mutation model
 // ---------------------------------------------------------------------------
@@ -108,7 +131,16 @@ import type { ToCData, Connection } from '../types';
  */
 const DRAG_THRESHOLD_PX = 3;
 
-export type WaypointDragKind = 'move' | 'insert';
+/**
+ * 'move'   — drag of an existing waypoint handle.
+ * 'insert' — drag of the at-rest midpoint affordance.
+ * 'path'   — drag starting on the connection's fat hit-path (round-7
+ *            issue 78). Write/undo semantics are identical to
+ *            'insert'; the distinct kind exists for the pointerup
+ *            validity check (no waypoint-index requirement) and for
+ *            the trailing-click suppression flag.
+ */
+export type WaypointDragKind = 'move' | 'insert' | 'path';
 
 export interface WaypointDragState {
   kind: WaypointDragKind;
@@ -118,7 +150,7 @@ export interface WaypointDragState {
    * For `kind: 'move'`, the index of the waypoint being dragged (only
    * relevant for the stale-gesture validity check on pointerup; the
    * write itself always collapses to a single waypoint). For
-   * `kind: 'insert'`, 0.
+   * `kind: 'insert'` / `'path'`, 0.
    */
   waypointIndex: number;
 }
@@ -165,6 +197,18 @@ export interface UseWaypointDragResult {
     targetNodeId: string,
     segmentIndex: number,
   ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  /** Round-7 issue 78: drag starting anywhere on the fat hit-path. */
+  bindPath: (
+    sourceNodeId: string,
+    targetNodeId: string,
+  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  /**
+   * One-shot: true iff the most recent path-initiated gesture armed
+   * (crossed the drag threshold). Consumed by the fat path's click
+   * handler to suppress the EdgeEditor after a drag. Reading clears
+   * the flag.
+   */
+  consumePathGestureArmed: () => boolean;
 }
 
 function findConnection(
@@ -276,6 +320,14 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   const gestureStartClientRef = useRef<{ x: number; y: number } | null>(null);
   const gestureArmedRef = useRef(false);
 
+  // Round-7 issue 78: sticky "the last path-initiated gesture was a
+  // drag" flag, read (and cleared) by the fat path's click handler via
+  // `consumePathGestureArmed`. Recorded in `cleanup` — which runs on
+  // pointerup BEFORE the browser dispatches the trailing click — and
+  // only for kind 'path' (handle gestures keep their own click
+  // handling and must not poison the flag).
+  const pathGestureArmedRef = useRef(false);
+
   const buildKey = useCallback(
     (sourceId: string, targetId: string): string => `waypoints-${sourceId}->${targetId}`,
     [],
@@ -304,6 +356,13 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       if (cancel) {
         const key = gestureKeyRef.current;
         if (key !== null) discardBufferedRef.current?.(key);
+      }
+      // Record the click-suppression flag BEFORE resetting the gesture
+      // state. Cancel paths (Escape/pointercancel) record too: the
+      // user's eventual release after a cancelled drag must not open
+      // the editor either.
+      if (dragStateRef.current?.kind === 'path') {
+        pathGestureArmedRef.current = gestureArmedRef.current;
       }
       captureElRef.current = null;
       activePointerIdRef.current = null;
@@ -396,9 +455,13 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       }
 
       const liveConn = findConnection(dataRef.current, state.sourceNodeId, state.targetNodeId);
+      // 'insert' and 'path' gestures aren't anchored to a specific
+      // waypoint — the connection existing is the whole validity
+      // story. Only 'move' additionally requires its index to still
+      // be live.
       const waypointStillValid =
         !!liveConn &&
-        (state.kind === 'insert' ||
+        (state.kind !== 'move' ||
           (state.waypointIndex >= 0 && state.waypointIndex < (liveConn.waypoints?.length ?? 0)));
       if (!waypointStillValid) {
         loggingService.reportError({
@@ -602,13 +665,47 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     [startGesture],
   );
 
+  const bindPathCache = useRef<Map<string, { onPointerDown: (e: ReactPointerEvent) => void }>>(
+    new Map(),
+  );
+
+  const bindPath = useCallback(
+    (sourceNodeId: string, targetNodeId: string) => {
+      const key = `${sourceNodeId}->${targetNodeId}`;
+      const cached = bindPathCache.current.get(key);
+      if (cached) return cached;
+      const entry = {
+        onPointerDown: (e: ReactPointerEvent) => {
+          // Every new path press starts with a clean suppression flag:
+          // a cancelled previous gesture may have set it without any
+          // click ever firing (pointer released off-path), and a press
+          // that never becomes a gesture (view mode, mutex held) must
+          // leave the click handler in its positional-fallback mode.
+          pathGestureArmedRef.current = false;
+          startGesture('path', sourceNodeId, targetNodeId, 0, e);
+        },
+      };
+      bindPathCache.current.set(key, entry);
+      return entry;
+    },
+    [startGesture],
+  );
+
+  const consumePathGestureArmed = useCallback((): boolean => {
+    const armed = pathGestureArmedRef.current;
+    pathGestureArmedRef.current = false;
+    return armed;
+  }, []);
+
   return useMemo(
     () => ({
       dragState,
       isActive: dragState !== null,
       bindWaypoint,
       bindMidpoint,
+      bindPath,
+      consumePathGestureArmed,
     }),
-    [dragState, bindWaypoint, bindMidpoint],
+    [dragState, bindWaypoint, bindMidpoint, bindPath, consumePathGestureArmed],
   );
 }

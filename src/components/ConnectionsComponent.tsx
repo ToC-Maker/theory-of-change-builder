@@ -80,6 +80,21 @@ interface ConnectionsComponentProps {
     targetNodeId: string,
     segmentIndex: number,
   ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  /**
+   * Round-7 issue 78: drag starting anywhere on the fat hit-path
+   * moves THE waypoint (supersedes K7's inert-drag decision). Same
+   * `useWaypointDrag` flow as the handles.
+   */
+  bindPath?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  /**
+   * One-shot "the gesture that produced this click was a drag" flag
+   * from `useWaypointDrag`; the fat path's click handler consumes it
+   * to keep drags from opening the EdgeEditor (see onClick below).
+   */
+  consumePathGestureArmed?: () => boolean;
   waypointDragState?: WaypointDragState | null;
 }
 
@@ -104,6 +119,8 @@ export function ConnectionsComponent({
   fontFamily,
   bindWaypoint,
   bindMidpoint,
+  bindPath,
+  consumePathGestureArmed,
   waypointDragState,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
@@ -624,9 +641,10 @@ export function ConnectionsComponent({
                 // K7: matched by App.tsx's `excludeFromPan` so a press
                 // that starts on a connection can never start a canvas
                 // pan (same mechanism as the waypoint handles, PR 7
-                // feedback 18). Dragging from a connection does
-                // nothing; only a true click (sub-threshold movement,
-                // see onClick) opens the EdgeEditor.
+                // feedback 18). Round-7 issue 78 superseded the other
+                // half of K7: dragging from the path now moves THE
+                // waypoint (see onPointerDown); a true click still
+                // opens the EdgeEditor (see onClick).
                 data-tocb-connection-hitpath=""
                 style={{
                   stroke: 'transparent',
@@ -669,26 +687,61 @@ export function ConnectionsComponent({
                     (activeEdgeKey !== null && edgeKey !== activeEdgeKey)
                       ? 'none'
                       : 'stroke',
+                  // Round-7 issue 78: the path is a drag surface now —
+                  // keep touch drags from being hijacked by browser
+                  // scrolling, same as the waypoint handles.
+                  touchAction: 'none',
                 }}
                 onPointerDown={(e) => {
                   // K7: record where the press started; the click
-                  // handler measures movement against this. No mutex
-                  // claim and no stopPropagation — a press on the path
-                  // is not (yet) a gesture.
+                  // handler measures movement against this (fallback
+                  // discrimination for presses the waypoint gesture
+                  // never saw — view mode, mutex held).
                   hitPathPointerDownRef.current = { x: e.clientX, y: e.clientY };
+                  // Round-7 issue 78 (supersedes K7's inert-drag
+                  // decision): a drag starting anywhere on the path
+                  // enters the waypoint-drag flow — identical
+                  // threshold/cancel/undo semantics to the midpoint
+                  // handle, and the waypoint goes where the cursor
+                  // goes. The hook claims the canvas-gesture mutex on
+                  // press and runs the full release lifecycle, so the
+                  // K7-era objection to claiming a gesture here no
+                  // longer applies. Panning from the path stays
+                  // excluded (App.excludeFromPan matches the data
+                  // attribute above).
+                  bindPath?.(connection.sourceId, connection.targetId).onPointerDown(e);
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
+
+                  // Round-7 issue 78: if the press that produced this
+                  // click armed the waypoint gesture, the gesture was
+                  // a drag — the waypoint write already committed on
+                  // pointerup; never open the editor on top of it.
+                  // One-shot consume (ALWAYS consumed, even if the
+                  // positional check below would also suppress) so the
+                  // flag can't go stale across gestures. This is the
+                  // primary tap-vs-drag discriminator: unlike the
+                  // positional dead-zone below it correctly classifies
+                  // an out-and-back drag that releases at the press
+                  // point.
+                  const pathGestureWasDrag = consumePathGestureArmed?.() ?? false;
 
                   // K7: tap-vs-drag dead-zone, mirroring
                   // `usePointerDrag.hasMoved` (PR #34 fb 45). A click
                   // event lands here after ANY down+up pair on this
                   // path, however far apart; only open the editor when
                   // the gesture stayed within the tap threshold.
-                  // Clicks with no recorded pointerdown (programmatic
-                  // / synthesized) open unconditionally.
+                  // Retained as the fallback for presses that never
+                  // entered the waypoint flow (view mode, gesture
+                  // mutex held, no bindPath wired). Clicks with no
+                  // recorded pointerdown (programmatic / synthesized)
+                  // open unconditionally.
                   const downPos = hitPathPointerDownRef.current;
                   hitPathPointerDownRef.current = null;
+                  if (pathGestureWasDrag) {
+                    return; // Drag (waypoint moved) — no editor.
+                  }
                   if (
                     downPos &&
                     (Math.abs(e.clientX - downPos.x) > MOVE_THRESHOLD_PX ||

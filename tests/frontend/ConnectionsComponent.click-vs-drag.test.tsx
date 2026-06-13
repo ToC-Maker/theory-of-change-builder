@@ -1,7 +1,17 @@
 // K7 (PR #34 round-2 parked issue): starting a DRAG on a connection's
-// invisible fat hit-path must do nothing — neither pan the canvas nor
-// open the EdgeEditor on release. A plain click (no movement) still
-// opens the editor.
+// invisible fat hit-path must not pan the canvas nor open the
+// EdgeEditor on release. A plain click (no movement) still opens the
+// editor.
+//
+// Round-7 issue 78 SUPERSEDES half of K7: a drag from the path is no
+// longer inert — it enters the waypoint-drag flow (`bindPath` from
+// `useWaypointDrag`), moving THE waypoint with the cursor. The
+// no-pan half of K7 stays (the path remains in App.excludeFromPan).
+// Click discrimination is now primarily the hook's one-shot
+// `consumePathGestureArmed()` flag (armed gesture = drag, suppress
+// editor); the K7 positional dead-zone survives as the fallback for
+// presses the hook never saw (view mode, gesture mutex held,
+// programmatic clicks).
 //
 // Reproduced live (rodney, trusted-order synthetic events): mousedown
 // on the fat path → mousemove +80/+40 → mouseup. The canvas panned the
@@ -60,7 +70,13 @@ function makeData(): ToCData {
   };
 }
 
-function setup() {
+function setup(extraProps?: {
+  bindPath?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+  ) => { onPointerDown: (e: React.PointerEvent) => void };
+  consumePathGestureArmed?: () => boolean;
+}) {
   const data = makeData();
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -86,6 +102,8 @@ function setup() {
     onSizeChange: vi.fn(),
     containerRef: { current: container } as React.RefObject<HTMLDivElement | null>,
     camera: { x: 0, y: 0, z: 1 },
+    bindPath: extraProps?.bindPath,
+    consumePathGestureArmed: extraProps?.consumePathGestureArmed,
   };
 
   render(<ConnectionsComponent {...props} />, { container });
@@ -146,6 +164,49 @@ describe('connection fat-path click vs drag (K7)', () => {
 
     fireEvent.pointerDown(fatPath, { clientX: 200, clientY: 200 });
     fireEvent.click(fatPath, { clientX: 201, clientY: 200 });
+    expect(document.querySelector('.edge-editor')).not.toBeNull();
+  });
+});
+
+describe('connection fat-path waypoint drag (round-7 issue 78)', () => {
+  it('pointerdown on the path enters the waypoint-drag flow via bindPath', () => {
+    const onPointerDown = vi.fn();
+    const bindPath = vi.fn(() => ({ onPointerDown }));
+    const { fatPath } = setup({ bindPath, consumePathGestureArmed: () => false });
+
+    fireEvent.pointerDown(fatPath, { clientX: 100, clientY: 100 });
+
+    expect(bindPath).toHaveBeenCalledWith('a', 'b');
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('an armed path gesture suppresses the trailing click even at sub-threshold coords', () => {
+    // Out-and-back drag: the pointer traveled far mid-gesture (the
+    // hook armed and wrote the waypoint) but the click lands back at
+    // the press point. The positional dead-zone alone would wrongly
+    // open the editor; the armed flag must win.
+    const consume = vi.fn(() => true);
+    const { fatPath } = setup({
+      bindPath: () => ({ onPointerDown: vi.fn() }),
+      consumePathGestureArmed: consume,
+    });
+
+    fireEvent.pointerDown(fatPath, { clientX: 100, clientY: 100 });
+    fireEvent.click(fatPath, { clientX: 100, clientY: 100 });
+
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.edge-editor')).toBeNull();
+  });
+
+  it('an unarmed path press still opens the editor on click (flag=false)', () => {
+    const { fatPath } = setup({
+      bindPath: () => ({ onPointerDown: vi.fn() }),
+      consumePathGestureArmed: () => false,
+    });
+
+    fireEvent.pointerDown(fatPath, { clientX: 100, clientY: 100 });
+    fireEvent.click(fatPath, { clientX: 101, clientY: 100 });
+
     expect(document.querySelector('.edge-editor')).not.toBeNull();
   });
 });

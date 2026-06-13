@@ -647,6 +647,279 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
   });
 
+  describe('bindPath — whole-edge drag (PR #34 round-7 issue 78)', () => {
+    // The reviewer superseded K7's "drag from a connection does
+    // nothing": a pointer-drag starting anywhere on the fat hit-path
+    // enters the SAME waypoint-drag flow as the midpoint handle. The
+    // waypoint position math is unchanged — the waypoint goes where
+    // the cursor goes.
+
+    it('a drag starting on the path creates THE waypoint at the drop position', () => {
+      const data = makeData([]); // no existing waypoint
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 140, y: 190 }]);
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+
+    it('a drag starting on the path MOVES the existing waypoint (collapse semantics)', () => {
+      // Same write shape as every other waypoint gesture: replace the
+      // whole array with [cursorPos]. Legacy multi-waypoint charts
+      // collapse exactly as they do for handle drags.
+      const data = makeData([
+        { x: 60, y: 100 },
+        { x: 140, y: 100 },
+      ]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 90, clientY: 100 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 200, clientY: 250 }));
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 200, y: 250 }]);
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+    });
+
+    it('a sub-threshold press+release on the path writes nothing (plain click)', () => {
+      const data = makeData([]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 41, clientY: 91 }));
+      });
+
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+
+    it('respects editMode=false and the canvas-gesture mutex', () => {
+      const data = makeData([]);
+      const viewMode = setupHook({ data, editMode: false });
+      act(() => {
+        viewMode.result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+      });
+      expect(viewMode.result.current.isActive).toBe(false);
+      cleanup();
+      _resetCanvasGestureStateForTest();
+
+      const { ctx, result } = setupHook({ data });
+      act(() => setCanvasGestureActive(true));
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+      });
+      expect(result.current.isActive).toBe(false);
+      expect(ctx.mutateDebounced).not.toHaveBeenCalled();
+    });
+
+    it('cancels (no commit, buffered discard) when the connection vanished mid-gesture', () => {
+      const data = makeData([]);
+      const { ctx, result } = setupHook({ data });
+
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+      });
+
+      const emptyData = makeData([]);
+      const dataNoConnection: ToCData = {
+        ...emptyData,
+        sections: emptyData.sections.map((section) => ({
+          ...section,
+          columns: section.columns.map((column) => ({
+            ...column,
+            nodes: column.nodes.map((node) =>
+              node.id === sourceId ? { ...node, connections: [] } : node,
+            ),
+          })),
+        })),
+      };
+      act(() => {
+        ctx.rerender({ data: dataNoConnection });
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
+      });
+
+      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(loggingService.reportError).toHaveBeenCalledTimes(1);
+      expect((loggingService.reportError as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(
+        expect.objectContaining({ error_name: 'stale-waypoint-drop' }),
+      );
+    });
+
+    describe('consumePathGestureArmed — trailing-click suppression signal', () => {
+      // Browsers fire `click` after every down/up pair on the path,
+      // however far apart (pointer capture keeps the target stable).
+      // The component's click handler consumes this one-shot flag to
+      // tell "that gesture was a drag" (suppress the EdgeEditor) from
+      // "that was a click" (open it). The flag — not a positional
+      // dead-zone — is what makes an out-and-back drag (release near
+      // the press point) count as a drag.
+
+      it('is true exactly once after an armed path gesture', () => {
+        const data = makeData([]);
+        const { result } = setupHook({ data });
+
+        act(() => {
+          result.current
+            .bindPath(sourceId, targetId)
+            .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
+        });
+
+        expect(result.current.consumePathGestureArmed()).toBe(true);
+        // One-shot: consumed.
+        expect(result.current.consumePathGestureArmed()).toBe(false);
+      });
+
+      it('is true after an out-and-back drag that releases at the press point', () => {
+        // The arm latches mid-gesture; releasing back at the start is
+        // a "moved then changed my mind" drop, not a click.
+        const data = makeData([]);
+        const { result } = setupHook({ data });
+
+        act(() => {
+          result.current
+            .bindPath(sourceId, targetId)
+            .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointerup', { clientX: 40, clientY: 90 }));
+        });
+
+        expect(result.current.consumePathGestureArmed()).toBe(true);
+      });
+
+      it('is false after a sub-threshold path press (a plain click)', () => {
+        const data = makeData([]);
+        const { result } = setupHook({ data });
+
+        act(() => {
+          result.current
+            .bindPath(sourceId, targetId)
+            .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointerup', { clientX: 41, clientY: 91 }));
+        });
+
+        expect(result.current.consumePathGestureArmed()).toBe(false);
+      });
+
+      it('is true after an Escape-cancelled armed path gesture (release must not open the editor)', () => {
+        const data = makeData([]);
+        const { ctx, result } = setupHook({ data });
+
+        act(() => {
+          result.current
+            .bindPath(sourceId, targetId)
+            .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+        });
+        act(() => {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        });
+
+        expect(ctx.commit).not.toHaveBeenCalled();
+        expect(ctx.discardBuffered).toHaveBeenCalledWith(`waypoints-${sourceId}->${targetId}`);
+        expect(result.current.consumePathGestureArmed()).toBe(true);
+      });
+
+      it('is NOT set by handle-initiated gestures (midpoint / waypoint drags)', () => {
+        const data = makeData([]);
+        const { result } = setupHook({ data });
+
+        act(() => {
+          result.current
+            .bindMidpoint(sourceId, targetId, 0)
+            .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
+        });
+
+        expect(result.current.consumePathGestureArmed()).toBe(false);
+      });
+
+      it('a stale flag from a cancelled gesture resets on the next path press', () => {
+        // Cancel paths can set the flag without a trailing click ever
+        // firing (pointer released off-path). The next path press
+        // must start clean.
+        const data = makeData([]);
+        const { result } = setupHook({ data });
+
+        act(() => {
+          result.current
+            .bindPath(sourceId, targetId)
+            .onPointerDown(makePointerDownEvent({ clientX: 40, clientY: 90 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointermove', { clientX: 140, clientY: 190 }));
+        });
+        act(() => {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        });
+        // Flag is true now, but NOT consumed (no click fired).
+
+        act(() => {
+          result.current
+            .bindPath(sourceId, targetId)
+            .onPointerDown(makePointerDownEvent({ clientX: 50, clientY: 95 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointerup', { clientX: 50, clientY: 95 }));
+        });
+
+        expect(result.current.consumePathGestureArmed()).toBe(false);
+      });
+    });
+  });
+
   describe('clientToContainer coordinate translation', () => {
     it('writes the translated (not raw client) coords to the waypoint', () => {
       const data = makeData([]);

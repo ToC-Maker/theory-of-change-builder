@@ -1671,6 +1671,8 @@ export function ToC({
           fontFamily={fontFamily}
           bindWaypoint={waypointDrag.bindWaypoint}
           bindMidpoint={waypointDrag.bindMidpoint}
+          bindPath={waypointDrag.bindPath}
+          consumePathGestureArmed={waypointDrag.consumePathGestureArmed}
           waypointDragState={waypointDrag.dragState}
         />
 
