@@ -266,15 +266,20 @@ describe('ConnectionWaypointHandles', () => {
       });
     }
 
-    it('midpoint: interactive circle has r >= 11 (>= 22px diameter), visible dot stays r=4', () => {
+    it('midpoint: interactive circle has r >= 11 (>= 22px diameter); visible dot is r=6.5, solid fill, white halo (round-7 issue 78)', () => {
       const { container } = renderMidpoint();
       const hit = container.querySelector('[data-tocb-midpoint-handle]') as SVGCircleElement;
       expect(Number(hit.getAttribute('r'))).toBeGreaterThanOrEqual(11);
-      // The decorative circle keeps the small visual and never
-      // intercepts events.
+      // The decorative circle is the discoverability cue: round-7
+      // feedback ("still tiny and barely visible") bumped it from the
+      // r=4 translucent dot to r=6.5 with a SOLID indigo fill and the
+      // same white halo as the waypoint handle. It never intercepts
+      // events.
       const circles = [...container.querySelectorAll('circle')];
       const visible = circles.find((c) => c !== hit)!;
-      expect(visible.getAttribute('r')).toBe('4');
+      expect(Number(visible.getAttribute('r'))).toBeGreaterThanOrEqual(6);
+      expect(visible.style.fill).toBe('rgb(99, 102, 241)'); // solid, not rgba(...,0.5)
+      expect(Number(visible.style.strokeWidth)).toBeGreaterThanOrEqual(2); // white halo
       expect(visible.style.pointerEvents).toBe('none');
       // Hit circle is invisible and co-located with the visual.
       expect(hit.style.fill).toBe('transparent');

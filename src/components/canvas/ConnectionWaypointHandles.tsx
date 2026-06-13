@@ -5,10 +5,15 @@
 // same SVG element as the path) when the connection is hovered or
 // selected. Two kinds:
 //
-//   - ONE translucent midpoint affordance at the on-curve midpoint,
-//     shown only while the connection has NO waypoint. `cursor:
-//     crosshair`. Dragging it creates THE waypoint
-//     (`useWaypointDrag.bindMidpoint`).
+//   - ONE midpoint affordance at the on-curve midpoint, shown only
+//     while the connection has NO waypoint. `cursor: crosshair`.
+//     Dragging it creates THE waypoint
+//     (`useWaypointDrag.bindMidpoint`). Round-7 issue 78: since the
+//     whole edge is now a drag surface, this dot's remaining job is
+//     DISCOVERABILITY — it advertises that the connection can be
+//     bent — so it is sized/contrasted like the waypoint handle
+//     (solid indigo + white halo) rather than the old r=4 translucent
+//     dot the reviewer called "tiny and barely visible".
 //
 //   - A filled solid circle at each existing waypoint. `cursor: move`.
 //     Dragging moves the waypoint (`useWaypointDrag.bindWaypoint`);
@@ -41,8 +46,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 
 /**
  * PR #34 round-4 feedback 69: minimum press-target radius, in SCREEN
- * (CSS) pixels. The visible dots are deliberately small (r=4 / r=6 —
- * measured 6.7px / 10.1px effective at the default fit zoom), so each
+ * (CSS) pixels. The visible dots are small (r=6.5 / r=6), so each
  * handle renders an additional INVISIBLE hit circle: same center, same
  * handlers, `fill: transparent`, radius `HIT_RADIUS_SCREEN_PX /
  * zoomScale` so the effective on-screen target stays ≥ 24px however
@@ -55,6 +59,18 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
  * gesture tests hit-test against.
  */
 const HIT_RADIUS_SCREEN_PX = 12;
+
+/**
+ * Visible radius of the midpoint affordance. Round-7 issue 78 bumped
+ * it from 4 (translucent — "tiny and barely visible" per review) to
+ * 6.5 with a solid fill + white halo matching the waypoint handle's
+ * affordance language. Slightly larger than the waypoint dot (r=6) so
+ * the at-rest cue reads at fit zoom; the two never co-exist (the
+ * midpoint only shows while the connection has no waypoint).
+ */
+const MIDPOINT_VISIBLE_R = 6.5;
+/** Visible radius of the waypoint handle (unchanged). */
+const WAYPOINT_VISIBLE_R = 6;
 
 function hitRadius(visibleR: number, zoomScale: number): number {
   const z = zoomScale > 0 ? zoomScale : 1;
@@ -161,18 +177,18 @@ export function ConnectionWaypointHandles({
           <circle
             cx={midpoint.x}
             cy={midpoint.y}
-            r={4}
+            r={MIDPOINT_VISIBLE_R}
             style={{
-              fill: 'rgba(99, 102, 241, 0.5)', // indigo-500 @ 50%
+              fill: 'rgb(99, 102, 241)', // indigo-500, solid (round-7 issue 78)
               stroke: 'white',
-              strokeWidth: 1.5,
+              strokeWidth: 2,
               pointerEvents: 'none', // decorative — the hit circle presses
             }}
           />
           <circle
             cx={midpoint.x}
             cy={midpoint.y}
-            r={hitRadius(4, zoomScale)}
+            r={hitRadius(MIDPOINT_VISIBLE_R, zoomScale)}
             data-tocb-midpoint-handle={`${sourceNodeId}->${targetNodeId}|0`}
             onPointerDown={midpointBound.onPointerDown}
             onClick={(e) => e.stopPropagation()}
@@ -197,7 +213,7 @@ export function ConnectionWaypointHandles({
             <circle
               cx={x}
               cy={y}
-              r={6}
+              r={WAYPOINT_VISIBLE_R}
               style={{
                 fill: 'rgb(99, 102, 241)', // indigo-500
                 stroke: 'white',
@@ -208,7 +224,7 @@ export function ConnectionWaypointHandles({
             <circle
               cx={x}
               cy={y}
-              r={hitRadius(6, zoomScale)}
+              r={hitRadius(WAYPOINT_VISIBLE_R, zoomScale)}
               data-tocb-waypoint-handle={`${sourceNodeId}->${targetNodeId}|${index}`}
               onPointerDown={bound.onPointerDown}
               onDoubleClick={bound.onDoubleClick}
