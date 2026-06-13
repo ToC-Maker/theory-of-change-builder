@@ -86,6 +86,8 @@ The AI modifies graphs via structured JSON edits in `src/utils/graphEdits.ts`:
 - Four types: `update`, `insert`, `delete`, `push`
 - Edits validated sequentially - later edits can reference earlier results
 - Never use negative indices or invalid paths
+- **`update` REPLACES the whole value at its path** (`setAtPath` in `graphEdits.ts`); it does not merge. Rewriting a whole connection/node object therefore silently drops any field the model omits.
+- **UI-managed fields the prompts must keep documented as "preserve, don't author":** `connection.waypoints`, `node.width`/`node.color`, and the root-level format fields (`curvature`, `textSize`, `fontFamily`, `columnPadding`, `sectionPadding`). They live in the JSON and must round-trip through edits, so the model changes a connection/node via **granular path edits** (e.g. `...connections.0.confidence`) rather than whole-object rewrites, or those fields are lost. The prompts (`src/prompts/chatModePrompt.md`, `generateModePrompt.md`) document this; `tests/frontend/graphEdits.waypoints.test.ts` guards the replace-vs-granular behavior.
 
 ### URL Patterns and Permissions
 
