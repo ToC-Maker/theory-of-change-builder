@@ -112,7 +112,17 @@ The structure includes:
 - sections: Array of sections (typically Activities, Outputs, Outcomes, Impacts)
 - Each section has columns containing nodes
 - Nodes have: id, title, text, path, connections, yPosition, width, color
-- connections: Array of full connection objects with: targetId, confidence (0-100), evidence, assumptions
+- connections: Array of full connection objects with: targetId, confidence (0-100), evidence, assumptions, and an optional **waypoints** array
+- **Optional root-level format fields** (UI-managed appearance/layout): curvature, textSize, fontFamily, columnPadding, sectionPadding
+
+**UI-managed fields — preserve, never author or invent:**
+
+Some fields are controlled by the user through the visual editor, not by you. Treat them as read-only and carry them through unchanged:
+
+- **connection.waypoints** — an optional `Array<{ x, y }>` of bezier routing points the user drags by hand to shape a connection's curve. NEVER add, remove, or invent waypoint coordinates. When you change a connection, you MUST preserve any existing waypoints.
+- **node.width / node.color** and the root-level format fields (curvature, textSize, fontFamily, columnPadding, sectionPadding) — appearance/layout the user controls. Leave them untouched unless the user explicitly asks you to restyle.
+
+To keep these fields safe, **prefer granular path edits over rewriting a whole object**: update the single property you mean to change (e.g. `sections.1.columns.0.nodes.0.connections.0.confidence`) instead of replacing an entire connection or node. A whole-object `update` overwrites the target completely and silently drops any field you omit (waypoints, width, color). Use `push`/`insert` only for brand-new nodes/connections (where there is nothing to preserve); use granular `update` to modify existing ones.
 
 **Adding a Graph Title**: When creating or modifying a graph, always include a descriptive title at the root level that clearly identifies the organization and purpose. For example:
 
@@ -148,17 +158,19 @@ Each time a new section/column is "locked" OR when the user requests changes to 
   },
   {
     "type": "update",
-    "path": "sections.1.columns.0.nodes.0.connections.0",
-    "value": {
-      "targetId": "target-node-id",
-      "confidence": 80,
-      "evidence": "Evidence text",
-      "assumptions": "Assumption text"
-    }
+    "path": "sections.1.columns.0.nodes.0.connections.0.confidence",
+    "value": 80
+  },
+  {
+    "type": "update",
+    "path": "sections.1.columns.0.nodes.0.connections.0.evidence",
+    "value": "Evidence text"
   }
 ]
 [/EDIT_INSTRUCTIONS]
 ```
+
+Note how the connection above is changed with granular field paths (`...connections.0.confidence`, `...connections.0.evidence`) rather than by replacing the whole `...connections.0` object. This preserves any UI-managed `waypoints` on that connection.
 
 **Edit instruction types:**
 
@@ -172,8 +184,9 @@ Each time a new section/column is "locked" OR when the user requests changes to 
 - Update title: `title`
 - Add node: `sections.{sectionIndex}.columns.{columnIndex}.nodes`
 - Add column: `sections.{sectionIndex}.columns`
-- Update node: `sections.{sectionIndex}.columns.{columnIndex}.nodes.{nodeIndex}`
-- Add connection: `sections.{sectionIndex}.columns.{columnIndex}.nodes.{nodeIndex}.connections`
+- Update a node field (granular — preserves width/color): `sections.{s}.columns.{c}.nodes.{n}.title` (likewise `.text`, `.yPosition`)
+- Add connection: `sections.{s}.columns.{c}.nodes.{n}.connections`
+- Update a connection field (granular — preserves waypoints): `sections.{s}.columns.{c}.nodes.{n}.connections.{i}.confidence` (likewise `.evidence`, `.assumptions`)
 
 **Example: Setting a graph title:**
 
