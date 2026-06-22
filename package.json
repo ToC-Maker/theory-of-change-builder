@@ -44,7 +44,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.14.7",
+    "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@cloudflare/workers-types": "^4.20260417.1",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/typography": "^0.5.19",
