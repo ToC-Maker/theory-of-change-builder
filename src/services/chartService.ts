@@ -1,4 +1,9 @@
 import { ToCData } from '../types';
+import type { LinkSharingLevel, Permission } from '../../shared/permissions';
+import { RequestTokenSource, type AuthTokenProvider } from './requestTokenSource';
+
+export type { LinkSharingLevel, Permission, PermissionStatus } from '../../shared/permissions';
+export type { AuthTokenProvider } from './requestTokenSource';
 
 const API_BASE = '/api';
 
@@ -30,37 +35,69 @@ export interface UserChart {
   permissionLevel: 'owner' | 'edit';
 }
 
-export interface Permission {
-  user_id: string;
-  user_email: string;
-  permission_level: 'owner' | 'edit';
-  granted_at: string;
-  granted_by: string;
-}
-
 export class ChartService {
-  // Optional token that can be set by components
-  private static authToken: string | null = null;
+  // Request-time token source (shared resolver — see
+  // src/services/requestTokenSource.ts for the resolution semantics:
+  // provider-first, static fallback, provider-throw → last-known).
+  //
+  // PR 7 round-2 fix: the worker now requires a valid Bearer JWT on
+  // getUserCharts (and on updateChart for owned, restricted charts),
+  // and the mount-time static snapshot alone proved unreliable — it is
+  // intentionally nulled when Auth0 silent refresh fails, and it
+  // silently expires mid-session. The signed-in 401s + "chart isn't
+  // saved" report came from exactly those states. Resolving the token
+  // per request via the registered provider keeps it fresh for as long
+  // as the Auth0 session can be refreshed.
+  private static tokenSource = new RequestTokenSource('ChartService');
 
   // Set the auth token (called from components with useAuth0 hook)
   static setAuthToken(token: string | null) {
-    this.authToken = token;
+    this.tokenSource.setToken(token);
   }
 
   // Check if auth token is set
   static hasAuthToken(): boolean {
-    return this.authToken !== null;
+    return this.tokenSource.hasToken();
+  }
+
+  /**
+   * Register (or clear, with `null`) the request-time token provider.
+   * Called from the App auth effect alongside `setAuthToken`.
+   */
+  static setAuthTokenProvider(provider: AuthTokenProvider | null) {
+    this.tokenSource.setProvider(provider);
+  }
+
+  /** Build request headers, attaching Authorization when a token resolves. */
+  private static async buildHeaders(
+    base: Record<string, string> = {},
+  ): Promise<Record<string, string>> {
+    const token = await this.tokenSource.resolve();
+    if (token) {
+      base['Authorization'] = `Bearer ${token}`;
+    }
+    return base;
+  }
+
+  /**
+   * Like `buildHeaders`, but for owner-only endpoints that are
+   * meaningless without a session: throws the same 'Authentication
+   * required' error the old static-only check produced.
+   */
+  private static async requireAuthHeaders(
+    base: Record<string, string> = {},
+  ): Promise<Record<string, string>> {
+    const headers = await this.buildHeaders(base);
+    if (!headers['Authorization']) {
+      throw new Error('Authentication required');
+    }
+    return headers;
   }
 
   static async createChart(chartData: ToCData): Promise<CreateChartResponse> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-      console.log(
-        '[ChartService] Creating chart with auth token (length:',
-        this.authToken.length,
-        ')',
-      );
+    const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
+    if (headers['Authorization']) {
+      console.log('[ChartService] Creating chart with auth token');
     } else {
       console.log('[ChartService] Creating chart without auth token (user not authenticated)');
     }
@@ -93,10 +130,7 @@ export class ChartService {
   }
 
   static async getChartByEditToken(editToken: string): Promise<GetChartResponse> {
-    const headers: Record<string, string> = {};
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-    }
+    const headers = await this.buildHeaders();
 
     const params = new URLSearchParams();
     params.append('editToken', editToken);
@@ -132,10 +166,13 @@ export class ChartService {
     // non-owned charts the user modifies surface in "My Charts".
     // Anonymous edits still work (the edit_token is the authorization
     // gate); they just don't produce an attribution row.
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-    }
+    //
+    // For owned charts with link_sharing_level != 'editor' the worker
+    // REQUIRES a valid Bearer token (owner or approved collaborator) —
+    // see worker/api/updateChart.ts — which is why the token resolves
+    // through the request-time provider here: a stale mount-time token
+    // means every autosave 403s silently.
+    const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
 
     const response = await fetch(`${API_BASE}/updateChart`, {
       method: 'POST',
@@ -144,7 +181,20 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to update chart');
+      // Prefer the worker's explanation (e.g. "Invalid or expired
+      // authentication. Please log in again.") — it feeds the
+      // SaveIndicator tooltip, where "Failed to update chart" gives the
+      // user nothing to act on.
+      let message = 'Failed to update chart';
+      try {
+        const errorData = (await response.json()) as { error?: string };
+        if (errorData?.error) {
+          message = errorData.error;
+        }
+      } catch {
+        // Non-JSON body (proxy error page etc.) — keep the generic message.
+      }
+      throw new Error(message);
     }
   }
 
@@ -181,15 +231,17 @@ export class ChartService {
     return tokens[chartId] || null;
   }
 
-  // Get all charts accessible by a user
+  // Get all charts accessible by a user.
+  //
+  // The worker derives the user from the verified JWT (the userId param
+  // is legacy/ignored server-side), so the Authorization header is
+  // mandatory — without it the endpoint 401s, which is the "failed to
+  // load user charts" the PR 7 round-2 reviewer hit.
   static async getUserCharts(userId: string): Promise<UserChart[]> {
     const params = new URLSearchParams();
     params.append('userId', userId);
 
-    const headers: Record<string, string> = {};
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-    }
+    const headers = await this.buildHeaders();
 
     const response = await fetch(`${API_BASE}/getUserCharts?${params}`, { headers });
 
@@ -201,21 +253,21 @@ export class ChartService {
     return result.charts;
   }
 
-  // Get permissions for a chart (owner only)
+  // Get permissions for a chart (owner only).
+  //
+  // The server returns `{ permissions, linkSharingLevel }`. `linkSharingLevel`
+  // is optional only to cover the chart-not-found edge case; in normal
+  // responses the field is always present.
   static async getChartPermissions(
     chartId: string,
-  ): Promise<{ permissions: Permission[]; linkSharingLevel?: 'restricted' | 'viewer' | 'editor' }> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
+  ): Promise<{ permissions: Permission[]; linkSharingLevel?: LinkSharingLevel }> {
+    const headers = await this.requireAuthHeaders();
 
     const params = new URLSearchParams();
     params.append('chartId', chartId);
 
     const response = await fetch(`${API_BASE}/managePermissions?${params}`, {
-      headers: {
-        Authorization: `Bearer ${this.authToken}`,
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -230,16 +282,9 @@ export class ChartService {
 
   // Remove permission from a user (owner only)
   static async removePermission(chartId: string, targetUserId: string): Promise<void> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
     const response = await fetch(`${API_BASE}/managePermissions`, {
       method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.authToken}`,
-      },
+      headers: await this.requireAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ chartId, targetUserId }),
     });
 
@@ -255,16 +300,9 @@ export class ChartService {
     targetUserId: string,
     permissionLevel: 'owner' | 'edit',
   ): Promise<void> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
     const response = await fetch(`${API_BASE}/managePermissions`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.authToken}`,
-      },
+      headers: await this.requireAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ chartId, targetUserId, permissionLevel }),
     });
 
@@ -277,18 +315,11 @@ export class ChartService {
   // Update link sharing settings (owner only)
   static async updateLinkSharing(
     chartId: string,
-    linkSharingLevel: 'restricted' | 'viewer' | 'editor',
+    linkSharingLevel: LinkSharingLevel,
   ): Promise<void> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
     const response = await fetch(`${API_BASE}/managePermissions`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.authToken}`,
-      },
+      headers: await this.requireAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ chartId, linkSharingLevel }),
     });
 
@@ -300,16 +331,9 @@ export class ChartService {
 
   // Approve a pending access request (owner only)
   static async approveAccessRequest(chartId: string, targetUserId: string): Promise<void> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
     const response = await fetch(`${API_BASE}/managePermissions`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.authToken}`,
-      },
+      headers: await this.requireAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ chartId, targetUserId, action: 'approve' }),
     });
 
@@ -321,16 +345,9 @@ export class ChartService {
 
   // Reject a pending access request (owner only)
   static async rejectAccessRequest(chartId: string, targetUserId: string): Promise<void> {
-    if (!this.authToken) {
-      throw new Error('Authentication required');
-    }
-
     const response = await fetch(`${API_BASE}/managePermissions`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.authToken}`,
-      },
+      headers: await this.requireAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ chartId, targetUserId, action: 'reject' }),
     });
 
@@ -348,14 +365,9 @@ export class ChartService {
   // chart_permissions. Passing undefined in the owner case is fine; the
   // editToken is only read on the anon branch.
   static async deleteChart(chartId: string, editToken?: string): Promise<void> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    // Add auth header if available (for owned charts)
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-    }
+    // Auth header attaches when a token resolves (owned charts); anon
+    // deletes authorize via the editToken in the body.
+    const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
 
     const body: { chartId: string; editToken?: string } = { chartId };
     if (editToken) {

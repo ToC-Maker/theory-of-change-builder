@@ -1,8 +1,44 @@
 import clsx from 'clsx';
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, memo } from 'react';
 import { Node } from '../types';
 import { getContrastTextColor } from '../utils';
+import { ConnectionHandles } from './canvas/ConnectionHandles';
+import type { BindConnectionHandle } from '../hooks/useConnectionDrag';
 
+/**
+ * DOM attribute the node root carries. Read by:
+ *   - `usePointerDrag` (in spirit: the bound `onPointerDown` lives on
+ *     the same root)
+ *   - App.tsx's `excludeFromPan` callback, via
+ *     `target.closest('[data-tocb-node]')`
+ * Hoisted to a constant so the attribute writer (this component) and
+ * the selector readers can't drift apart on rename.
+ */
+export const NODE_DOM_ATTR = 'data-tocb-node';
+
+// PR 3: this component was previously a three-way editor — inline
+// contentEditable for the title, a pencil-icon overlay that opened
+// `<NodePopup>`, and an extra `setNodePopup` prop that bridged the
+// info icon to the modal. All three are gone in PR 3. Title and
+// markdown details are now edited in the anchored `<NodeEditor>` (in
+// `src/components/node-editor/`). NodeComponent is back to being a
+// pure renderer + selection delegate.
+//
+// PR 4: HTML5 Drag and Drop (`draggable`, `onDragStart`, `onDragEnd`)
+// retired. Drag is now driven by `usePointerDrag` in the parent
+// (TheoryOfChangeGraph), which binds a single `onPointerDown` on this
+// component's root via the `onPointerDown` prop. The root also carries:
+//   - `data-tocb-node={id}` — the new attribute the App's
+//     `excludeFromPan` selector matches (replacing `draggable="true"`)
+//     and the locator pointer-event tests use.
+//   - `touch-none` (Tailwind: `touch-action: none`) — keeps mobile
+//     browser scroll gestures from swallowing pointermove events
+//     during a drag.
+//
+// `handleClick` modifier semantics (Cmd/Ctrl+click → 'multi',
+// Shift+click in editMode → 'column', else → 'single') are preserved
+// verbatim from before the refactor; the user-direction sticky in
+// `plans/figma-redesign.md:219` calls them out as load-bearing.
 interface NodeComponentProps {
   node: Node;
   updateNodeRef: (id: string, ref: HTMLDivElement | null) => void;
@@ -13,20 +49,35 @@ interface NodeComponentProps {
   toggleHighlight: (id: string, selectionMode?: 'single' | 'multi' | 'column') => void;
   setHoveredNode: (id: string | null) => void;
   hasHighlightedNodes: boolean;
-  onDragStart: (node: Node, event: React.DragEvent) => void;
-  onDragEnd: () => void;
+  /**
+   * PR 4: single pointerdown handler that starts the drag in the parent's
+   * `usePointerDrag` hook. Omitted when `editMode=false` so view-only
+   * pages render without any drag binding.
+   */
+  onPointerDown?: (event: React.PointerEvent) => void;
+  /**
+   * PR 5 Task 5.2: bind handle dots to the drag-to-connect gesture.
+   * Returned by `useConnectionDrag().bindHandle`. Omitted when
+   * editMode=false or when the parent opts out of connection drag.
+   * Visibility of the dots is gated by `isHovered || isHighlighted`.
+   */
+  bindConnectionHandle?: BindConnectionHandle;
   editMode: boolean;
   textSize: number;
   fontFamily: string;
-  setNodePopup: React.Dispatch<
-    React.SetStateAction<{ id: string; title: string; text: string } | null>
-  >;
-  isEditingTitle: boolean;
-  setEditingNodeId: (id: string | null) => void;
-  updateNodeTitle: (nodeId: string, title: string) => void;
 }
 
-export function NodeComponent({
+// NodeComponentInner is the actual render. The default export is wrapped
+// in `React.memo` with DEFAULT shallow equality (Important fix in plan
+// §0.4 — no custom equality function, harder to silently regress).
+// Parent (TheoryOfChangeGraph) MUST pass stable function references for
+// the callback props (`toggleHighlight`, `updateNodeRef`,
+// `setHoveredNode`, and `onPointerDown` — supplied via the `bindNode`
+// cache inside `usePointerDrag`), otherwise the memo bail-out fails and
+// every parent render re-renders every node. The
+// `NodeComponent.memo.test.tsx` regression test pins this for future
+// contributors.
+function NodeComponentInner({
   node,
   updateNodeRef,
   isHighlighted,
@@ -36,31 +87,17 @@ export function NodeComponent({
   toggleHighlight,
   setHoveredNode,
   hasHighlightedNodes,
-  onDragStart,
-  onDragEnd,
+  onPointerDown,
+  bindConnectionHandle,
   editMode,
   textSize,
   fontFamily,
-  setNodePopup,
-  isEditingTitle,
-  setEditingNodeId,
-  updateNodeTitle,
 }: NodeComponentProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
-  const cursorPositionedRef = useRef(false);
-  // Mutable (not RefObject) because we assign to .current from a ref callback.
-  const titleEditRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     updateNodeRef(node.id, nodeRef.current);
   }, [node.id, updateNodeRef]);
-
-  // Reset cursor positioned flag when exiting edit mode
-  useEffect(() => {
-    if (!isEditingTitle) {
-      cursorPositionedRef.current = false;
-    }
-  }, [isEditingTitle]);
 
   const handleClick = (event: React.MouseEvent) => {
     let selectionMode: 'single' | 'multi' | 'column' = 'single';
@@ -74,15 +111,6 @@ export function NodeComponent({
     toggleHighlight(node.id, selectionMode);
   };
 
-  const handleInfoClick = (event: React.MouseEvent) => {
-    event.stopPropagation();
-    setNodePopup({
-      id: node.id,
-      title: node.title,
-      text: node.text,
-    });
-  };
-
   const handleMouseEnter = () => {
     setHoveredNode(node.id);
   };
@@ -91,35 +119,30 @@ export function NodeComponent({
     setHoveredNode(null);
   };
 
-  const handleDoubleClick = (event: React.MouseEvent) => {
-    let selectionMode: 'single' | 'multi' | 'column' = 'single';
-
-    if (event.ctrlKey || event.metaKey) {
-      selectionMode = 'multi';
-    } else if (event.shiftKey && editMode) {
-      selectionMode = 'column';
-    }
-
-    toggleHighlight(node.id, selectionMode);
-  };
-
   return (
     <div className="relative z-10">
       <div
         ref={nodeRef}
         id={`node-${node.id}`}
-        draggable={editMode}
-        onDragStart={
-          editMode
-            ? (e) => {
-                onDragStart(node, e);
-                e.dataTransfer.effectAllowed = 'move';
-              }
-            : undefined
-        }
-        onDragEnd={editMode ? onDragEnd : undefined}
+        {...{ [NODE_DOM_ATTR]: node.id }}
+        onPointerDown={editMode ? onPointerDown : undefined}
         className={clsx(
-          'flex flex-col border-0 rounded-xl cursor-pointer transition-all duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
+          // PR #34 feedback (47): transition the hover/drag affordances
+          // only (box-shadow for hover shadow + selection ring,
+          // transform for hover:scale, opacity for drag/dim states) —
+          // NOT `transition-all`, which also animated the inline
+          // `width` and `backgroundColor` styles and made the
+          // NodeEditor's width slider / color picker visibly lag.
+          'flex flex-col border-0 rounded-xl cursor-pointer transition-[box-shadow,transform,opacity] duration-500 ease-in-out shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] hover:shadow-[0_20px_25px_-5px_rgba(0,0,0,0.3),_0_10px_10px_-5px_rgba(0,0,0,0.15)] transform hover:scale-105 pt-3 px-3 pb-6',
+          // PR 7 feedback (#5): `select-none` so clicking on the node
+          // title (or anywhere on the node body) starts the drag instead
+          // of initiating a text selection. The title is read-only here
+          // and edited via `<NodeEditor>`; suppressing text selection on
+          // the node root costs nothing functional. INPUT/TEXTAREA inside
+          // <NodeEditor> are unaffected (they're not descendants of the
+          // node root, and have their own user-select handling).
+          'select-none',
+          'touch-none',
           // Only apply default gradients if no custom color is set
           !node.color && 'bg-gradient-to-br from-white to-gray-50',
           isHighlighted
@@ -139,108 +162,39 @@ export function NodeComponent({
           backgroundColor: node.color || '#ffffff',
         }}
         onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
         <div className="flex flex-col justify-center relative py-2">
           <div
-            className={`font-medium text-center leading-tight break-words ${editMode && isHighlighted && isEditingTitle ? 'border-b-2 outline-none' : ''} ${editMode && isHighlighted ? 'cursor-text' : ''} ${!node.title ? 'empty-placeholder' : ''}`}
+            className={`font-medium text-center leading-tight break-words ${!node.title ? 'empty-placeholder' : ''}`}
             style={{
               fontSize: `${textSize * 1.125}rem`,
               fontFamily: fontFamily,
               color: node.color ? getContrastTextColor(node.color) : '#000000',
-              borderColor:
-                editMode && isHighlighted && isEditingTitle
-                  ? node.color
-                    ? getContrastTextColor(node.color)
-                    : '#9ca3af'
-                  : 'transparent',
             }}
-            contentEditable={editMode && isHighlighted && isEditingTitle}
-            suppressContentEditableWarning
             data-placeholder="Untitled"
-            onBlur={(e) => {
-              // Save changes when done editing
-              if (editMode && isHighlighted) {
-                updateNodeTitle(node.id, e.currentTarget.textContent || '');
-              }
-              setEditingNodeId(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                // Save changes and exit edit mode
-                if (titleEditRef.current) {
-                  updateNodeTitle(node.id, titleEditRef.current.textContent || '');
-                }
-                setEditingNodeId(null);
-              }
-            }}
-            onClick={(e) => {
-              if (editMode && isHighlighted) {
-                e.stopPropagation();
-                if (!isEditingTitle) {
-                  setEditingNodeId(node.id);
-                }
-              }
-            }}
-            onDoubleClick={(e) => {
-              if (editMode && isHighlighted && isEditingTitle) {
-                e.stopPropagation();
-              }
-            }}
-            ref={(el) => {
-              titleEditRef.current = el;
-              if (
-                el &&
-                editMode &&
-                isHighlighted &&
-                isEditingTitle &&
-                !cursorPositionedRef.current
-              ) {
-                el.focus();
-                // Move cursor to end of text - only once when entering edit mode
-                const range = document.createRange();
-                const selection = window.getSelection();
-                range.selectNodeContents(el);
-                range.collapse(false); // false = collapse to end
-                selection?.removeAllRanges();
-                selection?.addRange(range);
-                cursorPositionedRef.current = true;
-              }
-            }}
           >
             {node.title}
           </div>
         </div>
-
-        {/* Information/Edit icon for selected or hovered nodes - positioned relative to outer node */}
-        {(isHighlighted || isHovered) && (
-          <button
-            onClick={handleInfoClick}
-            className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center hover:bg-gray-100 hover:bg-opacity-20 transition-colors z-10"
-            style={{
-              color: node.color ? getContrastTextColor(node.color) : '#6b7280',
-            }}
-            title={editMode ? 'Edit details' : 'View details'}
-          >
-            {editMode ? (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fillRule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            )}
-          </button>
+        {/* PR 5 Task 5.2: drag-to-connect handle dots on left + right
+          edges. Visible only when hovered or selected (no global
+          pointermove subscription — pure React-tracked state). The
+          dots overhang the node edge by 6px so they're grabbable
+          without covering content. Handles are absolute-positioned
+          relative to this node's flex container. */}
+        {editMode && bindConnectionHandle && (
+          <ConnectionHandles
+            nodeId={node.id}
+            visible={isHovered || isHighlighted}
+            bindHandle={bindConnectionHandle}
+          />
         )}
       </div>
     </div>
   );
 }
+
+export const NodeComponent = memo(NodeComponentInner);
+NodeComponent.displayName = 'NodeComponent';

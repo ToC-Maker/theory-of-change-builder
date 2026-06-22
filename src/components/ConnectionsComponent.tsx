@@ -1,24 +1,40 @@
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
-import { EdgePopup } from './EdgePopup';
+import { getLocalPosition } from '../hooks/useGraphLayout';
+import { computePathWithWaypoints, computeSegmentMidpoints } from '../utils/connectionPath';
+import { EdgeEditor } from './edge-editor/EdgeEditor';
+import { buildConnectionPath } from './canvas/connectionPath';
+import type { WaypointDragState } from '../hooks/useWaypointDrag';
+import { MOVE_THRESHOLD_PX } from '../hooks/usePointerDrag';
+import { ConnectionWaypointHandles } from './canvas/ConnectionWaypointHandles';
 
-export interface EdgePopupState {
+// PR 3: `EdgePopupState` was the modal's full state copy (with x/y for
+// positioning, plus full confidence/evidence/assumptions). The new
+// anchored EdgeEditor reads property values from `data` directly, so we
+// only need the source/target pair plus the midpoint for anchor
+// placement.
+interface SelectedEdge {
   sourceId: string;
   targetId: string;
-  x: number;
-  y: number;
-  confidence: number;
-  minConfidence?: number;
-  maxConfidence?: number;
-  evidence?: string;
-  assumptions?: string;
+  /** Connection midpoint in container-local coordinates (px). */
+  midX: number;
+  midY: number;
 }
 
 interface ConnectionsComponentProps {
   data: ToCData;
-  setData: React.Dispatch<React.SetStateAction<ToCData>>;
+  /**
+   * PR 3: `useGraphMutation` triad threaded down so the embedded
+   * EdgeEditor can write confidence (streaming) and evidence /
+   * assumptions (buffered) through the same primitive everything
+   * else uses. `setData` (the direct setter) was previously used for
+   * updateConfidence/updateConnection in this file — both retired.
+   */
+  mutate?: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  mutateDebounced?: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  commit?: (key?: string) => void;
   nodeRefs: { [key: string]: HTMLDivElement | null };
   nodeHeights: { [key: string]: number };
   highlightedNodes: Set<string>;
@@ -26,22 +42,73 @@ interface ConnectionsComponentProps {
   hoveredConnections: Set<string>;
   curvature: number;
   editMode: boolean;
-  layoutMode: boolean;
   sectionWidths: number[];
   columnPadding: number;
   sectionPadding: number;
   onSizeChange: (size: { width: number; height: number }) => void;
-  onDeleteConnection?: (sourceId: string, targetId: string) => void;
+  /**
+   * PR 3: `onDeleteConnection` was used by the EdgePopup's delete
+   * button. The anchored EdgeEditor calls its own
+   * `useEdgeProperties.deleteConnection` (atomic write through the
+   * mutate triad), so the parent doesn't need to plumb a separate
+   * callback. The prop is intentionally removed; the
+   * `disconnectSelectedNodes` path in TheoryOfChangeGraph still owns
+   * the 2-node-selected disconnect button.
+   */
   containerRef: React.RefObject<HTMLDivElement | null>;
-  onEdgePopupChange?: (edgePopup: EdgePopupState | null) => void;
+  camera?: { x: number; y: number; z: number };
   fontFamily?: string;
-  viewportOffset?: { left: number; top: number; right: number; bottom: number };
-  zoomScale?: number;
+  // PR 3: `viewportOffset` / `zoomScale` were only consumed by EdgePopup
+  // (modal sizing math). The anchored EdgeEditor reads viewport
+  // positioning via `useAnchorPosition` directly, so these are no
+  // longer needed.
+  // PR 7: waypoint-drag binders + state come from the parent
+  // (`TheoryOfChangeGraph` owns the hook so its `isActive` can OR into
+  // `isAnyDragActive` for the polling-pause channel). `waypointDragState`
+  // is consumed locally for the "keep handles visible mid-drag"
+  // affordance — see `handlesVisible` below.
+  bindWaypoint?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+    waypointIndex: number,
+  ) => {
+    onPointerDown: (e: ReactPointerEvent) => void;
+    onDoubleClick: (e: ReactMouseEvent) => void;
+  };
+  bindMidpoint?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+    segmentIndex: number,
+  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  /**
+   * Round-7 issue 78: drag starting anywhere on the fat hit-path
+   * moves THE waypoint (supersedes K7's inert-drag decision). Same
+   * `useWaypointDrag` flow as the handles.
+   */
+  bindPath?: (
+    sourceNodeId: string,
+    targetNodeId: string,
+  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  /**
+   * One-shot "the gesture that produced this click was a drag" flag
+   * from `useWaypointDrag`; the fat path's click handler consumes it
+   * to keep drags from opening the EdgeEditor (see onClick below).
+   */
+  consumePathGestureArmed?: () => boolean;
+  /**
+   * Round-7 issue 78: clears the connection's custom waypoint(s) —
+   * the EdgeEditor's "Reset path" button. Same seam as the
+   * dblclick-on-handle reset (`useWaypointDrag.resetWaypoints`).
+   */
+  resetWaypoints?: (sourceNodeId: string, targetNodeId: string) => void;
+  waypointDragState?: WaypointDragState | null;
 }
 
 export function ConnectionsComponent({
   data,
-  setData,
+  mutate,
+  mutateDebounced,
+  commit,
   nodeRefs,
   nodeHeights,
   highlightedNodes,
@@ -49,21 +116,60 @@ export function ConnectionsComponent({
   hoveredConnections,
   curvature,
   editMode,
-  layoutMode,
   sectionWidths,
   columnPadding,
   sectionPadding,
   onSizeChange,
-  onDeleteConnection,
   containerRef,
-  onEdgePopupChange,
+  camera,
   fontFamily,
-  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
-  zoomScale = 1,
+  bindWaypoint,
+  bindMidpoint,
+  bindPath,
+  consumePathGestureArmed,
+  resetWaypoints,
+  waypointDragState,
 }: ConnectionsComponentProps) {
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
-  const [edgePopup, setEdgePopupState] = useState<EdgePopupState | null>(null);
+  // K7: pointerdown position on a connection's fat hit-path, consumed
+  // by that path's click handler to tell taps from drags. Browsers
+  // fire `click` after a drag whenever mousedown/mouseup share a
+  // target — and during a canvas pan the content used to move WITH
+  // the cursor, so the path always stayed under it and every pan
+  // ending on a connection popped the EdgeEditor. One shared ref (not
+  // per-connection): a click on path P implies both down and up hit P,
+  // so the most recent pointerdown is necessarily this gesture's.
+  // Cleared on consume so an abandoned press (down on path, up
+  // elsewhere → no click) can suppress at most nothing.
+  const hitPathPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  // PR 3: `edgePopup` (full EdgePopupState modal copy) collapsed to
+  // `selectedEdge` (source+target pair + midpoint anchor). The anchored
+  // EdgeEditor reads property values from `data` directly.
+  const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
+
+  // Feedback 49: NodeEditor and EdgeEditor are mutually exclusive —
+  // opening one must close the other. Mouse flows already satisfy this
+  // emergently (both editors dismiss on document `mousedown` via
+  // `useDismissOnOutsideEvent`, and every mouse path that changes one
+  // selection starts with a mousedown outside the other editor). The
+  // hole is node-selection paths with NO mousedown: keyboard select-all
+  // (Ctrl/Cmd+A) and Tab node-navigation in `useKeyboardShortcuts`
+  // would mount the NodeEditor while `selectedEdge` was still set.
+  // Enforce the invariant at the state level instead of per-gesture:
+  // whenever node selection is (or becomes) non-empty, drop the edge
+  // selection. Layout effect (not passive) so the dual state never
+  // paints. The `size > 0` guard keeps empty-set identity churn from
+  // closing a just-opened editor, and `setSelectedEdge(null)` on an
+  // already-null state is a React no-op, so this doesn't loop.
+  //
+  // Note the deliberate asymmetry: edge selection only ever arrives via
+  // a path click (mousedown first), so the NodeEditor side is already
+  // covered by its dismissal hook; node selection can arrive silently,
+  // so the EdgeEditor side needs this state-level rule.
+  useLayoutEffect(() => {
+    if (highlightedNodes.size > 0) setSelectedEdge(null);
+  }, [highlightedNodes]);
 
   // Stash `onSizeChange` in a ref so `updateSize` doesn't need it as a dep —
   // the parent passes a fresh inline arrow every render, which would otherwise
@@ -72,14 +178,6 @@ export function ConnectionsComponent({
   useEffect(() => {
     onSizeChangeRef.current = onSizeChange;
   }, [onSizeChange]);
-
-  const setEdgePopup: React.Dispatch<React.SetStateAction<EdgePopupState | null>> = (value) => {
-    setEdgePopupState((prev) => {
-      const next = typeof value === 'function' ? value(prev) : value;
-      onEdgePopupChange?.(next);
-      return next;
-    });
-  };
   const [smoothUpdates, setSmoothUpdates] = useState(false);
   // `refreshCounter` is a re-render kick: nothing reads the value, but calling
   // `setRefreshCounter` forces this component to re-render so the `connections.map`
@@ -90,11 +188,16 @@ export function ConnectionsComponent({
   const smoothUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateSize = useCallback(() => {
-    // Calculate width based on actual section widths + gaps only
+    // Calculate width based on actual section widths + gaps only.
+    //
+    // PR 5: edit mode always renders the column-gutter and section-
+    // padding affordances (`Task 5.1`). The width math accounts for
+    // those gutters whenever `editMode` is true (no `layoutMode`
+    // dependency). View mode still uses the bare section gaps.
     let totalWidth = 0;
 
-    // In add/remove mode, add section drop zone before first section
-    if (editMode && layoutMode) {
+    if (editMode) {
+      // Section drop zone before first section.
       totalWidth += sectionPadding;
     }
 
@@ -113,12 +216,13 @@ export function ConnectionsComponent({
       const effectiveSectionWidth = Math.max(sectionWidth, titleWidth);
       totalWidth += effectiveSectionWidth;
 
-      // Add extra width for add/remove mode drop zones
-      if (editMode && layoutMode) {
+      // Add extra width for the always-on column-gutter affordances in
+      // edit mode. (N+1) zones × columnPadding px each (before first
+      // + after each column).
+      if (editMode) {
         // Count ALL columns in this section (including empty ones)
         const columnCount = data.sections[sectionIndex].columns.length || 1;
 
-        // Drop zones: (N+1) zones × columnPadding px each (before first + after each column)
         const dropZonesWidth = (columnCount + 1) * columnPadding;
 
         // Only add drop zones width if it's not already accounted for in the effective section width
@@ -129,14 +233,16 @@ export function ConnectionsComponent({
         totalWidth += additionalWidth;
       }
 
-      // Add gap between sections (or section drop zone in add/remove mode)
+      // Section gap. In edit mode the section-padding gutter sits between
+      // sections (rendered by TheoryOfChangeGraph as the "before-section"
+      // affordance for sectionIndex+1); in view mode it's a bare gap.
       if (sectionIndex < sectionWidths.length - 1) {
         totalWidth += sectionPadding;
       }
     });
 
-    // In add/remove mode, add section drop zone after last section
-    if (editMode && layoutMode) {
+    if (editMode) {
+      // Section drop zone after last section.
       totalWidth += sectionPadding;
     }
 
@@ -161,7 +267,14 @@ export function ConnectionsComponent({
 
     // Add header height, title height, and padding
     const headerHeight = 62; // Section header height (matches the -62px offset in columns)
-    const titleHeight = data.title ? 80 : 0; // Graph title height when present (includes margin)
+    // Graph title block height (includes margin). PR #34 fb4 issue 64:
+    // edit mode renders the title block even when `data.title` is empty
+    // (the "Click to add title" placeholder), so the budget must count
+    // it then too — otherwise the canvas card comes out 80px shorter
+    // than the rendered content and the column bodies / add affordances
+    // spill below it. Mirrors the unconditional 80 in the edit-mode
+    // column body height (TheoryOfChangeGraph).
+    const titleHeight = data.title || editMode ? 80 : 0;
     const padding = 0; // No extra padding needed
     const dynamicHeight = Math.max(maxHeight + headerHeight + titleHeight + padding, 800); // Minimum 800px
 
@@ -173,7 +286,6 @@ export function ConnectionsComponent({
     data.sections,
     data.title,
     editMode,
-    layoutMode,
     nodeHeights,
     columnPadding,
     sectionPadding,
@@ -283,41 +395,10 @@ export function ConnectionsComponent({
     [data.sections],
   );
 
-  const findNodeTitle = (nodeId: string) => {
-    for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
-      for (
-        let columnIndex = 0;
-        columnIndex < data.sections[sectionIndex].columns.length;
-        columnIndex++
-      ) {
-        const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
-          (n) => n.id === nodeId,
-        );
-        if (node) {
-          return node.title;
-        }
-      }
-    }
-    return nodeId; // fallback to ID if not found
-  };
-
-  const findNodeColor = (nodeId: string) => {
-    for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
-      for (
-        let columnIndex = 0;
-        columnIndex < data.sections[sectionIndex].columns.length;
-        columnIndex++
-      ) {
-        const node = data.sections[sectionIndex].columns[columnIndex].nodes.find(
-          (n) => n.id === nodeId,
-        );
-        if (node) {
-          return node.color || '#6366f1'; // fallback to indigo-500 if no custom color
-        }
-      }
-    }
-    return '#6366f1'; // fallback to indigo-500 if not found
-  };
+  // PR 3: `findNodeTitle` / `findNodeColor` helpers retired — they fed
+  // the EdgePopup modal's "From: [title]" / "To: [title]" header. The
+  // anchored EdgeEditor doesn't render the endpoint titles; the user
+  // already sees the connected nodes visually on the canvas.
 
   const connections = useMemo(() => {
     return data.sections
@@ -340,6 +421,11 @@ export function ConnectionsComponent({
                   confidence: conn.confidence,
                   evidence: conn.evidence,
                   assumptions: conn.assumptions,
+                  // PR 7: forward optional waypoints. Empty/undefined =
+                  // falls back to auto-bezier (byte-identical to
+                  // pre-PR-7 rendering, see
+                  // `tests/frontend/connectionPath.waypoints.test.ts`).
+                  waypoints: conn.waypoints,
                 };
               });
             } else {
@@ -357,6 +443,7 @@ export function ConnectionsComponent({
                   confidence: 50, // default confidence (medium)
                   evidence: undefined,
                   assumptions: undefined,
+                  waypoints: undefined,
                 };
               });
             }
@@ -366,86 +453,24 @@ export function ConnectionsComponent({
       .filter((connection) => connection.start && connection.end);
   }, [data.sections, nodeRefs, findNodeLocation]);
 
-  const updateConfidence = (sourceId: string, targetId: string, newConfidence: number) => {
-    setData(
-      (prevData: ToCData): ToCData => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id === sourceId) {
-                if (node.connections) {
-                  return {
-                    ...node,
-                    connections: node.connections.map((conn) =>
-                      conn.targetId === targetId ? { ...conn, confidence: newConfidence } : conn,
-                    ),
-                  };
-                } else {
-                  // Convert from old format to new format
-                  return {
-                    ...node,
-                    connections: node.connectionIds.map((connId) => ({
-                      targetId: connId,
-                      confidence: connId === targetId ? newConfidence : 50, // default medium confidence
-                    })),
-                  };
-                }
-              }
-              return node;
-            }),
-          })),
-        })),
-      }),
-    );
-  };
+  // PR 3: `updateConfidence` / `updateConnection` setters retired —
+  // those mutations now flow through `useEdgeProperties.patchConnection`
+  // inside the EdgeEditor (which streams via `mutateDebounced` so the
+  // confidence slider produces ONE undo entry per drag, like the
+  // node-width slider).
 
-  const updateConnection = (
-    sourceId: string,
-    targetId: string,
-    evidence: string,
-    assumptions: string,
-  ) => {
-    setData(
-      (prevData: ToCData): ToCData => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id === sourceId) {
-                if (node.connections) {
-                  return {
-                    ...node,
-                    connections: node.connections.map((conn) =>
-                      conn.targetId === targetId ? { ...conn, evidence, assumptions } : conn,
-                    ),
-                  };
-                } else {
-                  // Convert from old format to new format and add evidence/assumptions
-                  return {
-                    ...node,
-                    connections: node.connectionIds.map((connId) => ({
-                      targetId: connId,
-                      confidence: 50, // default medium confidence
-                      evidence: connId === targetId ? evidence : '',
-                      assumptions: connId === targetId ? assumptions : '',
-                    })),
-                  };
-                }
-              }
-              return node;
-            }),
-          })),
-        })),
-      }),
-    );
-  };
+  // PR 7: waypoint-drag binders + drag-state come from the parent
+  // (`TheoryOfChangeGraph`). See `bindWaypoint`/`bindMidpoint`/
+  // `waypointDragState` props on this component for context.
 
   const strokeWidth = 3;
+  // K8 + fb4 63: the connection whose handles must win overlapping hit
+  // tests. Hover is the most immediate intent signal; with no hover, a
+  // SELECTED connection (EdgeEditor open) keeps priority — its handles
+  // are visible without hover, and a press on them must not fall on an
+  // overlapping sibling's fat band.
+  const selectedEdgeKey = selectedEdge ? `${selectedEdge.sourceId}-${selectedEdge.targetId}` : null;
+  const activeEdgeKey = hoveredEdge ?? selectedEdgeKey;
   return (
     <>
       <svg
@@ -469,26 +494,8 @@ export function ConnectionsComponent({
           const container = containerRef.current || startNode.closest('.flex.relative');
           if (!container) return null;
 
-          // Calculate local positions relative to container
-          const getLocalPosition = (element: HTMLElement) => {
-            let x = 0,
-              y = 0;
-            const width = element.offsetWidth,
-              height = element.offsetHeight;
-            let current: HTMLElement | null = element;
-
-            // Walk up the offset parent chain until we reach the container
-            while (current && current !== container) {
-              x += current.offsetLeft;
-              y += current.offsetTop;
-              current = current.offsetParent as HTMLElement | null;
-            }
-
-            return { x, y, width, height };
-          };
-
-          const startPos = getLocalPosition(startNode);
-          const endPos = getLocalPosition(endNode);
+          const startPos = getLocalPosition(startNode, container as HTMLElement);
+          const endPos = getLocalPosition(endNode, container as HTMLElement);
 
           // Check if nodes are in the same column for vertical connections
           const isSameColumn =
@@ -533,16 +540,25 @@ export function ConnectionsComponent({
             endY = endPos.y + endPos.height / 2;
           }
 
-          // Calculate control points based on connection type
-          let controlPointOffset;
-          if (isSameColumn) {
-            // Straight line for vertical connections
-            controlPointOffset = 0;
-          } else {
-            // For horizontal connections, use X distance for curvature
-            const baseOffset = Math.abs(endX - startX) / 2;
-            controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
-          }
+          // PR 7: factor path math into `computePathWithWaypoints`. With
+          // an empty waypoints array the output is BYTE-IDENTICAL to
+          // the previous inline auto-bezier string (validated by
+          // `tests/frontend/connectionPath.waypoints.test.ts`). When
+          // waypoints are present we get a single multi-segment cubic
+          // bezier (one `<path>` element) so dashed/dotted strokes stay
+          // continuous through corners.
+          const pathDirection: 'forward' | 'backward' | 'vertical' = isSameColumn
+            ? 'vertical'
+            : isBackwardConnection
+              ? 'backward'
+              : 'forward';
+          const pathD = computePathWithWaypoints({
+            source: { x: startX, y: startY },
+            target: { x: endX, y: endY },
+            waypoints: connection.waypoints ?? [],
+            curvature,
+            direction: pathDirection,
+          });
 
           const isHighlighted =
             highlightedNodes.has(connection.sourceId) || highlightedNodes.has(connection.targetId);
@@ -573,28 +589,173 @@ export function ConnectionsComponent({
           const strokeStyle = getStrokeStyle();
           const edgeKey = `${connection.sourceId}-${connection.targetId}`;
           const isEdgeHovered = hoveredEdge === edgeKey;
+          const isEdgeSelected =
+            selectedEdge?.sourceId === connection.sourceId &&
+            selectedEdge?.targetId === connection.targetId;
+          // PR 7: handles visible on hover OR select, edit-mode only.
+          // While the user is actively dragging a waypoint we keep
+          // handles visible regardless of hover (mouse may have left
+          // the path during the drag motion); the parent-owned
+          // `waypointDragState` tells us this.
+          const isThisConnectionBeingDragged =
+            waypointDragState?.sourceNodeId === connection.sourceId &&
+            waypointDragState?.targetNodeId === connection.targetId;
+          const handlesVisible =
+            editMode &&
+            !!bindWaypoint &&
+            !!bindMidpoint &&
+            (isEdgeHovered || isEdgeSelected || isThisConnectionBeingDragged);
+          const waypointAnchors = [
+            { x: startX, y: startY },
+            ...(connection.waypoints ?? []),
+            { x: endX, y: endY },
+          ];
+          const waypointCount = connection.waypoints?.length ?? 0;
+          // PR 7 feedback (A): midpoint affordances must sit ON the
+          // rendered curve, not on the straight chord between anchors.
+          // `computeSegmentMidpoints` shares the exact same control-
+          // point math as the path renderer and evaluates each segment
+          // at t=0.5 → handle dots line up with the visible curve
+          // regardless of waypoint position, curvature, or zoom.
+          const segmentMidpoints = computeSegmentMidpoints({
+            source: { x: startX, y: startY },
+            target: { x: endX, y: endY },
+            waypoints: connection.waypoints ?? [],
+            curvature,
+            direction: pathDirection,
+          });
 
           return (
-            <g key={index}>
+            // Hover state lives on the GROUP, not the invisible hit
+            // path: the waypoint/midpoint handles are siblings of the
+            // path inside this <g>, so path ↔ handle transitions stay
+            // internal and fire no leave. With the handlers on the
+            // path (previous design), reaching a handle fired the
+            // path's mouseleave → hoveredEdge=null → the handle under
+            // the pointer UNMOUNTED → the user's press fell through to
+            // the canvas and panned it (PR #34 feedback 50, leak path
+            // 2; regression test in ConnectionsComponent.hover-
+            // handles.test.tsx).
+            <g
+              key={index}
+              onMouseEnter={() => setHoveredEdge(edgeKey)}
+              onMouseLeave={() => setHoveredEdge(null)}
+            >
               {/* Invisible thicker path for easier clicking */}
               <path
-                d={
-                  isSameColumn
-                    ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                    : isBackwardConnection
-                      ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                }
+                d={pathD}
                 className="fill-none cursor-pointer"
+                // K7: matched by App.tsx's `excludeFromPan` so a press
+                // that starts on a connection can never start a canvas
+                // pan (same mechanism as the waypoint handles, PR 7
+                // feedback 18). Round-7 issue 78 superseded the other
+                // half of K7: dragging from the path now moves THE
+                // waypoint (see onPointerDown); a true click still
+                // opens the EdgeEditor (see onClick).
+                data-tocb-connection-hitpath=""
                 style={{
                   stroke: 'transparent',
                   strokeWidth: '20px', // Much thicker for easier clicking
-                  pointerEvents: hasHighlightedNodes && !isHighlighted ? 'none' : 'stroke',
+                  // K8: hover priority for overlapping fat bands. SVG
+                  // hit-testing gives overlap to the LAST connection in
+                  // document order, so on crossing layouts the topmost
+                  // band stole hover mid-glide — the lower connection's
+                  // group fired mouseleave while the cursor was still
+                  // on its visible curve, unmounting the very handles
+                  // the user was approaching (reproduced live: hover
+                  // log flipped to the upper band at t=0.35 of the
+                  // lower curve; its midpoint handle never mounted).
+                  // While ANY connection is hovered, every other
+                  // connection's hit path goes inert: acquisition is
+                  // unchanged (first contact happens on a
+                  // non-overlapped stretch), but once acquired, hover
+                  // sticks until the pointer truly leaves the hovered
+                  // band — and the hovered connection's handles win
+                  // the hit test inside the overlap, so they're
+                  // reachable. Release (group mouseleave → hoveredEdge
+                  // null) re-arms all bands; the next pointer move
+                  // re-acquires whatever is under the cursor.
+                  //
+                  // fb4 63 (K8 residual): the same muting applies while
+                  // a connection is SELECTED (EdgeEditor open) — its
+                  // handles are visible without hover, and a press on
+                  // them used to fall on an overlapping sibling's band
+                  // (reproduced live: with a→d selected and the pointer
+                  // away, elementFromPoint at a→d's own midpoint handle
+                  // returned b→c's hit path). `activeEdgeKey` is
+                  // `hoveredEdge ?? selectedEdge`: hover, when present,
+                  // takes precedence. While an editor is open, a click
+                  // on a sibling band therefore first dismisses the
+                  // editor (document-mousedown), which re-arms all
+                  // bands; the sibling is selectable with the next
+                  // click — standard popover dismissal semantics.
+                  pointerEvents:
+                    (hasHighlightedNodes && !isHighlighted) ||
+                    (activeEdgeKey !== null && edgeKey !== activeEdgeKey)
+                      ? 'none'
+                      : 'stroke',
+                  // Round-7 issue 78: the path is a drag surface now —
+                  // keep touch drags from being hijacked by browser
+                  // scrolling, same as the waypoint handles.
+                  touchAction: 'none',
                 }}
-                onMouseEnter={() => setHoveredEdge(edgeKey)}
-                onMouseLeave={() => setHoveredEdge(null)}
+                onPointerDown={(e) => {
+                  // K7: record where the press started; the click
+                  // handler measures movement against this (fallback
+                  // discrimination for presses the waypoint gesture
+                  // never saw — view mode, mutex held).
+                  hitPathPointerDownRef.current = { x: e.clientX, y: e.clientY };
+                  // Round-7 issue 78 (supersedes K7's inert-drag
+                  // decision): a drag starting anywhere on the path
+                  // enters the waypoint-drag flow — identical
+                  // threshold/cancel/undo semantics to the midpoint
+                  // handle, and the waypoint goes where the cursor
+                  // goes. The hook claims the canvas-gesture mutex on
+                  // press and runs the full release lifecycle, so the
+                  // K7-era objection to claiming a gesture here no
+                  // longer applies. Panning from the path stays
+                  // excluded (App.excludeFromPan matches the data
+                  // attribute above).
+                  bindPath?.(connection.sourceId, connection.targetId).onPointerDown(e);
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
+
+                  // Round-7 issue 78: if the press that produced this
+                  // click armed the waypoint gesture, the gesture was
+                  // a drag — the waypoint write already committed on
+                  // pointerup; never open the editor on top of it.
+                  // One-shot consume (ALWAYS consumed, even if the
+                  // positional check below would also suppress) so the
+                  // flag can't go stale across gestures. This is the
+                  // primary tap-vs-drag discriminator: unlike the
+                  // positional dead-zone below it correctly classifies
+                  // an out-and-back drag that releases at the press
+                  // point.
+                  const pathGestureWasDrag = consumePathGestureArmed?.() ?? false;
+
+                  // K7: tap-vs-drag dead-zone, mirroring
+                  // `usePointerDrag.hasMoved` (PR #34 fb 45). A click
+                  // event lands here after ANY down+up pair on this
+                  // path, however far apart; only open the editor when
+                  // the gesture stayed within the tap threshold.
+                  // Retained as the fallback for presses that never
+                  // entered the waypoint flow (view mode, gesture
+                  // mutex held, no bindPath wired). Clicks with no
+                  // recorded pointerdown (programmatic / synthesized)
+                  // open unconditionally.
+                  const downPos = hitPathPointerDownRef.current;
+                  hitPathPointerDownRef.current = null;
+                  if (pathGestureWasDrag) {
+                    return; // Drag (waypoint moved) — no editor.
+                  }
+                  if (
+                    downPos &&
+                    (Math.abs(e.clientX - downPos.x) > MOVE_THRESHOLD_PX ||
+                      Math.abs(e.clientY - downPos.y) > MOVE_THRESHOLD_PX)
+                  ) {
+                    return; // Drag, not a click — no editor.
+                  }
 
                   // Only allow clicking on highlighted edges when nodes are selected
                   // Or allow all edges when no nodes are selected
@@ -604,26 +765,17 @@ export function ConnectionsComponent({
 
                   const midX = (startX + endX) / 2;
                   const midY = (startY + endY) / 2;
-                  setEdgePopup({
+                  setSelectedEdge({
                     sourceId: connection.sourceId,
                     targetId: connection.targetId,
-                    x: midX,
-                    y: midY,
-                    confidence: connection.confidence,
-                    evidence: connection.evidence,
-                    assumptions: connection.assumptions,
+                    midX,
+                    midY,
                   });
                 }}
               />
               {/* Glow shadow layer */}
               <path
-                d={
-                  isSameColumn
-                    ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                    : isBackwardConnection
-                      ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                }
+                d={pathD}
                 className="fill-none"
                 markerEnd="url(#arrowhead)"
                 style={{
@@ -641,13 +793,7 @@ export function ConnectionsComponent({
               />
               {/* Main visible path */}
               <path
-                d={
-                  isSameColumn
-                    ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                    : isBackwardConnection
-                      ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                }
+                d={pathD}
                 className="fill-none"
                 markerEnd="url(#arrowhead)"
                 style={{
@@ -664,6 +810,28 @@ export function ConnectionsComponent({
                     : 'd 0.15s ease-out, stroke 0.2s ease-out, opacity 0.2s ease-out, stroke-dasharray 0.2s ease-out',
                 }}
               />
+              {/* PR 7: waypoint + midpoint handles for direct
+                  manipulation. Rendered above the visible path so the
+                  handles always sit on top; visibility = hovered OR
+                  selected OR currently being dragged.
+                  `dragInProgress` mirrors `isThisConnectionBeingDragged`
+                  (the parent-owned waypointDragState) so midpoint
+                  handles disappear while the user drags a waypoint —
+                  PR 7 feedback item 17. */}
+              {bindWaypoint && bindMidpoint && (
+                <ConnectionWaypointHandles
+                  sourceNodeId={connection.sourceId}
+                  targetNodeId={connection.targetId}
+                  anchors={waypointAnchors}
+                  segmentMidpoints={segmentMidpoints}
+                  waypointCount={waypointCount}
+                  visible={handlesVisible}
+                  dragInProgress={isThisConnectionBeingDragged}
+                  zoomScale={camera?.z}
+                  bindWaypoint={bindWaypoint}
+                  bindMidpoint={bindMidpoint}
+                />
+              )}
             </g>
           );
         })}
@@ -694,26 +862,8 @@ export function ConnectionsComponent({
 
             if (!container) return null;
 
-            // Use the same getLocalPosition function as normal edges
-            const getLocalPosition = (element: HTMLElement) => {
-              let x = 0,
-                y = 0;
-              const width = element.offsetWidth,
-                height = element.offsetHeight;
-              let current: HTMLElement | null = element;
-
-              // Walk up the offset parent chain until we reach the container
-              while (current && current !== container) {
-                x += current.offsetLeft;
-                y += current.offsetTop;
-                current = current.offsetParent as HTMLElement | null;
-              }
-
-              return { x, y, width, height };
-            };
-
-            const startPos = getLocalPosition(sourceRef);
-            const endPos = getLocalPosition(targetRef);
+            const startPos = getLocalPosition(sourceRef, container as HTMLElement);
+            const endPos = getLocalPosition(targetRef, container as HTMLElement);
 
             // Check if nodes are in the same column for ghost connection
             const sourceLocation = findNodeLocation(sourceId);
@@ -761,15 +911,23 @@ export function ConnectionsComponent({
               endY = endPos.y + endPos.height / 2;
             }
 
-            // Calculate control points based on connection type
-            let controlPointOffset;
-            if (isGhostSameColumn) {
-              // Straight line for vertical ghost connections
-              controlPointOffset = 0;
-            } else {
-              const baseOffset = Math.abs(endX - startX) / 2;
-              controlPointOffset = curvature === 0 ? 0 : baseOffset * (0.1 + curvature * 1.9);
-            }
+            // PR 5 Task 5.2: path math factored into
+            // `./canvas/connectionPath.ts` so the drag-to-connect
+            // gesture's in-flight ghost (rendered by the parent) can
+            // share the exact same shape as this select-2 preview.
+            const direction = isGhostSameColumn
+              ? 'vertical'
+              : isGhostBackwardConnection
+                ? 'backward'
+                : 'forward';
+            const ghostPathD = buildConnectionPath({
+              startX,
+              startY,
+              endX,
+              endY,
+              curvature,
+              direction,
+            });
 
             // Get the style that a real connection would have (default confidence: 75)
             const ghostStrokeStyle = getConfidenceStrokeStyle(75);
@@ -778,13 +936,7 @@ export function ConnectionsComponent({
               <g>
                 {/* Ghost connection path - looks like real connection but more transparent */}
                 <path
-                  d={
-                    isGhostSameColumn
-                      ? `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                      : isGhostBackwardConnection
-                        ? `M ${startX} ${startY} C ${startX - controlPointOffset} ${startY}, ${endX + controlPointOffset} ${endY}, ${endX} ${endY}`
-                        : `M ${startX} ${startY} C ${startX + controlPointOffset} ${startY}, ${endX - controlPointOffset} ${endY}, ${endX} ${endY}`
-                  }
+                  d={ghostPathD}
                   className="fill-none"
                   markerEnd="url(#arrowhead)"
                   style={{
@@ -803,25 +955,97 @@ export function ConnectionsComponent({
           })()}
       </svg>
 
-      {/* Large center modal for edge information - rendered to body to avoid zoom transforms */}
-      {edgePopup &&
-        createPortal(
-          <EdgePopup
-            edgePopup={edgePopup}
-            setEdgePopup={setEdgePopup}
-            updateConfidence={updateConfidence}
-            findNodeTitle={findNodeTitle}
-            findNodeColor={findNodeColor}
-            svgSize={svgSize}
-            editMode={editMode}
-            onUpdateConnection={updateConnection}
-            onDeleteConnection={onDeleteConnection}
-            fontFamily={fontFamily}
-            viewportOffset={viewportOffset}
-            zoomScale={zoomScale}
-          />,
-          document.body,
-        )}
+      {/* PR 3: anchored EdgeEditor replaces the EdgePopup modal. The
+        anchor is a 1x1 invisible div positioned at the connection
+        midpoint (container-local coords), inside the same container
+        the connections SVG paints into so it inherits the same pan/
+        zoom transform. `useAnchorPosition` re-reads its rect on
+        camera change. */}
+      {selectedEdge && mutate && mutateDebounced && commit && (
+        <EdgeAnchorMount
+          selectedEdge={selectedEdge}
+          data={data}
+          mutate={mutate}
+          mutateDebounced={mutateDebounced}
+          commit={commit}
+          camera={camera ?? { x: 0, y: 0, z: 1 }}
+          containerRef={containerRef}
+          fontFamily={fontFamily}
+          onRequestClose={() => setSelectedEdge(null)}
+          onResetPath={
+            resetWaypoints
+              ? () => resetWaypoints(selectedEdge.sourceId, selectedEdge.targetId)
+              : undefined
+          }
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Renders an invisible 1x1 anchor at the connection midpoint, then
+ * mounts the EdgeEditor against it. The anchor lives inside the
+ * connections container (sibling to the SVG), so it inherits the
+ * same CSS transforms. Pan/zoom updates the camera, which feeds
+ * `useAnchorPosition` and re-reads the rect.
+ */
+function EdgeAnchorMount({
+  selectedEdge,
+  data,
+  mutate,
+  mutateDebounced,
+  commit,
+  camera,
+  containerRef,
+  fontFamily,
+  onRequestClose,
+  onResetPath,
+}: {
+  selectedEdge: SelectedEdge;
+  data: ToCData;
+  mutate: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  mutateDebounced: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  commit: (key?: string) => void;
+  camera: { x: number; y: number; z: number };
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  fontFamily?: string;
+  onRequestClose: () => void;
+  onResetPath?: () => void;
+}) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  // The container is the canvas; appending a child to it places the
+  // anchor in the same coordinate space as the nodes. Note we render
+  // the anchor inside `containerRef.current` indirectly: this component
+  // returns the anchor JSX, and React mounts it as a sibling to the
+  // SVG inside the connections container. The midpoint is in
+  // container-local coordinates so we set absolute position + left/top.
+  if (!containerRef.current) return null;
+  return (
+    <>
+      <div
+        ref={anchorRef}
+        className="absolute pointer-events-none"
+        style={{
+          left: selectedEdge.midX,
+          top: selectedEdge.midY,
+          width: 1,
+          height: 1,
+        }}
+      />
+      <EdgeEditor
+        sourceId={selectedEdge.sourceId}
+        targetId={selectedEdge.targetId}
+        data={data}
+        mutate={mutate}
+        mutateDebounced={mutateDebounced}
+        commit={commit}
+        anchorRef={anchorRef}
+        camera={camera}
+        onRequestClose={onRequestClose}
+        onResetPath={onResetPath}
+        fontFamily={fontFamily}
+      />
     </>
   );
 }

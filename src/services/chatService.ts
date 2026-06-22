@@ -13,6 +13,7 @@ import type { AssistantBlock } from '../../shared/chat-blocks';
 import { StreamBlockAccumulator, toAssistantContentBlocks } from './streamBlockAccumulator';
 import { buildOutgoingMessages } from './outgoingMessages';
 import { CostTracker } from './chatCostTracker';
+import { RequestTokenSource, type AuthTokenProvider } from './requestTokenSource';
 import type { AnthropicUsage } from '../../shared/cost';
 import type { StreamEvent } from '../../shared/wire-shapes';
 // Co-located with the composer-blocker discriminated union so adding a new
@@ -525,7 +526,15 @@ class StreamingContext {
 
 class ChatService {
   private readonly STREAM_API_URL = '/api/anthropic-stream';
-  private authToken: string | null = null;
+  // Request-time token source (shared resolver — see
+  // src/services/requestTokenSource.ts). Same staleness class as the
+  // ChartService round-2 401 fix: a mount-time static snapshot either
+  // goes null (silent-refresh fallback → the stream request turns
+  // ANONYMOUS: BYOK header ignored, anon caps + Turnstile gate apply)
+  // or expires (→ hard 401 invalid_token from anthropic-stream's
+  // fail-closed resolveActor). Streams + reconcile POSTs resolve the
+  // token at request time instead.
+  private tokenSource = new RequestTokenSource('ChatService');
 
   constructor() {
     // Drain queued reconciles when the OS reports connectivity is back. This
@@ -536,7 +545,7 @@ class ChatService {
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
         console.log('[ChatService] online event fired, draining pending reconciles');
-        void drainPendingReconciles(this.authToken);
+        this.drainQueueWithFreshToken();
       });
     }
 
@@ -550,7 +559,9 @@ class ChatService {
     // global is null, so non-BYOK or unrouted entries no-op). If a later
     // mount registers the callback, the next drain (online / setAuthToken
     // / stream-end) credits any further deltas correctly.
-    void drainPendingReconciles(this.authToken);
+    // (No provider is registered this early, so this resolves the
+    // static — null — exactly as before.)
+    this.drainQueueWithFreshToken();
   }
 
   private static isNetworkError(error: Error): boolean {
@@ -562,8 +573,8 @@ class ChatService {
   }
 
   setAuthToken(token: string | null) {
-    const wasNull = this.authToken === null;
-    this.authToken = token;
+    const wasNull = this.tokenSource.getToken() === null;
+    this.tokenSource.setToken(token);
     // First time we get a real token (post-Auth0 hydration): drain the queue.
     // Catches the "user reloads while offline, comes back online before the
     // first stream" flow — without this, queued reconciles linger until the
@@ -571,6 +582,26 @@ class ChatService {
     if (wasNull && token !== null) {
       void drainPendingReconciles(token);
     }
+  }
+
+  /**
+   * Register (or clear, with `null`) the request-time token provider.
+   * Called from the App auth effect alongside `setAuthToken` — same
+   * pattern as ChartService.setAuthTokenProvider.
+   */
+  setAuthTokenProvider(provider: AuthTokenProvider | null) {
+    this.tokenSource.setProvider(provider);
+  }
+
+  /**
+   * Fire-and-forget queue drain with a request-time token. Each drain
+   * re-resolves so a retry hours after the original failure carries a
+   * live token instead of the snapshot from when the entry was queued.
+   */
+  private drainQueueWithFreshToken(): void {
+    // tokenSource.resolve() never rejects (provider errors fall back to
+    // the last-known static internally).
+    void this.tokenSource.resolve().then((token) => drainPendingReconciles(token));
   }
 
   private async streamFromApi(
@@ -587,11 +618,17 @@ class ChatService {
     extendedThinkingEnabled: boolean = false,
     keyLast4?: string | null,
   ): Promise<void> {
+    // Resolve the token once per stream, at request time. The same
+    // snapshot feeds the CostTracker + post-stream poll below — those
+    // fire within the stream's lifetime, so stream-start freshness is
+    // the right scope (the long-tail retry path, drainPendingReconciles,
+    // re-resolves at drain time instead).
+    const authToken = await this.tokenSource.resolve();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
     }
     if (extraHeaders) {
       for (const [k, v] of Object.entries(extraHeaders)) {
@@ -777,7 +814,9 @@ class ChatService {
       model,
       onCostUpdate: callbacks.onCostUpdate,
       loggingMessageId: loggingMessageIdForReconcile,
-      authToken: this.authToken,
+      // Stream-start snapshot from the request-time resolution above —
+      // fresh for the tracker's in-stream reconcile POSTs.
+      authToken,
       onFetchFailure: enqueueWithContext,
     });
 
@@ -1234,7 +1273,8 @@ class ChatService {
         void pollUntilReconciled({
           logging_message_id: lmidForPoll,
           cost_micro_usd: finalCost.toString(),
-          authToken: this.authToken,
+          // Stream-start snapshot; the poll runs ≤30s after stream end.
+          authToken,
           chartId: streamChartIdSnap,
           keyLast4: streamKeyLast4Snap,
           onCostBump: onCostBumpFromReconcile ?? undefined,
@@ -1249,7 +1289,7 @@ class ChatService {
       // belt-and-suspenders ("we just finished a stream, network must be
       // alive enough to have streamed bytes").
       cleanupTrackerListeners();
-      void drainPendingReconciles(this.authToken);
+      this.drainQueueWithFreshToken();
     }
 
     // Stream ended without message_stop — treat as incomplete
@@ -1306,7 +1346,7 @@ class ChatService {
     // user reloaded mid-poll then immediately typed a new message
     // (skipping the post-stream poll cleanup path). Fire-and-forget so
     // it doesn't delay the new stream's first fetch.
-    void drainPendingReconciles(this.authToken);
+    this.drainQueueWithFreshToken();
 
     let ctx: StreamingContext | undefined;
     let requestBody: Record<string, unknown> = {};

@@ -19,8 +19,6 @@ interface MDXEditorComponentProps {
   markdown: string;
   onChange?: (markdown: string) => void;
   placeholder?: string;
-  readOnly?: boolean;
-  simple?: boolean; // For title fields - no toolbar, minimal plugins
   fontFamily?: string;
 }
 
@@ -28,14 +26,11 @@ export function MDXEditorComponent({
   markdown,
   onChange,
   placeholder = 'Enter text...',
-  readOnly = false,
-  simple = false,
   fontFamily,
 }: MDXEditorComponentProps) {
   return (
     <div
-      className={`mdx-editor-wrapper ${simple ? 'simple' : ''}`}
-      data-readonly={readOnly}
+      className="mdx-editor-wrapper"
       style={{ fontFamily }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
@@ -44,38 +39,36 @@ export function MDXEditorComponent({
         markdown={markdown}
         onChange={onChange}
         placeholder={placeholder}
-        readOnly={readOnly}
         plugins={[
-          // Simple mode for titles - minimal plugins
-          ...(simple
-            ? []
-            : [
-                headingsPlugin(),
-                listsPlugin(),
-                quotePlugin(),
-                thematicBreakPlugin(),
-                linkPlugin(),
-              ]),
-          ...(readOnly || simple ? [] : [markdownShortcutPlugin()]),
-
-          // Toolbar with basic formatting (only if not read-only and not simple)
-          ...(readOnly || simple
-            ? []
-            : [
-                toolbarPlugin({
-                  toolbarContents: () => (
-                    <>
-                      <UndoRedo />
-                      <Separator />
-                      <BoldItalicUnderlineToggles />
-                      <Separator />
-                      <ListsToggle />
-                      <Separator />
-                      <BlockTypeSelect />
-                    </>
-                  ),
-                }),
-              ]),
+          headingsPlugin(),
+          listsPlugin(),
+          quotePlugin(),
+          thematicBreakPlugin(),
+          linkPlugin(),
+          markdownShortcutPlugin(),
+          toolbarPlugin({
+            // Two explicit rows. The editor mounts inside the 288px
+            // NodeEditor panel; the full control set is ~466px laid out
+            // in a single row, and MDXEditor's stock toolbar resolves
+            // that with `overflow-x: auto` (a horizontal scrollbar —
+            // PR 34 feedback #48). Splitting into two balanced rows
+            // keeps every control visible with no scrolling. See the
+            // `.mdx-toolbar-row` styles below.
+            toolbarContents: () => (
+              <div className="mdx-toolbar-rows">
+                <div className="mdx-toolbar-row">
+                  <UndoRedo />
+                  <Separator />
+                  <BoldItalicUnderlineToggles />
+                </div>
+                <div className="mdx-toolbar-row">
+                  <ListsToggle />
+                  <Separator />
+                  <BlockTypeSelect />
+                </div>
+              </div>
+            ),
+          }),
         ]}
         contentEditableClassName="mdx-editor-content"
       />
@@ -100,19 +93,6 @@ export function MDXEditorComponent({
           min-height: 120px;
           text-align: left !important;
           font-family: inherit !important;
-        }
-
-        .mdx-editor-wrapper.simple .mdx-editor-content {
-          min-height: 40px;
-          font-size: 18px;
-          font-weight: 700;
-          color: #111827;
-          padding: 8px 12px;
-        }
-
-        /* Remove min-height for read-only mode - content should size naturally */
-        .mdx-editor-wrapper[data-readonly="true"] .mdx-editor-content {
-          min-height: auto;
         }
 
         .mdx-editor-content ul {
@@ -170,6 +150,67 @@ export function MDXEditorComponent({
         /* MDX Editor library overrides */
         .mdx-editor-wrapper [class*="mdxeditor"] {
           font-family: inherit !important;
+        }
+
+        /* Popup layering (PR 34 feedback #66). The library portals its
+           popups (block-type select dropdown, toolbar tooltips, link
+           dialog) into a div.mdxeditor-popup-container appended to
+           document.body, shipped with position: relative; z-index: 2.
+           That body-level stacking context loses to the NodeEditor
+           panel (fixed z-[150], also a body child), so the block-type
+           select opened invisibly BEHIND the panel. Raise the container
+           via its documented stable class — v4 exposes no z-index var —
+           to sit just above the anchored editors (NodeEditor/EdgeEditor
+           at 150) and below the full-screen overlays (auth modal /
+           tutorial at 9999). Nothing else lives in (150, 9999). This
+           selector intentionally has no .mdx-editor-wrapper prefix: the
+           container is not a descendant of the wrapper. It wins the
+           specificity tie with the library rule by document order
+           (this <style> element renders in <body>, after the imported
+           stylesheet in <head>). */
+        .mdxeditor-popup-container {
+          z-index: 160;
+        }
+
+        /* Toolbar: two rows, never a horizontal scrollbar.
+           The library's _toolbarRoot has overflow-x: auto, which
+           shows a scrollbar inside the 288px NodeEditor. With the
+           two-row layout the contents fit, so let overflow be
+           visible (no scroll affordance at all). */
+        .mdx-editor-wrapper [class*="_toolbarRoot"] {
+          overflow-x: visible;
+        }
+
+        .mdx-editor-wrapper .mdx-toolbar-rows {
+          display: flex;
+          flex-direction: column;
+          width: 100%;
+        }
+
+        .mdx-editor-wrapper .mdx-toolbar-row {
+          display: flex;
+          align-items: center;
+          /* Re-create the root toolbar's inter-item gap (the library
+             sets it on _toolbarRoot, whose gap doesn't reach into
+             these nested rows). */
+          gap: var(--spacing-1, 4px);
+          /* Safety valve: if a row ever outgrows the editor (wide
+             custom node fonts, future controls), wrap rather than
+             overflow. */
+          flex-wrap: wrap;
+        }
+
+        /* The block-type select trigger is pinned to 144px
+           (width: var(--spacing-36)) by the library — over half the
+           editor's width. Let it shrink to its content ("Paragraph"
+           + chevron ≈ 95px) so the second row fits. min-width keeps
+           it recognizable as a select when the cursor sits in a
+           context with no block-type value (e.g. a list item), where
+           the label renders empty and the trigger would otherwise
+           collapse to a bare chevron. */
+        .mdx-editor-wrapper [class*="_selectTrigger"] {
+          width: auto;
+          min-width: 4rem;
         }
 
         .mdx-editor-wrapper [class*="_contentEditable"] {

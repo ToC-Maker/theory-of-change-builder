@@ -14,6 +14,15 @@
   // Docs: https://developers.cloudflare.com/changelog/2025-05-22-handle-request-cancellation/
   // Issue: https://github.com/cloudflare/workerd/issues/3033
   "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  // Smart Placement: run the Worker near its backends (api.anthropic.com,
+  // Neon Postgres) instead of near the visitor. Without it, upstream
+  // fetches egress from the colo closest to the user — and Anthropic 403s
+  // ("Request not allowed") requests originating from unsupported regions,
+  // killing estimates/chat for travelling users even though the same
+  // deployment works elsewhere (verified 2026-06-13: identical request
+  // 200s from EU egress, 403s from the reviewer's region). Also cuts
+  // multi-round-trip DB latency.
+  "placement": { "mode": "smart" },
   "workers_dev": true,
   "preview_urls": true,
   "assets": {

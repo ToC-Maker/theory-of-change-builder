@@ -1,6 +1,16 @@
+// First-visit privacy-policy gate shown on the editor route. The modal
+// mechanics (portal, focus, keyboard handling, layout) come from the
+// shared `<ConfirmModal>` primitive; this wrapper owns the route gating,
+// localStorage gating, and the logging-opt-in side effects.
+//
+// Single-action + non-dismissable: the modal has no cancel button, no
+// backdrop-dismiss, and no Escape handler. The user must explicitly
+// click "I Understand" to acknowledge before the editor unlocks.
+
 import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ShieldCheckIcon } from '@heroicons/react/24/outline';
+import { ConfirmModal } from './ConfirmModal';
 import { loggingService } from '../services/loggingService';
 
 interface PrivacyPolicyPopupProps {
@@ -15,25 +25,6 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     return stored === null ? true : stored !== 'true';
   });
   const location = useLocation();
-
-  // Inject fade-in animation style once
-  useEffect(() => {
-    const styleId = 'privacy-popup-animation';
-    if (document.getElementById(styleId)) return;
-    const style = document.createElement('style');
-    style.id = styleId;
-    style.textContent = `
-      @keyframes fadeIn {
-        from { opacity: 0; transform: scale(0.95); }
-        to { opacity: 1; transform: scale(1); }
-      }
-      .animate-fadeIn { animation: fadeIn 0.2s ease-out; }
-    `;
-    document.head.appendChild(style);
-    return () => {
-      document.getElementById(styleId)?.remove();
-    };
-  }, []);
 
   useEffect(() => {
     // Only show privacy policy on edit routes (not on view-only chart routes)
@@ -52,9 +43,10 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     // Show popup if: never accepted, OR accepted but never chose logging preference
     if (!hasAccepted || !hasLoggingPreference) {
       // Show popup after a short delay to ensure smooth page load
-      setTimeout(() => {
+      const id = setTimeout(() => {
         setIsVisible(true);
       }, 1000);
+      return () => clearTimeout(id);
     }
   }, [location]);
 
@@ -72,66 +64,46 @@ export function PrivacyPolicyPopup({ onAccept }: PrivacyPolicyPopupProps) {
     onAccept?.(shareData);
   };
 
-  if (!isVisible) {
-    return null;
-  }
-
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-      {/* Backdrop — not clickable, popup is not dismissable */}
-      <div className="absolute inset-0 bg-black bg-opacity-50" />
-
-      {/* Modal */}
-      <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6 animate-fadeIn">
-        {/* Icon */}
-        <div className="flex justify-center mb-4">
-          <div className="p-3 bg-blue-100 rounded-full">
-            <ShieldCheckIcon className="w-8 h-8 text-blue-600" />
-          </div>
+    <ConfirmModal
+      open={isVisible}
+      title="Privacy & Data Protection"
+      body="To improve the AI assistant, we collect usage data such as chat messages and graph edits. You can change this anytime under Account > Data & Privacy."
+      confirmLabel="I Understand"
+      confirmVariant="blue"
+      singleAction
+      icon={
+        <div className="p-3 bg-blue-100 rounded-full">
+          <ShieldCheckIcon className="w-8 h-8 text-blue-600" />
         </div>
+      }
+      extras={
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={shareData}
+              onChange={(e) => setShareData(e.target.checked)}
+              className="h-3.5 w-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 focus:ring-offset-0"
+            />
+            <span className="text-xs text-gray-500">Help improve AI by sharing usage data</span>
+          </label>
 
-        {/* Title */}
-        <h2 className="text-xl font-semibold text-gray-900 text-center mb-4">
-          Privacy & Data Protection
-        </h2>
-
-        {/* Content */}
-        <p className="text-sm text-gray-600 text-center mb-5">
-          To improve the AI assistant, we collect usage data such as chat messages and graph edits.
-          You can change this anytime under Account &gt; Data &amp; Privacy.
-        </p>
-
-        {/* Actions */}
-        <div className="space-y-3">
-          <button
-            onClick={handleAccept}
-            className="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+          <a
+            href="https://docs.google.com/document/d/1rjFIogfs_xGAUmO68Ci1UJOTtpJ2jWvwllJRl7k_sN4/edit?usp=sharing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-blue-600 hover:text-blue-700"
           >
-            I Understand
-          </button>
-
-          <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={shareData}
-                onChange={(e) => setShareData(e.target.checked)}
-                className="h-3.5 w-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 focus:ring-offset-0"
-              />
-              <span className="text-xs text-gray-500">Help improve AI by sharing usage data</span>
-            </label>
-
-            <a
-              href="https://docs.google.com/document/d/1rjFIogfs_xGAUmO68Ci1UJOTtpJ2jWvwllJRl7k_sN4/edit?usp=sharing"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-blue-600 hover:text-blue-700"
-            >
-              View Privacy Policy →
-            </a>
-          </div>
+            View Privacy Policy →
+          </a>
         </div>
-      </div>
-    </div>
+      }
+      onConfirm={handleAccept}
+      onCancel={() => {
+        // singleAction mode: cancel hooks are never invoked, but the
+        // prop is required by the type. Treat as a no-op.
+      }}
+    />
   );
 }

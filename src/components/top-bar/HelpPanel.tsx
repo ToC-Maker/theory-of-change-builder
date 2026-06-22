@@ -1,0 +1,202 @@
+// HelpPanel — Help dropdown in the new TopBar.
+//
+// Sections (per plan §1.2):
+//   - Keyboard shortcuts (sourced from `src/data/keyboardShortcuts.ts`)
+//   - View-mode tutorial — a button that dispatches the
+//     `GRAPH_TUTORIAL_REPLAY_EVENT` window event so the already-mounted
+//     `<GraphTutorial />` opens. HelpPanel sits in TopBar; GraphTutorial
+//     sits near the canvas, so we use a window-scoped CustomEvent rather
+//     than threading a prop chain through both subtrees.
+//   - Edit-mode tutorial — "Coming soon" placeholder (deferred to a
+//     later PR; covers the new hover affordances + connection handles
+//     introduced in PRs 5+7).
+//   - Contact — mailto link to the project inbox plus a GitHub-issues
+//     external link for power users who'd rather file directly on the
+//     repo. The mail client takes over for the mailto, so no hosted form.
+//   - External link to a Theory of Change explainer article.
+//
+// The previous EditToolbar's Help modal was a single dump of everything;
+// the new HelpPanel keeps the same surface but groups it under explicit
+// sections so the user knows where to look.
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ChevronDownIcon,
+  QuestionMarkCircleIcon,
+  ArrowTopRightOnSquareIcon,
+} from '@heroicons/react/24/outline';
+import { keyboardShortcutGroups } from '../../data/keyboardShortcuts';
+import { GRAPH_TUTORIAL_REPLAY_EVENT } from '../GraphTutorial';
+
+const TOC_EXPLAINER_URL = 'https://en.wikipedia.org/wiki/Theory_of_change';
+const CONTACT_EMAIL = 'theoryofchangebuilder@gmail.com';
+const GITHUB_ISSUES_URL = 'https://github.com/ToC-Maker/theory-of-change-builder/issues/new';
+
+interface Props {
+  // PR 7 feedback (37): menubar hover-switch. See FileMenu.tsx for
+  // details — when the parent (TopBar) controls open state, it
+  // passes these so a hover from a sibling open menu can switch to
+  // this one without a click. Optional so MobileMenu / tests still
+  // work as uncontrolled.
+  isOpen?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  onHoverOpen?: () => void;
+}
+
+export function HelpPanel({ isOpen, onOpenChange, onHoverOpen }: Props = {}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen ?? internalOpen;
+  // Memoized so it's a stable dep for effects. See FileMenu.tsx for
+  // the controlled-vs-uncontrolled rationale.
+  const setOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      if (onOpenChange) {
+        const resolved = typeof next === 'function' ? next(isOpen ?? false) : next;
+        onOpenChange(resolved);
+      } else {
+        setInternalOpen(next);
+      }
+    },
+    [onOpenChange, isOpen],
+  );
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    // Escape closes the menu. Handled per-menu (not in TopBar) so
+    // FileMenu's two-step flyout ladder isn't raced by a parent-level
+    // listener — see the note in TopBar.tsx.
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [open, setOpen]);
+
+  const handleReplayTutorial = () => {
+    setOpen(false);
+    // <GraphTutorial> listens for this event on `window` and opens its
+    // tooltip. The component is mounted unconditionally in both
+    // ToCViewer and ToCViewerOnly, so this works regardless of route.
+    window.dispatchEvent(new CustomEvent(GRAPH_TUTORIAL_REPLAY_EVENT));
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((s) => !s)}
+        onPointerEnter={onHoverOpen}
+        // PR 7 feedback (43): full-height native-menubar trigger with
+        // a full-height fill (kept while open). See FileMenu.tsx.
+        className={`h-full px-2 sm:px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-1 ${
+          open ? 'bg-gray-100' : ''
+        }`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Help"
+      >
+        <QuestionMarkCircleIcon className="w-4 h-4" />
+        <span className="hidden md:inline">Help</span>
+        <ChevronDownIcon className="w-3 h-3" />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute top-full right-0 sm:right-auto sm:left-0 w-[min(22rem,calc(100vw-1rem))] max-h-[80vh] overflow-y-auto bg-white rounded-lg shadow-lg border border-gray-200 py-3 px-4 z-50"
+        >
+          {/* Keyboard shortcuts */}
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Keyboard shortcuts</h3>
+            <div className="space-y-3">
+              {keyboardShortcutGroups.map((group) => (
+                <div key={group.title}>
+                  <div className="text-xs font-medium text-gray-500 mb-1">{group.title}</div>
+                  <ul className="space-y-1">
+                    {group.shortcuts.map((s) => (
+                      <li
+                        key={`${group.title}:${s.description}`}
+                        className="flex items-center justify-between text-xs text-gray-700"
+                      >
+                        <span>{s.description}</span>
+                        <kbd className="ml-2 px-1.5 py-0.5 text-[10px] bg-gray-100 border border-gray-200 rounded font-mono text-gray-600 whitespace-nowrap">
+                          {s.combo.display}
+                        </kbd>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Tutorials */}
+          <div className="mb-4 pt-3 border-t border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Tutorials</h3>
+            <button
+              type="button"
+              onClick={handleReplayTutorial}
+              className="w-full text-left text-sm text-blue-700 hover:underline px-1 py-1"
+              role="menuitem"
+            >
+              Replay the view-mode walkthrough
+            </button>
+            <div className="text-xs text-gray-500 px-1 py-1">Edit-mode tutorial — coming soon.</div>
+          </div>
+
+          {/* Contact */}
+          <div className="mb-4 pt-3 border-t border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Contact</h3>
+            <p className="text-xs text-gray-600 px-1 py-1 leading-relaxed">
+              Bug reports, feedback, or questions:{' '}
+              <a
+                href={`mailto:${CONTACT_EMAIL}`}
+                className="text-blue-700 hover:underline break-all"
+                role="menuitem"
+              >
+                {CONTACT_EMAIL}
+              </a>
+              . You can also{' '}
+              <a
+                href={GITHUB_ISSUES_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-blue-700 hover:underline"
+                role="menuitem"
+              >
+                open a GitHub issue
+                <ArrowTopRightOnSquareIcon className="w-3 h-3" />
+              </a>{' '}
+              for bugs.
+            </p>
+          </div>
+
+          {/* External resources */}
+          <div className="pt-3 border-t border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Learn more</h3>
+            <a
+              href={TOC_EXPLAINER_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-sm text-blue-700 hover:underline px-1 py-1"
+              role="menuitem"
+            >
+              What is a Theory of Change?
+              <ArrowTopRightOnSquareIcon className="w-3 h-3" />
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

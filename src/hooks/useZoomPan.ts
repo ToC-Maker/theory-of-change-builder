@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, RefObject } from 'react';
+import { isCanvasGestureActive } from './_canvasGestureState';
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 5;
@@ -70,25 +71,57 @@ export function useZoomPan({
     return { width: viewportWidth, height: viewportHeight };
   }, []);
 
-  // Calculate fit-to-screen zoom level
-  const calculateFitToScreenZoom = useCallback(() => {
-    const size = containerSizeRef.current;
-    if (!size.width || !size.height) return 1;
+  // Calculate fit-to-screen zoom level. Takes the offset as a parameter
+  // (rather than reading viewportOffsetRef) so the fit-zoom effect below
+  // can pass the CURRENT prop values and honestly list them as deps;
+  // the init effect passes the ref's snapshot.
+  const calculateFitToScreenZoom = useCallback(
+    (offset: { left: number; top: number; right: number; bottom: number }) => {
+      const size = containerSizeRef.current;
+      if (!size.width || !size.height) return 1;
 
-    const cWidth = size.width + EMBED_PADDING;
-    const cHeight = size.height + EMBED_PADDING;
-    const { width: availableWidth, height: availableHeight } = getAvailableViewport();
-    const scaleX = availableWidth / cWidth;
-    const scaleY = availableHeight / cHeight;
-    return Math.max(MIN_SCALE, Math.min(scaleX, scaleY));
-  }, [getAvailableViewport]);
+      const cWidth = size.width + EMBED_PADDING;
+      const cHeight = size.height + EMBED_PADDING;
+      const availableWidth = window.innerWidth - offset.left - offset.right;
+      const availableHeight = window.innerHeight - offset.top - offset.bottom;
+      const scaleX = availableWidth / cWidth;
+      const scaleY = availableHeight / cHeight;
+      return Math.max(MIN_SCALE, Math.min(scaleX, scaleY));
+    },
+    [],
+  );
 
-  // Update fit-to-screen zoom when container size or window changes
+  // Update fit-to-screen zoom when container size, window size, or the
+  // reserved chrome offsets change.
+  //
+  // PR #34 fb3 (K1): the offset SCALARS are deps — scalars, not the
+  // object, because callers that omit the prop get a fresh default
+  // object literal every render — so a changed reserve re-fits without
+  // waiting for a window resize event. Two paths need that:
+  //   (a) a drawer collapse-toggle changes the reserve with no resize
+  //       event at all (previously the canvas recentered but kept its
+  //       stale fit scale);
+  //   (b) on a real window resize, App's debounced offset recompute
+  //       (useViewportOffset) and this effect's debounced listener
+  //       race; if this one fires first it computes from the old
+  //       reserve, and without these deps nothing re-runs after App
+  //       commits the fresh one.
+  const {
+    left: offsetLeft,
+    top: offsetTop,
+    right: offsetRight,
+    bottom: offsetBottom,
+  } = viewportOffset;
   useEffect(() => {
     if (!containerSize.width || !containerSize.height) return;
 
     const updateFitZoom = () => {
-      const newFitZoom = calculateFitToScreenZoom();
+      const newFitZoom = calculateFitToScreenZoom({
+        left: offsetLeft,
+        top: offsetTop,
+        right: offsetRight,
+        bottom: offsetBottom,
+      });
       setFitToScreenZoom(newFitZoom);
       fitToScreenZoomRef.current = newFitZoom;
 
@@ -115,13 +148,21 @@ export function useZoomPan({
       window.removeEventListener('resize', handleResize);
       clearTimeout(resizeTimeout);
     };
-  }, [containerSize.width, containerSize.height, calculateFitToScreenZoom]);
+  }, [
+    containerSize.width,
+    containerSize.height,
+    calculateFitToScreenZoom,
+    offsetLeft,
+    offsetTop,
+    offsetRight,
+    offsetBottom,
+  ]);
 
   // Initialize camera to fit-to-screen on first load
   useEffect(() => {
     if (hasInitializedZoom.current || !containerSize.width || !containerSize.height) return;
 
-    const fitZoom = calculateFitToScreenZoom();
+    const fitZoom = calculateFitToScreenZoom(viewportOffsetRef.current);
     setFitToScreenZoom(fitZoom);
     fitToScreenZoomRef.current = fitZoom;
     const newCam = { x: 0, y: 0, z: fitZoom };
@@ -244,6 +285,22 @@ export function useZoomPan({
     const handleMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
 
+      // PR #34 feedback (50): never start a pan while a canvas gesture
+      // (node / connection / waypoint drag) is in flight. Those gestures
+      // claim the shared mutex during `pointerdown`, which the browser
+      // always dispatches BEFORE this compatibility `mousedown` — so the
+      // check is race-free. This matters because the target-based
+      // exclusion below can be defeated by mid-gesture re-renders: a
+      // pointerdown on a midpoint-insert handle synchronously unmounts
+      // the pressed element (midpoint handles hide during drag), and
+      // Chrome then retargets the compat mousedown to the closest
+      // still-connected ancestor (`<g data-tocb-waypoint-handles>`),
+      // which the attribute checks in `excludeFromPan` didn't match —
+      // the canvas panned WHILE the waypoint dragged. Reproduced via
+      // CDP trusted input; regression-pinned in
+      // `tests/frontend/useZoomPan.gesture-mutex.test.ts`.
+      if (isCanvasGestureActive()) return;
+
       const target = e.target as HTMLElement;
       if (target.tagName === 'BUTTON' || target.closest('button')) return;
 
@@ -334,6 +391,11 @@ export function useZoomPan({
     };
 
     const handleTouchStart = (e: TouchEvent) => {
+      // Same mutex guard as handleMouseDown: `pointerdown` (where
+      // gestures claim the mutex) fires before `touchstart` in Chrome,
+      // so an in-flight canvas gesture must suppress touch-panning too.
+      if (isCanvasGestureActive()) return;
+
       const target = e.target as HTMLElement;
       if (target.tagName === 'BUTTON' || target.closest('button')) return;
 

@@ -2,72 +2,99 @@ import clsx from 'clsx';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
+import { getContrastTextColor } from '../utils';
+import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
+import { computeAlignedSections } from '../utils/alignNodes';
 import { NodeComponent } from './NodeComponent';
-import { ConnectionsComponent, EdgePopupState } from './ConnectionsComponent';
-import { EditToolbar } from './EditToolbar';
-import { Legend } from './Legend';
-import { NodePopup } from './NodePopup';
+import { ConnectionsComponent } from './ConnectionsComponent';
+import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
+import { NodeEditor } from './node-editor/NodeEditor';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
+import { useGraphMutation } from '../hooks/useGraphMutation';
+import { usePointerDrag } from '../hooks/usePointerDrag';
+import type { DragOverLocation } from '../hooks/usePointerDrag';
+import { useConnectionDrag } from '../hooks/useConnectionDrag';
+import { useWaypointDrag } from '../hooks/useWaypointDrag';
+import { buildConnectionPath } from './canvas/connectionPath';
+import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
+import { GutterAffordance } from './canvas/GutterAffordance';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
+// PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
+// so the old prop drilling for those (`undoHistory`, `redoHistory`,
+// `handleUndo`, `handleRedo`, `isSaving`, `lastSyncTime`,
+// `isManualSyncing`, `handleManualSync`, `getTimeAgo`) is no longer
+// needed by `ToC`.
+//
+// PR 2: the share-dialog block also moved up to App.tsx, so
+// `currentEditToken` and `onChartCreated` are no longer threaded
+// through. The remaining props are the canvas-layer hooks (camera,
+// viewport, container-size callbacks) + highlight notifier.
 export function ToC({
   data: initialData,
   onSizeChange,
   onDataChange,
   showEditButton = true,
-  undoHistory = [],
-  redoHistory = [],
-  handleUndo = () => {},
-  handleRedo = () => {},
-  isSaving = false,
-  currentEditToken = null,
-  lastSyncTime = null,
-  isManualSyncing = false,
-  handleManualSync = () => {},
-  getTimeAgo = () => '',
   zoomScale = 1,
   camera,
   onHighlightedNodesChange,
-  onChartCreated,
-  viewportOffset = { left: 0, top: 0, right: 0, bottom: 0 },
+  onDragActiveChange,
 }: {
   data: ToCData;
   onSizeChange?: (size: { width: number; height: number }) => void;
   onDataChange?: (data: ToCData) => void;
   showEditButton?: boolean;
-  undoHistory?: ToCData[];
-  redoHistory?: ToCData[];
-  handleUndo?: () => void;
-  handleRedo?: () => void;
-  isSaving?: boolean;
-  currentEditToken?: string | null;
-  lastSyncTime?: Date | null;
-  isManualSyncing?: boolean;
-  handleManualSync?: () => void;
-  getTimeAgo?: (date: Date) => string;
   zoomScale?: number;
   camera?: { x: number; y: number; z: number };
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void;
-  onChartCreated?: (token: string, chartId: string) => void;
-  viewportOffset?: { left: number; top: number; right: number; bottom: number };
+  /**
+   * PR 4: fired when a pointer-drag starts or ends. App.tsx uses this
+   * to pause its 30s sync poll so the in-flight gesture isn't fighting
+   * a stale server snapshot for control of the canvas state
+   * (red-team Important "PR 4 pointer-capture during cross-tab delete
+   * race"). Best-effort: a missed `false` after unmount is fine — the
+   * polling effect re-snapshots `data` next tick.
+   */
+  onDragActiveChange?: (isActive: boolean) => void;
+  // PR 3: `viewportOffset` was used by the NodePopup / EdgePopup modal
+  // sizing math; both modals retired, so the prop is gone. The
+  // anchored editors are positioned by `useAnchorPosition` directly.
 }) {
-  const [data, setData] = useState<ToCData>(initialData);
-
-  // Create a wrapped setData that also notifies parent
-  const setDataAndNotify = useCallback(
-    (newData: ToCData | ((prevData: ToCData) => ToCData)) => {
-      setData((prevData) => {
-        const updatedData = typeof newData === 'function' ? newData(prevData) : newData;
-        // Always notify parent of changes using setTimeout to avoid infinite loops
-        setTimeout(() => onDataChange?.(updatedData), 0);
-        return updatedData;
-      });
-    },
-    [onDataChange],
-  );
+  // Graph mutation seam: see `src/hooks/useGraphMutation.ts` for the
+  // queueMicrotask-deferral rationale (replaces the previous
+  // `setTimeout(0)` hack with a precise documented primitive). Three
+  // entry points:
+  //
+  //   mutate(updater)              — discrete user actions
+  //                                   (drop, delete, add-node, add-column,
+  //                                   add-section, etc.)
+  //   mutateDebounced(updater,key) — streaming inputs
+  //                                   (slider drags, color, title typing).
+  //                                   No parent notify until commit().
+  //   commit(key?)                 — flush buffered key(s); produces ONE
+  //                                   undo entry per gesture.
+  //
+  // `setData` from the hook is exposed for direct AI-edit / external
+  // state-replace paths (the `useEffect` that resets `data` when
+  // `initialData` changes).
+  const {
+    data,
+    setData,
+    mutate: setDataAndNotify,
+    mutateDebounced,
+    commit: commitMutation,
+    discardBuffered: discardBufferedMutation,
+  } = useGraphMutation(initialData, onDataChange);
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null;
   }>({});
+  // Ref mirror of `nodeRefs` for the drag-handler hot path (read-only).
+  // Reading via a ref keeps `handleDragStart`'s useCallback dep list
+  // stable across node mount/unmount churn (a `useState`-keyed dep
+  // mutates on every ref-callback fire, invalidating React.memo on
+  // every node and defeating Task 0.4's bail-out work).
+  const nodeRefsRef = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const [nodeHeights, setNodeHeights] = useState<{
     [key: string]: number;
   }>({});
@@ -78,16 +105,19 @@ export function ToC({
     onHighlightedNodesChange?.(highlightedNodes);
   }, [highlightedNodes, onHighlightedNodesChange]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [draggedNode, setDraggedNode] = useState<Node | null>(null);
-  const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
-  const [dragOverLocation, setDragOverLocation] = useState<{
-    sectionIndex: number;
-    columnIndex: number;
-    yPosition?: number;
-    isNewColumn?: boolean;
-  } | null>(null);
-  const [editMode, setEditMode] = useState(showEditButton);
-  const [layoutMode, setLayoutMode] = useState(false);
+  // PR 4: legacy `draggedNode`, `dragOffset`, `dragOverLocation` state
+  // retired — `usePointerDrag` now owns drag state internally and
+  // returns `dragState` (or null). The hook is wired below after
+  // `useGraphLayout` (it needs the snapshot accessor).
+  // PR 5 Task 5.4: `layoutMode` deleted. The dual-mode toggle is
+  // gone; edit-mode now provides the always-on hover affordances
+  // (gutters, hover-× delete, connection handles) that used to be
+  // gated behind layoutMode. `editMode` remains as the view/edit
+  // distinction, set by the parent route (showEditButton).
+  // Direct prop-mirror (no setter, no state slot): if the parent
+  // ever flips `showEditButton`, this component re-renders with the
+  // new value rather than freezing the mount-time value.
+  const editMode = showEditButton;
   const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5);
   const [textSize, setTextSize] = useState(initialData.textSize ?? 1); // 0.5 to 2.0 scale
   const [fontFamily, setFontFamily] = useState(initialData.fontFamily ?? "'Ubuntu', sans-serif"); // Default font family
@@ -97,20 +127,15 @@ export function ToC({
   const [sectionPadding, setSectionPadding] = useState(initialData.sectionPadding ?? 32); // Default section padding in pixels
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
-  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
-  const [nodePopup, setNodePopup] = useState<{
-    id: string;
-    title: string;
-    text: string;
-  } | null>(null);
-  const [edgePopup, setEdgePopup] = useState<EdgePopupState | null>(null);
+  // PR 3: `editingNodeId` / `nodePopup` / `edgePopup` state retired —
+  // node editing now lives in the anchored `<NodeEditor>` (mounted
+  // alongside the selected node) and edge editing in `<EdgeEditor>`
+  // (owned by `ConnectionsComponent`'s `selectedEdge` state).
   const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
-  const [legendPosition, setLegendPosition] = useState({ x: 340, y: 70 });
-  const [isDraggingLegend, setIsDraggingLegend] = useState(false);
-  const [legendDragOffset, setLegendDragOffset] = useState({ x: 0, y: 0 });
   const graphContainerRef = useRef<HTMLDivElement>(null);
 
   const updateNodeRef = useCallback((id: string, ref: HTMLDivElement | null) => {
+    nodeRefsRef.current[id] = ref;
     setNodeRefs((prev) => ({ ...prev, [id]: ref }));
 
     // Update height when ref changes - use offsetHeight for local (pre-transform) height
@@ -120,53 +145,33 @@ export function ToC({
     }
   }, []);
 
-  const updateNode = useCallback(
-    (nodeId: string, title: string, text: string) => {
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) =>
-              node.id === nodeId ? { ...node, title, text } : node,
-            ),
-          })),
-        })),
-      }));
+  // PR 3: `updateNode` and `updateNodeTitle` retired — node title and
+  // markdown details are now mutated via the `useNodeProperties` hook
+  // inside `<NodeEditor>`, which writes through the same
+  // `useGraphMutation` primitive (`mutateDebounced` + `commit`) every
+  // other streaming input uses. Per-keystroke height recompute is
+  // handled by the ResizeObserver in `useAnchorPosition`.
 
-      // Trigger height recalculation for the updated node
-      // We need to wait for the DOM to update first
-      setTimeout(() => {
-        const nodeRef = nodeRefs[nodeId];
-        if (nodeRef) {
-          const height = nodeRef.offsetHeight;
-          setNodeHeights((prev) => ({ ...prev, [nodeId]: height }));
-        }
-      }, 0);
-    },
-    [setDataAndNotify, nodeRefs],
-  );
-
-  const updateNodeTitle = useCallback(
-    (nodeId: string, title: string) => {
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => (node.id === nodeId ? { ...node, title } : node)),
-          })),
-        })),
-      }));
-    },
-    [setDataAndNotify],
-  );
+  // Pending height-recalc timer. Tracked so unmount can clear it: the
+  // bare setTimeout used to outlive the component (it fires on every
+  // mount via the initialData effect below), and a mount→unmount inside
+  // the 50ms window made the callback setState against a dead tree —
+  // observed as a flaky "window is not defined" unhandled error when a
+  // jsdom test environment tore down first.
+  const heightRecalcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (heightRecalcTimerRef.current != null) clearTimeout(heightRecalcTimerRef.current);
+    };
+  }, []);
 
   const recalculateAllNodeHeights = useCallback(() => {
-    // Force recalculation of all node heights
-    setTimeout(() => {
+    // Force recalculation of all node heights. Last call wins — a
+    // pending timer is superseded (the callback recomputes ALL heights
+    // from the current refs, so collapsing rapid calls is lossless).
+    if (heightRecalcTimerRef.current != null) clearTimeout(heightRecalcTimerRef.current);
+    heightRecalcTimerRef.current = setTimeout(() => {
+      heightRecalcTimerRef.current = null;
       Object.entries(nodeRefs).forEach(([nodeId, ref]) => {
         if (ref) {
           const height = ref.offsetHeight;
@@ -176,40 +181,13 @@ export function ToC({
     }, 50); // Slightly longer delay to ensure DOM updates
   }, [nodeRefs]);
 
-  const handleLegendMouseMove = useCallback(
-    (e: MouseEvent) => {
-      if (isDraggingLegend) {
-        setLegendPosition({
-          x: e.clientX - legendDragOffset.x,
-          y: e.clientY - legendDragOffset.y,
-        });
-      }
-    },
-    [isDraggingLegend, legendDragOffset],
-  );
-
-  const handleLegendMouseUp = useCallback(() => {
-    setIsDraggingLegend(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDraggingLegend) {
-      document.addEventListener('mousemove', handleLegendMouseMove);
-      document.addEventListener('mouseup', handleLegendMouseUp);
-      return () => {
-        document.removeEventListener('mousemove', handleLegendMouseMove);
-        document.removeEventListener('mouseup', handleLegendMouseUp);
-      };
-    }
-  }, [isDraggingLegend, handleLegendMouseMove, handleLegendMouseUp]);
-
   // Update internal data state when prop changes
   useEffect(() => {
     console.log('ToC component received new initialData:', initialData);
     setData(initialData);
     // Recalculate node heights when data changes (e.g., from AI edits)
     recalculateAllNodeHeights();
-  }, [initialData, recalculateAllNodeHeights]);
+  }, [initialData, recalculateAllNodeHeights, setData]);
 
   // Update settings when data changes
   useEffect(() => {
@@ -236,16 +214,6 @@ export function ToC({
     initialData.fontFamily,
   ]);
 
-  // Position legend in bottom-right corner when svgSize changes
-  useEffect(() => {
-    if (svgSize.width > 0 && svgSize.height > 0) {
-      setLegendPosition({
-        x: svgSize.width - 158, // 153px from right edge
-        y: svgSize.height - 178, // 178px from bottom edge
-      });
-    }
-  }, [svgSize.width, svgSize.height]);
-
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
     return `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -268,14 +236,18 @@ export function ToC({
         newNodeWidth = Math.max(...columnNodeWidths);
       }
 
-      // yPosition is where the user clicked - this becomes the center Y of the node
+      // yPosition is where the user clicked - this becomes the center Y
+      // of the node, clamped so a double-click near the column top
+      // doesn't place the node over the section title bar (PR #34 fb
+      // 46). 76px is the typical rendered height of a fresh "New Node"
+      // (same default the renderer uses before measurement).
       const newNode: Node = {
         id: generateNodeId(),
         title: 'New Node',
         text: 'Details of New Node.',
         connectionIds: [],
         connections: [],
-        yPosition: yPosition, // Click position = center Y
+        yPosition: clampNodeCenterY(yPosition, 76), // Click position = center Y
         width: newNodeWidth, // Match column width
         color: nodeColor, // Use current color setting
       };
@@ -299,266 +271,16 @@ export function ToC({
         ),
       }));
 
-      // Select the new node and enter edit mode
+      // PR 3: selecting the new node opens the anchored NodeEditor
+      // beside it (single-click semantics). No separate "enter edit
+      // mode" state is needed; the editor manages its own focus.
       setHighlightedNodes(new Set([newNode.id]));
-      setTimeout(() => {
-        setEditingNodeId(newNode.id);
-      }, 0);
     },
     [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId, data.sections],
   );
 
-  const toggleHighlight = (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
-    setHighlightedNodes((prev) => {
-      if (selectionMode === 'multi') {
-        // Multi-select mode (Ctrl held): toggle individual nodes
-        const newSet = new Set(prev);
-        if (newSet.has(id)) {
-          newSet.delete(id);
-        } else {
-          newSet.add(id);
-        }
-
-        // When adding a node to selection, snap width slider and color to that node's properties
-        if (newSet.size === 1 && newSet.has(id)) {
-          // Only snap if this is the first/only selected node
-          const nodeLocation = findNodeLocation(id);
-          if (nodeLocation) {
-            const node = nodeLocation.node;
-            const currentWidth = node.width || 192;
-            const currentColor = node.color || '#ffffff';
-            setNodeWidth(currentWidth);
-            setNodeColor(currentColor);
-          }
-        }
-        return newSet;
-      } else if (selectionMode === 'column') {
-        // Column select mode (Shift held): select all nodes in the same column
-        const nodeLocation = findNodeLocation(id);
-        if (nodeLocation) {
-          const { sectionIndex, columnIndex } = nodeLocation;
-          const columnNodes = data.sections[sectionIndex].columns[columnIndex].nodes;
-          const columnNodeIds = columnNodes.map((node) => node.id);
-
-          // Check if all column nodes are already selected
-          const allColumnNodesSelected = columnNodeIds.every((nodeId) => prev.has(nodeId));
-
-          if (allColumnNodesSelected) {
-            // If all column nodes are selected, deselect them
-            const newSet = new Set(prev);
-            columnNodeIds.forEach((nodeId) => newSet.delete(nodeId));
-            return newSet;
-          } else {
-            // Select all nodes in the column (add to existing selection)
-            const newSet = new Set(prev);
-            columnNodeIds.forEach((nodeId) => newSet.add(nodeId));
-
-            // Snap to the clicked node's properties
-            const node = nodeLocation.node;
-            const currentWidth = node.width || 192;
-            const currentColor = node.color || '#ffffff';
-            setNodeWidth(currentWidth);
-            setNodeColor(currentColor);
-
-            return newSet;
-          }
-        }
-        return prev;
-      } else {
-        // Single select mode (default): clear existing selection and select only this node
-        const newSet = new Set<string>();
-        if (!prev.has(id) || prev.size > 1) {
-          // Either this node wasn't selected, or multiple nodes were selected
-          // In both cases, select only this node
-          newSet.add(id);
-
-          // Snap width slider and color to the selected node's properties
-          const nodeLocation = findNodeLocation(id);
-          if (nodeLocation) {
-            const node = nodeLocation.node;
-            const currentWidth = node.width || 192;
-            const currentColor = node.color || '#ffffff';
-            setNodeWidth(currentWidth);
-            setNodeColor(currentColor);
-          }
-        }
-        // If this node was the only selected node, deselect it (newSet remains empty)
-        return newSet;
-      }
-    });
-  };
-
-  const moveNodeVertically = useCallback(
-    (nodeId: string, direction: 'up' | 'down') => {
-      const moveAmount = direction === 'up' ? -20 : 20;
-
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node, nodeIndex) => {
-              if (node.id === nodeId) {
-                // Use cached height or default
-                const actualHeight = nodeHeights[node.id] || 76;
-
-                // Calculate current center Y position
-                const defaultCenterY = nodeIndex * 180 + 30 + actualHeight / 2;
-                const currentCenterY = node.yPosition ?? defaultCenterY;
-                return { ...node, yPosition: currentCenterY + moveAmount };
-              }
-              return node;
-            }),
-          })),
-        })),
-      }));
-    },
-    [setDataAndNotify, nodeHeights],
-  );
-
-  const straightenEdges = useCallback(() => {
-    if (!editMode) return;
-
-    setDataAndNotify((prevData) => {
-      // Collect all nodes with their actual center positions
-      const allNodes: {
-        node: Node;
-        sectionIndex: number;
-        columnIndex: number;
-        nodeIndex: number;
-        centerY: number;
-        topY: number;
-        height: number;
-      }[] = [];
-
-      prevData.sections.forEach((section, sectionIndex) => {
-        section.columns.forEach((column, columnIndex) => {
-          column.nodes.forEach((node, nodeIndex) => {
-            // Use cached height or default
-            const actualHeight = nodeHeights[node.id] || 76;
-
-            // yPosition now represents the center Y
-            const centerY = node.yPosition ?? nodeIndex * 180 + 30 + actualHeight / 2;
-            const topY = centerY - actualHeight / 2;
-            allNodes.push({
-              node,
-              sectionIndex,
-              columnIndex,
-              nodeIndex,
-              centerY,
-              topY,
-              height: actualHeight,
-            });
-          });
-        });
-      });
-
-      // Group nodes by similar center Y positions (within 60px tolerance - increased for better grouping)
-      const groups: (typeof allNodes)[] = [];
-      const tolerance = 40;
-
-      allNodes.forEach((nodeData) => {
-        let addedToGroup = false;
-        for (const group of groups) {
-          const avgCenterY = group.reduce((sum, n) => sum + n.centerY, 0) / group.length;
-          if (Math.abs(nodeData.centerY - avgCenterY) <= tolerance) {
-            group.push(nodeData);
-            addedToGroup = true;
-            break;
-          }
-        }
-        if (!addedToGroup) {
-          groups.push([nodeData]);
-        }
-      });
-
-      // Calculate the average center Y position for each group and update nodes
-      const newData = { ...prevData };
-      groups.forEach((group) => {
-        if (group.length > 1) {
-          // Only straighten groups with multiple nodes
-          const avgCenterY = Math.round(
-            group.reduce((sum, n) => sum + n.centerY, 0) / group.length,
-          );
-
-          group.forEach(({ sectionIndex, columnIndex, nodeIndex }) => {
-            const node = newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex];
-            // yPosition now represents the center Y, so set it directly
-            newData.sections[sectionIndex].columns[columnIndex].nodes[nodeIndex] = {
-              ...node,
-              yPosition: avgCenterY,
-            };
-          });
-        }
-      });
-
-      return newData;
-    });
-  }, [editMode, setDataAndNotify, nodeHeights]);
-
-  const handleDragStart = (node: Node, event: React.DragEvent) => {
-    if (!editMode) {
-      event.preventDefault();
-      return;
-    }
-
-    setDraggedNode(node);
-
-    // Calculate the offset from where the user clicked to the top of the node
-    const nodeElement = nodeRefs[node.id];
-    if (nodeElement) {
-      const rect = nodeElement.getBoundingClientRect();
-      const offsetX = event.clientX - rect.left;
-      const offsetY = event.clientY - rect.top;
-      setDragOffset({ x: offsetX, y: offsetY });
-
-      // Create a wrapper div to apply scale without affecting the drag image capture
-      const wrapper = document.createElement('div');
-      wrapper.style.position = 'fixed';
-      wrapper.style.top = '-9999px';
-      wrapper.style.left = '-9999px';
-      wrapper.style.width = `${nodeElement.offsetWidth * zoomScale}px`;
-      wrapper.style.height = `${nodeElement.offsetHeight * zoomScale}px`;
-      wrapper.style.pointerEvents = 'none';
-
-      const dragImage = nodeElement.cloneNode(true) as HTMLElement;
-      dragImage.style.width = `${nodeElement.offsetWidth}px`;
-      dragImage.style.height = `${nodeElement.offsetHeight}px`;
-      dragImage.style.transform = `scale(${zoomScale})`;
-      dragImage.style.transformOrigin = '0 0';
-      dragImage.style.opacity = '0.8';
-
-      wrapper.appendChild(dragImage);
-      document.body.appendChild(wrapper);
-
-      // Set the drag image with scaled offset
-      event.dataTransfer.setDragImage(wrapper, offsetX, offsetY);
-
-      // Clean up after drag starts
-      requestAnimationFrame(() => {
-        if (wrapper.parentNode) {
-          document.body.removeChild(wrapper);
-        }
-      });
-    }
-  };
-
-  const handleDragEnd = () => {
-    setDraggedNode(null);
-    setDragOffset(null);
-    setDragOverLocation(null);
-  };
-
-  const handleDragOver = (
-    sectionIndex: number,
-    columnIndex: number,
-    isNewColumn: boolean = false,
-    yPosition?: number,
-  ) => {
-    setDragOverLocation({ sectionIndex, columnIndex, isNewColumn, yPosition });
-  };
-
+  // findNodeLocation is hoisted above toggleHighlight so the useCallback
+  // dep array can reference it.
   const findNodeLocation = useCallback(
     (nodeId: string) => {
       for (let sectionIndex = 0; sectionIndex < data.sections.length; sectionIndex++) {
@@ -580,134 +302,174 @@ export function ToC({
     [data.sections],
   );
 
-  // Calculate total width needed for each section (all columns + gaps).
-  // `data.sections` reference changes on every immutable update (including
-  // column-count changes), so it's sufficient as a dep — no need for a
-  // secondary fingerprint key that the original code tried to add.
-  const sectionWidths = useMemo(() => {
-    // Defensive programming: ensure sections is an array
-    if (!data.sections || !Array.isArray(data.sections)) {
-      console.error('Data corruption detected: sections is not an array', data.sections);
-      return [400]; // Return default width
-    }
+  // useCallback so React.memo(NodeComponent) can bail out on referentially-
+  // identical callbacks. Without this, every re-render of TheoryOfChangeGraph
+  // creates a new toggleHighlight reference, defeating the memo. See
+  // `NodeComponent.memo.test.tsx`.
+  const toggleHighlight = useCallback(
+    (id: string, selectionMode: 'single' | 'multi' | 'column' = 'single') => {
+      setHighlightedNodes((prev) => {
+        if (selectionMode === 'multi') {
+          // Multi-select mode (Ctrl held): toggle individual nodes
+          const newSet = new Set(prev);
+          if (newSet.has(id)) {
+            newSet.delete(id);
+          } else {
+            newSet.add(id);
+          }
 
-    const widths = data.sections.map((section) => {
-      // Always include all columns (even empty ones)
-      const columnsToCalculate = section.columns;
+          // When adding a node to selection, snap width slider and color to that node's properties
+          if (newSet.size === 1 && newSet.has(id)) {
+            // Only snap if this is the first/only selected node
+            const nodeLocation = findNodeLocation(id);
+            if (nodeLocation) {
+              const node = nodeLocation.node;
+              const currentWidth = node.width || 192;
+              const currentColor = node.color || '#ffffff';
+              setNodeWidth(currentWidth);
+              setNodeColor(currentColor);
+            }
+          }
+          return newSet;
+        } else if (selectionMode === 'column') {
+          // Column select mode (Shift held): select all nodes in the same column
+          const nodeLocation = findNodeLocation(id);
+          if (nodeLocation) {
+            const { sectionIndex, columnIndex } = nodeLocation;
+            const columnNodes = data.sections[sectionIndex].columns[columnIndex].nodes;
+            const columnNodeIds = columnNodes.map((node) => node.id);
 
-      if (columnsToCalculate.length === 0) return 192; // Default width for empty sections
+            // Check if all column nodes are already selected
+            const allColumnNodesSelected = columnNodeIds.every((nodeId) => prev.has(nodeId));
 
-      // Calculate width needed for each column (max node width in that column)
-      const columnWidths = columnsToCalculate.map((column) => {
-        if (column.nodes.length === 0) return 128; // Empty columns get default width
-        const nodeWidths = column.nodes.map((node) => node.width || 192);
-        return Math.max(...nodeWidths, 128); // At least 128px per column
+            if (allColumnNodesSelected) {
+              // If all column nodes are selected, deselect them
+              const newSet = new Set(prev);
+              columnNodeIds.forEach((nodeId) => newSet.delete(nodeId));
+              return newSet;
+            } else {
+              // Select all nodes in the column (add to existing selection)
+              const newSet = new Set(prev);
+              columnNodeIds.forEach((nodeId) => newSet.add(nodeId));
+
+              // Snap to the clicked node's properties
+              const node = nodeLocation.node;
+              const currentWidth = node.width || 192;
+              const currentColor = node.color || '#ffffff';
+              setNodeWidth(currentWidth);
+              setNodeColor(currentColor);
+
+              return newSet;
+            }
+          }
+          return prev;
+        } else {
+          // Single select mode (default): clear existing selection and select only this node
+          const newSet = new Set<string>();
+          if (!prev.has(id) || prev.size > 1) {
+            // Either this node wasn't selected, or multiple nodes were selected
+            // In both cases, select only this node
+            newSet.add(id);
+
+            // Snap width slider and color to the selected node's properties
+            const nodeLocation = findNodeLocation(id);
+            if (nodeLocation) {
+              const node = nodeLocation.node;
+              const currentWidth = node.width || 192;
+              const currentColor = node.color || '#ffffff';
+              setNodeWidth(currentWidth);
+              setNodeColor(currentColor);
+            }
+          }
+          // If this node was the only selected node, deselect it (newSet remains empty)
+          return newSet;
+        }
       });
+    },
+    [data.sections, findNodeLocation, setNodeWidth, setNodeColor],
+  );
 
-      // Total width = sum of all column widths
-      const totalColumnWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+  const moveNodeVertically = useCallback(
+    (nodeId: string, direction: 'up' | 'down') => {
+      const moveAmount = direction === 'up' ? -20 : 20;
 
-      // In add/remove mode, gaps become drop zones and are added in ConnectionsComponent
-      // So we don't add gaps here, but the drop zones are calculated as (N+1) * columnPadding
-      // which is already handled in ConnectionsComponent
-      const gaps =
-        editMode && layoutMode ? 0 : Math.max(0, columnWidths.length - 1) * columnPadding;
+      setDataAndNotify((prevData) => ({
+        ...prevData,
+        sections: prevData.sections.map((section) => ({
+          ...section,
+          columns: section.columns.map((column) => ({
+            ...column,
+            nodes: column.nodes.map((node, nodeIndex) => {
+              if (node.id === nodeId) {
+                // Use cached height or default
+                const actualHeight = nodeHeights[node.id] || 76;
 
-      return totalColumnWidth + gaps;
+                // Calculate current center Y position. Clamp so
+                // arrow-key moves can't push the node above the column
+                // body into the section title bar (PR #34 fb 46).
+                const defaultCenterY = nodeIndex * 180 + 30 + actualHeight / 2;
+                const currentCenterY = node.yPosition ?? defaultCenterY;
+                return {
+                  ...node,
+                  yPosition: clampNodeCenterY(currentCenterY + moveAmount, actualHeight),
+                };
+              }
+              return node;
+            }),
+          })),
+        })),
+      }));
+    },
+    [setDataAndNotify, nodeHeights],
+  );
+
+  // Feedback 67: the alignment math lives in `computeAlignedSections`
+  // (`src/utils/alignNodes.ts`) — a PURE function. The previous inline
+  // implementation shallow-copied `prevData` and then assigned into the
+  // shared nested `sections[i].columns[j].nodes[k]` arrays, mutating
+  // the previous state in place. App.tsx's undo history deep-clones
+  // exactly that previous object (`saveToHistory(dataRef.current)`),
+  // so the undo entry already carried the aligned positions and Ctrl+Z
+  // after "Align nodes" was a no-op. Regression tests:
+  // `tests/frontend/TheoryOfChangeGraph.alignment.test.tsx`.
+  const straightenEdges = useCallback(() => {
+    if (!editMode) return;
+
+    setDataAndNotify((prevData) => {
+      const nextSections = computeAlignedSections(prevData.sections, nodeHeights);
+      if (nextSections === prevData.sections) return prevData; // nothing to align
+      return { ...prevData, sections: nextSections };
     });
-    return widths;
-  }, [data.sections, columnPadding, editMode, layoutMode]);
+  }, [editMode, setDataAndNotify, nodeHeights]);
 
-  // Global drag tracking to handle dragging outside container bounds
-  useEffect(() => {
-    if (!draggedNode || !editMode) return;
+  // PR 4: HTML5 DnD retired. `handleDragStart` / `handleDragEnd` /
+  // `handleDragOver` and the global `dragover` / `drop` document
+  // listeners are gone. Pointer-events drag is owned by
+  // `usePointerDrag` (wired below, after `useGraphLayout` because the
+  // hook needs `getSnapshot`).
+  //
+  // The scaled-clone drag-image wrapper that this section used to
+  // build (for the HTML5 DnD `setDragImage` call at the original
+  // zoom) is no longer needed: our React-rendered drop-preview ghost
+  // (see render path below) follows the pointer in the same
+  // transform stack as the canvas, so the browser doesn't have to
+  // composite a separate drag-image layer.
 
-    const handleGlobalDragOver = (e: DragEvent) => {
-      e.preventDefault(); // Necessary to allow drop
-
-      const container = graphContainerRef.current;
-      if (!container) return;
-
-      // Instead of calculating positions, query all column elements and check which one the mouse is over
-      const allColumnElements = container.querySelectorAll('[data-column]');
-      let foundColumn = false;
-
-      // Check each column element to see if the mouse is over it
-      for (const element of allColumnElements) {
-        const columnElement = element as HTMLElement;
-        const columnRect = columnElement.getBoundingClientRect();
-
-        // Check if mouse X is within this column's bounds (allow vertical overflow)
-        if (e.clientX >= columnRect.left && e.clientX <= columnRect.right) {
-          // Extract section and column index from data-column attribute
-          const dataColumn = columnElement.getAttribute('data-column');
-          if (dataColumn) {
-            const [sectionIndex, columnIndex] = dataColumn.split('-').map(Number);
-
-            // Calculate Y position relative to this column
-            const yPositionRelativeToColumn = e.clientY - columnRect.top;
-
-            setDragOverLocation({
-              sectionIndex,
-              columnIndex,
-              isNewColumn: false,
-              yPosition: yPositionRelativeToColumn,
-            });
-            foundColumn = true;
-            break;
-          }
-        }
-      }
-
-      // If no column found under mouse, find the closest one by X position
-      if (!foundColumn && allColumnElements.length > 0) {
-        let closestElement: HTMLElement | null = null;
-        let closestDistance = Infinity;
-
-        for (const element of allColumnElements) {
-          const columnElement = element as HTMLElement;
-          const columnRect = columnElement.getBoundingClientRect();
-          const columnCenterX = columnRect.left + columnRect.width / 2;
-          const distance = Math.abs(e.clientX - columnCenterX);
-
-          if (distance < closestDistance) {
-            closestDistance = distance;
-            closestElement = columnElement;
-          }
-        }
-
-        if (closestElement) {
-          const dataColumn = closestElement.getAttribute('data-column');
-          if (dataColumn) {
-            const [sectionIndex, columnIndex] = dataColumn.split('-').map(Number);
-            const columnRect = closestElement.getBoundingClientRect();
-            const yPositionRelativeToColumn = e.clientY - columnRect.top;
-
-            setDragOverLocation({
-              sectionIndex,
-              columnIndex,
-              isNewColumn: false,
-              yPosition: yPositionRelativeToColumn,
-            });
-          }
-        }
-      }
-    };
-
-    document.addEventListener('dragover', handleGlobalDragOver);
-
-    return () => {
-      document.removeEventListener('dragover', handleGlobalDragOver);
-    };
-  }, [
-    draggedNode,
-    editMode,
-    layoutMode,
-    data.sections,
-    sectionWidths,
+  // Section widths + column-rect snapshot from useGraphLayout.
+  // `getSnapshot` is consumed by `usePointerDrag` mid-drag to feed
+  // `classifyRegion` (the only path that reads rects during a gesture;
+  // PR 5 / PR 7 will share the same accessor).
+  const { sectionWidths, getSnapshot } = useGraphLayout({
+    data,
+    containerRef: graphContainerRef,
     columnPadding,
     sectionPadding,
-  ]);
+    editMode,
+    // PR #34 zoom fix: the hook divides viewport rect deltas by the
+    // zoom so the snapshot is content-space, matching the zoom-divided
+    // classify points `usePointerDrag` feeds to `classifyRegion`.
+    zoomScale,
+  });
 
   const areNodesConnected = useCallback(
     (sourceId: string, targetId: string) => {
@@ -763,39 +525,10 @@ export function ToC({
     [editMode, setDataAndNotify],
   );
 
-  // Generic function to delete a specific node
-  const deleteNode = useCallback(
-    (nodeId: string) => {
-      if (!editMode) return;
-
-      // Combine node deletion and connection cleanup in a single atomic update
-      setDataAndNotify((prevData) => ({
-        ...prevData,
-        sections: prevData.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes
-              .filter((node) => node.id !== nodeId) // Remove the deleted node
-              .map((node) => ({
-                ...node,
-                // Clean up any connections to the deleted node
-                connectionIds: node.connectionIds?.filter((id) => id !== nodeId) || [],
-                connections: node.connections?.filter((conn) => conn.targetId !== nodeId),
-              })),
-          })),
-        })),
-      }));
-
-      // Clear any selection of the deleted node
-      setHighlightedNodes((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(nodeId);
-        return newSet;
-      });
-    },
-    [editMode, setDataAndNotify],
-  );
+  // PR 3: `deleteNode(nodeId)` callback retired — node deletion is
+  // now driven by the NodeEditor's `useNodeProperties.deleteSelectedNodes`
+  // (multi-select aware) and by the keyboard-shortcut delete handler in
+  // `useKeyboardShortcuts.ts` (which does its own atomic batch).
 
   const disconnectSelectedNodes = useCallback(() => {
     if (!editMode) return;
@@ -867,143 +600,447 @@ export function ToC({
     setNodeColor('#ffffff');
   }, [editMode, highlightedNodes, setDataAndNotify, areNodesConnected, disconnectSelectedNodes]);
 
+  // PR 4: `handleDrop` signature refactored to take a `DragOverLocation`
+  // and the dragged node id directly (the hook supplies both via its
+  // `onDrop` callback). The previous (sectionIndex, columnIndex,
+  // isNewColumn, yPosition) shape is gone — all 6+ JSX callsites
+  // that used to wire it up via `onDragOver` / `onDrop` are deleted
+  // along with HTML5 DnD. The hook also closes the "drop outside
+  // container" gap that the old global `drop` listener used to cover:
+  // captured pointer events deliver `pointerup` everywhere.
+  //
+  // `pointerOffset` is the offset (in viewport px) from the cursor to
+  // the top of the dragged node at drag-start; the hook passes it
+  // through so we don't have to re-read it from React state at drop
+  // time (closing the scheduling gap `dragStateRef` exists to cover).
   const handleDrop = useCallback(
-    (
-      targetSectionIndex: number,
-      targetColumnIndex: number,
-      isNewColumn: boolean = false,
-      yPosition?: number,
-    ) => {
-      if (!draggedNode || !dragOffset) {
-        console.log('No dragged node or drag offset');
-        return;
-      }
-
-      const sourceLocation = findNodeLocation(draggedNode.id);
+    (target: DragOverLocation, draggedNodeId: string, pointerOffset: { x: number; y: number }) => {
+      const sourceLocation = findNodeLocation(draggedNodeId);
       if (!sourceLocation) {
-        console.log('Source location not found for node:', draggedNode.id);
+        console.log('Source location not found for node:', draggedNodeId);
         return;
       }
+      // No drag-driven new-section path today; ignore the signal.
+      if (target.kind === 'new-section') return;
 
-      // Adjust yPosition by the drag offset so the node appears where the user grabbed it
-      let adjustedYPosition = 20; // Default fallback
-      if (yPosition !== undefined) {
-        // yPosition comes from e.clientY - rect.top where rect is from getBoundingClientRect()
-        // getBoundingClientRect() returns viewport coordinates which are already scaled by the zoom transform
-        // So we need to convert back to local space by dividing by zoom
-        const mouseLocalY = yPosition / zoomScale;
+      const targetSectionIndex = target.sectionIndex;
+      const targetColumnIndex = target.columnIndex;
+      const isNewColumn = target.kind === 'new-column';
 
-        // dragOffset.y was captured from the original drag event, also in viewport space
-        const dragOffsetLocalY = dragOffset.y / zoomScale;
+      // Adjust yPosition so the node appears where the user grabbed it.
+      // `target.yPosition` (node-slot and over-node, PR #34 fb 45/46)
+      // is container-local; the hook already divided by zoomScale.
+      // `pointerOffset.y` is viewport-space (captured at drag-start
+      // with no zoom applied); `computeDropCenterY` divides it by
+      // zoomScale to put both in the same coord system before
+      // subtracting. new-column carries no cursor Y and takes the
+      // top-of-column default. Every result is clamped below the
+      // section title bar (PR #34 fb 46).
+      const draggedNodeHeight = nodeHeights[draggedNodeId] || 76;
+      const adjustedYPosition = computeDropCenterY({
+        cursorColumnLocalY:
+          target.kind === 'node-slot' || target.kind === 'over-node' ? target.yPosition : null,
+        pointerOffsetY: pointerOffset.y,
+        zoomScale,
+        nodeHeight: draggedNodeHeight,
+      });
 
-        // Calculate where the node's top would be in local space
-        const nodeTopLocal = mouseLocalY - dragOffsetLocalY;
-
-        // Get node height (stored in local space)
-        const actualHeight = nodeHeights[draggedNode.id] || 76;
-
-        // Calculate center in local space
-        adjustedYPosition = nodeTopLocal + actualHeight / 2;
-      }
-
-      console.log('Moving node', draggedNode.id, 'from', sourceLocation, 'to', {
+      console.log('Moving node', draggedNodeId, 'from', sourceLocation, 'to', {
         targetSectionIndex,
         targetColumnIndex,
         isNewColumn,
         yPosition: adjustedYPosition,
       });
 
+      // PR 7 feedback (25 + B): when a node moves, translate the
+      // waypoints of all connections touching that node so the curve's
+      // middle segment "follows" the move. Three cases:
+      //
+      //   - Same-column move: only `y` changes. dx=0, dy=Δy.
+      //   - Cross-column move (existing target column): both x and y
+      //     change. dx = new column center-x − old column center-x.
+      //   - New-column move: a new column is inserted at
+      //     `targetColumnIndex`, pushing existing columns right. The
+      //     new column's x sits between the two columns it's inserted
+      //     between. Estimate as the gutter midpoint from the
+      //     pre-drop layout snapshot.
+      //
+      // The translation magnitude is HALF the node's delta. Rationale:
+      //   - If only the source (or only the target) moved, the
+      //     waypoint moves halfway along — preserving its relative
+      //     position to BOTH endpoints rather than locking to one.
+      //   - If both endpoints moved by the same delta (rigid drag),
+      //     the waypoint would move by that full delta — but in the
+      //     single-drop case we have here, only one node moves per
+      //     event, so half-delta is the correct contribution.
+      const isSameColumnMove =
+        !isNewColumn &&
+        sourceLocation.sectionIndex === targetSectionIndex &&
+        sourceLocation.columnIndex === targetColumnIndex;
+
+      // Snapshot the node's pre-drop CENTER y in CONTAINER-LOCAL coords.
+      // Reading from `data` is the source of truth — the renderer
+      // computes the same `centerY = node.yPosition ?? nodeIndex*180 +
+      // 30 + height/2` formula at line ~460, and `adjustedYPosition`
+      // is in that same space. DOM `offsetTop` is relative to the
+      // immediate offsetParent (a `relative z-10` wrapper one level
+      // up from the absolutely-positioned slot), so it can't be
+      // compared against `adjustedYPosition` directly.
+      let preDropYCenter: number | null = null;
+      const sourceColumn =
+        data.sections[sourceLocation.sectionIndex]?.columns[sourceLocation.columnIndex];
+      const sourceNodeIndex = sourceColumn?.nodes.findIndex((n) => n.id === draggedNodeId) ?? -1;
+      const sourceNodeFromData = sourceNodeIndex >= 0 ? sourceColumn!.nodes[sourceNodeIndex] : null;
+      if (sourceNodeFromData) {
+        preDropYCenter =
+          sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + draggedNodeHeight / 2;
+      }
+      // Snapshot the pre-drop COLUMN center-x for the source and target
+      // columns from the layout snapshot. The snapshot's `columnRects`
+      // are CONTENT-space (zoom-normalized container-local px — see the
+      // LayoutSnapshot invariant in useGraphLayout), which is the same
+      // space waypoints live in, so the centers are usable directly.
+      // (Pre-zoom-fix this block ran the raw viewport deltas through a
+      // `(x - containerRect.left) / zoomScale` conversion; the constant
+      // canceled in the dx subtraction below and the division is now
+      // done once in the snapshot producer.)
+      let preDropXCenter: number | null = null;
+      let postDropXCenter: number | null = null;
+      const layoutSnap = getSnapshot();
+      if (layoutSnap.columnRects.length > 0) {
+        const srcCol =
+          layoutSnap.columnRects[sourceLocation.sectionIndex]?.[sourceLocation.columnIndex];
+        if (srcCol) {
+          preDropXCenter = (srcCol.left + srcCol.right) / 2;
+        }
+        if (isSameColumnMove) {
+          // Same column → post-drop x equals pre-drop x.
+          postDropXCenter = preDropXCenter;
+        } else if (isNewColumn) {
+          // New column is inserted at `targetColumnIndex`, pushing the
+          // column currently at that index to the right. Best pre-drop
+          // estimate of the new column's center-x: the gutter midpoint
+          // between the column to the LEFT of the insertion point and
+          // the column currently AT the insertion point.
+          const sec = layoutSnap.columnRects[targetSectionIndex];
+          if (sec) {
+            const leftCol = sec[targetColumnIndex - 1];
+            const rightCol = sec[targetColumnIndex];
+            if (leftCol && rightCol) {
+              postDropXCenter = (leftCol.right + rightCol.left) / 2;
+            } else if (leftCol) {
+              // Drop past the last column → new column lands to the
+              // right of the current rightmost; approximate one
+              // column-width to the right.
+              postDropXCenter = leftCol.right + (leftCol.right - leftCol.left) / 2;
+            } else if (rightCol) {
+              // Drop before the first column → mirror.
+              postDropXCenter = rightCol.left - (rightCol.right - rightCol.left) / 2;
+            }
+          }
+        } else {
+          // Existing target column — its rect is already known.
+          const tgtCol = layoutSnap.columnRects[targetSectionIndex]?.[targetColumnIndex];
+          if (tgtCol) {
+            postDropXCenter = (tgtCol.left + tgtCol.right) / 2;
+          }
+        }
+      }
+      const dy = preDropYCenter !== null ? adjustedYPosition - preDropYCenter : 0;
+      const dx =
+        preDropXCenter !== null && postDropXCenter !== null ? postDropXCenter - preDropXCenter : 0;
+      const shouldTranslateWaypoints = dx !== 0 || dy !== 0;
+      const waypointShift = { x: dx / 2, y: dy / 2 }; // half-delta — see comment above
+
       setDataAndNotify((prevData) => {
-        // If we're just updating position in the same column, do it more precisely
-        if (
-          !isNewColumn &&
-          sourceLocation.sectionIndex === targetSectionIndex &&
-          sourceLocation.columnIndex === targetColumnIndex
-        ) {
-          // Just update the yPosition of the specific node in place
-          return {
-            ...prevData,
-            sections: prevData.sections.map((section, sIndex) =>
-              sIndex === targetSectionIndex
-                ? {
-                    ...section,
-                    columns: section.columns.map((column, cIndex) =>
-                      cIndex === targetColumnIndex
-                        ? {
-                            ...column,
-                            nodes: column.nodes.map((node) =>
-                              node.id === draggedNode.id
-                                ? { ...node, yPosition: adjustedYPosition }
-                                : node,
-                            ),
-                          }
-                        : column,
-                    ),
-                  }
-                : section,
-            ),
-          };
+        // Locate the source node fresh inside the updater so we don't
+        // leak `findNodeLocation`'s closed-over data snapshot.
+        let sourceNode: Node | null = null;
+        for (const section of prevData.sections) {
+          for (const column of section.columns) {
+            const found = column.nodes.find((n) => n.id === draggedNodeId);
+            if (found) {
+              sourceNode = found;
+              break;
+            }
+          }
+          if (sourceNode) break;
+        }
+        if (!sourceNode) return prevData;
+
+        // Helper: shift every waypoint on every connection touching
+        // draggedNodeId (as source OR target). Pure, returns a new
+        // sections array, allocations gated on actual change.
+        const shiftWaypointsForNode = (
+          sections: ToCData['sections'],
+          nodeId: string,
+          shift: { x: number; y: number },
+        ): ToCData['sections'] => {
+          let changed = false;
+          const next = sections.map((section) => ({
+            ...section,
+            columns: section.columns.map((column) => ({
+              ...column,
+              nodes: column.nodes.map((node) => {
+                if (!node.connections || node.connections.length === 0) return node;
+                let nodeChanged = false;
+                const newConns = node.connections.map((conn) => {
+                  // Only touch connections where draggedNodeId is one
+                  // endpoint (node.id is the source side; targetId is
+                  // the target side).
+                  const isEndpoint = node.id === nodeId || conn.targetId === nodeId;
+                  if (!isEndpoint) return conn;
+                  if (!conn.waypoints || conn.waypoints.length === 0) return conn;
+                  nodeChanged = true;
+                  return {
+                    ...conn,
+                    waypoints: conn.waypoints.map((w) => ({
+                      x: w.x + shift.x,
+                      y: w.y + shift.y,
+                    })),
+                  };
+                });
+                if (!nodeChanged) return node;
+                changed = true;
+                return { ...node, connections: newConns };
+              }),
+            })),
+          }));
+          return changed ? next : sections;
+        };
+
+        // Same-column move: in-place yPosition update only.
+        if (isSameColumnMove) {
+          const sectionsAfterMove = prevData.sections.map((section, sIndex) =>
+            sIndex === targetSectionIndex
+              ? {
+                  ...section,
+                  columns: section.columns.map((column, cIndex) =>
+                    cIndex === targetColumnIndex
+                      ? {
+                          ...column,
+                          nodes: column.nodes.map((node) =>
+                            node.id === draggedNodeId
+                              ? { ...node, yPosition: adjustedYPosition }
+                              : node,
+                          ),
+                        }
+                      : column,
+                  ),
+                }
+              : section,
+          );
+          const sectionsAfterWaypoints = shouldTranslateWaypoints
+            ? shiftWaypointsForNode(sectionsAfterMove, draggedNodeId, waypointShift)
+            : sectionsAfterMove;
+          return { ...prevData, sections: sectionsAfterWaypoints };
         }
 
-        // For moves between different columns/sections, do the full remove and add
+        // Cross-column / cross-section / new-column move: remove from
+        // source, add to target, then translate waypoints by the
+        // half-delta computed from the layout snapshot (PR 7 feedback
+        // B). The waypoint translation is folded into the SAME update
+        // so undo/redo treats the whole gesture atomically — no extra
+        // history entry, no flash-of-stale-waypoint visual blink
+        // between the node move and the waypoint shift.
         const newData = { ...prevData };
-
-        // Remove node from source location
         newData.sections = prevData.sections.map((section) => ({
           ...section,
           columns: section.columns.map((column) => ({
             ...column,
-            nodes: column.nodes.filter((node) => node.id !== draggedNode.id),
+            nodes: column.nodes.filter((node) => node.id !== draggedNodeId),
           })),
         }));
 
         if (isNewColumn) {
-          // Insert new column at the target position
           const targetSection = newData.sections[targetSectionIndex];
-          const newColumn = { nodes: [{ ...draggedNode, yPosition: adjustedYPosition }] };
+          const newColumn = { nodes: [{ ...sourceNode, yPosition: adjustedYPosition }] };
           targetSection.columns.splice(targetColumnIndex, 0, newColumn);
         } else {
-          // Add node with custom yPosition to existing column
-          const nodeWithPosition = { ...draggedNode, yPosition: adjustedYPosition };
+          const nodeWithPosition = { ...sourceNode, yPosition: adjustedYPosition };
           newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(
             nodeWithPosition,
           );
         }
 
+        if (shouldTranslateWaypoints) {
+          newData.sections = shiftWaypointsForNode(newData.sections, draggedNodeId, waypointShift);
+        }
+
         return newData;
       });
-
-      setDraggedNode(null);
-      setDragOffset(null);
-      setDragOverLocation(null);
     },
-    [draggedNode, dragOffset, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
+    [data, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify, getSnapshot],
   );
 
-  // Global drop handler to complete drops even when mouse is outside column boundaries
+  // PR 4: `usePointerDrag` owns drag state. `onDrop` flows directly to
+  // `handleDrop` above (the hook supplies `pointerOffset` as the third
+  // argument, so the consumer doesn't have to read it back from React
+  // state). `onDragStart` dispatches the NodeEditor-close callback
+  // registered via `nodeEditorDragStartRef` (set up below in
+  // `NodeEditorMount`).
+  const nodeEditorDragStartRef = useRef<(() => void) | null>(null);
+
+  const {
+    dragState,
+    bindNode: bindNodeDrag,
+    isActive: isDragActive,
+  } = usePointerDrag({
+    data,
+    containerRef: graphContainerRef,
+    getSnapshot,
+    editMode,
+    zoomScale,
+    nodeHeights,
+    onDrop: handleDrop,
+    onDragStart: (_nodeId, modifiers) => {
+      // Notify the anchored NodeEditor to dismiss (if mounted). Skip
+      // the dismiss when a multi-select modifier is held — the click is
+      // a selection-extension gesture, not a real drag, and dismissing
+      // here would clear `highlightedNodes` before React's onClick can
+      // call `toggleHighlight('multi')` to extend the selection.
+      if (modifiers.metaKey || modifiers.ctrlKey) return;
+      nodeEditorDragStartRef.current?.();
+    },
+  });
+
+  // PR 5 Task 5.3: column / section delete callbacks shared by the
+  // hover-`×` affordance. Each writes through `setDataAndNotify` so the
+  // op is one undo entry. Deleting the last column in a section
+  // collapses the section too (consistent with the legacy
+  // layoutMode behavior).
+  const deleteColumn = useCallback(
+    (sectionIndex: number, columnIndex: number) => {
+      if (!editMode) return;
+      setDataAndNotify((prevData) => {
+        const updatedSection = {
+          ...prevData.sections[sectionIndex],
+          columns: prevData.sections[sectionIndex].columns.filter((_, i) => i !== columnIndex),
+        };
+        const newSections =
+          updatedSection.columns.length === 0
+            ? prevData.sections.filter((_, i) => i !== sectionIndex)
+            : prevData.sections.map((s, i) => (i === sectionIndex ? updatedSection : s));
+        return { ...prevData, sections: newSections };
+      });
+      // Clear selection if any deleted nodes were highlighted.
+      setHighlightedNodes(new Set());
+    },
+    [editMode, setDataAndNotify],
+  );
+
+  const deleteSection = useCallback(
+    (sectionIndex: number) => {
+      if (!editMode) return;
+      setDataAndNotify((prevData) => ({
+        ...prevData,
+        sections: prevData.sections.filter((_, i) => i !== sectionIndex),
+      }));
+      setHighlightedNodes(new Set());
+    },
+    [editMode, setDataAndNotify],
+  );
+
+  // PR 5 Task 5.2: drag-to-connect gesture. `useConnectionDrag` shares
+  // the `isCanvasGestureActive` mutual-exclusion flag with
+  // `usePointerDrag` (so node-drag and connection-drag can't start
+  // concurrently). On successful drop the hook calls `onConnect` which
+  // commits a single `mutate()` undo entry.
+  const addConnection = useCallback(
+    (sourceId: string, targetId: string) => {
+      if (sourceId === targetId) return;
+      // No-op if already connected (idempotent commit avoids spurious
+      // undo entries on accidental re-drops).
+      if (areNodesConnected(sourceId, targetId)) return;
+      setDataAndNotify((prevData) => ({
+        ...prevData,
+        sections: prevData.sections.map((section) => ({
+          ...section,
+          columns: section.columns.map((column) => ({
+            ...column,
+            nodes: column.nodes.map((node) => {
+              if (node.id !== sourceId) return node;
+              if (node.connections) {
+                return {
+                  ...node,
+                  connections: [...node.connections, { targetId, confidence: 75 }],
+                };
+              }
+              // Old format → migrate to new on first write.
+              return {
+                ...node,
+                connectionIds: [...(node.connectionIds || []), targetId],
+                connections: [
+                  ...(node.connectionIds || []).map((id) => ({ targetId: id, confidence: 50 })),
+                  { targetId, confidence: 75 },
+                ],
+              };
+            }),
+          })),
+        })),
+      }));
+    },
+    [areNodesConnected, setDataAndNotify],
+  );
+
+  const {
+    dragState: connectionDragState,
+    bindHandle: bindConnectionHandle,
+    isActive: isConnectionDragActive,
+  } = useConnectionDrag({
+    data,
+    editMode,
+    onConnect: addConnection,
+  });
+
+  // PR 7: waypoint drag is hoisted up to `TheoryOfChangeGraph` (parity
+  // with `useConnectionDrag` placement) so its `isActive` flag can OR
+  // into `isAnyDragActive` below — that is the polling-pause signal the
+  // 30s sync poll consumes via App.tsx's `isDragInFlightRef`. Previously
+  // this hook lived inside `<ConnectionsComponent>` and the signal
+  // never reached the parent (a poll mid-waypoint-drag could overwrite
+  // the buffered `mutateDebounced` state). Bind accessors and the
+  // current drag state are passed down to `<ConnectionsComponent>`,
+  // which forwards them to per-connection `<ConnectionWaypointHandles>`.
+  const clientToContainer = useCallback(
+    (clientX: number, clientY: number) => {
+      const container = graphContainerRef.current;
+      if (!container) return { x: clientX, y: clientY };
+      const rect = container.getBoundingClientRect();
+      const zoom = camera?.z ?? 1;
+      return {
+        x: (clientX - rect.left) / zoom,
+        y: (clientY - rect.top) / zoom,
+      };
+    },
+    [camera],
+  );
+
+  const waypointDrag = useWaypointDrag({
+    data,
+    editMode,
+    mutateDebounced,
+    commit: commitMutation,
+    discardBuffered: discardBufferedMutation,
+    clientToContainer,
+  });
+
+  // Notify parent (App) of drag-active transitions so the 30s sync
+  // poll can pause while a gesture is in flight (red-team Important).
+  // We OR-combine the node-drag, connection-drag, and waypoint-drag
+  // flags so any gesture pauses polling.
+  //
+  // Cleanup fires `false` if this component unmounts while a drag is
+  // active — otherwise the parent's `isDragInFlightRef` stays `true`
+  // for the rest of the App's lifetime (the polling effect would
+  // silently skip every sync tick).
+  const isAnyDragActive = isDragActive || isConnectionDragActive || waypointDrag.isActive;
   useEffect(() => {
-    if (!draggedNode || !editMode) return;
-
-    const handleGlobalDrop = (e: DragEvent) => {
-      e.preventDefault();
-
-      // Use the current drag over location if available
-      if (dragOverLocation) {
-        handleDrop(
-          dragOverLocation.sectionIndex,
-          dragOverLocation.columnIndex,
-          dragOverLocation.isNewColumn,
-          dragOverLocation.yPosition,
-        );
-      }
-    };
-
-    document.addEventListener('drop', handleGlobalDrop);
-
+    onDragActiveChange?.(isAnyDragActive);
     return () => {
-      document.removeEventListener('drop', handleGlobalDrop);
+      if (isAnyDragActive) onDragActiveChange?.(false);
     };
-  }, [draggedNode, editMode, dragOverLocation, handleDrop]);
+  }, [isAnyDragActive, onDragActiveChange]);
 
   const connectedNodes = useMemo(() => {
     if (highlightedNodes.size === 0) {
@@ -1091,7 +1128,6 @@ export function ToC({
     nodeRefs,
     setNodeWidth,
     setNodeColor,
-    setNodePopup,
     moveNodeVertically,
     nodeHeights,
   });
@@ -1105,23 +1141,44 @@ export function ToC({
             <input
               type="text"
               value={data.title || ''}
+              // Streaming input (typing). Buffer per-keystroke under
+              // 'graph-title'; commit once on blur / Enter so a single
+              // editing pass produces one undo entry, not one per char.
               onChange={(e) => {
-                setDataAndNotify((prev) => ({ ...prev, title: e.target.value }));
+                const value = e.target.value;
+                mutateDebounced((prev) => ({ ...prev, title: value }), 'graph-title');
               }}
-              onBlur={() => setEditingTitle(false)}
+              onBlur={() => {
+                commitMutation('graph-title');
+                setEditingTitle(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
+                  commitMutation('graph-title');
                   setEditingTitle(false);
                 }
               }}
-              className="text-4xl font-bold text-center text-gray-800 tracking-wider w-full bg-transparent border-b-2 border-gray-400 outline-none focus:border-indigo-500"
-              style={{ fontFamily: fontFamily }}
+              // `text-4xl` (2.25rem) replaced by an inline
+              // `fontSize: textSize * 2.25rem` so the chart title scales
+              // with the Format menu's text-size multiplier alongside
+              // section + node titles. Each layer keeps its own base
+              // size (chart 2.25rem > section 1.875rem > node 1.125rem)
+              // so the visual hierarchy is preserved; textSize is a
+              // global multiplier on top.
+              className="font-bold text-center text-gray-800 tracking-wider w-full bg-transparent border-b-2 border-gray-400 outline-none focus:border-indigo-500"
+              style={{
+                fontFamily: fontFamily,
+                fontSize: `${textSize * 2.25}rem`,
+              }}
               autoFocus
             />
           ) : (
             <h1
-              className={`text-4xl font-bold text-center text-gray-800 tracking-wider ${editMode ? 'cursor-pointer hover:text-indigo-600 transition-colors' : ''}`}
-              style={{ fontFamily: fontFamily }}
+              className={`font-bold text-center text-gray-800 tracking-wider ${editMode ? 'cursor-pointer hover:text-indigo-600 transition-colors' : ''}`}
+              style={{
+                fontFamily: fontFamily,
+                fontSize: `${textSize * 2.25}rem`,
+              }}
               onClick={() => editMode && setEditingTitle(true)}
               title={editMode ? 'Click to edit title' : ''}
             >
@@ -1135,9 +1192,30 @@ export function ToC({
         ref={graphContainerRef}
         className="flex relative min-w-fit overflow-visible"
         style={{
-          gap: editMode && layoutMode ? '0px' : `${sectionPadding}px`,
+          // PR 5: add affordances (column-gutter "+ Column" and
+          // section-padding "+ Section") are always rendered in edit
+          // mode now (no `layoutMode` gate). They provide the
+          // inter-column / inter-section spacing themselves, so the
+          // parent flex `gap` collapses to 0 in edit mode. View mode
+          // keeps the explicit gap (no gutter divs render).
+          gap: editMode ? '0px' : `${sectionPadding}px`,
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
-          height: svgSize.height > 0 ? `${svgSize.height - 55}px` : '100vh', // I don't understand why I need to subtract 55, but it works
+          // PR #34 fb4 issue 64: in edit mode the container takes its
+          // height from content (the section wrappers, whose column
+          // bodies carry the explicit height below). This makes the
+          // flex line the section-content height, so the stretch-sized
+          // section gutters end exactly at the column bodies' bottom —
+          // the canvas content edge — instead of overshooting the card
+          // via the old fixed `svgSize.height - 55` budget. View mode
+          // keeps the explicit height: its column bodies are
+          // auto-height (nodes are absolutely positioned), so without
+          // it the container — and the click-to-deselect area — would
+          // collapse to the title bars.
+          ...(editMode
+            ? {}
+            : {
+                height: svgSize.height > 0 ? `${svgSize.height - 55}px` : '100vh', // I don't understand why I need to subtract 55, but it works
+              }),
         }}
         onClick={(e) => {
           // Clear selections when clicking empty space in both view and edit mode
@@ -1149,30 +1227,28 @@ export function ToC({
           }
         }}
       >
-        {/* Empty state message - show when there are no nodes */}
-        {Array.isArray(data.sections) &&
-          data.sections.every(
-            (s) => s.columns && s.columns.every((c) => !c.nodes || c.nodes.length === 0),
-          ) && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-gray-300 text-5xl font-light" style={{ fontFamily: fontFamily }}>
-                Double Click Anywhere to Add a Node
-              </div>
-            </div>
-          )}
+        {/* PR 7 feedback (task 7): the previous "Double Click Anywhere
+            to Add a Node" empty-state banner is no longer accurate.
+            PR 5 introduced always-on add affordances in column gutters
+            and section padding, so "click anywhere" oversells where
+            adds actually land. Removed entirely (no replacement copy)
+            since the gutter labels already announce "+ Column" /
+            "+ Section" on hover. */}
 
         {Array.isArray(data.sections) ? (
           data.sections.map((section, sectionIndex) => (
             <React.Fragment key={sectionIndex}>
-              {/* Gap before first section or between sections with click to add section */}
-              {editMode && layoutMode && (
-                <div
-                  className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
-                  style={{
-                    width: `${sectionPadding}px`,
-                    height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                    marginTop: '68px',
-                  }}
+              {/* PR 5 Task 5.1: always-on add-section affordance. The
+                gutter is rendered in edit mode regardless of layout
+                state. Default: minimal visual treatment (no background
+                tint, label hidden). Hover: translucent green tint plus
+                "+ Section" label. Click adds a section before this
+                index. The 32px width comes from `sectionPadding`. */}
+              {editMode && (
+                <GutterAffordance
+                  kind="section"
+                  width={sectionPadding}
+                  testId="add-section-before"
                   onClick={() => {
                     setDataAndNotify((prevData) => {
                       const newData = { ...prevData };
@@ -1183,12 +1259,7 @@ export function ToC({
                       return newData;
                     });
                   }}
-                  title="Click to add section"
-                >
-                  <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
-                    + Section
-                  </div>
-                </div>
+                />
               )}
               <div
                 onClick={(e) => {
@@ -1204,40 +1275,135 @@ export function ToC({
                   {/* Section title positioned to center over actual columns */}
                   <div className="flex flex-col" data-section-index={sectionIndex}>
                     <div
-                      className="rounded py-3 mb-2 px-3"
+                      className={clsx(
+                        'rounded py-3 mb-2 px-3',
+                        // PR 5 Task 5.3 + PR 7 task 8: `group/section
+                        // relative` lives on the section *title bar*,
+                        // not the outer column wrapper, so the section
+                        // × reveals only when the title bar itself is
+                        // hovered. Hovering inside a column does NOT
+                        // light it up — CSS `:hover` bubbles through
+                        // ancestors, so putting the group on the outer
+                        // wrapper made every descendant-hover (every
+                        // column, every node) also satisfy
+                        // `.group/section:hover`. Title bar is the
+                        // visually-obvious hover target for "delete
+                        // this section".
+                        editMode && 'group/section relative',
+                      )}
                       style={{
                         backgroundColor: data.color || '#374151', // Default to gray-700
-                        minWidth: `${sectionWidths[sectionIndex] + (editMode && layoutMode ? (section.columns.length + 1) * columnPadding : 0)}px`,
-                        width: 'max-content',
+                        // PR 5: section title width must account for the
+                        // always-on column gutters in edit mode (N+1
+                        // gutters around N columns, each `columnPadding`
+                        // wide). View mode renders no gutters.
+                        //
+                        // PR 7 task 15: in edit mode, pin `width` to the
+                        // columns-driven layout figure so the section
+                        // doesn't visibly resize when the title swaps
+                        // between `<h2>` and `<input>`. The `<input>`
+                        // defaults to a ~20-char intrinsic width at
+                        // 3xl, which used to push `max-content`
+                        // (previously `width: max-content`) wider than
+                        // the columns. Locking the width matches what
+                        // the columns underneath need; the `<h2>` and
+                        // `<input>` inside use `w-full` and let this
+                        // wrapper dictate the layout. View mode keeps
+                        // the historical `max-content + minWidth`
+                        // behaviour so long titles can still grow the
+                        // section past its columns.
+                        ...(editMode
+                          ? {
+                              width: `${sectionWidths[sectionIndex] + (section.columns.length + 1) * columnPadding}px`,
+                            }
+                          : {
+                              minWidth: `${sectionWidths[sectionIndex]}px`,
+                              width: 'max-content',
+                            }),
                       }}
                     >
+                      {/* PR 5 Task 5.3: hover-revealed section delete
+                        (bare trash glyph, light tone for the dark
+                        title bar — issue 54). Visible only when the
+                        title bar is hovered (via the parent's
+                        `group/section` class). Click → React confirm
+                        modal. */}
+                      {editMode && (
+                        <ColumnDeleteAffordance
+                          nodeCount={section.columns.reduce(
+                            (sum, col) => sum + col.nodes.length,
+                            0,
+                          )}
+                          scope="section"
+                          onDelete={() => deleteSection(sectionIndex)}
+                          testIdSuffix={`${sectionIndex}`}
+                        />
+                      )}
                       {editMode && editingSectionIndex === sectionIndex ? (
                         <input
                           type="text"
                           value={section.title}
+                          // Streaming input (typing). Buffer under
+                          // 'section-N-title'; commit on blur/Enter so a
+                          // single editing pass = one undo entry.
                           onChange={(e) => {
-                            setDataAndNotify((prev) => ({
-                              ...prev,
-                              sections: prev.sections.map((s, idx) =>
-                                idx === sectionIndex ? { ...s, title: e.target.value } : s,
-                              ),
-                            }));
+                            const value = e.target.value;
+                            mutateDebounced(
+                              (prev) => ({
+                                ...prev,
+                                sections: prev.sections.map((s, idx) =>
+                                  idx === sectionIndex ? { ...s, title: value } : s,
+                                ),
+                              }),
+                              `section-${sectionIndex}-title`,
+                            );
                           }}
-                          onBlur={() => setEditingSectionIndex(null)}
+                          onBlur={() => {
+                            commitMutation(`section-${sectionIndex}-title`);
+                            setEditingSectionIndex(null);
+                          }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
+                              commitMutation(`section-${sectionIndex}-title`);
                               setEditingSectionIndex(null);
                             }
                           }}
-                          className="text-3xl font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
-                          style={{ fontFamily: fontFamily }}
-                          size={section.title.length || 1}
+                          // PR 7 task 15: keep section dimensions stable
+                          // while editing the title.
+                          //   - `w-full` (no HTML `size` attribute): the
+                          //     input fills the title bar width — no
+                          //     horizontal growth per character.
+                          //   - `border-b-2 border-white/50` matches the
+                          //     pre-PR-7 focus underline; the matching
+                          //     h2 below carries `border-b-2
+                          //     border-transparent` so the swap is
+                          //     vertically identical (no height jump).
+                          // PR 7 task 13: `text-3xl` (1.875rem) replaced
+                          // by inline `fontSize: textSize * 1.875rem` so
+                          // section titles scale with the Format menu's
+                          // text-size setting (Tailwind text-* classes win
+                          // over inline style, so the static class has to
+                          // come off).
+                          className="w-full font-bold text-center text-white uppercase bg-transparent border-b-2 border-white/50 outline-none focus:border-white"
+                          style={{
+                            fontFamily: fontFamily,
+                            fontSize: `${textSize * 1.875}rem`,
+                          }}
                           autoFocus
                         />
                       ) : (
                         <h2
-                          className={`text-3xl font-bold text-center text-white uppercase ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
-                          style={{ fontFamily: fontFamily }}
+                          // PR 7 task 15: the 2px transparent bottom
+                          // border matches the input's `border-b-2`
+                          // underline, so swapping between view and
+                          // edit doesn't change the title row's height.
+                          // PR 7 task 13: inline `fontSize` (see input
+                          // comment above) so section titles scale.
+                          className={`block w-full font-bold text-center text-white uppercase border-b-2 border-transparent ${editMode ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                          style={{
+                            fontFamily: fontFamily,
+                            fontSize: `${textSize * 1.875}rem`,
+                          }}
                           onClick={() => editMode && setEditingSectionIndex(sectionIndex)}
                           title={editMode ? 'Click to edit section label' : ''}
                         >
@@ -1248,32 +1414,27 @@ export function ToC({
                     <div
                       className="flex"
                       style={{
-                        gap: editMode && layoutMode ? '0px' : `${columnPadding}px`,
+                        // PR 5: same `gap`-collapses-to-0 rationale as
+                        // the outer section flex above. Column gutters
+                        // provide spacing in edit mode; view mode falls
+                        // back to the explicit gap.
+                        gap: editMode ? '0px' : `${columnPadding}px`,
                         justifyContent: 'center',
                       }}
                     >
                       {section.columns.map((column, colIndex) => (
                         <React.Fragment key={`${sectionIndex}-${colIndex}`}>
-                          {/* Gap before first column with click to add column */}
-                          {editMode && layoutMode && colIndex === 0 && (
-                            <div
-                              className="bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
-                              style={{
-                                width: `${columnPadding}px`,
-                                height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                              }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDragOver(sectionIndex, 0, true, yPosition);
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDrop(sectionIndex, 0, true, yPosition);
-                              }}
+                          {/* PR 5 Task 5.1: always-on add-column
+                            affordance (left gutter before first
+                            column). Same minimal-default / hover-
+                            translucent-blue treatment as the section
+                            gutter above; `+ Column` label fades in
+                            on hover. */}
+                          {editMode && colIndex === 0 && (
+                            <GutterAffordance
+                              kind="column"
+                              width={columnPadding}
+                              testId={`add-column-before-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 setDataAndNotify((prevData) => {
                                   const newData = { ...prevData };
@@ -1283,100 +1444,72 @@ export function ToC({
                                   return newData;
                                 });
                               }}
-                              title="Click to add column"
-                            >
-                              <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
-                                + Column
-                              </div>
-                            </div>
+                            />
                           )}
 
-                          {/* Column with drag and keyboard positioning */}
+                          {/* PR 5 Task 5.1: column body. No more
+                            `layoutMode` red-state for empty columns
+                            (delete-column moves to Task 5.3's hover-×
+                            affordance). Empty columns simply render
+                            with a `cell` cursor so the user knows
+                            double-click adds a node at the cursor's
+                            Y position (the existing behavior). */}
                           <div
                             data-column={`${sectionIndex}-${colIndex}`}
                             className={clsx(
                               'relative',
+                              // PR 5 Task 5.3 + PR 7 task 8:
+                              // `group/column` enables the *column* ×
+                              // delete button's hover-reveal. Named
+                              // group so hovering one column doesn't
+                              // light up sibling columns' × buttons
+                              // (or the surrounding section's ×).
+                              editMode && 'group/column',
+                              // CSS-hover affordance for empty-column
+                              // body: `cursor-cell` signals "click here
+                              // to drop a node". Pure CSS, no JS hover
+                              // tracking.
                               editMode &&
-                                layoutMode &&
                                 column.nodes.length === 0 &&
-                                'bg-red-50 hover:bg-red-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg',
+                                'cursor-cell hover:bg-gray-500/5 transition-colors rounded-lg',
                             )}
                             style={{
                               width: `${Math.max(...column.nodes.map((node) => node.width || 192), 128)}px`,
-                              height:
-                                editMode && layoutMode && column.nodes.length === 0
-                                  ? svgSize.height > 0
-                                    ? `${svgSize.height - 124}px`
-                                    : '740px'
-                                  : editMode
-                                    ? svgSize.height > 0
-                                      ? `${svgSize.height - 62 - (data.title ? 80 : 0)}px`
-                                      : '740px'
-                                    : 'auto',
+                              // 62 = section header budget; 80 = title
+                              // block budget. PR #34 fb4 issue 64: edit
+                              // mode ALWAYS renders the title block (the
+                              // "Click to add title" placeholder when
+                              // `data.title` is empty), so the 80px is
+                              // unconditional here — the old
+                              // `data.title ? 80 : 0` ignored the
+                              // placeholder, pushing the column bodies
+                              // (and the gutters that stretch to match
+                              // them) ~79px past the canvas card on
+                              // no-title edit charts.
+                              // ConnectionsComponent.updateSize adds the
+                              // same 80px under `data.title || editMode`,
+                              // so body bottom and card bottom stay glued.
+                              height: editMode
+                                ? svgSize.height > 0
+                                  ? `${svgSize.height - 62 - 80}px`
+                                  : '740px'
+                                : 'auto',
                             }}
-                            title={
-                              editMode && layoutMode && column.nodes.length === 0
-                                ? 'Click to delete column'
-                                : undefined
-                            }
-                            onDragOver={
-                              editMode
-                                ? (e) => {
-                                    e.preventDefault();
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    const yPosition = e.clientY - rect.top;
-                                    handleDragOver(sectionIndex, colIndex, false, yPosition);
-                                  }
-                                : undefined
-                            }
-                            onDrop={
-                              editMode
-                                ? (e) => {
-                                    e.preventDefault();
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    const yPosition = e.clientY - rect.top;
-                                    handleDrop(sectionIndex, colIndex, false, yPosition);
-                                  }
-                                : undefined
-                            }
                             onClick={(e) => {
-                              // Only handle clicks on the column area itself
+                              // Deselect nodes when clicking the
+                              // column area (not a node inside it).
                               if (e.target === e.currentTarget) {
-                                if (editMode && layoutMode && column.nodes.length === 0) {
-                                  // Delete the empty column
-                                  setDataAndNotify((prevData) => {
-                                    const updatedSection = {
-                                      ...prevData.sections[sectionIndex],
-                                      columns: prevData.sections[sectionIndex].columns.filter(
-                                        (_, i) => i !== colIndex,
-                                      ),
-                                    };
-
-                                    // If this was the last column in the section, delete the section entirely
-                                    const newSections =
-                                      updatedSection.columns.length === 0
-                                        ? prevData.sections.filter((_, i) => i !== sectionIndex)
-                                        : prevData.sections.map((s, i) =>
-                                            i === sectionIndex ? updatedSection : s,
-                                          );
-
-                                    return {
-                                      ...prevData,
-                                      sections: newSections,
-                                    };
-                                  });
-                                } else {
-                                  // Deselect nodes when clicking column area
-                                  setHighlightedNodes(new Set());
-                                  setNodeWidth(192);
-                                  setNodeColor('#ffffff');
-                                }
+                                setHighlightedNodes(new Set());
+                                setNodeWidth(192);
+                                setNodeColor('#ffffff');
                               }
                             }}
                             onDoubleClick={
-                              editMode && !layoutMode
+                              editMode
                                 ? (e) => {
-                                    // Only create new node if double-clicking in blank column area (not in layout mode)
+                                    // Double-click in blank column
+                                    // area → add a node at the
+                                    // cursor's Y position.
                                     if (e.target === e.currentTarget) {
                                       const rect = e.currentTarget.getBoundingClientRect();
                                       const viewportY = e.clientY - rect.top;
@@ -1394,15 +1527,25 @@ export function ToC({
                                 128,
                               );
                               const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2);
+                              // Cached measured height; 76px is the
+                              // typical height for "New Node".
+                              const nodeHeight = nodeHeights[node.id] || 76;
 
                               return (
                                 <div
                                   key={node.id}
                                   className="absolute"
                                   style={{
+                                    // Convert from center to top position.
+                                    // The center is clamped VISUALLY so
+                                    // out-of-range data (old charts, AI
+                                    // edits) renders inside the column
+                                    // body instead of over the section
+                                    // title bar (PR #34 fb 46) — the
+                                    // stored yPosition is not rewritten.
                                     top:
                                       node.yPosition !== undefined
-                                        ? `${node.yPosition - (nodeHeights[node.id] || 76) / 2}px` // Convert from center to top position using cached height (76px is typical height for "New Node")
+                                        ? `${clampNodeCenterY(node.yPosition, nodeHeight) - nodeHeight / 2}px`
                                         : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
                                     left: `${leftOffset}px`,
                                     width: `${nodeWidth}px`,
@@ -1414,52 +1557,44 @@ export function ToC({
                                     isHighlighted={highlightedNodes.has(node.id)}
                                     isConnected={connectedNodes.has(node.id)}
                                     isHovered={hoveredNode === node.id}
-                                    isDragging={draggedNode?.id === node.id}
+                                    isDragging={dragState?.nodeId === node.id && dragState.hasMoved}
                                     toggleHighlight={toggleHighlight}
                                     setHoveredNode={setHoveredNode}
                                     hasHighlightedNodes={highlightedNodes.size > 0}
-                                    onDragStart={handleDragStart}
-                                    onDragEnd={handleDragEnd}
+                                    onPointerDown={bindNodeDrag(node.id).onPointerDown}
+                                    bindConnectionHandle={bindConnectionHandle}
                                     editMode={editMode}
                                     textSize={textSize}
                                     fontFamily={fontFamily}
-                                    setNodePopup={setNodePopup}
-                                    isEditingTitle={editingNodeId === node.id}
-                                    setEditingNodeId={setEditingNodeId}
-                                    updateNodeTitle={updateNodeTitle}
                                   />
                                 </div>
                               );
                             })}
 
-                            {/* Label for empty column in add/remove mode */}
-                            {editMode && layoutMode && column.nodes.length === 0 && (
-                              <div className="text-red-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
-                                - Delete
-                              </div>
+                            {/* PR 5 Task 5.3: hover-revealed column
+                              delete (bare trash glyph — issue 54).
+                              Visible only on column hover via the
+                              parent's `group/column` class. Click →
+                              React confirm modal (NOT window.confirm). */}
+                            {editMode && (
+                              <ColumnDeleteAffordance
+                                nodeCount={column.nodes.length}
+                                scope="column"
+                                onDelete={() => deleteColumn(sectionIndex, colIndex)}
+                                testIdSuffix={`${sectionIndex}-${colIndex}`}
+                              />
                             )}
                           </div>
 
-                          {/* Gap after column with click to add column */}
-                          {editMode && layoutMode && (
-                            <div
-                              className="bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
-                              style={{
-                                width: `${columnPadding}px`,
-                                height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                              }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDragOver(sectionIndex, colIndex + 1, true, yPosition);
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const yPosition = e.clientY - rect.top;
-                                handleDrop(sectionIndex, colIndex + 1, true, yPosition);
-                              }}
+                          {/* PR 5 Task 5.1: always-on add-column
+                            affordance (right gutter after every
+                            column). Same minimal-default / hover-
+                            translucent-blue treatment. */}
+                          {editMode && (
+                            <GutterAffordance
+                              kind="column"
+                              width={columnPadding}
+                              testId={`add-column-after-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 // Add new column
                                 setDataAndNotify((prevData) => {
@@ -1470,12 +1605,7 @@ export function ToC({
                                   return newData;
                                 });
                               }}
-                              title="Click to add column"
-                            >
-                              <div className="text-blue-400 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
-                                + Column
-                              </div>
-                            </div>
+                            />
                           )}
                         </React.Fragment>
                       ))}
@@ -1483,15 +1613,15 @@ export function ToC({
                   </div>
                 </div>
               </div>
-              {/* Gap after last section with click to add section */}
-              {editMode && layoutMode && sectionIndex === data.sections.length - 1 && (
-                <div
-                  className="bg-green-50 hover:bg-green-100 transition-colors flex items-center justify-center cursor-pointer group rounded-lg"
-                  style={{
-                    width: `${sectionPadding}px`,
-                    height: svgSize.height > 0 ? `${svgSize.height - 124}px` : '740px',
-                    marginTop: '68px',
-                  }}
+              {/* PR 5 Task 5.1: always-on add-section affordance after
+                the last section. Same minimal-default / hover-
+                translucent-green treatment as the before-section
+                gutter above. */}
+              {editMode && sectionIndex === data.sections.length - 1 && (
+                <GutterAffordance
+                  kind="section"
+                  width={sectionPadding}
+                  testId="add-section-after-last"
                   onClick={() => {
                     setDataAndNotify((prevData) => {
                       const newData = { ...prevData };
@@ -1502,12 +1632,7 @@ export function ToC({
                       return newData;
                     });
                   }}
-                  title="Click to add section"
-                >
-                  <div className="text-green-500 text-xs font-medium rotate-90 whitespace-nowrap opacity-100 transition-opacity">
-                    + Section
-                  </div>
-                </div>
+                />
               )}
             </React.Fragment>
           ))
@@ -1524,7 +1649,9 @@ export function ToC({
 
         <ConnectionsComponent
           data={data}
-          setData={setDataAndNotify}
+          mutate={setDataAndNotify}
+          mutateDebounced={mutateDebounced}
+          commit={commitMutation}
           nodeRefs={nodeRefs}
           nodeHeights={nodeHeights}
           highlightedNodes={highlightedNodes}
@@ -1532,7 +1659,6 @@ export function ToC({
           hoveredConnections={hoveredConnections}
           curvature={curvature}
           editMode={editMode}
-          layoutMode={layoutMode}
           sectionWidths={sectionWidths}
           columnPadding={columnPadding}
           sectionPadding={sectionPadding}
@@ -1540,81 +1666,28 @@ export function ToC({
             setSvgSize(size);
             onSizeChange?.(size);
           }}
-          onDeleteConnection={deleteConnection}
           containerRef={graphContainerRef}
-          onEdgePopupChange={setEdgePopup}
+          camera={camera}
           fontFamily={fontFamily}
-          viewportOffset={viewportOffset}
-          zoomScale={zoomScale}
+          bindWaypoint={waypointDrag.bindWaypoint}
+          bindMidpoint={waypointDrag.bindMidpoint}
+          bindPath={waypointDrag.bindPath}
+          consumePathGestureArmed={waypointDrag.consumePathGestureArmed}
+          resetWaypoints={waypointDrag.resetWaypoints}
+          waypointDragState={waypointDrag.dragState}
         />
 
+        {/* PR 3: only the alignment-suggestion banner remains in this
+          overlay. The per-selection toolbar's width/color/delete
+          controls moved into the anchored `<NodeEditor>` (mounted
+          below alongside the selected node). The ShareDialog moved up
+          to App.tsx in PR 2. */}
         {createPortal(
-          <EditToolbar
+          <AlignmentSuggestionBanner
             editMode={editMode}
-            setEditMode={setEditMode}
             showEditButton={showEditButton}
-            highlightedNodes={highlightedNodes}
-            setHighlightedNodes={setHighlightedNodes}
-            layoutMode={layoutMode}
-            setLayoutMode={setLayoutMode}
-            curvature={curvature}
-            setCurvature={(value) => {
-              const next = typeof value === 'function' ? value(curvature) : value;
-              setCurvature(next);
-              // Update data with new curvature
-              setDataAndNotify((prev) => ({ ...prev, curvature: next }));
-            }}
-            textSize={textSize}
-            setTextSize={(value) => {
-              const next = typeof value === 'function' ? value(textSize) : value;
-              setTextSize(next);
-              // Update data with new text size
-              setDataAndNotify((prev) => ({ ...prev, textSize: next }));
-            }}
-            fontFamily={fontFamily}
-            setFontFamily={(value) => {
-              const next = typeof value === 'function' ? value(fontFamily) : value;
-              setFontFamily(next);
-              // Update data with new font family
-              setDataAndNotify((prev) => ({ ...prev, fontFamily: next }));
-            }}
-            nodeWidth={nodeWidth}
-            setNodeWidth={setNodeWidth}
-            nodeColor={nodeColor}
-            setNodeColor={setNodeColor}
-            columnPadding={columnPadding}
-            setColumnPadding={(value) => {
-              const next = typeof value === 'function' ? value(columnPadding) : value;
-              setColumnPadding(next);
-              // Update data with new padding
-              setDataAndNotify((prev) => ({ ...prev, columnPadding: next }));
-            }}
-            sectionPadding={sectionPadding}
-            setSectionPadding={(value) => {
-              const next = typeof value === 'function' ? value(sectionPadding) : value;
-              setSectionPadding(next);
-              // Update data with new padding
-              setDataAndNotify((prev) => ({ ...prev, sectionPadding: next }));
-            }}
-            straightenEdges={straightenEdges}
-            setData={setDataAndNotify}
-            undoHistory={undoHistory}
-            redoHistory={redoHistory}
-            handleUndo={handleUndo}
-            handleRedo={handleRedo}
-            isSaving={isSaving}
-            currentEditToken={currentEditToken}
-            lastSyncTime={lastSyncTime}
-            isManualSyncing={isManualSyncing}
-            handleManualSync={handleManualSync}
-            getTimeAgo={getTimeAgo}
             data={data}
-            onDeleteNode={deleteNode}
-            nodePopup={nodePopup}
-            edgePopup={edgePopup}
-            camera={camera}
-            onChartCreated={onChartCreated}
-            containerSize={svgSize}
+            straightenEdges={straightenEdges}
           />,
           document.body,
         )}
@@ -1651,26 +1724,8 @@ export function ToC({
                   return;
                 }
 
-                // Use the same getLocalPosition function as ConnectionsComponent
-                const getLocalPosition = (element: HTMLElement) => {
-                  let x = 0,
-                    y = 0;
-                  const width = element.offsetWidth,
-                    height = element.offsetHeight;
-                  let current: HTMLElement | null = element;
-
-                  // Walk up the offset parent chain until we reach the container
-                  while (current && current !== container) {
-                    x += current.offsetLeft;
-                    y += current.offsetTop;
-                    current = current.offsetParent as HTMLElement | null;
-                  }
-
-                  return { x, y, width, height };
-                };
-
-                const sourcePos = getLocalPosition(sourceNodeRef);
-                const targetPos = getLocalPosition(targetNodeRef);
+                const sourcePos = getLocalPosition(sourceNodeRef, container as HTMLElement);
+                const targetPos = getLocalPosition(targetNodeRef, container as HTMLElement);
 
                 // Check if nodes are in the same column for vertical connections
                 const sourceLocation = findNodeLocation(sourceId);
@@ -1771,35 +1826,255 @@ export function ToC({
             return <ConnectButton />;
           })()}
 
-        {/* Draggable Legend */}
-        <Legend
-          legendPosition={legendPosition}
-          setLegendPosition={setLegendPosition}
-          isDraggingLegend={isDraggingLegend}
-          setIsDraggingLegend={setIsDraggingLegend}
-          legendDragOffset={legendDragOffset}
-          setLegendDragOffset={setLegendDragOffset}
-          editMode={editMode}
-          fontFamily={fontFamily}
-        />
+        {/* The connection-strength Legend is no longer rendered here
+          (PR #34 round-7 feedback 76): it's view-mode chrome now,
+          mounted by `ToCViewerOnly` OUTSIDE the zoom/pan transform so
+          it neither scales with zoom nor covers canvas content. The
+          editor surface gets no legend at all — editors read
+          confidence numerically in the EdgeEditor. */}
 
-        {nodePopup &&
-          createPortal(
-            <NodePopup
-              nodePopup={nodePopup}
-              setNodePopup={setNodePopup}
-              svgSize={svgSize}
-              editMode={editMode}
-              onUpdateNode={updateNode}
-              onDeleteNode={deleteNode}
-              fontFamily={fontFamily}
-              onClearSelection={() => setHighlightedNodes(new Set())}
-              viewportOffset={viewportOffset}
-              zoomScale={zoomScale}
-            />,
-            document.body,
-          )}
+        {/* Anchored NodeEditor — replaces NodePopup (modal) and the
+          per-selection toolbar. Single-click on a node opens it; it
+          stays anchored beside the first selected node across pan,
+          zoom, and DOM reflow via `useAnchorPosition`. */}
+        {editMode && highlightedNodes.size > 0 && (
+          <NodeEditorMount
+            highlightedNodes={highlightedNodes}
+            nodeRefs={nodeRefs}
+            data={data}
+            mutate={setDataAndNotify}
+            mutateDebounced={mutateDebounced}
+            commit={commitMutation}
+            camera={camera ?? { x: 0, y: 0, z: 1 }}
+            onRequestClose={() => setHighlightedNodes(new Set())}
+            registerOnDragStartedElsewhere={(cb) => {
+              nodeEditorDragStartRef.current = cb;
+            }}
+            fontFamily={fontFamily}
+          />
+        )}
+
+        {/* PR 4 + PR 7 feedback (#3): single cursor-following ghost
+            that is a visual clone of the dragged node. Renders the
+            actual title/color/size/font so the user is looking at the
+            same thing they grabbed (with reduced opacity); previously
+            two abstract indigo silhouettes rendered side-by-side which
+            confused reviewers about which one represented the drop
+            target. The original node still renders at half opacity in
+            place via NodeComponent's `isDragging` prop above (visual
+            anchor for the source location). No separate drop-preview
+            silhouette: the column area's existing hover state already
+            signals "drop will land here". The ghost sits in the same
+            transform stack as the canvas so it translates with pan/zoom. */}
+        {dragState && dragState.hasMoved && graphContainerRef.current
+          ? (() => {
+              const draggedLoc = findNodeLocation(dragState.nodeId);
+              if (!draggedLoc) return null;
+              const draggedNode = draggedLoc.node;
+
+              // Translate ghostPos (viewport coords) to container-local
+              // so the absolute-positioned ghost lines up with the
+              // canvas geometry. The cursor offset within the node is
+              // preserved (the grab point stays under the finger / mouse).
+              const containerRect = graphContainerRef.current.getBoundingClientRect();
+              const localX = (dragState.ghostPos.x - containerRect.left) / zoomScale;
+              const localY = (dragState.ghostPos.y - containerRect.top) / zoomScale;
+              const offsetXLocal = dragState.pointerOffset.x / zoomScale;
+              const offsetYLocal = dragState.pointerOffset.y / zoomScale;
+              const ghostWidth = dragState.nodeSize.width;
+              return (
+                <div
+                  className="pointer-events-none absolute z-[60] opacity-50"
+                  style={{
+                    left: `${localX - offsetXLocal}px`,
+                    top: `${localY - offsetYLocal}px`,
+                    width: `${ghostWidth}px`,
+                  }}
+                  aria-hidden
+                  data-testid="node-drag-ghost"
+                >
+                  {/* Mirrors NodeComponent's visual chrome (sans
+                      interactive bits — no ring, no hover scale, no
+                      connection handles). The ghost is a pure visual
+                      duplicate so the user sees the exact node they're
+                      dragging, only translucent. */}
+                  <div
+                    className="flex flex-col border-0 rounded-xl shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] pt-3 px-3 pb-6 select-none"
+                    style={{
+                      backgroundColor: draggedNode.color || '#ffffff',
+                    }}
+                  >
+                    <div className="flex flex-col justify-center relative py-2">
+                      <div
+                        className="font-medium text-center leading-tight break-words"
+                        style={{
+                          fontSize: `${textSize * 1.125}rem`,
+                          fontFamily: fontFamily,
+                          color: draggedNode.color
+                            ? getContrastTextColor(draggedNode.color)
+                            : '#000000',
+                        }}
+                      >
+                        {draggedNode.title}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          : null}
+
+        {/* PR 5 Task 5.2: drag-to-connect in-flight ghost line. Renders
+            an SVG path from the source handle's node edge to the
+            cursor (or to the hovered target node's opposite edge).
+            Shares the cubic-bezier math with the select-2 ghost via
+            `buildConnectionPath`. The SVG covers the container so the
+            single path positions in container-local coords. */}
+        {connectionDragState && graphContainerRef.current
+          ? (() => {
+              const containerRect = graphContainerRef.current.getBoundingClientRect();
+              const sourceEl = nodeRefs[connectionDragState.sourceNodeId];
+              if (!sourceEl) return null;
+              const sourcePos = getLocalPosition(sourceEl, graphContainerRef.current);
+              // Start at the source node's left or right edge midpoint.
+              const startX =
+                connectionDragState.sourceSide === 'left'
+                  ? sourcePos.x
+                  : sourcePos.x + sourcePos.width;
+              const startY = sourcePos.y + sourcePos.height / 2;
+
+              // End at the target node's opposite edge (if hovered),
+              // else at the cursor. The cursor branch translates
+              // viewport coords to container-local via zoom.
+              let endX: number;
+              let endY: number;
+              const targetId = connectionDragState.targetNodeId;
+              const targetEl = targetId ? nodeRefs[targetId] : null;
+              if (targetEl && graphContainerRef.current) {
+                const tPos = getLocalPosition(targetEl, graphContainerRef.current);
+                // Snap to the side facing the source so the ghost
+                // doesn't cross the target node.
+                if (
+                  connectionDragState.sourceSide === 'right' &&
+                  tPos.x >= sourcePos.x + sourcePos.width
+                ) {
+                  endX = tPos.x - 6;
+                } else if (
+                  connectionDragState.sourceSide === 'left' &&
+                  tPos.x + tPos.width <= sourcePos.x
+                ) {
+                  endX = tPos.x + tPos.width + 6;
+                } else {
+                  // Mismatched side; just snap to the nearest edge.
+                  const sourceMid = startX;
+                  endX = tPos.x + tPos.width / 2 < sourceMid ? tPos.x + tPos.width + 6 : tPos.x - 6;
+                }
+                endY = tPos.y + tPos.height / 2;
+              } else {
+                endX = (connectionDragState.ghostPos.x - containerRect.left) / zoomScale;
+                endY = (connectionDragState.ghostPos.y - containerRect.top) / zoomScale;
+              }
+
+              // 'forward' if cursor is right of source, else 'backward'.
+              const direction = endX >= startX ? 'forward' : 'backward';
+              const ghostPathD = buildConnectionPath({
+                startX,
+                startY,
+                endX,
+                endY,
+                curvature,
+                direction,
+              });
+              // SVG canvas sized to the container; the path coords are
+              // in container-local space so they line up with nodes.
+              const w = graphContainerRef.current.offsetWidth || svgSize.width;
+              const h = graphContainerRef.current.offsetHeight || svgSize.height;
+              return (
+                <svg
+                  className="pointer-events-none absolute inset-0 z-[59]"
+                  width={w}
+                  height={h}
+                  aria-hidden
+                  data-testid="connection-drag-ghost"
+                >
+                  <path
+                    d={ghostPathD}
+                    className="fill-none stroke-indigo-500"
+                    style={{
+                      strokeWidth: '2px',
+                      strokeDasharray: '6 4',
+                      opacity: 0.7,
+                    }}
+                  />
+                </svg>
+              );
+            })()
+          : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * `NodeEditorMount` — internal wrapper that picks the anchor element
+ * from `nodeRefs` based on the first selected node id. Lifting this
+ * out of the main render lets us keep the ref hand-off purely inside
+ * the editor render path and avoids re-deriving the anchor on every
+ * parent render.
+ */
+function NodeEditorMount({
+  highlightedNodes,
+  nodeRefs,
+  data,
+  mutate,
+  mutateDebounced,
+  commit,
+  camera,
+  onRequestClose,
+  registerOnDragStartedElsewhere,
+  fontFamily,
+}: {
+  highlightedNodes: Set<string>;
+  nodeRefs: { [key: string]: HTMLDivElement | null };
+  data: ToCData;
+  mutate: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  mutateDebounced: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  commit: (key?: string) => void;
+  camera: { x: number; y: number; z: number };
+  onRequestClose: () => void;
+  /**
+   * PR 4 seam: NodeEditor calls this once on mount with its dismiss
+   * callback. The parent (TheoryOfChangeGraph) stores it in a ref the
+   * `usePointerDrag` hook reads on `onDragStart`.
+   */
+  registerOnDragStartedElsewhere?: (cb: () => void) => void;
+  fontFamily?: string;
+}) {
+  const selectedIds = Array.from(highlightedNodes);
+  // Sort the array so the anchor is stable across additions to the
+  // selection (e.g. Cmd+click extending the set). Without sort the
+  // first-id flips depending on Set iteration order.
+  const sorted = [...selectedIds].sort();
+  const anchorId = sorted[0];
+  const anchorRef = useRef<HTMLElement | null>(null);
+  // Keep the ref pointed at the anchor's DOM node. This re-runs every
+  // render but is cheap (a single object property assignment).
+  anchorRef.current = anchorId ? (nodeRefs[anchorId] ?? null) : null;
+
+  if (!anchorRef.current) return null;
+
+  return (
+    <NodeEditor
+      selectedNodeIds={selectedIds}
+      data={data}
+      mutate={mutate}
+      mutateDebounced={mutateDebounced}
+      commit={commit}
+      anchorRef={anchorRef}
+      camera={camera}
+      onRequestClose={onRequestClose}
+      registerOnDragStartedElsewhere={registerOnDragStartedElsewhere}
+      fontFamily={fontFamily}
+    />
   );
 }

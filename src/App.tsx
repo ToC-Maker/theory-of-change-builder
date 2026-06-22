@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useZoomPan } from './hooks/useZoomPan';
+import { useViewportOffset } from './hooks/useViewportOffset';
 import { Routes, Route, useParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { ToC } from './components/TheoryOfChangeGraph';
+import { Legend } from './components/Legend';
+import { NODE_DOM_ATTR } from './components/NodeComponent';
 import { ChatInterface } from './components/ChatInterface';
-import { JsonDropdown } from './components/JsonDropdown';
 import { GraphTutorial } from './components/GraphTutorial';
 import { PrivacyPolicyPopup } from './components/PrivacyPolicyPopup';
 import { ApiKeyProvider } from './contexts/ApiKeyContext';
@@ -19,9 +21,33 @@ import {
   DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import AuthButton from './components/AuthButton';
+import { TopBar } from './components/top-bar/TopBar';
+import { validateChartImport } from './utils/validateChartImport';
+import type { SaveError } from './components/top-bar/SaveIndicator';
+import { ShareDialog } from './components/share/ShareDialog';
+import { usePermissionsRefresh } from './hooks/usePermissionsRefresh';
+import { useChartSync } from './hooks/useChartSync';
 import { getFreshIdToken } from './utils/auth';
+import {
+  reportAuthTokenFailure,
+  reportAuthTokenSuccess,
+  resetAuthSessionHealth,
+} from './services/authSessionHealth';
+import { SessionExpiredBanner } from './components/SessionExpiredBanner';
+import { isInputFocused } from './utils/isInputFocused';
+import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
+import type { Permission, LinkSharingLevel } from '../shared/permissions';
 import './App.css';
+
+// Helper: map a thrown error from a save attempt into the SaveIndicator
+// shape. Strips Anthropic/Fetch metadata that isn't useful in the pill.
+function asSaveError(err: unknown): SaveError {
+  if (err instanceof Error) {
+    return { message: err.message };
+  }
+  return { message: typeof err === 'string' ? err : 'Save failed' };
+}
 
 // Default empty template with 4 sections
 const emptyTemplate: ToCData = {
@@ -91,6 +117,10 @@ function ToCViewerOnly() {
   const [isCopying, setIsCopying] = useState(false);
   const [isInIframe, setIsInIframe] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // PR 4: viewer-only mode never enters edit, so the hook's drag path
+  // is dormant. The ref is referenced by the shared `syncData` guard
+  // and always stays `false` here.
+  const isDragInFlightRef = useRef(false);
 
   // Use shared zoom/pan hook
   const {
@@ -284,6 +314,14 @@ function ToCViewerOnly() {
       if (!isTabVisible || Date.now() - lastActivity > 300000) {
         // 5 min idle timeout
         console.log('Skipping sync - tab hidden or user idle');
+        return;
+      }
+      // PR 4: don't sync mid-drag. A server snapshot landing while
+      // a pointer-drag is in flight could yank the dragged node out
+      // from under the user (cross-tab delete race). The drop handler
+      // is itself stale-node-guarded; this prevents the race upstream.
+      if (isDragInFlightRef.current) {
+        console.log('Skipping sync - drag in flight');
         return;
       }
 
@@ -596,6 +634,16 @@ function ToCViewerOnly() {
         </div>
       )}
 
+      {/* Connection-strength key (PR #34 round-7 feedback 76):
+        view-mode-only chrome — viewers have no EdgeEditor to read
+        confidence from. Mounted HERE, outside the zoom/pan transform,
+        as a fixed bottom-left overlay (bottom-right belongs to the
+        zoom controls): it never scales with zoom and can't permanently
+        cover content, since panning moves content out from under it.
+        Hidden in iframes like the rest of the fixed chrome so small
+        embeds stay clean. */}
+      {!isInIframe && <Legend fontFamily={data.fontFamily} />}
+
       <GraphTutorial />
     </div>
   );
@@ -621,29 +669,117 @@ function ToCViewer() {
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null);
   const [currentChartId, setCurrentChartId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  // Last save failure surfaced via the TopBar's SaveIndicator. Cleared
+  // when a subsequent save succeeds. SaveIndicator debounces its
+  // `reportError` ping per state-fingerprint so re-renders don't spam.
+  const [saveError, setSaveError] = useState<SaveError | null>(null);
+  // PR 7 fb (57): state mirror of `pendingChangesRef` (declared below),
+  // because a ref write doesn't re-render and the SaveIndicator must
+  // show "Unsaved changes" whenever local edits haven't been persisted
+  // — most importantly when a save FAILS (the save catch blocks leave
+  // the pending data in place; pre-fix the pill silently fell back to
+  // "Saved"). Always write through `setPendingChanges` so the ref (the
+  // synchronous source of truth for beforeunload/unmount flush) and
+  // this state can't drift. Declared up here (not next to the ref)
+  // because the save/undo/redo callbacks list it in their dependency
+  // arrays, which evaluate during render in source order.
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const setPendingChanges = useCallback((next: ToCData | null) => {
+    pendingChangesRef.current = next;
+    setHasPendingChanges(next !== null);
+  }, []);
+  // PR 1 task 1.7: sync button gone, "Last synced X ago" display gone.
+  // setLastSyncTime kept (auto-sync still writes it) for future
+  // observability hooks, but the helpers that read it are stripped.
+  const [, setLastSyncTime] = useState<Date | null>(null);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
+  // Server-verified `isOwner` from the latest getChart response. Reset
+  // when the edit token changes. Wired through to FileMenu so the
+  // owner-gated Delete item only renders for the legitimate owner.
+  const [isOwner, setIsOwner] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [authTokenReady, setAuthTokenReady] = useState(false);
-
-  // Calculate viewport offset based on sidebar state
-  const viewportOffset = useMemo(
-    () => ({
-      left: isLeftPanelCollapsed ? 48 : Math.floor(window.innerWidth * 0.25),
-      top: 64, // Toolbar height
-      right: 0,
-      bottom: 80, // JSON dropdown height
-    }),
-    [isLeftPanelCollapsed],
+  // PR 2 ShareDialog open-state lives at the App level so TopBar's Share
+  // button can flip it directly (no CustomEvent bridge through the old
+  // EditToolbar — its share-dialog block went away with PR 2).
+  const [shareOpen, setShareOpen] = useState(false);
+  // Single owner for chart permissions. Previously: ShareDialog's
+  // `loadPermissions` (own 30s poll), `usePermissionsRefresh` (own
+  // storage-event fetch), and App's pending-request badge poll were
+  // three independent callers of `getChartPermissions(chartId)` on
+  // the same chart. Collapsed here: App polls every 30s + invalidates
+  // on cross-tab `storage` events; ShareDialog reads via props.
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [linkSharingLevel, setLinkSharingLevel] = useState<LinkSharingLevel>('restricted');
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [permissionsFetchError, setPermissionsFetchError] = useState<string | null>(null);
+  // True when the permissions poll has been failing for >=2
+  // consecutive attempts. Drives a stale visual on the Share-button
+  // badge (count may lag reality) and lets the ShareDialog surface
+  // the same warning as before.
+  const [pendingRequestCountStale, setPendingRequestCountStale] = useState(false);
+  // Derived counter for the TopBar Share badge. Pulled out of state
+  // (was duplicated) — recomputed on every render from `permissions`.
+  const pendingRequestCount = useMemo(
+    () => permissions.filter((p) => p.status === 'pending').length,
+    [permissions],
   );
 
-  // Exclude interactive elements from panning in edit mode
+  // PR 4: 30s sync poll pauses while a pointer-drag is in flight.
+  // `ToC.onDragActiveChange` toggles this ref; `syncData` reads it and
+  // skips the network call until the gesture completes. Red-team
+  // Important: "PR 4 pointer-capture during cross-tab delete race".
+  const isDragInFlightRef = useRef(false);
+
+  // Reserved chrome space + breathing pad for the canvas auto-fit.
+  // Computation and history (PR 1 pads, round-2 fb 55 drawer clamp,
+  // fb3 K1 resize subscription) live in useViewportOffset — the hook
+  // re-renders us when a debounced window resize changes the reserve,
+  // which the old [isLeftPanelCollapsed]-keyed memo here never did.
+  const viewportOffset = useViewportOffset(isLeftPanelCollapsed);
+
+  // Exclude interactive elements from panning in edit mode.
+  // PR 4: node selector switched from `[draggable="true"]` to
+  // `[data-tocb-node]` since HTML5 DnD is no longer used. The attribute
+  // is set by `NodeComponent` on every node root regardless of editMode
+  // (presence is the signal; value is the node id, used by drag
+  // callsites). Constant lives next to the writer so a rename can't
+  // silently drift.
   const excludeFromPan = useCallback((target: HTMLElement) => {
-    const isNode = target.closest('[draggable="true"]');
-    const isLegend = target.closest('.cursor-grab') || target.closest('.cursor-grabbing');
+    const isNode = target.closest(`[${NODE_DOM_ATTR}]`);
+    // (fb7 issue 76: the `.cursor-grab` legend exclusion is gone — the
+    // draggable legend was the only element carrying those classes,
+    // and the legend no longer renders on the editor canvas at all.)
     const isChatPanel = target.closest('.fixed.left-0.z-40') !== null;
     const isJsonPanel = target.closest('.fixed.bottom-0.z-30') !== null;
+    // PR 7 feedback (18): waypoint + midpoint handles for connection
+    // editing live inside the SVG layer, OUTSIDE of any `[data-tocb-node]`
+    // ancestor, so without this guard a `pointerdown` on a waypoint
+    // handle also kicks off a canvas pan. The mousedown handler in
+    // `useZoomPan` fires through `document` and doesn't see the
+    // `_canvasGestureState` flag (different event type / direct doc
+    // listener), so we have to short-circuit it at the exclusion check.
+    // `[data-tocb-waypoint-handles]` (plural) is the GROUP element
+    // wrapping all of a connection's handles. It matters because Chrome
+    // retargets compatibility mouse events to the closest still-
+    // connected ancestor when the pressed handle is unmounted by the
+    // gesture's own synchronous re-render (PR #34 feedback 50). The
+    // primary guard for that race is the canvas-gesture mutex check in
+    // `useZoomPan`; this match is defense-in-depth so anything inside
+    // the handles layer is excluded from panning regardless.
+    const isWaypointHandle =
+      target.closest('[data-tocb-waypoint-handle]') !== null ||
+      target.closest('[data-tocb-midpoint-handle]') !== null ||
+      target.closest('[data-tocb-waypoint-handles]') !== null;
+    // K7: a press that starts on a connection's invisible fat hit-path
+    // must not start a canvas pan. Pre-fix, dragging from a connection
+    // panned the canvas AND the trailing click (browsers fire it when
+    // down/up share a target — and panned content moves WITH the
+    // cursor, so they always do) popped the EdgeEditor. The path's
+    // click handler has the matching tap-vs-drag dead-zone in
+    // `ConnectionsComponent`; this exclusion makes the drag itself
+    // inert. Attribute is set on the hit path next to that handler.
+    const isConnectionHitPath = target.closest('[data-tocb-connection-hitpath]') !== null;
     const activeElement = document.activeElement;
     const isTextEditing =
       activeElement &&
@@ -672,7 +808,14 @@ function ToCViewer() {
       isTextEditing ||
       isSelectableText;
 
-    return !!(isNode || isLegend || isEditableElement || isChatPanel || isJsonPanel);
+    return !!(
+      isNode ||
+      isEditableElement ||
+      isChatPanel ||
+      isJsonPanel ||
+      isWaypointHandle ||
+      isConnectionHitPath
+    );
   }, []);
 
   // Use shared zoom/pan hook
@@ -697,8 +840,47 @@ function ToCViewer() {
   useEffect(() => {
     const setToken = async () => {
       if (isAuthenticated && !authLoading) {
+        // PR 7 round-2 fix (signed-in 401s + silent save failures):
+        // register a request-time token provider BEFORE the one-shot
+        // fetch below. The static snapshot alone breaks in two real
+        // states — (a) the silent-refresh fallback below clears it
+        // while `isAuthenticated` stays true, and (b) it expires
+        // mid-session with nothing refreshing it. The worker now
+        // rejects both states (401 on getUserCharts, 403 on
+        // updateChart for owned restricted charts), so every
+        // ChartService call resolves a fresh ID token at request time
+        // instead. getFreshIdToken returns the cached token until it
+        // nears expiry, so the per-request cost is a local claims read.
+        //
+        // The same provider goes to chatService (a STALE token hard-
+        // 401s /api/anthropic-stream — fail-closed resolveActor; a
+        // NULLED one silently demotes the request to anonymous: BYOK
+        // header ignored, anon caps + Turnstile gate apply) and
+        // LoggingService (stale-token 401s on logging-* trip the
+        // circuit breaker and silently kill logging for the session).
+        // Round-4: the provider also feeds authSessionHealth so a
+        // PERSISTENTLY dead session (revoked refresh-token grant —
+        // "Unknown or invalid refresh token" — where every resolution
+        // returns null while `isAuthenticated` stays true) surfaces the
+        // SessionExpiredBanner instead of silently demoting every
+        // request to anonymous. invalid_grant-family errors degrade
+        // immediately; transient ones need 3 consecutive failures.
+        const tokenProvider = async () => {
+          let refreshError: unknown;
+          const token = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims, (err) => {
+            refreshError = err;
+          });
+          if (token) reportAuthTokenSuccess();
+          else reportAuthTokenFailure(refreshError);
+          return token;
+        };
+        ChartService.setAuthTokenProvider(tokenProvider);
+        chatService.setAuthTokenProvider(tokenProvider);
+        LoggingServiceClass.setAuthTokenProvider(tokenProvider);
         console.log('[App] Fetching Auth0 ID token...');
-        const idToken = await getFreshIdToken(getAccessTokenSilently, getIdTokenClaims);
+        // Through tokenProvider (not bare getFreshIdToken) so a dead
+        // grant trips the banner at mount, not on the first API call.
+        const idToken = await tokenProvider();
         if (idToken) {
           ChartService.setAuthToken(idToken);
           chatService.setAuthToken(idToken);
@@ -715,6 +897,10 @@ function ToCViewer() {
           // Silent refresh failed (refresh token revoked/expired or network
           // hiccup). Fall back to anonymous mode so the UI keeps working
           // instead of sending stale tokens that 401 server-side.
+          // The request-time provider registered above intentionally
+          // STAYS registered: it retries the refresh on each request,
+          // so a transient failure here self-heals instead of pinning
+          // the whole session to anonymous mode.
           console.warn('[App] No fresh ID token available, falling back to anonymous mode');
           ChartService.setAuthToken(null);
           chatService.setAuthToken(null);
@@ -724,6 +910,10 @@ function ToCViewer() {
       } else if (!authLoading) {
         // Auth finished loading but user is not authenticated
         console.log('[App] User not authenticated, clearing token');
+        resetAuthSessionHealth();
+        ChartService.setAuthTokenProvider(null);
+        chatService.setAuthTokenProvider(null);
+        LoggingServiceClass.setAuthTokenProvider(null);
         ChartService.setAuthToken(null);
         chatService.setAuthToken(null);
         LoggingServiceClass.setAuthToken(null);
@@ -736,56 +926,6 @@ function ToCViewer() {
     };
     setToken();
   }, [isAuthenticated, authLoading, getIdTokenClaims, getAccessTokenSilently]);
-
-  // Helper function to format relative time
-  const getTimeAgo = (date: Date) => {
-    const now = new Date();
-    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-    if (diffInSeconds < 10) {
-      return 'less than 10 seconds ago';
-    }
-
-    if (diffInSeconds < 60) {
-      return 'less than 1 minute ago';
-    }
-
-    const diffInMinutes = Math.floor(diffInSeconds / 60);
-    if (diffInMinutes < 60) {
-      return `${diffInMinutes} minute${diffInMinutes !== 1 ? 's' : ''} ago`;
-    }
-
-    const diffInHours = Math.floor(diffInMinutes / 60);
-    if (diffInHours < 24) {
-      return `${diffInHours} hour${diffInHours !== 1 ? 's' : ''} ago`;
-    }
-
-    const diffInDays = Math.floor(diffInHours / 24);
-    return `${diffInDays} day${diffInDays !== 1 ? 's' : ''} ago`;
-  };
-
-  // Manual sync function
-  const handleManualSync = async () => {
-    if (!currentEditToken || isManualSyncing) return;
-
-    setIsManualSyncing(true);
-    try {
-      console.log('Manual sync triggered');
-      const result = await ChartService.getChartByEditToken(currentEditToken);
-      const newDataStr = JSON.stringify(result.chartData);
-      const currentDataStr = JSON.stringify(data);
-
-      if (newDataStr !== currentDataStr) {
-        setData(result.chartData);
-        console.log('Chart data updated from manual sync');
-      }
-      setLastSyncTime(new Date());
-    } catch (err) {
-      console.error('Manual sync failed:', err);
-    } finally {
-      setIsManualSyncing(false);
-    }
-  };
 
   // Logging session lifecycle (session init, activity tracking, cleanup)
   const { initializeLogging, handlePrivacyAccept, handleLoggingEnabled, logGraphChange } =
@@ -805,6 +945,12 @@ function ToCViewer() {
 
   // Debounced undo history to group rapid successive operations
   const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Feedback 67: the snapshot waiting out the 300ms grouping window.
+  // Undo/redo FLUSH this into the history instead of dropping it —
+  // previously an undo within 300ms of an edit cancelled the pending
+  // push outright, silently losing that edit's boundary (Ctrl+Z then
+  // restored the state from one operation EARLIER).
+  const pendingUndoSnapshotRef = useRef<ToCData | null>(null);
 
   const saveToHistory = useCallback((currentData: ToCData) => {
     if (!currentData) return;
@@ -816,11 +962,31 @@ function ToCViewer() {
     if (undoTimeoutRef.current) {
       clearTimeout(undoTimeoutRef.current);
     }
+    pendingUndoSnapshotRef.current = clonedData;
 
     // Set new timeout to save to history after a brief delay
     undoTimeoutRef.current = setTimeout(() => {
+      undoTimeoutRef.current = null;
+      pendingUndoSnapshotRef.current = null;
       setUndoHistory((prev) => [...prev, clonedData]);
     }, 300); // 300ms delay to group rapid operations
+  }, []);
+
+  // Flush (not drop) the pending history snapshot. Returns the history
+  // array undo/redo should operate on. Shared by handleUndo/handleRedo
+  // so an undo issued inside the 300ms grouping window still sees the
+  // most recent boundary.
+  const flushPendingHistory = useCallback((history: ToCData[]): ToCData[] => {
+    if (undoTimeoutRef.current) {
+      clearTimeout(undoTimeoutRef.current);
+      undoTimeoutRef.current = null;
+    }
+    if (pendingUndoSnapshotRef.current) {
+      const flushed = [...history, pendingUndoSnapshotRef.current];
+      pendingUndoSnapshotRef.current = null;
+      return flushed;
+    }
+    return history;
   }, []);
 
   const saveToLocalStorage = useCallback(
@@ -855,19 +1021,22 @@ function ToCViewer() {
 
   const handleUploadJSON = useCallback(
     (jsonData: unknown) => {
-      // Validate that the uploaded data has the expected structure
-      if (!jsonData || typeof jsonData !== 'object') {
-        alert('Invalid JSON file: Data must be an object');
+      // Defense in depth: FileMenu already deep-validates before
+      // calling us, but any other future caller (programmatic, dev
+      // console, future paste-from-clipboard, etc.) goes through here
+      // with possibly malformed data. Walk the full shape — same
+      // validator — and surface a console error if it fails. The
+      // legacy `alert()` was a UX anti-pattern from PR 1 era.
+      //
+      // `validateChartImport` covers waypoint validation introduced
+      // by PR 7 (it was designed in PR 6 fix to anticipate the new
+      // shape).
+      const result = validateChartImport(jsonData);
+      if (!result.ok) {
+        console.error('[App] handleUploadJSON received malformed data:', result.reason);
         return;
       }
-
-      const candidate = jsonData as { sections?: unknown };
-      if (!candidate.sections || !Array.isArray(candidate.sections)) {
-        alert('Invalid JSON file: Missing or invalid sections array');
-        return;
-      }
-
-      const validData = jsonData as ToCData;
+      const validData = result.data;
       console.log('Uploading JSON data:', validData);
 
       // Save current state to history before updating
@@ -880,7 +1049,7 @@ function ToCViewer() {
 
       // Set the uploaded data
       setData(validData);
-      pendingChangesRef.current = validData;
+      setPendingChanges(validData);
       saveToLocalStorage(validData);
 
       // Trigger debounced database save for JSON upload
@@ -894,12 +1063,14 @@ function ToCViewer() {
             console.log('Saving uploaded JSON to database');
             ChartService.updateChart(currentEditToken, pendingChangesRef.current)
               .then(() => {
-                pendingChangesRef.current = null;
+                setPendingChanges(null);
                 setIsSaving(false);
+                setSaveError(null);
               })
               .catch((err) => {
                 console.error('Failed to save uploaded JSON to database:', err);
                 setIsSaving(false);
+                setSaveError(asSaveError(err));
               });
           } else {
             setIsSaving(false);
@@ -910,7 +1081,7 @@ function ToCViewer() {
 
       console.log('JSON data uploaded successfully');
     },
-    [data, saveToHistory, saveToLocalStorage, currentEditToken],
+    [data, saveToHistory, saveToLocalStorage, currentEditToken, setPendingChanges],
   );
 
   const handleGraphUpdate = (newGraphData: ToCData) => {
@@ -924,6 +1095,9 @@ function ToCViewer() {
 
   // Debounced save to database
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pending (not yet persisted) edits. Mutate via `setPendingChanges`
+  // only — see the hasPendingChanges mirror declared with the other
+  // save state above.
   const pendingChangesRef = useRef<ToCData | null>(null);
   const dataRef = useRef<ToCData | null>(data);
   useEffect(() => {
@@ -943,7 +1117,7 @@ function ToCViewer() {
       setRedoHistory([]);
 
       setData(newData);
-      pendingChangesRef.current = newData;
+      setPendingChanges(newData);
 
       // Save debounced snapshot for logging (manual edits)
       logGraphChange(newData, 'manual_edit');
@@ -970,8 +1144,9 @@ function ToCViewer() {
           ChartService.updateChart(currentEditToken, pendingChangesRef.current)
             .then(() => {
               console.log('Database save successful');
-              pendingChangesRef.current = null;
+              setPendingChanges(null);
               setIsSaving(false);
+              setSaveError(null);
             })
             .catch((err) => {
               console.error('Failed to save to database:', err);
@@ -980,6 +1155,7 @@ function ToCViewer() {
                 saveToLocalStorage(pendingChangesRef.current);
               }
               setIsSaving(false);
+              setSaveError(asSaveError(err));
             });
         } else {
           setIsSaving(false);
@@ -987,19 +1163,26 @@ function ToCViewer() {
         saveTimeoutRef.current = null;
       }, 300); // 300ms debounce
     },
-    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange],
+    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges],
   );
 
   const handleUndo = useCallback(() => {
-    // Clear any pending saves first
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
-    }
+    // L2 mitigation: if the user is typing in an INPUT/TEXTAREA/
+    // contentEditable, the in-progress edit owns Ctrl+Z. Bail out so the
+    // browser's native undo runs against the text field instead of our
+    // graph history. Toolbar undo buttons that fire handleUndo MUST pair
+    // this with `onMouseDown={(e) => e.preventDefault()}` so the click
+    // doesn't shift focus to the button before this check runs.
+    if (isInputFocused()) return;
 
-    if (undoHistory.length > 0 && data) {
-      const previousState = undoHistory[undoHistory.length - 1];
-      const newUndoHistory = undoHistory.slice(0, -1);
+    // Feedback 67: flush — never drop — a snapshot still inside the
+    // 300ms grouping window, so the operation the user is undoing is
+    // the one that actually gets undone.
+    const effectiveUndoHistory = flushPendingHistory(undoHistory);
+
+    if (effectiveUndoHistory.length > 0 && data) {
+      const previousState = effectiveUndoHistory[effectiveUndoHistory.length - 1];
+      const newUndoHistory = effectiveUndoHistory.slice(0, -1);
 
       // Validate the previous state has required structure
       if (!previousState || !previousState.sections || !Array.isArray(previousState.sections)) {
@@ -1013,7 +1196,7 @@ function ToCViewer() {
 
       // Use handleDataChange to trigger debounced save, but skip history management
       setData(previousState);
-      pendingChangesRef.current = previousState;
+      setPendingChanges(previousState);
       saveToLocalStorage(previousState);
 
       // Save undo snapshot for logging
@@ -1030,12 +1213,14 @@ function ToCViewer() {
             console.log('Saving undo state to database');
             ChartService.updateChart(currentEditToken, pendingChangesRef.current)
               .then(() => {
-                pendingChangesRef.current = null;
+                setPendingChanges(null);
                 setIsSaving(false);
+                setSaveError(null);
               })
               .catch((err) => {
                 console.error('Failed to save undo to database:', err);
                 setIsSaving(false);
+                setSaveError(asSaveError(err));
               });
           } else {
             setIsSaving(false);
@@ -1046,13 +1231,27 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
+  }, [
+    undoHistory,
+    data,
+    flushPendingHistory,
+    saveToLocalStorage,
+    currentEditToken,
+    logGraphChange,
+    setPendingChanges,
+  ]);
 
   const handleRedo = useCallback(() => {
-    // Clear any pending saves first
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
+    // L2 mitigation symmetric to handleUndo — see comment there.
+    if (isInputFocused()) return;
+
+    // Feedback 67: same flush-not-drop rule as handleUndo. (A pending
+    // snapshot here implies a data change after the last undo, which
+    // also cleared redoHistory — so this is unreachable in practice;
+    // kept for invariant safety.)
+    const flushedUndoHistory = flushPendingHistory(undoHistory);
+    if (flushedUndoHistory !== undoHistory) {
+      setUndoHistory(flushedUndoHistory);
     }
 
     if (redoHistory.length > 0 && data) {
@@ -1071,7 +1270,7 @@ function ToCViewer() {
 
       // Use debounced save for redo as well
       setData(nextState);
-      pendingChangesRef.current = nextState;
+      setPendingChanges(nextState);
       saveToLocalStorage(nextState);
 
       // Save redo snapshot for logging
@@ -1088,12 +1287,14 @@ function ToCViewer() {
             console.log('Saving redo state to database');
             ChartService.updateChart(currentEditToken, pendingChangesRef.current)
               .then(() => {
-                pendingChangesRef.current = null;
+                setPendingChanges(null);
                 setIsSaving(false);
+                setSaveError(null);
               })
               .catch((err) => {
                 console.error('Failed to save redo to database:', err);
                 setIsSaving(false);
+                setSaveError(asSaveError(err));
               });
           } else {
             setIsSaving(false);
@@ -1104,23 +1305,23 @@ function ToCViewer() {
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
-  }, [redoHistory, data, saveToLocalStorage, currentEditToken, logGraphChange]);
+  }, [
+    redoHistory,
+    undoHistory,
+    data,
+    flushPendingHistory,
+    saveToLocalStorage,
+    currentEditToken,
+    logGraphChange,
+    setPendingChanges,
+  ]);
 
   // Keyboard shortcut handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if user is typing in an input field
-      const activeElement = document.activeElement;
-      const isTyping =
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          (activeElement as HTMLElement).contentEditable === 'true');
-
-      // Don't interfere with text editing
-      if (isTyping) {
-        return;
-      }
+      // Don't interfere with text editing: shared util keeps this in
+      // sync with handleUndo/handleRedo and useKeyboardShortcuts.
+      if (isInputFocused()) return;
 
       if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
         event.preventDefault();
@@ -1140,66 +1341,45 @@ function ToCViewer() {
     };
   }, [handleUndo, handleRedo]); // Re-run when handlers change
 
-  const copyGraphJSON = useCallback(async () => {
-    if (!data) return;
+  // Delete chart handler. Lives at App-level so FileMenu (in TopBar)
+  // can call it without prop-drilling through TheoryOfChangeGraph.
+  // Owner gating is enforced by the FileMenu (it doesn't render the
+  // Delete item for non-owners); calling deleteChart without ownership
+  // would 403 on the server.
+  const handleDeleteChart = useCallback(
+    async (chartId: string) => {
+      try {
+        await ChartService.deleteChart(chartId, currentEditToken ?? undefined);
+        clearChartSpend(chartId);
 
-    try {
-      const graphData = {
-        ...data,
-        // Include additional UI state in metadata
-        _metadata: {
-          exportedAt: new Date().toISOString(),
-        },
-      };
-      await navigator.clipboard.writeText(JSON.stringify(graphData, null, 2));
-      // Could add a toast notification here if desired
-    } catch (err) {
-      console.error('Failed to copy JSON:', err);
-    }
-  }, [data]);
-
-  const resetToOriginal = useCallback(async () => {
-    if (
-      !confirm(
-        'This will reset your graph to the original version and delete all saved progress. Are you sure?',
-      )
-    ) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      // Clear localStorage for this file
-      const storageKey = `toc_graph_${filename || 'default'}`;
-      localStorage.removeItem(storageKey);
-      console.log('Cleared localStorage:', storageKey);
-
-      // Clear undo/redo history
-      setUndoHistory([]);
-      setRedoHistory([]);
-
-      // Load original data
-      if (filename) {
-        const response = await fetch(`/ToC-graphs/${filename}`);
-        if (!response.ok) {
-          throw new Error(`Failed to load ${filename}`);
+        if (!isAuthenticated) {
+          // Strip the deleted entry from the anon recent-charts list.
+          try {
+            const stored = localStorage.getItem('recentEditCharts');
+            if (stored) {
+              const charts = JSON.parse(stored) as { chartId?: string }[];
+              const filtered = charts.filter((c) => c.chartId !== chartId);
+              localStorage.setItem('recentEditCharts', JSON.stringify(filtered));
+            }
+          } catch (err) {
+            console.warn('[App] failed to clean anon recent-charts', err);
+          }
         }
-        const jsonData = await response.json();
-        setData(jsonData);
-      } else {
-        // Default to empty template
-        setData(emptyTemplate);
-      }
 
-      console.log('Reset to original data');
-    } catch (err) {
-      console.error('Error resetting to original:', err);
-      setError(err instanceof Error ? err.message : 'Failed to reset to original');
-    } finally {
-      setLoading(false);
-    }
-  }, [filename]);
+        // If we deleted the current chart, send the user home.
+        if (currentChartId === chartId) {
+          window.location.href = '/';
+        }
+      } catch (err) {
+        // Surface the failure via the SaveIndicator so the user knows
+        // the delete didn't take.
+        setSaveError(asSaveError(err));
+        // Also pop an alert because the SaveIndicator is small.
+        alert(err instanceof Error ? err.message : 'Failed to delete chart');
+      }
+    },
+    [currentEditToken, currentChartId, isAuthenticated],
+  );
 
   // Add beforeunload warning for unsaved changes
   useEffect(() => {
@@ -1223,6 +1403,85 @@ function ToCViewer() {
   useEffect(() => {
     currentEditTokenRef.current = currentEditToken;
   }, [currentEditToken]);
+
+  // PR 2 fix-pass: single permissions poll. Replaces three overlapping
+  // callers (ShareDialog's `loadPermissions`, `usePermissionsRefresh`,
+  // and the standalone pending-badge poll). Owner-gated; the
+  // chart_permissions endpoint 403s for non-owners so guarding by
+  // `isOwner` keeps the console clean. 30s cadence is the L1 race
+  // correctness guarantee. Resets on chart / owner-status change so a
+  // flip from owner -> non-owner doesn't leave a stale badge.
+  //
+  // Failure handling: a transient 5xx / 401 (Auth0 silent refresh /
+  // Neon cold start) used to be silently swallowed, leaving the badge
+  // frozen at its last-known-good value. We now flag the badge as
+  // stale after >=2 consecutive failures and report to
+  // `loggingService.reportError` so the operator has a signal. The
+  // count itself is preserved (better to show a stale 3 than a fresh 0)
+  // and resets to non-stale on the next successful poll.
+  //
+  // Consecutive-failure counter for the polling closure. Stable across
+  // re-renders so the effect re-runs only on chart / auth changes, not
+  // on every fetch outcome. We report once per streak by checking
+  // `=== 2` on the increment side (the boundary where we first hit
+  // stale); subsequent failures bump the counter without re-reporting.
+  const permissionsFailuresRef = useRef(0);
+  const fetchPermissions = useCallback(async () => {
+    if (!currentChartId || !isAuthenticated || !isOwner) return;
+    setPermissionsLoading(true);
+    try {
+      const result = await ChartService.getChartPermissions(currentChartId);
+      setPermissions(result.permissions);
+      if (result.linkSharingLevel) {
+        setLinkSharingLevel(result.linkSharingLevel);
+      }
+      permissionsFailuresRef.current = 0;
+      setPermissionsFetchError(null);
+      setPendingRequestCountStale(false);
+    } catch (err) {
+      permissionsFailuresRef.current += 1;
+      console.error('[App] permissions poll failed:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      setPermissionsFetchError(message);
+      if (permissionsFailuresRef.current >= 2) {
+        setPendingRequestCountStale(true);
+      }
+      // Report exactly once per streak (at the boundary where we
+      // first hit stale) so we don't flood logging_errors during a
+      // multi-hour outage.
+      if (permissionsFailuresRef.current === 2) {
+        loggingService.reportError({
+          error_name: 'PermissionsPollFailed',
+          error_message: message,
+          chart_id: currentChartId,
+        });
+      }
+    } finally {
+      setPermissionsLoading(false);
+    }
+  }, [currentChartId, isAuthenticated, isOwner]);
+
+  useEffect(() => {
+    if (!currentChartId || !isAuthenticated || !isOwner) {
+      setPermissions([]);
+      setLinkSharingLevel('restricted');
+      setPermissionsFetchError(null);
+      setPendingRequestCountStale(false);
+      permissionsFailuresRef.current = 0;
+      return;
+    }
+    void fetchPermissions();
+    const interval = setInterval(() => void fetchPermissions(), 30_000);
+    return () => clearInterval(interval);
+  }, [currentChartId, isAuthenticated, isOwner, fetchPermissions]);
+
+  // Cross-tab nudge: when a sibling tab writes a sentinel key (e.g.
+  // after `updateLinkSharing` in ShareDialog), refetch immediately
+  // rather than waiting up to 30s for the poll.
+  usePermissionsRefresh({
+    enabled: Boolean(currentChartId && isAuthenticated && isOwner),
+    onInvalidate: () => void fetchPermissions(),
+  });
 
   // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
   useEffect(() => {
@@ -1288,6 +1547,7 @@ function ToCViewer() {
           setData(result.chartData);
           setCurrentEditToken(editToken);
           setCurrentChartId(result.chartId);
+          setIsOwner(Boolean(result.isOwner));
 
           // Initialize logging session after chart is loaded
           initializeLogging(result.chartId, result.chartData);
@@ -1343,127 +1603,26 @@ function ToCViewer() {
     }
   }, [data?.title]);
 
-  // Smart periodic sync with idle detection for edit mode
-  useEffect(() => {
-    if (!editToken || !authTokenReady) return;
-
-    let interval: ReturnType<typeof setInterval>;
-    let lastSyncedData: string | null = null;
-    let isTabVisible = true;
-    let lastActivity = Date.now();
-    let syncInterval = 10000; // Start with 10 seconds
-    let consecutiveUnchanged = 0;
-
-    const syncData = async () => {
-      // Don't sync if tab is hidden or user is idle
-      if (!isTabVisible || Date.now() - lastActivity > 300000) {
-        // 5 min idle timeout
-        console.log('Skipping sync - tab hidden or user idle');
-        return;
-      }
-
-      // Don't sync if currently saving to prevent conflicts
-      if (isSaving) {
-        console.log('Skipping sync - save in progress');
-        return;
-      }
-
-      try {
-        console.log(`Syncing chart in edit mode (interval: ${syncInterval}ms)`);
-        const result = await ChartService.getChartByEditToken(editToken);
-        const newDataStr = JSON.stringify(result.chartData);
-
-        // Only update if the data has changed (to preserve undo/redo history)
-        if (lastSyncedData !== newDataStr) {
-          lastSyncedData = newDataStr;
-          setData(result.chartData);
-          console.log('Chart data updated from sync');
-          setLastSyncTime(new Date());
-          consecutiveUnchanged = 0;
-          syncInterval = 10000; // Reset to 10 seconds
-        } else {
-          consecutiveUnchanged++;
-          // Exponential backoff: 10s -> 15s -> 22s -> 33s -> 50s -> 60s max
-          if (consecutiveUnchanged > 2) {
-            const newInterval = Math.min(Math.floor(syncInterval * 1.5), 60000);
-            if (newInterval !== syncInterval) {
-              syncInterval = newInterval;
-              console.log(
-                `No changes for ${consecutiveUnchanged} syncs, interval now ${syncInterval}ms`,
-              );
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error syncing chart data:', err);
-      }
-    };
-
-    // Handle visibility change
-    const handleVisibilityChange = () => {
-      isTabVisible = !document.hidden;
-      if (isTabVisible) {
-        console.log('Tab became visible, syncing immediately');
-        syncData(); // Sync immediately when tab becomes visible
-        lastActivity = Date.now();
-      }
-    };
-
-    // Handle user activity
-    const handleActivity = () => {
-      const timeSinceLastActivity = Date.now() - lastActivity;
-      lastActivity = Date.now();
-
-      // If user was idle and becomes active, sync immediately
-      if (timeSinceLastActivity > 300000) {
-        console.log('User became active after being idle, syncing');
-        syncData();
-      }
-    };
-
-    // Listen for events
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    document.addEventListener('mousemove', handleActivity);
-    document.addEventListener('keydown', handleActivity);
-    document.addEventListener('click', handleActivity);
-    document.addEventListener('scroll', handleActivity);
-
-    // Initial sync after a short delay
-    const initialTimer = setTimeout(syncData, 1000);
-
-    // Dynamic interval
-    const runSync = () => {
-      syncData();
-      clearInterval(interval);
-      if (syncInterval < 60000 || consecutiveUnchanged < 10) {
-        interval = setInterval(runSync, syncInterval);
-      }
-    };
-    interval = setInterval(runSync, syncInterval);
-
-    return () => {
-      clearTimeout(initialTimer);
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      document.removeEventListener('mousemove', handleActivity);
-      document.removeEventListener('keydown', handleActivity);
-      document.removeEventListener('click', handleActivity);
-      document.removeEventListener('scroll', handleActivity);
-    };
-  }, [editToken, isSaving, authTokenReady]);
-
-  // Update the "time ago" display every second
-  const [, forceUpdate] = useState({});
-  useEffect(() => {
-    if (!lastSyncTime) return;
-
-    const interval = setInterval(() => {
-      // Force re-render to update the "time ago" display
-      forceUpdate({});
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [lastSyncTime]);
+  // Smart periodic sync with idle detection for edit mode. Extracted to
+  // `useChartSync` (round-7 issue 80): the inline effect's in-flight GET
+  // could land after a newer local edit and setData the stale snapshot
+  // over it (the "slider reverts after release" bug). The hook carries
+  // apply-time guards (dead-epoch drop, local-pending drop, own-echo
+  // skip) and the regression tests; see the header of
+  // `src/hooks/useChartSync.ts` for the measured timeline.
+  const handleRemoteData = useCallback((chartData: ToCData) => {
+    setData(chartData);
+    setLastSyncTime(new Date());
+  }, []);
+  useChartSync({
+    editToken,
+    authTokenReady,
+    isSaving,
+    isDragInFlightRef,
+    pendingChangesRef,
+    dataRef,
+    onRemoteData: handleRemoteData,
+  });
 
   if (loading) {
     return (
@@ -1606,6 +1765,81 @@ function ToCViewer() {
 
   return (
     <div className="h-screen w-screen bg-gray-50 overflow-hidden fixed inset-0">
+      {/* TopBar carries the Share button (right cluster); PR 2's
+        ShareDialog mounts here at the App level and is opened via
+        TopBar's `onShareClick`. */}
+      <TopBar
+        editMode={true}
+        showEditButton={true}
+        undoHistory={undoHistory}
+        redoHistory={redoHistory}
+        handleUndo={handleUndo}
+        handleRedo={handleRedo}
+        isSaving={isSaving}
+        saveError={saveError}
+        // PR 7 fb (57): drives the SaveIndicator "Unsaved changes"
+        // state — mirrors pendingChangesRef, so a failed autosave (the
+        // round-2 silent-save bug) shows as unsaved instead of a stale
+        // "Saved".
+        hasPendingChanges={hasPendingChanges}
+        currentEditToken={currentEditToken}
+        // Format-menu setters write through `handleDataChange` so the
+        // canonical state lives in `data.*` (TheoryOfChangeGraph's
+        // initialData effect picks them up).
+        fontFamily={data.fontFamily ?? "'Ubuntu', sans-serif"}
+        setFontFamily={(next) => handleDataChange({ ...data, fontFamily: next })}
+        textSize={data.textSize ?? 1}
+        setTextSize={(next) => handleDataChange({ ...data, textSize: next })}
+        curvature={data.curvature ?? 0.5}
+        setCurvature={(next) => handleDataChange({ ...data, curvature: next })}
+        columnPadding={data.columnPadding ?? 24}
+        setColumnPadding={(next) => handleDataChange({ ...data, columnPadding: next })}
+        sectionPadding={data.sectionPadding ?? 32}
+        setSectionPadding={(next) => handleDataChange({ ...data, sectionPadding: next })}
+        isAuthenticated={isAuthenticated}
+        isOwner={isOwner}
+        currentChartId={currentChartId}
+        onDeleteChart={handleDeleteChart}
+        // PR 6 (Task 6.2): FileMenu Export reads `data` (filename
+        // from `data.title`, payload from current state) and Import
+        // reads it to decide whether to show a "replace existing
+        // chart?" confirm. Without this prop the FileMenu disables
+        // all three Export entries (canExport = Boolean(data)),
+        // which is the bug reported as PR 7 feedback (34) — Export
+        // appeared disabled even on charts with modifications.
+        data={data}
+        // PR 6 (Task 6.2): FileMenu Import → JSON drops through
+        // `handleUploadJSON`, which validates the shape, saves to
+        // history, and triggers a debounced DB save.
+        onImportJson={handleUploadJSON}
+        // Share button opens the PR 2 ShareDialog mounted below.
+        // Replaces the CustomEvent bridge to the legacy share-dialog
+        // shim inside the old EditToolbar, deleted in PR 2.
+        onShareClick={() => setShareOpen(true)}
+        pendingRequestCount={pendingRequestCount}
+        pendingRequestCountStale={pendingRequestCountStale}
+        profileSlot={<AuthButton onLoggingEnabled={handleLoggingEnabled} />}
+      />
+
+      {/* Round-4: visible + recoverable signal when the signed-in session
+        can no longer mint tokens (otherwise: silent anon demotion). */}
+      <SessionExpiredBanner />
+
+      <ShareDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        data={data}
+        currentEditToken={currentEditToken}
+        containerSize={containerSize}
+        onChartCreated={handleChartCreated}
+        permissions={permissions}
+        linkSharingLevel={linkSharingLevel}
+        permissionsLoading={permissionsLoading}
+        permissionsFetchError={permissionsFetchError}
+        onPermissionsChanged={fetchPermissions}
+        onOptimisticLinkSharingLevel={setLinkSharingLevel}
+      />
+
       {/* Left Sidebar - AI Assistant */}
       <ChatInterface
         isCollapsed={isLeftPanelCollapsed}
@@ -1644,6 +1878,14 @@ function ToCViewer() {
         >
           <div
             className="bg-white rounded-xl shadow-lg p-4"
+            // PR 6: the export utilities (`src/utils/exportChart.ts`)
+            // query for `[data-export-root]` to find the capture target.
+            // This is the inner white card; it contains the entire
+            // graph (sections + nodes + SVG connections) and is
+            // independent of the outer zoom/pan transform — which
+            // `exportChart` neutralizes during capture, but that
+            // transform is on the *parent* div, not this one.
+            data-export-root="true"
             style={{
               width: containerSize.width > 0 ? `${containerSize.width + 32}px` : 'auto',
               height: containerSize.height > 0 ? `${containerSize.height + 32}px` : 'auto',
@@ -1653,36 +1895,15 @@ function ToCViewer() {
               data={data}
               onSizeChange={setContainerSize}
               onDataChange={handleDataChange}
-              undoHistory={undoHistory}
-              redoHistory={redoHistory}
-              handleUndo={handleUndo}
-              handleRedo={handleRedo}
-              isSaving={isSaving}
-              currentEditToken={currentEditToken}
-              lastSyncTime={lastSyncTime}
-              isManualSyncing={isManualSyncing}
-              handleManualSync={handleManualSync}
-              getTimeAgo={getTimeAgo}
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}
-              onChartCreated={handleChartCreated}
-              viewportOffset={viewportOffset}
+              onDragActiveChange={(active) => {
+                isDragInFlightRef.current = active;
+              }}
             />
           </div>
         </div>
-      </div>
-
-      {/* Auth Button - Top Right */}
-      <div
-        className="fixed"
-        style={{
-          top: '4rem',
-          right: '1rem',
-          zIndex: 9999,
-        }}
-      >
-        <AuthButton onLoggingEnabled={handleLoggingEnabled} />
       </div>
 
       {/* Zoom Controls - Google Maps Style (hidden on mobile) */}
@@ -1718,24 +1939,15 @@ function ToCViewer() {
         </div>
       </div>
 
-      {/* JSON Dropdown Footer - Fixed at bottom */}
-      <div
-        className={`fixed bottom-0 z-30 transition-all duration-300 ${
-          isLeftPanelCollapsed ? 'left-0 md:left-12' : 'left-0 md:left-[280px] lg:left-[25%]'
-        } right-0`}
-      >
-        <JsonDropdown
-          data={data}
-          title="Current Graph JSON"
-          copyGraphJSON={copyGraphJSON}
-          resetToOriginal={resetToOriginal}
-          onUploadJSON={handleUploadJSON}
-          loading={loading}
-        />
-      </div>
-
       {/* Privacy Policy Popup */}
       <PrivacyPolicyPopup onAccept={handlePrivacyAccept} />
+
+      {/* View-mode walkthrough. Mounted here (editor route) and in
+        ToCViewerOnly so HelpPanel's "Replay" button reaches a live
+        listener from either entrypoint. <GraphTutorial> stays invisible
+        until it receives the GRAPH_TUTORIAL_REPLAY_EVENT custom event
+        (dispatched by HelpPanel). No auto-open. */}
+      <GraphTutorial />
     </div>
   );
 }

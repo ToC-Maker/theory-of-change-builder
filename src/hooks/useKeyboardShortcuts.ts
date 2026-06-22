@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Node, ToCData } from '../types';
+import { isInputFocused } from '../utils/isInputFocused';
 
 interface UseKeyboardShortcutsProps {
   data: ToCData;
@@ -10,9 +11,10 @@ interface UseKeyboardShortcutsProps {
   nodeRefs: { [key: string]: HTMLDivElement | null };
   setNodeWidth: (width: number) => void;
   setNodeColor: (color: string) => void;
-  setNodePopup: React.Dispatch<
-    React.SetStateAction<{ id: string; title: string; text: string } | null>
-  >;
+  // PR 3: `setNodePopup` was used by `clearSelections` to dismiss the
+  // pencil-icon NodePopup modal. The modal is gone; the anchored
+  // NodeEditor self-dismisses when selection clears, so the prop is no
+  // longer needed.
   moveNodeVertically: (nodeId: string, direction: 'up' | 'down') => void;
   nodeHeights: { [key: string]: number };
 }
@@ -26,7 +28,6 @@ export function useKeyboardShortcuts({
   nodeRefs,
   setNodeWidth,
   setNodeColor,
-  setNodePopup,
   moveNodeVertically,
   nodeHeights,
 }: UseKeyboardShortcutsProps) {
@@ -86,8 +87,9 @@ export function useKeyboardShortcuts({
     setHighlightedNodes(new Set());
     setNodeWidth(192);
     setNodeColor('#ffffff');
-    setNodePopup(null);
-  }, [setHighlightedNodes, setNodeWidth, setNodeColor, setNodePopup]);
+    // PR 3: the anchored NodeEditor watches `highlightedNodes`, so it
+    // dismisses automatically when we clear the set.
+  }, [setHighlightedNodes, setNodeWidth, setNodeColor]);
 
   // Navigate to next/previous node with Tab
   const navigateNodes = useCallback(
@@ -242,19 +244,11 @@ export function useKeyboardShortcuts({
   // Enhanced keyboard event handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if user is typing in an input field
-      const activeElement = document.activeElement;
-      const isTyping =
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          (activeElement as HTMLElement).contentEditable === 'true');
-
-      // Allow ALL shortcuts to pass through when typing in input fields
-      if (isTyping) {
-        // Don't interfere with any keyboard shortcuts while user is typing
-        return;
-      }
+      // Don't interfere with any keyboard shortcut while user is typing
+      // in an INPUT / TEXTAREA / contentEditable. Shared helper so the
+      // check stays in sync with App.handleUndo/handleRedo + toolbar
+      // L2 mitigation.
+      if (isInputFocused()) return;
 
       // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)
       if ((event.ctrlKey || event.metaKey) && event.key === 'a' && editMode) {

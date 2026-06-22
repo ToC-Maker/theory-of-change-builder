@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect, useDeferredValue } from 'react';
+import React, { useCallback, useMemo, useState, useRef, useEffect, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
@@ -23,20 +23,26 @@ import systemPromptContent from '../prompts/systemPrompt.md?raw';
 import chatModePromptContent from '../prompts/chatModePrompt.md?raw';
 import { addNodePaths } from '../utils/addNodePaths';
 import { parseGeneratedGraph, hasGeneratedGraph } from '../utils/parseGeneratedGraph';
-import { parseFile, getFileTypeDescription } from '../utils/fileParser';
+import { parseFile } from '../utils/fileParser';
 import { addByokSpend, setChartSpendIfHigher, useChartByokSpendUsd } from '../utils/byokSpend';
+import { TOP_BAR_HEIGHT_PX } from '../hooks/useViewportOffset';
 import { getFreshIdToken } from '../utils/auth';
 import { AttachedFilesBar, type AttachedFile } from './AttachedFilesBar';
 import {
   type ComposerBlocker,
+  type EstimateFailure,
   type RenderedBlocker,
+  bannerCarriesEstimateStatus,
   costErrorToBlocker,
+  estimateUnavailableNote,
   selectBlocker,
   shouldBlockSend,
   preserveCapClassOnly,
 } from './chat/composerBlocker';
-import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
+import { useAuthSessionDegraded } from '../hooks/useAuthSessionDegraded';
+import { useClampedPopoverX } from './chat/useClampedPopoverX';
+import { ConfirmModal } from './ConfirmModal';
 import type { ToCData } from '../types';
 import {
   formatCostUsd,
@@ -53,8 +59,6 @@ import {
   ChevronDownIcon,
   PaperAirplaneIcon,
   PaperClipIcon,
-  CloudArrowUpIcon,
-  XMarkIcon,
   DocumentPlusIcon,
   ArrowUpTrayIcon,
   ChatBubbleLeftRightIcon,
@@ -63,6 +67,7 @@ import {
   SparklesIcon,
   PencilSquareIcon,
   InformationCircleIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -208,6 +213,11 @@ function Picker<T extends string>({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Measured horizontal clamp: the menu opens inside the chat panel's
+  // overflow-hidden content wrapper, so a static `left-0` anchor clips at
+  // the panel edge when the trigger sits close to it (e.g. the Effort
+  // picker inside the composer-options popover). See useClampedPopoverX.
+  const menuClamp = useClampedPopoverX(open);
   useEffect(() => {
     if (!open) return;
     const handle = (e: MouseEvent) => {
@@ -231,7 +241,9 @@ function Picker<T extends string>({
       </button>
       {open && (
         <div
-          className={`absolute bottom-full mb-1 left-0 ${menuWidthClass} bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50`}
+          ref={menuClamp.ref}
+          style={menuClamp.style}
+          className={`absolute bottom-full mb-1 ${menuWidthClass} bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden z-50`}
         >
           {options.map((value) => (
             <button
@@ -707,6 +719,32 @@ export function ChatInterface({
   // flickering on the narrow `web_search` sub-block only.
   const [streamPhase, setStreamPhase] = useState<StreamPhase | null>(null);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  // Composer ⚙ popover (PR 1 polish §1.4): houses the web-search toggle
+  // and the effort selector. Replaces the inline magnifying-glass
+  // button + side-by-side effort dropdown.
+  const [showComposerOptions, setShowComposerOptions] = useState(false);
+  // Clear-chat confirmation modal (PR 5 red-team L4 closure: replaces
+  // window.confirm). Same pattern as FileMenu's delete-chart retrofit.
+  const [confirmClearChatOpen, setConfirmClearChatOpen] = useState(false);
+  const composerOptionsRef = useRef<HTMLDivElement>(null);
+  // Measured horizontal clamp for the ⚙ popover (PR #34 feedback #60).
+  // The popover lives inside the panel's overflow-hidden content wrapper,
+  // so static side anchors clip at a panel edge: `right-0` clipped off the
+  // panel's left, and round 1's `left-0` (4c3f484) clipped at the panel's
+  // right. One shared instance is safe: the Chat and Generate composers
+  // are mutually exclusive (`currentMode` branches), so only one popover
+  // mounts at a time. See useClampedPopoverX for the mechanics.
+  const composerOptionsClamp = useClampedPopoverX(showComposerOptions);
+  useEffect(() => {
+    if (!showComposerOptions) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (composerOptionsRef.current && !composerOptionsRef.current.contains(e.target as Node)) {
+        setShowComposerOptions(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [showComposerOptions]);
   // Extended thinking is always enabled on Opus 4.7; the server defaults to
   // adaptive thinking when extendedThinkingEnabled is omitted/true.
 
@@ -735,10 +773,14 @@ export function ChatInterface({
   // estimate can update independently; both are debounced to avoid
   // hammering /api/count-tokens-estimate on every keystroke.
   const [composerEstimateUsd, setComposerEstimateUsd] = useState<number>(0);
-  // Last upstream message from /api/count-tokens-estimate when it fails.
-  // Rendered inline so shape issues (file_id unresolvable, etc.) surface
-  // to the user instead of silently falling back to a char-based estimate.
-  const [composerEstimateError, setComposerEstimateError] = useState<string | null>(null);
+  // Failure state of the last /api/count-tokens-estimate fetch (fb6 issue
+  // 74). Structured (upstream status + message) rather than a prebaked
+  // string because two consumers format it differently: the under-textarea
+  // note (unblocked flow) and the in-banner quiet line (quota-blocked flow)
+  // both run it through estimateUnavailableNote. null = healthy.
+  const [composerEstimateFailure, setComposerEstimateFailure] = useState<EstimateFailure | null>(
+    null,
+  );
   // file_ids that /api/count-tokens-estimate couldn't price (e.g. Anthropic's
   // count_tokens endpoint rejected them, or they're awaiting upload). Surfaced
   // so the user knows the estimate excludes those files and the real billed
@@ -762,7 +804,8 @@ export function ChatInterface({
   // startGeneration's confirm-check and the user's choice. Two-phase
   // callback flow lives in startGeneration: setting this true returns early;
   // the modal's onConfirm calls startGenerationInternal (the body after the
-  // confirm gate). See GenerateConfirmDialog.tsx for the modal.
+  // confirm gate). See the <ConfirmModal> render at the bottom of this file
+  // (icon + purple variant for the "Replace your Chat?" framing).
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
 
   // Loading flag so the composer can show a spinner while the debounced
@@ -777,13 +820,23 @@ export function ChatInterface({
   // estimate, which is 0 in Generate mode → no derived block fires).
   const activeEstimate = currentMode === 'generate' ? generateEstimateUsd : composerEstimateUsd;
 
+  // SessionExpiredBanner state (round-4): the signed-in session can no
+  // longer mint tokens, so quota probes and sends answer for the ANON
+  // actor. Gated on isAuthenticated to mirror the banner's own render
+  // gate; selectBlocker uses it to replace quota-class blockers with the
+  // re-login deferral (fb5 issue 73 precedence rule).
+  const authSessionDegraded = useAuthSessionDegraded();
+
   // Render-time blocker: event blocker (composerBlocker) plus derived
   // would_exceed_cap, with cap-class blockers filtered out when tier is
-  // byok. Pure function, called inline at render — cheap.
+  // byok and quota-class results deferred to the session-expired banner
+  // while that state is active. Pure function, called inline at render —
+  // cheap.
   const renderedBlocker: RenderedBlocker = selectBlocker({
     eventBlocker: composerBlocker,
     usage,
     composerEstimateUsd: activeEstimate,
+    authSessionDegraded: isAuthenticated && authSessionDegraded,
   });
 
   // Turnstile session flag. Flipped to `true` once POST /api/verify-turnstile
@@ -802,15 +855,6 @@ export function ChatInterface({
   // verification, so the user knows to retry the challenge rather than just
   // seeing a silent re-render.
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
-
-  // Generate-mode Turnstile gate. Mirrors the chat composer's condition
-  // (line ~3645) so the same anon-without-session state blocks Generate's
-  // upload + submit. `!hasTurnstileSession` is truthy for both null
-  // (probe in flight) and false (probe resolved unverified); both cases
-  // block actions so a click during the probe window can't race the
-  // server-side Turnstile check.
-  const generateBlockedByTurnstile =
-    !isAuthenticated && Boolean(TURNSTILE_SITE_KEY) && !hasTurnstileSession;
 
   // Files attached in Chat mode (separate from Generate-mode `files`). These
   // can be inline text (content in-memory) or Anthropic Files API uploads
@@ -1433,6 +1477,14 @@ export function ChatInterface({
       );
       if (draftChars === 0 && messages.length === 0 && !hasUploadedFiles) {
         setComposerEstimateUsd(0);
+        // Mirror the Generate guard below: an empty composer must not sit
+        // under leftovers from the previous draft. Resetting only the dollar
+        // figure stranded the "estimates unavailable" note (and the "N files
+        // couldn't be priced" notice) indefinitely — e.g. a network-failed
+        // estimate followed by clearing the draft showed $0.00 with a
+        // permanent failure note and no request in flight to resolve it.
+        setComposerEstimateFailure(null);
+        setComposerUncountedFileIds([]);
         setEstimatingCost(false);
         return;
       }
@@ -1501,6 +1553,12 @@ export function ChatInterface({
 
       setEstimatingCost(true);
       void (async () => {
+        // Carried past the throw below so the catch can preserve upstream
+        // detail. The old shape set the error state in the !ok branch and
+        // then unconditionally overwrote it in the catch — the upstream
+        // reason (e.g. 403 "Request not allowed") never reached the UI
+        // (fb6 issue 74 clobber).
+        let upstreamFailure: EstimateFailure | null = null;
         try {
           const response = await fetch('/api/count-tokens-estimate', {
             method: 'POST',
@@ -1515,21 +1573,34 @@ export function ChatInterface({
           });
           if (!response.ok) {
             // Surface upstream detail so shape issues (e.g. file_id
-            // unresolvable in count_tokens, beta header mismatch) are
-            // diagnosable from the composer instead of silently falling
-            // back to the local char estimate.
-            let upstreamMessage: string | null = null;
+            // unresolvable in count_tokens, beta header mismatch) and
+            // origin blocks (403 "Request not allowed") are diagnosable
+            // from the composer instead of silently falling back to the
+            // local char estimate. The worker re-shapes upstream 429s into
+            // its own 429 {error:'rate_limited'} WITHOUT upstream_* fields
+            // (count-tokens-estimate.ts), so map that back explicitly.
             try {
-              const body = (await response.json()) as { upstream_message?: string };
-              if (typeof body.upstream_message === 'string')
-                upstreamMessage = body.upstream_message;
+              const body = (await response.json()) as {
+                error?: string;
+                upstream_status?: number;
+                upstream_message?: string;
+              };
+              upstreamFailure = {
+                upstreamStatus:
+                  typeof body.upstream_status === 'number'
+                    ? body.upstream_status
+                    : body.error === 'rate_limited'
+                      ? 429
+                      : undefined,
+                upstreamMessage:
+                  typeof body.upstream_message === 'string' ? body.upstream_message : undefined,
+              };
             } catch {
-              /* non-JSON body */
+              /* non-JSON body — fall through to the detail-less failure */
             }
-            setComposerEstimateError(upstreamMessage);
             throw new Error(`status ${response.status}`);
           }
-          setComposerEstimateError(null);
+          setComposerEstimateFailure(null);
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
@@ -1583,11 +1654,12 @@ export function ChatInterface({
           setComposerEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          // Network-level failure (CORS, offline, DNS). Mirror the !response.ok
-          // branch by setting composerEstimateError so the UI shows a
-          // degraded-estimate banner instead of presenting the local char
-          // fallback as if it were precise.
-          setComposerEstimateError('Estimate unavailable; showing rough value');
+          // !response.ok lands here with upstreamFailure populated; network-
+          // level failures (CORS, offline, DNS) land here with it still null
+          // → detail-less failure ({}). Either way the UI shows a degraded-
+          // estimate note instead of presenting the local char fallback as
+          // if it were precise.
+          setComposerEstimateFailure(upstreamFailure ?? {});
           const historyChars = messages.reduce((sum, m) => sum + m.content.length, 0);
           const tokens = roughInputTokensFromChars(
             systemPrompt.length + historyChars + draftChars,
@@ -1622,6 +1694,10 @@ export function ChatInterface({
         !additionalInstructions.trim()
       ) {
         setGenerateEstimateUsd(0);
+        // Clear any stale failure from a previous draft so the empty
+        // composer doesn't sit under a leftover "estimates unavailable"
+        // note.
+        setComposerEstimateFailure(null);
         return;
       }
 
@@ -1636,8 +1712,26 @@ export function ChatInterface({
 
       const systemPromptForEstimate = `${systemPromptContent}\n\n${generateModePromptContent}`;
 
+      // Anthropic-Files-API uploads (PDFs): send as `document` content blocks
+      // so count_tokens counts the PDF text. Without this the estimate
+      // silently ignored attached PDFs — files-only Generate showed $0
+      // instead of the real (often $0.50+) cost of analysing the upload.
+      const userContent: unknown =
+        generateAttachedFileIds.length > 0
+          ? [
+              ...generateAttachedFileIds.map((fid) => ({
+                type: 'document' as const,
+                source: { type: 'file' as const, file_id: fid },
+              })),
+              { type: 'text' as const, text: assembled },
+            ]
+          : assembled;
+
       setEstimatingCost(true);
       void (async () => {
+        // Same clobber-fix shape as the Chat estimate effect above: carry
+        // upstream detail past the throw so the catch preserves it.
+        let upstreamFailure: EstimateFailure | null = null;
         try {
           const response = await fetch('/api/count-tokens-estimate', {
             method: 'POST',
@@ -1647,26 +1741,36 @@ export function ChatInterface({
             body: JSON.stringify({
               model: selectedModel,
               system: [{ type: 'text', text: systemPromptForEstimate }],
-              messages: [{ role: 'user', content: assembled }],
+              messages: [{ role: 'user', content: userContent }],
             }),
           });
           if (!response.ok) {
-            // Surface upstream detail so shape issues (e.g. file_id
-            // unresolvable in count_tokens, beta header mismatch) are
+            // Surface upstream detail so shape issues and origin blocks are
             // diagnosable from the composer instead of silently falling
-            // back to the local char estimate.
-            let upstreamMessage: string | null = null;
+            // back to the local char estimate. Worker re-shapes upstream
+            // 429s into {error:'rate_limited'} without upstream_* fields.
             try {
-              const body = (await response.json()) as { upstream_message?: string };
-              if (typeof body.upstream_message === 'string')
-                upstreamMessage = body.upstream_message;
+              const body = (await response.json()) as {
+                error?: string;
+                upstream_status?: number;
+                upstream_message?: string;
+              };
+              upstreamFailure = {
+                upstreamStatus:
+                  typeof body.upstream_status === 'number'
+                    ? body.upstream_status
+                    : body.error === 'rate_limited'
+                      ? 429
+                      : undefined,
+                upstreamMessage:
+                  typeof body.upstream_message === 'string' ? body.upstream_message : undefined,
+              };
             } catch {
-              /* non-JSON body */
+              /* non-JSON body — fall through to the detail-less failure */
             }
-            setComposerEstimateError(upstreamMessage);
             throw new Error(`status ${response.status}`);
           }
-          setComposerEstimateError(null);
+          setComposerEstimateFailure(null);
           const data = (await response.json()) as {
             input_tokens?: number;
             estimated_cost_usd?: number;
@@ -1683,10 +1787,11 @@ export function ChatInterface({
           setGenerateEstimateUsd(estimate);
         } catch (err) {
           if ((err as { name?: string })?.name === 'AbortError') return;
-          // Network-level failure. Mirror the !response.ok branch so the UI
-          // shows a degraded-estimate indicator rather than silently falling
-          // back to the char-based estimate and presenting it as precise.
-          setComposerEstimateError('Estimate unavailable; showing rough value');
+          // !response.ok lands here with upstreamFailure populated; network-
+          // level failures land here with it still null → detail-less
+          // failure ({}). Either way the UI shows a degraded-estimate note
+          // rather than presenting the char-based fallback as precise.
+          setComposerEstimateFailure(upstreamFailure ?? {});
           const chars =
             systemPromptForEstimate.length +
             assembled.length +
@@ -2632,6 +2737,51 @@ export function ChatInterface({
     setFiles((prev) => prev.filter((f) => f.file !== fileToRemove));
   };
 
+  // Stable ID prefix for synthesised AttachedFile chips representing
+  // text files in the Generate-mode `files[]` state (which lacks ids).
+  // The prefix is matched in handleGenerateUnifiedRemove to dispatch back
+  // to `removeFile` for text files versus `handleGenerateFileRemove` for
+  // the (id-bearing) PDF chips. Index-based id is fine because removal
+  // mutates the source array and the chips are re-derived from scratch.
+  const GENERATE_TEXT_CHIP_PREFIX = 'gen-text-';
+
+  // Unified view of all Generate-mode attachments (PDF chips + text-file
+  // entries) for AttachedFilesBar. Lets the Generate composer mirror the
+  // Chat composer's single-tray pattern. Text-file chips synthesise a
+  // status — `reading` maps to `uploading`, `ready` carries the size,
+  // `error` keeps the original errorMessage — so the existing chip UI
+  // renders them with no special-cases needed.
+  const generateUnifiedChips = useMemo<AttachedFile[]>(() => {
+    const textChips: AttachedFile[] = files.map((entry, idx) => ({
+      id: `${GENERATE_TEXT_CHIP_PREFIX}${idx}`,
+      filename: entry.file.name,
+      mimeType: entry.file.type || 'text/plain',
+      sizeBytes: entry.file.size,
+      status:
+        entry.status === 'ready' ? 'ready' : entry.status === 'reading' ? 'uploading' : 'error',
+      error: entry.status === 'error' ? (entry.errorMessage ?? 'Failed to read file') : undefined,
+    }));
+    return [...generateAttachedChips, ...textChips];
+  }, [generateAttachedChips, files]);
+
+  // Remove handler routed by chip kind. Text-file chips synthesise ids
+  // with the GENERATE_TEXT_CHIP_PREFIX and remove from `files[]`; all
+  // others dispatch to handleGenerateFileRemove (PDF chip cleanup).
+  const handleGenerateUnifiedRemove = useCallback(
+    (id: string) => {
+      if (id.startsWith(GENERATE_TEXT_CHIP_PREFIX)) {
+        const idx = Number(id.slice(GENERATE_TEXT_CHIP_PREFIX.length));
+        if (Number.isFinite(idx)) {
+          const target = files[idx];
+          if (target) removeFile(target.file);
+        }
+        return;
+      }
+      handleGenerateFileRemove(id);
+    },
+    [files, handleGenerateFileRemove],
+  );
+
   // File inputs for the Chat-mode paperclip. Separate ref so we can reset
   // the input value after each pick (browsers ignore re-picking the same
   // file without a clear).
@@ -2808,7 +2958,10 @@ export function ChatInterface({
 
     const readyTextFiles = files.filter((f) => f.status === 'ready').length;
     const readyPdfFiles = generateAttachedFileIds.length;
-    if (readyTextFiles + readyPdfFiles === 0) {
+    const hasPrompt = additionalInstructions.trim().length > 0;
+    // Allow prompt-only generation. Documents are optional; a non-empty
+    // prompt is enough to kick off a Generate run.
+    if (readyTextFiles + readyPdfFiles === 0 && !hasPrompt) {
       return;
     }
     // Block on in-flight PDF uploads so the request doesn't race the file_id.
@@ -2850,8 +3003,9 @@ export function ChatInterface({
   // The body of startGeneration after the confirm gate. Extracted so the
   // modal's onConfirm callback can call it directly without re-running the
   // early-exit checks (which would race state changes that occurred while
-  // the modal was open). Two-phase callback pattern; see
-  // GenerateConfirmDialog.tsx for the modal that re-enters here.
+  // the modal was open). Two-phase callback pattern; see the
+  // "Replace your Chat?" <ConfirmModal> below for the modal that re-enters
+  // here.
   const startGenerationInternal = async () => {
     sendInFlightRef.current = true;
     // Cancel any pending/in-flight debounced count_tokens estimate (same
@@ -3213,59 +3367,88 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             : 'w-full sm:w-80 md:w-1/4 md:min-w-[280px] md:max-w-[400px]'
         }`}
         style={{
-          top: '52px',
+          // The drawer starts at the TopBar row's bottom edge and
+          // tucks 1px under the bar's border-b (bar is z-50, drawer
+          // z-40, so the border paints on top — no white seam).
+          // TOP_BAR_HEIGHT_PX is row + border, hence the -1.
+          top: `${TOP_BAR_HEIGHT_PX - 1}px`,
           bottom: 0,
-          height: 'calc(100vh - 52px)',
+          height: `calc(100vh - ${TOP_BAR_HEIGHT_PX - 1}px)`,
         }}
       >
-        {/* Toggle Button */}
-        <div className="flex-shrink-0 p-2 border-b border-gray-200">
-          <button
-            onClick={onToggle}
-            className="w-full h-8 flex items-center justify-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded transition-colors"
-            title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+        {/* Drawer Header. Title sits left; Clear (chat mode with history
+            only) and the collapse chevron sit right — only the chevron
+            toggles (clicking the title text does NOT). When collapsed the
+            title and Clear are hidden and the chevron is centered as the
+            sole control. No bottom padding: the chat header below brings
+            its own p-3 (round-2 feedback 42 — the old layout stacked
+            p-2 + p-3 + an orphaned mb-3 spacer row into a 32px dead gap).
+            Spacing contract (round-4 feedback 71): one 12px box gap at
+            every step — drawer top → title row (pt-3 here), title row →
+            tab strip (the chat header's p-3), tab strip → usage line
+            (space-y-3 there), usage line → border (p-3 again). The title
+            glyphs start at 12px (px-2 here + pl-1 on the span) so they
+            sit on the same left line as the tab strip / usage bar (p-3),
+            and the chevron svg's right edge mirrors it (px-2 + p-1
+            button). Keep px-2 symmetric: the collapsed rail centers the
+            chevron in it. */}
+        <div className="flex-shrink-0 px-2 pt-3">
+          <div
+            className={`h-8 flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'}`}
           >
-            {!isCollapsed && <span className="mr-2 text-sm font-medium">AI Assistant</span>}
-            <ChevronLeftIcon
-              className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
-            />
-          </button>
+            {!isCollapsed && (
+              <span className="text-sm font-medium text-gray-700 pl-1 select-none">
+                AI Assistant
+              </span>
+            )}
+            <div className="flex items-center gap-1">
+              {!isCollapsed && currentMode === 'chat' && messages.length > 0 && (
+                <button
+                  onClick={() => {
+                    // Destructive: wipes the in-memory chat + attached files +
+                    // any uploaded file chips from the server. Confirm first so
+                    // a mis-click can't silently delete a long conversation.
+                    setConfirmClearChatOpen(true);
+                  }}
+                  className="text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 px-1.5 py-1 rounded-md transition-colors"
+                  title="Clear chat"
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                onClick={onToggle}
+                className="p-1 rounded-md text-gray-500 hover:text-gray-800 hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300 transition-colors"
+                title={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+                aria-label={isCollapsed ? 'Expand AI Assistant' : 'Collapse AI Assistant'}
+                aria-expanded={!isCollapsed}
+              >
+                <ChevronLeftIcon
+                  className={`w-4 h-4 transition-transform duration-300 ${isCollapsed ? 'rotate-180' : ''}`}
+                />
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Chat Content */}
+        {/* Chat Content. `min-h-0` lets the inner `flex-1 overflow-y-auto`
+            content area actually scroll — without it, flex-1's default
+            min-height of `auto` lets the content's intrinsic size win and
+            the scroll container grows past the viewport instead of
+            clipping + scrolling. */}
         <div
-          className={`flex-1 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}
+          className={`flex-1 min-h-0 overflow-hidden transition-all duration-300 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}
         >
-          <div className="h-full flex flex-col">
-            {/* Chat Header */}
+          <div className="h-full flex flex-col min-h-0">
+            {/* Chat Header. (The Clear-chat affordance lives in the drawer
+                title row above — its old wrapper row here was an orphaned
+                spacer that inflated the title→tabs gap, round-2 feedback
+                42.) */}
             <div className="p-3 border-b border-gray-200">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  {currentMode === 'chat' && messages.length > 0 && (
-                    <button
-                      onClick={() => {
-                        // Destructive: wipes the in-memory chat + attached files +
-                        // any uploaded file chips from the server. Confirm first so
-                        // a mis-click can't silently delete a long conversation.
-                        if (
-                          window.confirm(
-                            'Clear the entire chat? This removes all messages and any files attached in Chat. Your chart and Generate state are unaffected.',
-                          )
-                        ) {
-                          clearChat();
-                        }
-                      }}
-                      className="text-xs text-gray-500 hover:text-gray-700 p-1 rounded"
-                      title="Clear chat"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Mode Switcher and Model Selector */}
-              <div className="space-y-2">
+              {/* Mode Switcher and Model Selector. space-y-3 keeps the
+                  tab strip → usage line gap on the same 12px rhythm as
+                  the rest of the header (round-4 feedback 71). */}
+              <div className="space-y-3">
                 <div className="flex bg-gray-100 rounded-lg p-1">
                   <button
                     onClick={() => setCurrentMode('chat')}
@@ -3296,9 +3479,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 (change/remove) lives in the profile dropdown's "Anthropic
                 API key" modal. The per-chart spend figure is a best-effort
                 client-side tally (localStorage); Anthropic's dashboard is
-                the source of truth for billing. */}
+                the source of truth for billing. (Spacing comes from the
+                parent's space-y-3 — don't add a competing margin here.) */}
                 {usage && (
-                  <div className="mt-2">
+                  <div>
                     {usage.tier === 'byok' ? (
                       <span className="inline-flex items-center gap-1 text-xs text-gray-700">
                         <span aria-hidden>🔑</span>
@@ -3373,7 +3557,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             {/* Content Area */}
             <div
               ref={chatContainerRef}
-              className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3"
+              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3 space-y-3"
               onScroll={handleScroll}
             >
               {currentMode === 'chat' ? (
@@ -3383,14 +3567,18 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       <div className="mb-2">
                         <ChatBubbleLeftRightIcon className="w-8 h-8 mx-auto text-gray-400" />
                       </div>
-                      <p>Type anything to start creating your Theory of Change step-by-step.</p>
+                      <p className="font-medium text-gray-700">Build your ToC step-by-step.</p>
                       <p className="mt-2 text-xs">
-                        If you already have a Theory of Change, you can use the flowchart editing
-                        features.
+                        Ask questions and the assistant edits the flowchart with you as the
+                        conversation unfolds. Best when you want fine-grained control or are still
+                        thinking it through.
                       </p>
                       <p className="mt-2 text-xs">
-                        Or use the "Generate" tab to create a new Theory of Change from existing
-                        documents.
+                        Already have a Theory of Change? You can edit it directly on the canvas.
+                      </p>
+                      <p className="mt-2 text-xs">
+                        Want a complete draft from your existing documents in one shot? Switch to
+                        the <strong>Generate</strong> tab.
                       </p>
                     </div>
                   ) : null}
@@ -3400,255 +3588,31 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   ))}
                 </>
               ) : currentMode === 'generate' ? (
-                <div className="space-y-4">
-                  {/* Cost heads-up. Generate concentrates spend (extended
-                    thinking + web search + documents) into one one-shot
-                    request, so flag this above the upload area. Server-side
-                    reserveCost + the kill switch enforce the $5 lifetime cap
-                    for free/anon tiers; BYOK bypasses it. */}
-                  <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                    Generate runs a deep analysis of your documents. A single run typically costs a
-                    few dollars — more for large documents or heavy web searching. The running cost
-                    is shown as the answer is written, so you can stop it at any time if it starts
-                    to add up.
+                // Empty-state intro. Mirrors Chat mode's empty-state shape
+                // (centered text, py-8). The prior visual scaffolding —
+                // amber advisory panel, icon, dashed drop-zone, inline
+                // textarea + model/effort/Turnstile card stack — was
+                // replaced by a chat-style composer pinned at the bottom
+                // (see Input Area below); only the intro copy lives here.
+                // The "moves to chat" + "costs a few dollars" lines are
+                // the must-haves per the brief.
+                <div className="text-center text-gray-500 text-sm py-8">
+                  <div className="mb-2">
+                    <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
                   </div>
-                  <div className="text-center text-gray-500 text-sm py-4">
-                    <div className="mb-2">
-                      <DocumentTextIcon className="w-8 h-8 mx-auto text-gray-400" />
-                    </div>
-                    <p>Upload documents to generate a Theory of Change conversation</p>
-                  </div>
-
-                  {/* File Upload */}
-                  <div
-                    className={`border-2 border-dashed border-gray-300 rounded-lg p-4 transition-colors ${
-                      generateBlockedByTurnstile ? 'opacity-50' : 'hover:border-gray-400'
-                    }`}
-                    onDragOver={(e) => {
-                      if (generateBlockedByTurnstile) return;
-                      e.preventDefault();
-                      e.currentTarget.classList.add('border-blue-400', 'bg-blue-50');
-                    }}
-                    onDragLeave={(e) => {
-                      if (generateBlockedByTurnstile) return;
-                      e.preventDefault();
-                      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                    }}
-                    onDrop={(e) => {
-                      if (generateBlockedByTurnstile) return;
-                      e.preventDefault();
-                      e.currentTarget.classList.remove('border-blue-400', 'bg-blue-50');
-                      const files = e.dataTransfer.files;
-                      if (files.length > 0) handleFileUpload(files);
-                    }}
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
-                      onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
-                      className="hidden"
-                    />
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={generateBlockedByTurnstile}
-                      className="w-full flex items-center justify-center gap-2 p-3 text-gray-600 enabled:hover:text-gray-800 enabled:hover:bg-gray-50 disabled:cursor-not-allowed rounded transition-colors"
-                    >
-                      <CloudArrowUpIcon className="w-5 h-5" />
-                      Click to upload or drag & drop documents
-                    </button>
-                    <p className="text-xs text-gray-500 text-center mt-2">
-                      Supports PDF, TXT, MD, CSV, JSON, XML, HTML, YAML, and other text formats
-                    </p>
-                  </div>
-
-                  {/* Generate-mode PDF chips (Files API uploads). */}
-                  {generateAttachedChips.length > 0 && (
-                    <AttachedFilesBar
-                      files={generateAttachedChips}
-                      onRemove={handleGenerateFileRemove}
-                      onRetry={handleGenerateFileRetry}
-                    />
-                  )}
-
-                  {/* Uploaded Files */}
-                  {files.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-sm font-medium text-gray-700">Uploaded Files:</h4>
-                      {files.map((file, index) => (
-                        <div key={index} className="p-2 bg-gray-50 rounded">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2 flex-1">
-                              <div
-                                className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                                  file.status === 'ready'
-                                    ? 'bg-green-400'
-                                    : file.status === 'reading'
-                                      ? 'bg-yellow-400 animate-pulse'
-                                      : 'bg-red-400'
-                                }`}
-                              ></div>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm text-gray-700 truncate">
-                                    {file.file.name}
-                                  </span>
-                                  <span className="text-xs text-gray-500">
-                                    ({getFileTypeDescription(file.file.name)})
-                                  </span>
-                                </div>
-                                {file.status === 'reading' && (
-                                  <span className="text-xs text-gray-500">Reading file...</span>
-                                )}
-                                {file.status === 'ready' && file.content && (
-                                  <span className="text-xs text-green-600">
-                                    {Math.round(file.content.length / 1000)}KB of text extracted
-                                  </span>
-                                )}
-                                {file.status === 'error' && (
-                                  <span className="text-xs text-red-600">
-                                    {file.errorMessage || 'Failed to read file'}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => removeFile(file.file)}
-                              className="text-gray-400 hover:text-red-500 transition-colors ml-2 flex-shrink-0"
-                              title="Remove file"
-                            >
-                              <XMarkIcon className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Additional Instructions */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Additional Instructions (Optional)
-                    </label>
-                    <textarea
-                      value={additionalInstructions}
-                      onChange={(e) => setAdditionalInstructions(e.target.value)}
-                      placeholder="Any specific focus areas or requirements for your Theory of Change..."
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
-                      rows={3}
-                    />
-                  </div>
-
-                  {(generateEstimateUsd > 0 || estimatingCost) && (
-                    <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 flex items-center gap-2">
-                      {estimatingCost && (
-                        <span
-                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                          aria-label="Recalculating estimate"
-                        />
-                      )}
-                      {generateEstimateUsd > 0 ? (
-                        <span>
-                          Estimated input cost: {formatCostUsd(generateEstimateUsd)}; output shown
-                          live during streaming.
-                        </span>
-                      ) : (
-                        <span className="text-gray-500">Estimating…</span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Model picker. Mirrors the chat composer's pattern;
-                selectedModel is shared across modes so a user's choice
-                in one carries to the other. */}
-                  <div className="flex items-center justify-between text-xs text-gray-600">
-                    <span>Model</span>
-                    <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
-                  </div>
-
-                  {/* Effort picker. Hidden when the model doesn't accept
-                      `output_config.effort`; rendered on the same row when
-                      it does so the controls stay visually grouped. */}
-                  {MODEL_CAPABILITIES[selectedModel].supports_output_config_effort && (
-                    <div className="flex items-center justify-between text-xs text-gray-600">
-                      <span>Effort</span>
-                      <EffortDropdown
-                        model={selectedModel}
-                        selected={selectedEffort}
-                        onSelect={setSelectedEffort}
-                      />
-                    </div>
-                  )}
-
-                  {/* Anon-tier Turnstile prompt. Placed next to the Generate
-                    button rather than at the top of the panel so it's
-                    visible alongside the action it gates; pairs with the
-                    disabled upload/Generate controls above. Solving flips
-                    the shared hasTurnstileSession cookie so chat is also
-                    unblocked. */}
-                  {generateBlockedByTurnstile && (
-                    <div className="space-y-2">
-                      <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
-                        Solve the challenge to verify you&apos;re human before uploading or
-                        generating.
-                      </div>
-                      <TurnstileWidget
-                        siteKey={TURNSTILE_SITE_KEY}
-                        onToken={handleTurnstileToken}
-                      />
-                      {turnstileError && (
-                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
-                          {turnstileError}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Cap/cost blocker banner. Same component the Chat
-                    composer renders; same source-of-truth state. Without
-                    this mount, Generate-mode users hitting would_exceed_cap
-                    (estimate over remaining quota) saw only a disabled
-                    Generate button with no copy explaining why. */}
-                  <ComposerBlockerBanner
-                    blocker={renderedBlocker}
-                    usage={usage}
-                    hasKey={hasKey}
-                    composerEstimateUsd={activeEstimate}
-                  />
-
-                  {/* Generate button. Available to all tiers; the $5 lifetime
-                    cap is enforced server-side via reserveCost and the
-                    kill switch. BYOK bypasses the cap. shouldBlockSend
-                    matches the Chat path — same predicate, same source
-                    of truth. */}
-                  <button
-                    onClick={startGeneration}
-                    disabled={
-                      files.filter((f) => f.status === 'ready').length +
-                        generateAttachedFileIds.length ===
-                        0 ||
-                      generateAttachedChips.some(
-                        (f) => f.status === 'uploading' || f.status === 'error',
-                      ) ||
-                      isLoading ||
-                      generateBlockedByTurnstile ||
-                      shouldBlockSend(renderedBlocker)
-                    }
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {isLoading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <DocumentPlusIcon className="w-4 h-4" />
-                        Generate Theory of Change
-                      </>
-                    )}
-                  </button>
+                  <p className="font-medium text-gray-700">Generate a full draft in one pass.</p>
+                  <p className="mt-2 text-xs">
+                    Describe what you want and attach any supporting documents. Generate runs a deep
+                    analysis and writes your Theory of Change directly on the canvas.
+                  </p>
+                  <p className="mt-2 text-xs">
+                    Once you submit, this view switches to chat — you can follow the cost ticking
+                    live there and stop anytime.
+                  </p>
+                  <p className="mt-2 text-xs">
+                    A run typically costs a few dollars, more for large documents or heavy web
+                    searching.
+                  </p>
                 </div>
               ) : null}
 
@@ -3840,7 +3804,13 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Area */}
+            {/* Input Area. Now serves both Chat and Generate modes; Generate's
+                composer mirrors Chat's exactly except for the textarea state
+                binding (additionalInstructions vs inputValue) and the submit
+                handler (startGeneration vs handleSendMessage). Files attached
+                in Generate mode route through the existing dual-state system
+                (text files into `files`, PDFs into `generateAttachedChips`),
+                surfaced together via AttachedFilesBar. */}
             <div className="p-3 border-t border-gray-200">
               {currentMode === 'chat' ? (
                 hasTurnstileSession === null ? (
@@ -3888,12 +3858,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       a single React.memo'd component reading from
                       renderedBlocker (see src/components/chat/composerBlocker.ts).
                       Variants: cap_reached, request_cut_off, global_budget,
-                      would_exceed_cap, advisory. */}
+                      would_exceed_cap, session_expired_quota, advisory.
+                      Quota variants also carry the estimate status (fb6
+                      issue 74) — see estimateFailure prop. */}
                     <ComposerBlockerBanner
                       blocker={renderedBlocker}
                       usage={usage}
                       hasKey={hasKey}
                       composerEstimateUsd={activeEstimate}
+                      estimateFailure={composerEstimateFailure}
+                      isAuthenticated={isAuthenticated}
                     />
                     {/* File attachment tray + drop target. Stays mounted so
                       files dropped on the composer area land here. */}
@@ -3945,23 +3919,35 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         target.style.height = newHeight + 'px';
                       }}
                     />
-                    <div className="text-xs text-gray-500 flex items-center gap-1.5">
-                      {estimatingCost && (
-                        <span
-                          className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
-                          aria-label="Recalculating estimate"
-                        />
-                      )}
-                      <span>
-                        Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
-                        live during streaming.
-                      </span>
-                    </div>
-                    {composerEstimateError && (
-                      <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                        Estimation failed: {composerEstimateError}. Fell back to a rough local
-                        estimate; the actual reservation may differ.
-                      </div>
+                    {/* Under-textarea estimate cluster. Suppressed while a
+                      quota blocker is rendered (fb6 issue 74): the banner
+                      carries the estimate status for those variants, and
+                      this cluster clips below the fold once the blocker
+                      stack is up (reproduced at 1366x662 — the composer
+                      column doesn't scroll). Its "output shown live during
+                      streaming" promise is also incoherent while sending
+                      is paused. */}
+                    {!bannerCarriesEstimateStatus(renderedBlocker) && (
+                      <>
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                          {estimatingCost && (
+                            <span
+                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                              aria-label="Recalculating estimate"
+                            />
+                          )}
+                          <span>
+                            Estimated input cost: {formatCostUsd(composerEstimateUsd)}; output shown
+                            live during streaming.
+                          </span>
+                        </div>
+                        {composerEstimateFailure && (
+                          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                            {estimateUnavailableNote(composerEstimateFailure)} Fell back to a rough
+                            local estimate; the actual reservation may differ.
+                          </div>
+                        )}
+                      </>
                     )}
                     {composerUncountedFileIds.length > 0 && (
                       <div
@@ -3974,6 +3960,10 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                       </div>
                     )}
                     <div className="flex items-center justify-between">
+                      {/* PR 1 polish: bottom composer redesigned to
+                        [+ Attach] [Model ▾] [⚙] [Send]. Web search +
+                        effort moved into the ⚙ popover (plan §1.4 +
+                        traceability table #4). */}
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => chatFileInputRef.current?.click()}
@@ -3983,26 +3973,65 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                         >
                           <PaperClipIcon className="w-5 h-5" />
                         </button>
-                        <button
-                          onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                          className={`p-2 rounded-lg transition-colors ${
-                            webSearchEnabled
-                              ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
-                              : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                          }`}
-                          title={webSearchEnabled ? 'Web search enabled' : 'Enable web search'}
-                        >
-                          <MagnifyingGlassIcon className="w-5 h-5" />
-                        </button>
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                        <div className="relative" ref={composerOptionsRef}>
+                          <button
+                            onClick={() => setShowComposerOptions((s) => !s)}
+                            className="p-2 rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                            title="Composer options"
+                            aria-label="Composer options"
+                            aria-haspopup="menu"
+                            aria-expanded={showComposerOptions}
+                          >
+                            <Cog6ToothIcon className="w-5 h-5" />
+                          </button>
+                          {showComposerOptions && (
+                            // Horizontal position is measured + clamped
+                            // (useClampedPopoverX), NOT a static side
+                            // anchor: the popover sits inside the panel's
+                            // overflow-hidden wrapper, so `left-0` clipped
+                            // at the panel's right edge and `right-0` at
+                            // its left (PR #34 feedback #60). Each row is
+                            // a single line: label left, control right.
+                            <div
+                              role="menu"
+                              ref={composerOptionsClamp.ref}
+                              style={composerOptionsClamp.style}
+                              className="absolute bottom-full mb-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium text-gray-700">Web search</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setWebSearchEnabled((v) => !v)}
+                                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                    webSearchEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                                  }`}
+                                  aria-pressed={webSearchEnabled}
+                                  aria-label="Toggle web search"
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                                      webSearchEnabled ? 'translate-x-4' : 'translate-x-1'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium text-gray-700">
+                                  Effort level
+                                </div>
+                                <EffortDropdown
+                                  model={selectedModel}
+                                  selected={selectedEffort}
+                                  onSelect={setSelectedEffort}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <EffortDropdown
-                          model={selectedModel}
-                          selected={selectedEffort}
-                          onSelect={setSelectedEffort}
-                        />
-                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
-
                         {isStreaming ? (
                           <button
                             onClick={handleStopStreaming}
@@ -4065,6 +4094,232 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                     </div>
                   </div>
                 )
+              ) : currentMode === 'generate' ? (
+                hasTurnstileSession === null ? (
+                  /* Probe in flight — same posture as Chat to avoid a
+                     flash of the Turnstile gate for returning anon users
+                     with a still-valid cookie. */
+                  <div className="h-24" aria-hidden />
+                ) : !isAuthenticated && TURNSTILE_SITE_KEY && !hasTurnstileSession ? (
+                  /* Anon Turnstile gate. Same shape and prompt as the
+                     Chat branch — solving here also unlocks Chat (the
+                     `tocb_anon` cookie is shared across modes). */
+                  <div className="space-y-2">
+                    <div className="text-sm text-gray-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                      Solve the challenge below to verify you&apos;re human before generating.
+                    </div>
+                    <TurnstileWidget siteKey={TURNSTILE_SITE_KEY} onToken={handleTurnstileToken} />
+                    {turnstileError && (
+                      <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                        {turnstileError}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Generate composer. Mirrors the Chat composer JSX
+                     exactly — same banner, same AttachedFilesBar, same
+                     textarea + estimate line + bottom bar — and differs
+                     only in: state binding (additionalInstructions vs
+                     inputValue), file handlers (handleFileUpload routes
+                     PDFs to the Files API + text into `files[]`), the
+                     placeholder, and submit handler (startGeneration). */
+                  <div className="space-y-2">
+                    {!isAuthenticated && !TURNSTILE_SITE_KEY && import.meta.env.DEV ? (
+                      <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        Anonymous quota unavailable (VITE_TURNSTILE_SITE_KEY unset); please sign in.
+                      </div>
+                    ) : null}
+                    <ComposerBlockerBanner
+                      blocker={renderedBlocker}
+                      usage={usage}
+                      hasKey={hasKey}
+                      composerEstimateUsd={activeEstimate}
+                      estimateFailure={composerEstimateFailure}
+                      isAuthenticated={isAuthenticated}
+                    />
+                    {/* Unified attachment tray. Shows both Files-API PDFs
+                        (`generateAttachedChips`) and inlined text files
+                        (`files[]`, synthesised into chip shape via
+                        `generateUnifiedChips`). Drop-target stays mounted
+                        so files dropped on the composer area land here. */}
+                    <AttachedFilesBar
+                      files={generateUnifiedChips}
+                      onRemove={handleGenerateUnifiedRemove}
+                      onRetry={handleGenerateFileRetry}
+                      onDropFiles={handleFileUpload}
+                    />
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".txt,.md,.markdown,.pdf,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rtf"
+                      onChange={(e) => {
+                        if (e.target.files) handleFileUpload(e.target.files);
+                        e.target.value = '';
+                      }}
+                      className="hidden"
+                    />
+                    <textarea
+                      value={additionalInstructions}
+                      onChange={(e) => setAdditionalInstructions(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          void startGeneration();
+                        }
+                      }}
+                      placeholder="Describe what you want, or just attach documents…"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
+                      disabled={isLoading || isStreaming}
+                      rows={1}
+                      style={{ minHeight: '2.5rem', maxHeight: '8rem' }}
+                      onInput={(e) => {
+                        const target = e.target as HTMLTextAreaElement;
+                        if (target.value.length > 2000) {
+                          if (target.style.height !== '128px') {
+                            target.style.height = '128px';
+                          }
+                          return;
+                        }
+                        target.style.height = 'auto';
+                        const newHeight = Math.min(target.scrollHeight, 128);
+                        target.style.height = newHeight + 'px';
+                      }}
+                    />
+                    {/* Under-textarea estimate cluster — same suppression
+                      rule as the Chat composer (fb6 issue 74): the banner
+                      carries the estimate status while a quota blocker is
+                      rendered. */}
+                    {!bannerCarriesEstimateStatus(renderedBlocker) && (
+                      <>
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                          {estimatingCost && (
+                            <span
+                              className="w-3 h-3 border-[1.5px] border-gray-400 border-t-transparent rounded-full animate-spin"
+                              aria-label="Recalculating estimate"
+                            />
+                          )}
+                          <span>
+                            Estimated input cost: {formatCostUsd(generateEstimateUsd)}; output shown
+                            live during streaming.
+                          </span>
+                        </div>
+                        {composerEstimateFailure && (
+                          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                            {estimateUnavailableNote(composerEstimateFailure)} Fell back to a rough
+                            local estimate; the actual reservation may differ.
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={isLoading || isStreaming}
+                          className="p-2 rounded-lg transition-colors text-gray-500 enabled:hover:text-gray-700 enabled:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Attach a file"
+                          aria-label="Attach a file"
+                        >
+                          <PaperClipIcon className="w-5 h-5" />
+                        </button>
+                        <ModelDropdown selected={selectedModel} onSelect={setSelectedModel} />
+                        <div className="relative" ref={composerOptionsRef}>
+                          <button
+                            onClick={() => setShowComposerOptions((s) => !s)}
+                            className="p-2 rounded-lg transition-colors text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                            title="Composer options"
+                            aria-label="Composer options"
+                            aria-haspopup="menu"
+                            aria-expanded={showComposerOptions}
+                          >
+                            <Cog6ToothIcon className="w-5 h-5" />
+                          </button>
+                          {showComposerOptions && (
+                            // Measured + clamped horizontal position — see
+                            // the Chat-composer popover above (feedback #60).
+                            <div
+                              role="menu"
+                              ref={composerOptionsClamp.ref}
+                              style={composerOptionsClamp.style}
+                              className="absolute bottom-full mb-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 p-3 z-50 space-y-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium text-gray-700">Web search</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setWebSearchEnabled((v) => !v)}
+                                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                    webSearchEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                                  }`}
+                                  aria-pressed={webSearchEnabled}
+                                  aria-label="Toggle web search"
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                                      webSearchEnabled ? 'translate-x-4' : 'translate-x-1'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium text-gray-700">
+                                  Effort level
+                                </div>
+                                <EffortDropdown
+                                  model={selectedModel}
+                                  selected={selectedEffort}
+                                  onSelect={setSelectedEffort}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isStreaming ? (
+                          <button
+                            onClick={handleStopStreaming}
+                            className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                            title="Stop generation"
+                          >
+                            <StopIcon className="w-5 h-5" />
+                          </button>
+                        ) : isLoading ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="p-2 bg-blue-500 text-white rounded-lg opacity-60 cursor-not-allowed"
+                            title="Generating…"
+                          >
+                            <div
+                              className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"
+                              aria-label="Waiting for server"
+                            />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => void startGeneration()}
+                            disabled={
+                              (files.filter((f) => f.status === 'ready').length +
+                                generateAttachedFileIds.length ===
+                                0 &&
+                                additionalInstructions.trim().length === 0) ||
+                              generateAttachedChips.some(
+                                (f) => f.status === 'uploading' || f.status === 'error',
+                              ) ||
+                              shouldBlockSend(renderedBlocker)
+                            }
+                            className="p-2 bg-blue-500 text-white rounded-lg enabled:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            title="Generate Theory of Change"
+                          >
+                            <PaperAirplaneIcon className="w-5 h-5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
               ) : null}
             </div>
           </div>
@@ -4087,10 +4342,26 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
           before mutating state. The two-phase flow lives in startGeneration
           (open modal & early-return on first click; modal's onConfirm calls
           startGenerationInternal). Cancel leaves UI clean (no mutations
-          had happened pre-confirm). */}
-      <GenerateConfirmDialog
+          had happened pre-confirm). Uses the shared ConfirmModal primitive
+          with the purple variant + DocumentPlusIcon for Generate-flow
+          framing. */}
+      <ConfirmModal
         open={showGenerateConfirm}
-        chatMessageCount={messages.length}
+        title="Replace your Chat?"
+        body={
+          <p>
+            Generating a new Theory of Change will replace your current Chat (
+            {messages.length === 1 ? '1 message' : `${messages.length} messages`}) with a fresh
+            generation conversation. Your existing chart isn&apos;t affected.
+          </p>
+        }
+        confirmLabel="Generate"
+        confirmVariant="purple"
+        icon={
+          <div className="p-3 bg-purple-100 rounded-full">
+            <DocumentPlusIcon className="w-8 h-8 text-purple-600" />
+          </div>
+        }
         onConfirm={() => {
           setShowGenerateConfirm(false);
           void startGenerationInternal();
@@ -4098,6 +4369,25 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
         onCancel={() => {
           setShowGenerateConfirm(false);
         }}
+      />
+
+      {/* Clear-chat confirmation (PR 5 red-team L4 closure). Distinct from
+          the "Replace your Chat?" modal above: this is user-initiated
+          deletion of the entire chat (including uploaded files), not the
+          implicit Generate-overwrites-history confirmation. Uses the shared
+          ConfirmModal primitive for consistency with FileMenu's
+          delete-chart and GeneralAccessSelector. */}
+      <ConfirmModal
+        open={confirmClearChatOpen}
+        title="Clear chat?"
+        body="Clear the entire chat? This removes all messages and any files attached in Chat. Your chart and Generate state are unaffected."
+        confirmLabel="Clear chat"
+        confirmVariant="danger"
+        onConfirm={() => {
+          setConfirmClearChatOpen(false);
+          clearChat();
+        }}
+        onCancel={() => setConfirmClearChatOpen(false)}
       />
     </>
   );

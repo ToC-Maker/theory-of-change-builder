@@ -68,11 +68,19 @@ export type ComposerBlocker =
     };
 
 /**
- * Render-time blocker: event blockers plus the derived `would_exceed_cap`
- * variant computed from the current draft's estimate. `selectBlocker`
- * returns this; consumers (banner, send gate) match against it.
+ * Render-time blocker: event blockers plus two derived variants —
+ * `would_exceed_cap` (computed from the current draft's estimate) and
+ * `session_expired_quota` (the degraded-session deferral: any quota-class
+ * result is replaced by it while the SessionExpiredBanner state is active,
+ * because the quota being enforced belongs to the anon actor the dead
+ * session silently demoted us to). `selectBlocker` returns this; consumers
+ * (banner, send gate) match against it.
  */
-export type RenderedBlocker = ComposerBlocker | { type: 'would_exceed_cap' } | null;
+export type RenderedBlocker =
+  | ComposerBlocker
+  | { type: 'would_exceed_cap' }
+  | { type: 'session_expired_quota' }
+  | null;
 
 /**
  * Cap-class predicate. Used in three places: `selectBlocker` tier-filter,
@@ -224,19 +232,62 @@ export function costErrorToBlocker(error: CostError): ComposerBlocker | undefine
 }
 
 /**
+ * Quota-class predicate over RENDERED variants: every blocker whose copy
+ * and remedies are about the free-tier allowance of a specific identity.
+ * Used by the session-expired deferral below — when the session is
+ * degraded, the allowance being enforced belongs to the anon actor, not
+ * the account the UI shows, so quota messaging (and its "add an API key"
+ * remedy, which needs a live session anyway) must yield to re-login.
+ *
+ * Distinct from `isCapClassBlocker` (event-slot stickiness) and from the
+ * BYOK tier-flip filter (inlined in selectBlocker): this one includes the
+ * derived `would_exceed_cap` because it operates post-derivation.
+ */
+function isQuotaClassRendered(rendered: NonNullable<RenderedBlocker>): boolean {
+  return (
+    rendered.type === 'cap_reached' ||
+    rendered.type === 'last_send_exceeded' ||
+    rendered.type === 'request_cut_off' ||
+    rendered.type === 'would_exceed_cap'
+  );
+}
+
+/**
  * Compose the render-time blocker from event-driven state + derived inputs.
  * Pure function — call inline at render (cheap). Returns:
  *   - Event blocker if any (filtered for cap-class on byok tier flip)
  *   - Derived `would_exceed_cap` if estimate would push usage over limit
  *   - `null` otherwise
+ * Then, when `authSessionDegraded` is set, quota-class results are replaced
+ * by `session_expired_quota` (precedence rule for the SessionExpiredBanner
+ * state — see isQuotaClassRendered above).
  */
 export function selectBlocker(params: {
   eventBlocker: ComposerBlocker | null;
   usage: UsageSnapshot | null;
   composerEstimateUsd: number;
+  /**
+   * True while the SessionExpiredBanner condition holds (isAuthenticated
+   * && degraded token provider — see authSessionHealth.ts). The caller
+   * applies the same `isAuthenticated &&` gate the banner uses, so
+   * genuinely-anon users never get the deferral.
+   */
+  authSessionDegraded?: boolean;
 }): RenderedBlocker {
-  const { eventBlocker, usage, composerEstimateUsd } = params;
+  const { eventBlocker, usage, composerEstimateUsd, authSessionDegraded = false } = params;
 
+  const rendered = selectBlockerBase(eventBlocker, usage, composerEstimateUsd);
+  if (authSessionDegraded && rendered && isQuotaClassRendered(rendered)) {
+    return { type: 'session_expired_quota' };
+  }
+  return rendered;
+}
+
+function selectBlockerBase(
+  eventBlocker: ComposerBlocker | null,
+  usage: UsageSnapshot | null,
+  composerEstimateUsd: number,
+): RenderedBlocker {
   // BYOK tier-flip clear: cap-related event blockers become irrelevant
   // when the user has BYOK active (free-tier cap doesn't apply). Includes
   // last_send_exceeded — the past rejection was about the free-tier cap;
@@ -289,6 +340,108 @@ export function selectBlocker(params: {
 }
 
 /**
+ * Structured failure state for the composer's count_tokens estimate
+ * (fb6 issue 74). `upstreamStatus`/`upstreamMessage` mirror the
+ * `upstream_status`/`upstream_message` fields of the worker's
+ * `estimation_unavailable` body (worker/api/count-tokens-estimate.ts);
+ * both absent = a failure with no upstream detail (network error, local
+ * 503). A `null` slot means the estimate is healthy.
+ */
+export type EstimateFailure = {
+  upstreamStatus?: number;
+  upstreamMessage?: string;
+};
+
+/**
+ * Map an estimate failure to ONE quiet human sentence (fb6 issue 74).
+ *
+ * Status meanings are doc-grounded (Anthropic error types):
+ *   - 401 authentication_error: OUR server key was rejected — a server
+ *     problem, never the user's.
+ *   - 402 billing_error: server-side billing issue.
+ *   - 403 permission_error: the terse "Request not allowed" variant is
+ *     empirically a request-origin/region block (confirmed in the field:
+ *     the same request 200s from the EU and 403s from a blocked region).
+ *     NOT quota — billing is a separate 402 type. The block gates ALL AI
+ *     endpoints, so the copy names the full blast radius; the round-6
+ *     reviewer was misled into thinking only estimation was broken.
+ *     (Smart Placement — see the wrangler.jsonc note — should make this
+ *     rare; this copy is the safety net.)
+ *   - 429 rate_limit_error: transient; the estimate re-fires on the next
+ *     draft edit. NOTE: the worker re-shapes upstream 429s into its own
+ *     429 `{error:'rate_limited'}` WITHOUT upstream_* fields — the client
+ *     parse maps that shape to upstreamStatus 429 before calling this.
+ *   - 500/504/529: transient upstream errors.
+ *   - anything else: generic line with the raw detail appended, so
+ *     unrecognized failures stay diagnosable from the composer.
+ */
+export function estimateUnavailableNote(failure: EstimateFailure): string {
+  switch (failure.upstreamStatus) {
+    case 401:
+      return (
+        "Cost estimates are unavailable: the server's AI credentials were rejected. " +
+        'This is a server problem, not yours.'
+      );
+    case 402:
+      return 'Cost estimates are unavailable: the AI service reported a billing problem on our side.';
+    case 403:
+      return (
+        'Cost estimates are unavailable: the AI service refused the request from this region. ' +
+        'Chat and generation are affected too.'
+      );
+    case 429:
+      return (
+        'Cost estimates are briefly unavailable: the AI service is rate-limiting. ' +
+        'It retries automatically.'
+      );
+    case 500:
+    case 504:
+    case 529:
+      return 'Cost estimates are temporarily unavailable upstream. Estimates resume automatically.';
+    default: {
+      const { upstreamStatus, upstreamMessage } = failure;
+      if (upstreamStatus != null && upstreamMessage) {
+        return `Cost estimates are unavailable right now (upstream error ${upstreamStatus}: ${upstreamMessage}).`;
+      }
+      if (upstreamStatus != null) {
+        return `Cost estimates are unavailable right now (upstream error ${upstreamStatus}).`;
+      }
+      if (upstreamMessage) {
+        return `Cost estimates are unavailable right now (${upstreamMessage}).`;
+      }
+      return 'Cost estimates are unavailable right now.';
+    }
+  }
+}
+
+/**
+ * Which rendered variants carry the estimate status INSIDE the banner
+ * (fb6 issue 74). Field incident: with a quota blocker up, the
+ * under-textarea estimate cluster clips below the fold on common laptop
+ * viewports (reproduced at 1366x662 — the composer column doesn't
+ * scroll), so the quota-exhausted reviewer saw no estimate-related
+ * message at all. For these variants ComposerBlockerBanner renders the
+ * estimate status as a quiet line within the banner, and ChatInterface
+ * suppresses the under-textarea cluster — one source of truth at a time,
+ * co-visible with the blocker by construction.
+ *
+ * Scope: the quota-class variants plus the session-expired deferral.
+ * NOT advisory (its service-error copy — including the stream-side
+ * `estimation_unavailable` — would double up) and NOT global_budget
+ * (identity-independent; already renders its own upstream line).
+ */
+export function bannerCarriesEstimateStatus(rendered: RenderedBlocker): boolean {
+  if (!rendered) return false;
+  return (
+    rendered.type === 'cap_reached' ||
+    rendered.type === 'request_cut_off' ||
+    rendered.type === 'last_send_exceeded' ||
+    rendered.type === 'would_exceed_cap' ||
+    rendered.type === 'session_expired_quota'
+  );
+}
+
+/**
  * Send-start clear semantics. Preserve sticky cap-class blockers across
  * send attempts (the cap gate blocks the send anyway, so the banner must
  * stay visible); clear advisory blockers so they don't linger after the
@@ -311,6 +464,8 @@ export function preserveCapClassOnly(prev: ComposerBlocker | null): ComposerBloc
  * gates.
  *
  * Blocks: cap_reached, request_cut_off, global_budget, would_exceed_cap,
+ * session_expired_quota (the deferred quota condition would reject the
+ * send, and sending while degraded silently burns the anon allowance),
  * AND advisory with cost_error_type='unknown' (FM-Q4 defensive over-block
  * for client/server bundle skew).
  *
@@ -326,6 +481,7 @@ export function shouldBlockSend(rendered: RenderedBlocker): boolean {
     case 'request_cut_off':
     case 'global_budget':
     case 'would_exceed_cap':
+    case 'session_expired_quota':
       return true;
     case 'last_send_exceeded':
       // Past-tense informational. User is under cap; editing down may let
