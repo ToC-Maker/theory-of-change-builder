@@ -36,6 +36,10 @@ import {
   shouldBlockSend,
   preserveCapClassOnly,
 } from './chat/composerBlocker';
+import {
+  rollbackRefusedMessage,
+  restoreChatAfterRefusedGeneration,
+} from '../utils/refusalRollback';
 import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import type { ToCData } from '../types';
@@ -2123,17 +2127,13 @@ export function ChatInterface({
             // rephrase, unless they already started something new.
             const emptied: ChatMessage[] = [];
             purgeEmptyHistoryRef.current = emptied;
-            setMessages((prev) => {
-              const rest = prev.filter((m) => m.id !== userMessageId);
-              // Refused message not there (user moved to another chart): leave it be.
-              if (rest.length === prev.length) return prev;
-              return rest.length === 0 ? emptied : rest;
-            });
+            setMessages((prev) => rollbackRefusedMessage(prev, userMessageId, emptied));
             setInputValue((current) => current || inputValue);
             setChatAttachedFiles((current) => (current.length > 0 ? current : chatAttachedFiles));
             setComposerBlocker(refusalToBlocker(details));
             resetStreamUiState();
-            // The refused usage was still billed; refresh the progress bar.
+            // The worker tallies a refused stream's usage like any other, so
+            // refresh the progress bar.
             void refreshUsage();
           },
           onError: (error: string) => {
@@ -3102,10 +3102,8 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             const emptied: ChatMessage[] = [];
             purgeEmptyHistoryRef.current = emptied;
             const restored = messages.length === 0 ? emptied : messages;
-            // Only while the chat is still exactly the refused generation
-            // prompt: after a move to another chart it isn't ours to overwrite.
             setMessages((current) =>
-              current.length === 1 && current[0] === generationMessage ? restored : current,
+              restoreChatAfterRefusedGeneration(current, generationMessage.id, restored),
             );
             setCurrentMode('generate');
             setComposerBlocker(refusalToBlocker(details));
