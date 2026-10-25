@@ -184,7 +184,7 @@ describe('chatService refusal handling', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('does not hand partial output (text, content blocks, edit instructions) to the caller on a mid-stream refusal', async () => {
+  it('does not call onComplete, so no edit instructions or content blocks are handed over, when a refusal follows a complete edit block', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const onRefusal = vi.fn();
     const onComplete = vi.fn();
@@ -205,7 +205,7 @@ describe('chatService refusal handling', () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it('reports null category and explanation when stop_details is null or its fields are null', async () => {
+  it('reports null category and explanation when stop_details is null, its fields are null, or the explanation is blank', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const onRefusal = vi.fn();
 
@@ -219,9 +219,19 @@ describe('chatService refusal handling', () => {
       { onRefusal },
     );
 
-    expect(onRefusal).toHaveBeenCalledTimes(2);
+    await runStream(
+      [
+        messageStart,
+        refusalDelta({ type: 'refusal', category: null, explanation: '   ' }),
+        { type: 'message_stop' },
+      ],
+      { onRefusal },
+    );
+
+    expect(onRefusal).toHaveBeenCalledTimes(3);
     expect(onRefusal).toHaveBeenNthCalledWith(1, { category: null, explanation: null });
     expect(onRefusal).toHaveBeenNthCalledWith(2, { category: null, explanation: null });
+    expect(onRefusal).toHaveBeenNthCalledWith(3, { category: null, explanation: null });
   });
 
   it('still costs and reconciles the usage of a refused stream', async () => {
@@ -454,6 +464,33 @@ describe('chatService refusal handling', () => {
     expect(onCostError.mock.calls[0][0]).toMatchObject({ type: 'request_cost_ceiling_exceeded' });
     expect(onRefusal).not.toHaveBeenCalled();
   });
+
+  it.each(['max_tokens', 'tool_use', 'pause_turn'])(
+    'does not treat a %s stop as a refusal: onComplete fires, no onRefusal, no ModelRefusal',
+    async (stopReason) => {
+      const onRefusal = vi.fn();
+      const onComplete = vi.fn();
+
+      await runStream(
+        [
+          messageStart,
+          ...textBlock('A real answer.'),
+          {
+            type: 'message_delta',
+            delta: { stop_reason: stopReason, stop_sequence: null, stop_details: null },
+            usage: { output_tokens: 5 },
+          },
+          { type: 'message_stop' },
+        ],
+        { onRefusal, onComplete },
+      );
+
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete.mock.calls[0][0]).toBe('A real answer.');
+      expect(onRefusal).not.toHaveBeenCalled();
+      expect(reportError).not.toHaveBeenCalled();
+    },
+  );
 
   it('leaves a normally ended stream alone: onComplete fires, onRefusal does not', async () => {
     const onRefusal = vi.fn();
