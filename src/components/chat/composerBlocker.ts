@@ -11,7 +11,7 @@
 // component code. See plans/composer-banner-unification.md for the failure
 // modes this closes and the decision record.
 
-import type { CostError, CostErrorType } from '../../services/chatService';
+import type { CostError, CostErrorType, RefusalDetails } from '../../services/chatService';
 import { CAP_OVERSPEND_TOLERANCE_FRACTION } from '../../../shared/cap';
 
 // Inline shape of the /api/usage response, matching the literal at
@@ -55,6 +55,10 @@ type UsageSnapshot = {
  *   body_too_large, chart_deleted, file_unavailable, invalid_token,
  *   service-class errors, AND the lifetime_cap $0/$0 fallback +
  *   unknown-variant defensive arm.
+ * - `refusal`: the safety classifiers declined the last request
+ *   (`stop_reason: "refusal"`). Non-blocking: the refused turn was already
+ *   taken out of the conversation, so the user edits and sends again.
+ *   Cleared by the next send like `advisory`.
  */
 export type ComposerBlocker =
   | { type: 'cap_reached' }
@@ -65,7 +69,8 @@ export type ComposerBlocker =
       type: 'advisory';
       cost_error_type: CostErrorType | 'unknown';
       detail: string;
-    };
+    }
+  | { type: 'refusal'; detail: string };
 
 /**
  * Render-time blocker: event blockers plus the derived `would_exceed_cap`
@@ -224,10 +229,29 @@ export function costErrorToBlocker(error: CostError): ComposerBlocker | undefine
 }
 
 /**
+ * Banner for a refused turn. `explanation` is Anthropic's display text for
+ * the refusal and is null when the refusal has no named category.
+ */
+export function refusalToBlocker(details: RefusalDetails): ComposerBlocker {
+  return {
+    type: 'refusal',
+    detail: [
+      "Claude's safety filter blocked this response.",
+      details.explanation,
+      'Your request was left out of the conversation, so you can edit it and try again.',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  };
+}
+
+/**
  * Compose the render-time blocker from event-driven state + derived inputs.
  * Pure function — call inline at render (cheap). Returns:
- *   - Event blocker if any (filtered for cap-class on byok tier flip)
- *   - Derived `would_exceed_cap` if estimate would push usage over limit
+ *   - Event blocker if any (filtered for cap-class on byok tier flip),
+ *     except `refusal`, which yields to the derived cap states below
+ *   - Derived `cap_reached` / `would_exceed_cap` from usage and the estimate
+ *   - The `refusal` blocker if no cap state applies
  *   - `null` otherwise
  */
 export function selectBlocker(params: {
@@ -257,7 +281,11 @@ export function selectBlocker(params: {
       ? null
       : eventBlocker;
 
-  if (filteredEvent) return filteredEvent;
+  // A refusal banner says "edit and try again", but the refused request's
+  // usage still counts toward the cap: if it pushed the user there, the cap
+  // state (and its blocked send) must show instead. It is returned below if
+  // none applies.
+  if (filteredEvent && filteredEvent.type !== 'refusal') return filteredEvent;
 
   // Derived cap_reached: user is already at-or-over the displayed cap.
   // Mirrors the server's `cost_micro_usd < LIFETIME_CAP_MICRO_USD` gate in
@@ -285,7 +313,7 @@ export function selectBlocker(params: {
     return { type: 'would_exceed_cap' };
   }
 
-  return null;
+  return filteredEvent;
 }
 
 /**
@@ -315,6 +343,7 @@ export function preserveCapClassOnly(prev: ComposerBlocker | null): ComposerBloc
  * for client/server bundle skew).
  *
  * Does NOT block: regular advisory (body_too_large, invalid_token, etc.),
+ * refusal (the refused turn is already out of the conversation),
  * last_send_exceeded (user can retry with a smaller draft — would_exceed_cap
  * derived state gates the actual attempt if the new draft is still too big),
  * or null.
@@ -334,6 +363,8 @@ export function shouldBlockSend(rendered: RenderedBlocker): boolean {
       return false;
     case 'advisory':
       return rendered.cost_error_type === 'unknown';
+    case 'refusal':
+      return false;
     default: {
       const _exhaustive: never = rendered;
       void _exhaustive;

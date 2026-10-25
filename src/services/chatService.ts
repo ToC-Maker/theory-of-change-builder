@@ -259,6 +259,27 @@ function drainPendingReconciles(authToken: string | null): Promise<void> {
   );
 }
 
+/**
+ * `stop_details` of a `stop_reason: "refusal"` message_delta (a classifier
+ * declined the request). Both fields are null when the refusal maps to no
+ * named category; `explanation` is display text, not stable enough to parse.
+ */
+export interface RefusalDetails {
+  category: string | null;
+  explanation: string | null;
+}
+
+function parseRefusalDetails(raw: unknown): RefusalDetails {
+  const details = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return {
+    category: typeof details.category === 'string' ? details.category : null,
+    explanation:
+      typeof details.explanation === 'string' && details.explanation.trim()
+        ? details.explanation
+        : null,
+  };
+}
+
 export interface StreamCallbacks {
   onContent?: (chunk: string, fullContent: string) => void;
   /**
@@ -285,6 +306,20 @@ export interface StreamCallbacks {
     contentBlocks?: AssistantBlock[],
   ) => void;
   onError?: (error: string) => void;
+  /**
+   * Fires instead of `onComplete` when the turn ended with
+   * `stop_reason: "refusal"`. Chunks already delivered through `onContent`,
+   * `onThinking` and `onStreamPhase` are not retracted: the caller must
+   * discard them, since whatever streamed before a refusal is incomplete.
+   * What is withheld is `onComplete`: no edit instructions are parsed and no
+   * content blocks are handed over for replay. The caller must also drop the
+   * turn that was refused from its history (Anthropic: reset the context
+   * before continuing, otherwise the next request keeps being refused).
+   * Usage is still reported through `onCostUpdate` and the reconcile POST,
+   * as for any other stream. Without an `onRefusal`, the refusal goes to
+   * `onError` with a fixed message.
+   */
+  onRefusal?: (details: RefusalDetails) => void;
   onSearchStart?: () => void;
   onSearchComplete?: (results?: WebSearchResult[]) => void;
   /**
@@ -701,6 +736,53 @@ class ChatService {
     let fullContent = '';
     let fullThinking = '';
     let usage: AnthropicUsage | null = null;
+    // Set from the `stop_reason: "refusal"` message_delta; acted on at message_stop.
+    let refusal: RefusalDetails | null = null;
+    // True once any content block opened: separates a refusal before any
+    // output from one that cut a turn off mid-stream.
+    let outputStarted = false;
+    let refusalDelivered = false;
+    // Delivers a seen refusal once, whichever ends the stream first:
+    // message_stop, a mid-stream error event, EOF without message_stop, or a
+    // non-abort drop. The refusal is already known by then, and surfacing a
+    // drop as a transport error would retry the request, re-sending a prompt
+    // that gets refused again. Returns whether it delivered.
+    const finishRefusal = (): boolean => {
+      if (!refusal || refusalDelivered) return false;
+      refusalDelivered = true;
+      ctx?.markComplete();
+      console.warn(`[ChatService] Stream refused: category=${refusal.category}`);
+      // Refusals are HTTP 200s, invisible to error-rate monitoring.
+      // Category, model and stage only: no explanation, no content.
+      const stage = outputStarted ? 'mid_stream' : 'before_output';
+      loggingService.reportError({
+        error_name: 'ModelRefusal',
+        error_message: `stop_reason refusal (category=${refusal.category ?? 'none'}, ${stage})`,
+        request_metadata: { category: refusal.category, model, stage },
+      });
+      try {
+        if (callbacks.onRefusal) callbacks.onRefusal(refusal);
+        else callbacks.onError?.("The response was blocked by Claude's safety filter.");
+      } catch (callbackErr) {
+        // Same handling as onComplete below: a throwing handler must not
+        // become an SSE processing error, which would reach onError (and
+        // possibly the network retry) for a turn the caller already dropped.
+        const cbErr = callbackErr instanceof Error ? callbackErr : new Error(String(callbackErr));
+        console.error('[ChatService] onRefusal callback error:', cbErr);
+        loggingService.reportError({
+          error_name: `onRefusalCallback:${cbErr.name}`,
+          error_message: cbErr.message,
+          stack_trace: cbErr.stack,
+          request_metadata: {
+            model,
+            mode,
+            messageCount: messages.length,
+            ...(ctx ? ctx.toMetadata().streaming : {}),
+          },
+        });
+      }
+      return true;
+    };
 
     // Block accumulator runs in parallel with the existing fullContent /
     // fullThinking string buffers (which power the live UI). On
@@ -873,11 +955,21 @@ class ChatService {
               ) {
                 blockAccumulator.handleEvent(event);
               }
+              if (event.type === 'content_block_start') outputStarted = true;
+              // `stop_reason` and `stop_details` ride on message_delta's
+              // `delta` (the usage branch further down reads `usage`).
+              if (event.type === 'message_delta' && event.delta?.stop_reason === 'refusal') {
+                refusal = parseRefusalDetails(event.delta.stop_details);
+              }
               // Mid-stream synthesized error events from the worker (U9). These
               // arrive as SSE events rather than HTTP errors because the failure
               // was detected after streaming began. They terminate the stream
               // via onCostError without invoking onError or the retry path.
               if (typeof event.type === 'string' && event.type in MID_STREAM_ERROR_TYPES) {
+                // A refusal already seen takes precedence: the turn is dropped
+                // as refused, not stamped as a cut-off partial. The cap state
+                // reaches the user through the caller's usage refresh.
+                if (finishRefusal()) return;
                 const mappedType = MID_STREAM_ERROR_TYPES[event.type];
                 callbacks.onCostError?.({
                   type: mappedType,
@@ -1111,6 +1203,7 @@ class ChatService {
                       ` protocol=${meta.protocol ?? '?'}`,
                   );
                 }
+                if (finishRefusal()) return;
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
                 // Pass raw fullContent so loggers capture exactly what
@@ -1171,6 +1264,9 @@ class ChatService {
           }
         }
       }
+      // The stream ended without message_stop. If a refusal was seen, that is
+      // the turn's outcome; otherwise the incomplete-stream check below applies.
+      finishRefusal();
     } catch (e) {
       // Kill-time diagnostic log. The K2 gap (sub-5s kill after message_start,
       // before the first count_tokens poll, leaving only the 8-token output
@@ -1181,6 +1277,9 @@ class ChatService {
       // with the final reconcile value. Skipped on non-abort errors.
       const isAbort =
         (e instanceof DOMException && e.name === 'AbortError') || signal?.aborted === true;
+      // A drop after the refusal message_delta ends the turn as a refusal, not
+      // a transport error (no retry).
+      if (!isAbort && !isCostError(e) && finishRefusal()) return;
       if (isAbort) {
         const totalChars = fullContent.length + fullThinking.length;
         if (totalChars > 0) {
