@@ -2891,6 +2891,9 @@ export function ChatInterface({
     // isLoading && !isStreaming). Set sync, BEFORE the streamMessage call,
     // so a slow preflight surfaces the spinner immediately.
     setIsLoading(true);
+    // Same send-start clear as handleSendMessage: advisory and refusal
+    // banners from an earlier turn don't outlive the next send.
+    setComposerBlocker(preserveCapClassOnly);
     // Defensive resets: hide leftover content if React commits before
     // onAccepted lands. Streaming visibility (isStreaming) and mode swap
     // (setCurrentMode('chat')) are deferred into onAccepted per C5/Q4 so
