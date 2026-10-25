@@ -735,6 +735,9 @@ class ChatService {
     let usage: AnthropicUsage | null = null;
     // Set from the `stop_reason: "refusal"` message_delta; acted on at message_stop.
     let refusal: RefusalDetails | null = null;
+    // True once any content block opened: separates a refusal before any
+    // output from one that cut a turn off mid-stream.
+    let outputStarted = false;
 
     // Block accumulator runs in parallel with the existing fullContent /
     // fullThinking string buffers (which power the live UI). On
@@ -907,6 +910,7 @@ class ChatService {
               ) {
                 blockAccumulator.handleEvent(event);
               }
+              if (event.type === 'content_block_start') outputStarted = true;
               // `stop_reason` and `stop_details` ride on message_delta's
               // `delta` (the usage branch further down reads `usage`).
               if (event.type === 'message_delta' && event.delta?.stop_reason === 'refusal') {
@@ -1152,6 +1156,14 @@ class ChatService {
                 }
                 if (refusal) {
                   console.warn(`[ChatService] Stream refused: category=${refusal.category}`);
+                  // Refusals are HTTP 200s, invisible to error-rate monitoring.
+                  // Category, model and stage only: no explanation, no content.
+                  const stage = outputStarted ? 'mid_stream' : 'before_output';
+                  loggingService.reportError({
+                    error_name: 'ModelRefusal',
+                    error_message: `stop_reason refusal (category=${refusal.category ?? 'none'}, ${stage})`,
+                    request_metadata: { category: refusal.category, model, stage },
+                  });
                   callbacks.onRefusal?.(refusal);
                   return;
                 }

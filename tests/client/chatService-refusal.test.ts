@@ -10,13 +10,16 @@
 //     `onComplete`, so partial text, [EDIT_INSTRUCTIONS] and content blocks of
 //     the refused turn never reach the caller.
 //   - The refused stream's usage is still costed and reconciled.
+//   - Each refusal is reported once as `ModelRefusal` (category, model, stage;
+//     never the explanation or any content).
 //   - Streams that end normally are unaffected.
 //
 // Harness mirrors `chatService-onAccepted.test.ts`: fake DOM globals, a
 // controlled ReadableStream body and a mocked global fetch.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 import { chatService, type StreamCallbacks } from '../../src/services/chatService';
+import { loggingService } from '../../src/services/loggingService';
 
 const MODEL = 'claude-opus-4-7';
 
@@ -120,9 +123,11 @@ const textBlock = (text: string) => [
 ];
 
 let fakes: Fakes;
+let reportError: MockInstance<typeof loggingService.reportError>;
 
 beforeEach(() => {
   fakes = installDomFakes();
+  reportError = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -223,6 +228,51 @@ describe('chatService refusal handling', () => {
     expect(fakes.beaconUrls).toContain('/api/reconcile-cost');
   });
 
+  it('reports a refusal before any output as ModelRefusal with category, model and stage only', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const explanation = 'This request was declined because it could enable cyber harm.';
+
+    await runStream(
+      [
+        messageStart,
+        refusalDelta({ type: 'refusal', category: 'cyber', explanation }),
+        { type: 'message_stop' },
+      ],
+      { onRefusal: vi.fn() },
+    );
+
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const report = reportError.mock.calls[0][0];
+    expect(report.error_name).toBe('ModelRefusal');
+    expect(report.request_metadata).toEqual({
+      category: 'cyber',
+      model: MODEL,
+      stage: 'before_output',
+    });
+    expect(JSON.stringify(report)).not.toContain(explanation);
+  });
+
+  it('reports a mid-stream refusal with stage mid_stream and never the streamed text', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runStream(
+      [
+        messageStart,
+        ...textBlock('a secret draft answer'),
+        refusalDelta({ type: 'refusal', category: null, explanation: 'Some explanation.' }),
+        { type: 'message_stop' },
+      ],
+      { onRefusal: vi.fn() },
+    );
+
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const report = reportError.mock.calls[0][0];
+    expect(report.request_metadata).toEqual({ category: null, model: MODEL, stage: 'mid_stream' });
+    expect(report.error_message).toContain('category=none');
+    expect(JSON.stringify(report)).not.toContain('a secret draft answer');
+    expect(JSON.stringify(report)).not.toContain('Some explanation.');
+  });
+
   it('leaves a normally ended stream alone: onComplete fires, onRefusal does not', async () => {
     const onRefusal = vi.fn();
     const onComplete = vi.fn();
@@ -244,5 +294,6 @@ describe('chatService refusal handling', () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0]).toBe('All good.');
     expect(onRefusal).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
   });
 });
