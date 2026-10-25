@@ -248,8 +248,10 @@ export function refusalToBlocker(details: RefusalDetails): ComposerBlocker {
 /**
  * Compose the render-time blocker from event-driven state + derived inputs.
  * Pure function — call inline at render (cheap). Returns:
- *   - Event blocker if any (filtered for cap-class on byok tier flip)
- *   - Derived `would_exceed_cap` if estimate would push usage over limit
+ *   - Event blocker if any (filtered for cap-class on byok tier flip),
+ *     except `refusal`, which yields to the derived cap states below
+ *   - Derived `cap_reached` / `would_exceed_cap` from usage and the estimate
+ *   - The `refusal` blocker if no cap state applies
  *   - `null` otherwise
  */
 export function selectBlocker(params: {
@@ -279,7 +281,10 @@ export function selectBlocker(params: {
       ? null
       : eventBlocker;
 
-  if (filteredEvent) return filteredEvent;
+  // A refusal banner says "edit and try again", but the refused request was
+  // still billed: if it pushed the user to the cap, the cap state (and its
+  // blocked send) must show instead. It is returned below if none applies.
+  if (filteredEvent && filteredEvent.type !== 'refusal') return filteredEvent;
 
   // Derived cap_reached: user is already at-or-over the displayed cap.
   // Mirrors the server's `cost_micro_usd < LIFETIME_CAP_MICRO_USD` gate in
@@ -307,7 +312,7 @@ export function selectBlocker(params: {
     return { type: 'would_exceed_cap' };
   }
 
-  return null;
+  return filteredEvent;
 }
 
 /**
