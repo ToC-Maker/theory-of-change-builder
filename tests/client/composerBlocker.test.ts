@@ -6,6 +6,7 @@
 //   - shouldBlockSend: send-gate semantics including unknown-sentinel over-block
 //   - isCapClassBlocker: cap-class predicate
 //   - preserveCapClassOnly: send-start stickiness rule
+//   - refusalToBlocker: banner for a classifier-refused turn
 //   - Transition sequences covering Mode A regression and BYOK tier flip
 //
 // Pattern: matches tests/client/chatService-reconcile-cadence.test.ts
@@ -16,6 +17,7 @@ import {
   type ComposerBlocker,
   type RenderedBlocker,
   costErrorToBlocker,
+  refusalToBlocker,
   selectBlocker,
   shouldBlockSend,
   isCapClassBlocker,
@@ -785,5 +787,57 @@ describe('exported type narrowing', () => {
     expect(a).toBeNull();
     expect(b.type).toBe('cap_reached');
     expect(c.type).toBe('would_exceed_cap');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Refusal (stop_reason: "refusal") banner
+// ---------------------------------------------------------------------------
+
+describe('refusalToBlocker', () => {
+  it("shows Anthropic's explanation when there is one", () => {
+    const blocker = refusalToBlocker({
+      category: 'cyber',
+      explanation: 'This request was declined because it could enable cyber harm.',
+    });
+    expect(blocker.type).toBe('refusal');
+    expect(blocker).toMatchObject({
+      detail: expect.stringContaining(
+        'This request was declined because it could enable cyber harm.',
+      ),
+    });
+  });
+
+  it('still reads as a complete message when category and explanation are null', () => {
+    const blocker = refusalToBlocker({ category: null, explanation: null });
+    expect(blocker).toEqual({
+      type: 'refusal',
+      detail:
+        "Claude's safety filter blocked this response. " +
+        'Your request was left out of the conversation, so you can edit it and try again.',
+    });
+  });
+
+  it('does not block sends (the refused turn is already out of the conversation)', () => {
+    expect(shouldBlockSend(refusalToBlocker({ category: 'bio', explanation: null }))).toBe(false);
+  });
+
+  it('is cleared at the next send, like an advisory', () => {
+    const blocker = refusalToBlocker({ category: 'bio', explanation: null });
+    expect(isCapClassBlocker(blocker)).toBe(false);
+    expect(preserveCapClassOnly(blocker)).toBeNull();
+  });
+
+  it('survives selectBlocker on both tiers (not a cap blocker)', () => {
+    const blocker = refusalToBlocker({ category: 'cyber', explanation: 'x' });
+    for (const tier of ['free', 'byok']) {
+      expect(
+        selectBlocker({
+          eventBlocker: blocker,
+          usage: { used_usd: 0, limit_usd: LIFETIME_CAP_USD, tier },
+          composerEstimateUsd: 0,
+        }),
+      ).toBe(blocker);
+    }
   });
 });

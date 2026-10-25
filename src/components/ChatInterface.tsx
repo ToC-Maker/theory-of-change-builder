@@ -31,6 +31,7 @@ import {
   type ComposerBlocker,
   type RenderedBlocker,
   costErrorToBlocker,
+  refusalToBlocker,
   selectBlocker,
   shouldBlockSend,
   preserveCapClassOnly,
@@ -2099,6 +2100,22 @@ export function ChatInterface({
               });
             }
           },
+          onRefusal: (details) => {
+            // The classifiers declined this turn. Anthropic: reset the
+            // context before continuing, or the next request keeps being
+            // refused. Drop the user message committed in onAccepted; no
+            // assistant turn was stamped, so history is back to exactly the
+            // prefix the model last saw (earlier signed thinking blocks stay
+            // valid). Give the draft and attachments back so the user can
+            // rephrase, unless they already started something new.
+            setMessages((prev) => prev.filter((m) => m.id !== userMessageId));
+            setInputValue((current) => current || inputValue);
+            setChatAttachedFiles((current) => (current.length > 0 ? current : chatAttachedFiles));
+            setComposerBlocker(refusalToBlocker(details));
+            resetStreamUiState();
+            // The refused usage was still billed; refresh the progress bar.
+            void refreshUsage();
+          },
           onError: (error: string) => {
             // Structured cost errors arrive via onCostError below with
             // typed data; this onError path is for transport-level failures
@@ -3054,6 +3071,16 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 console.error('Error applying graph edits:', error);
               }
             }
+          },
+          onRefusal: (details) => {
+            // Undo onAccepted's deferred commit: the refused generation
+            // prompt leaves the chat, the prior chat comes back, and the
+            // Generate form (files, instructions) is still there to edit.
+            setMessages(messages);
+            setCurrentMode('generate');
+            setComposerBlocker(refusalToBlocker(details));
+            resetStreamUiState();
+            void refreshUsage();
           },
           onError: (error: string) => {
             // Transport-level failures. Cost errors were swallowed in
