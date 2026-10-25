@@ -259,6 +259,27 @@ function drainPendingReconciles(authToken: string | null): Promise<void> {
   );
 }
 
+/**
+ * `stop_details` of a `stop_reason: "refusal"` message_delta (a classifier
+ * declined the request). Both fields are null when the refusal maps to no
+ * named category; `explanation` is display text, not stable enough to parse.
+ */
+export interface RefusalDetails {
+  category: string | null;
+  explanation: string | null;
+}
+
+function parseRefusalDetails(raw: unknown): RefusalDetails {
+  const details = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return {
+    category: typeof details.category === 'string' ? details.category : null,
+    explanation:
+      typeof details.explanation === 'string' && details.explanation.trim()
+        ? details.explanation
+        : null,
+  };
+}
+
 export interface StreamCallbacks {
   onContent?: (chunk: string, fullContent: string) => void;
   /**
@@ -285,6 +306,17 @@ export interface StreamCallbacks {
     contentBlocks?: AssistantBlock[],
   ) => void;
   onError?: (error: string) => void;
+  /**
+   * Fires instead of `onComplete` when the turn ended with
+   * `stop_reason: "refusal"`. Whatever streamed before the refusal is
+   * incomplete and is never passed on: no `onComplete`, so no edit
+   * instructions are parsed and no content blocks are handed to the caller
+   * for replay. The caller must drop the turn that was refused from its
+   * history (Anthropic: reset the context before continuing, otherwise the
+   * next request keeps being refused). Usage is still reported through
+   * `onCostUpdate` and the reconcile POST, as for any other stream.
+   */
+  onRefusal?: (details: RefusalDetails) => void;
   onSearchStart?: () => void;
   onSearchComplete?: (results?: WebSearchResult[]) => void;
   /**
@@ -701,6 +733,8 @@ class ChatService {
     let fullContent = '';
     let fullThinking = '';
     let usage: AnthropicUsage | null = null;
+    // Set from the `stop_reason: "refusal"` message_delta; acted on at message_stop.
+    let refusal: RefusalDetails | null = null;
 
     // Block accumulator runs in parallel with the existing fullContent /
     // fullThinking string buffers (which power the live UI). On
@@ -872,6 +906,11 @@ class ChatService {
                 event.type === 'content_block_stop'
               ) {
                 blockAccumulator.handleEvent(event);
+              }
+              // `stop_reason` and `stop_details` ride on message_delta's
+              // `delta` (the usage branch further down reads `usage`).
+              if (event.type === 'message_delta' && event.delta?.stop_reason === 'refusal') {
+                refusal = parseRefusalDetails(event.delta.stop_details);
               }
               // Mid-stream synthesized error events from the worker (U9). These
               // arrive as SSE events rather than HTTP errors because the failure
@@ -1110,6 +1149,11 @@ class ChatService {
                       ` bytes=${meta.bytesReceived}` +
                       ` protocol=${meta.protocol ?? '?'}`,
                   );
+                }
+                if (refusal) {
+                  console.warn(`[ChatService] Stream refused: category=${refusal.category}`);
+                  callbacks.onRefusal?.(refusal);
+                  return;
                 }
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
