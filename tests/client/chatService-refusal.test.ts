@@ -16,7 +16,9 @@
 //     message_delta, and a drop never triggers the network retry (that would
 //     re-send and re-bill the refused prompt).
 //   - A throwing onRefusal is contained like a throwing onComplete; without an
-//     onRefusal the refusal falls back to onError.
+//     onRefusal the refusal falls back to onError (guarded the same way).
+//   - A refusal already seen takes precedence over a cost-error event that
+//     follows it (e.g. the worker's end-of-stream kill).
 //   - Streams that end normally are unaffected.
 //
 // Harness mirrors `chatService-onAccepted.test.ts`: fake DOM globals, a
@@ -389,6 +391,68 @@ describe('chatService refusal handling', () => {
     expect(onError.mock.calls[0][0]).toContain('safety filter');
     expect(onComplete).not.toHaveBeenCalled();
     expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it('contains a throwing onError fallback when the caller passes no onRefusal', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onError = vi.fn(() => {
+      throw new Error('onError failed');
+    });
+
+    await runStream(
+      [
+        messageStart,
+        refusalDelta({ type: 'refusal', category: 'cyber', explanation: null }),
+        { type: 'message_stop' },
+      ],
+      { onError },
+    );
+
+    // Not rethrown into the generic error path, which would call onError again.
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls.map(([report]) => report.error_name)).toEqual([
+      'ModelRefusal',
+      'onRefusalCallback:Error',
+    ]);
+  });
+
+  it('delivers a refusal, not a cost error, when a cost-error event follows the refusal message_delta', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onRefusal = vi.fn();
+    const onCostError = vi.fn();
+    const onError = vi.fn();
+
+    await runStream(
+      [
+        messageStart,
+        ...textBlock('partial'),
+        refusalDelta({ type: 'refusal', category: 'bio', explanation: null }),
+        { type: 'request_cost_ceiling_exceeded' },
+      ],
+      { onRefusal, onCostError, onError },
+    );
+
+    expect(onRefusal).toHaveBeenCalledTimes(1);
+    // The caller would stamp the refused partial as a cut-off turn and keep
+    // the user message that the refusal removes.
+    expect(onCostError).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  it('still routes a cost-error event to onCostError when no refusal was seen', async () => {
+    const onRefusal = vi.fn();
+    const onCostError = vi.fn();
+
+    await runStream([messageStart, { type: 'request_cost_ceiling_exceeded' }], {
+      onRefusal,
+      onCostError,
+    });
+
+    expect(onCostError).toHaveBeenCalledTimes(1);
+    expect(onCostError.mock.calls[0][0]).toMatchObject({ type: 'request_cost_ceiling_exceeded' });
+    expect(onRefusal).not.toHaveBeenCalled();
   });
 
   it('leaves a normally ended stream alone: onComplete fires, onRefusal does not', async () => {

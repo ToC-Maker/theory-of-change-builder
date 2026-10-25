@@ -757,12 +757,9 @@ class ChatService {
         error_message: `stop_reason refusal (category=${refusal.category ?? 'none'}, ${stage})`,
         request_metadata: { category: refusal.category, model, stage },
       });
-      if (!callbacks.onRefusal) {
-        callbacks.onError?.("The response was blocked by Claude's safety filter.");
-        return true;
-      }
       try {
-        callbacks.onRefusal(refusal);
+        if (callbacks.onRefusal) callbacks.onRefusal(refusal);
+        else callbacks.onError?.("The response was blocked by Claude's safety filter.");
       } catch (callbackErr) {
         // Same handling as onComplete below: a throwing handler must not
         // become an SSE processing error, which would reach onError (and
@@ -966,6 +963,10 @@ class ChatService {
               // was detected after streaming began. They terminate the stream
               // via onCostError without invoking onError or the retry path.
               if (typeof event.type === 'string' && event.type in MID_STREAM_ERROR_TYPES) {
+                // A refusal already seen takes precedence: the turn is dropped
+                // as refused, not stamped as a cut-off partial. The cap state
+                // reaches the user through the caller's usage refresh.
+                if (finishRefusal()) return;
                 const mappedType = MID_STREAM_ERROR_TYPES[event.type];
                 callbacks.onCostError?.({
                   type: mappedType,
