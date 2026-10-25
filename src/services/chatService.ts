@@ -738,6 +738,51 @@ class ChatService {
     // True once any content block opened: separates a refusal before any
     // output from one that cut a turn off mid-stream.
     let outputStarted = false;
+    let refusalDelivered = false;
+    // Delivers a seen refusal once: at message_stop, or when the stream ends
+    // or drops after the refusal message_delta. The refusal is already known
+    // by then, and surfacing the drop as a transport error would retry the
+    // request, re-sending and re-billing a prompt that gets refused again.
+    // Returns whether it delivered.
+    const finishRefusal = (): boolean => {
+      if (!refusal || refusalDelivered) return false;
+      refusalDelivered = true;
+      ctx?.markComplete();
+      console.warn(`[ChatService] Stream refused: category=${refusal.category}`);
+      // Refusals are HTTP 200s, invisible to error-rate monitoring.
+      // Category, model and stage only: no explanation, no content.
+      const stage = outputStarted ? 'mid_stream' : 'before_output';
+      loggingService.reportError({
+        error_name: 'ModelRefusal',
+        error_message: `stop_reason refusal (category=${refusal.category ?? 'none'}, ${stage})`,
+        request_metadata: { category: refusal.category, model, stage },
+      });
+      if (!callbacks.onRefusal) {
+        callbacks.onError?.("The response was blocked by Claude's safety filter.");
+        return true;
+      }
+      try {
+        callbacks.onRefusal(refusal);
+      } catch (callbackErr) {
+        // Same handling as onComplete below: a throwing handler must not
+        // become an SSE processing error, which would reach onError (and
+        // possibly the network retry) for a turn the caller already dropped.
+        const cbErr = callbackErr instanceof Error ? callbackErr : new Error(String(callbackErr));
+        console.error('[ChatService] onRefusal callback error:', cbErr);
+        loggingService.reportError({
+          error_name: `onRefusalCallback:${cbErr.name}`,
+          error_message: cbErr.message,
+          stack_trace: cbErr.stack,
+          request_metadata: {
+            model,
+            mode,
+            messageCount: messages.length,
+            ...(ctx ? ctx.toMetadata().streaming : {}),
+          },
+        });
+      }
+      return true;
+    };
 
     // Block accumulator runs in parallel with the existing fullContent /
     // fullThinking string buffers (which power the live UI). On
@@ -1154,19 +1199,7 @@ class ChatService {
                       ` protocol=${meta.protocol ?? '?'}`,
                   );
                 }
-                if (refusal) {
-                  console.warn(`[ChatService] Stream refused: category=${refusal.category}`);
-                  // Refusals are HTTP 200s, invisible to error-rate monitoring.
-                  // Category, model and stage only: no explanation, no content.
-                  const stage = outputStarted ? 'mid_stream' : 'before_output';
-                  loggingService.reportError({
-                    error_name: 'ModelRefusal',
-                    error_message: `stop_reason refusal (category=${refusal.category ?? 'none'}, ${stage})`,
-                    request_metadata: { category: refusal.category, model, stage },
-                  });
-                  callbacks.onRefusal?.(refusal);
-                  return;
-                }
+                if (finishRefusal()) return;
                 const editInstructions = parseEditInstructions(fullContent);
                 const cleanContent = cleanResponseContent(fullContent);
                 // Pass raw fullContent so loggers capture exactly what
@@ -1227,6 +1260,9 @@ class ChatService {
           }
         }
       }
+      // The stream ended without message_stop. If a refusal was seen, that is
+      // the turn's outcome; otherwise the incomplete-stream check below applies.
+      finishRefusal();
     } catch (e) {
       // Kill-time diagnostic log. The K2 gap (sub-5s kill after message_start,
       // before the first count_tokens poll, leaving only the 8-token output
@@ -1237,6 +1273,9 @@ class ChatService {
       // with the final reconcile value. Skipped on non-abort errors.
       const isAbort =
         (e instanceof DOMException && e.name === 'AbortError') || signal?.aborted === true;
+      // A drop after the refusal message_delta ends the turn as a refusal, not
+      // a transport error (no retry).
+      if (!isAbort && !isCostError(e) && finishRefusal()) return;
       if (isAbort) {
         const totalChars = fullContent.length + fullThinking.length;
         if (totalChars > 0) {

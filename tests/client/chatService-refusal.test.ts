@@ -12,6 +12,11 @@
 //   - The refused stream's usage is still costed and reconciled.
 //   - Each refusal is reported once as `ModelRefusal` (category, model, stage;
 //     never the explanation or any content).
+//   - A refusal is acted on even when the stream drops or ends after its
+//     message_delta, and a drop never triggers the network retry (that would
+//     re-send and re-bill the refused prompt).
+//   - A throwing onRefusal is contained like a throwing onComplete; without an
+//     onRefusal the refusal falls back to onError.
 //   - Streams that end normally are unaffected.
 //
 // Harness mirrors `chatService-onAccepted.test.ts`: fake DOM globals, a
@@ -78,22 +83,35 @@ function sseLine(event: object): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-/** Resolves once `streamMessage` has consumed a full SSE script. */
+let fetchMock: MockInstance;
+
+/** Number of requests sent to the stream endpoint (more than 1 means a retry). */
+const streamRequests = () =>
+  fetchMock.mock.calls.filter(([url]) => String(url).includes('/api/anthropic-stream')).length;
+
+/**
+ * Resolves once `streamMessage` has consumed a full SSE script. The script is
+ * delivered one event per read; `end` is how the body finishes afterwards:
+ * closed cleanly (default) or errored, as on a dropped connection.
+ */
 async function runStream(
   events: object[],
   callbacks: StreamCallbacks,
-  opts: { loggingMessageId?: string } = {},
+  opts: { loggingMessageId?: string; end?: Error } = {},
 ): Promise<void> {
+  let next = 0;
   const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const event of events) controller.enqueue(sseLine(event));
-      controller.close();
+    pull(controller) {
+      if (next < events.length) controller.enqueue(sseLine(events[next++]));
+      else if (opts.end) controller.error(opts.end);
+      else controller.close();
     },
   });
-  globalThis.fetch = vi.fn(
+  fetchMock = vi.fn(
     async () =>
       new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
-  ) as unknown as typeof fetch;
+  );
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 
   await chatService.streamMessage({
     messages: [{ id: 'u1', role: 'user', content: 'hello', timestamp: new Date() }],
@@ -271,6 +289,106 @@ describe('chatService refusal handling', () => {
     expect(report.error_message).toContain('category=none');
     expect(JSON.stringify(report)).not.toContain('a secret draft answer');
     expect(JSON.stringify(report)).not.toContain('Some explanation.');
+  });
+
+  it('ends the turn as a refusal when the connection drops after the refusal message_delta, without retrying', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onRefusal = vi.fn();
+    const onError = vi.fn();
+    const onComplete = vi.fn();
+
+    await runStream(
+      [messageStart, refusalDelta({ type: 'refusal', category: 'bio', explanation: null })],
+      { onRefusal, onError, onComplete },
+      { end: new TypeError('network error') },
+    );
+
+    expect(onRefusal).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    // A retry would re-send, and re-bill, a prompt that is refused again.
+    expect(streamRequests()).toBe(1);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0][0].error_name).toBe('ModelRefusal');
+  });
+
+  it('ends the turn as a refusal when the stream closes after the refusal message_delta without message_stop', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onRefusal = vi.fn();
+    const onError = vi.fn();
+
+    await runStream(
+      [
+        messageStart,
+        refusalDelta({ type: 'refusal', category: 'cyber', explanation: 'Declined.' }),
+      ],
+      { onRefusal, onError },
+    );
+
+    expect(onRefusal).toHaveBeenCalledTimes(1);
+    expect(onRefusal).toHaveBeenCalledWith({ category: 'cyber', explanation: 'Declined.' });
+    expect(onError).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0][0].error_name).toBe('ModelRefusal');
+  });
+
+  it('still reports a stream that closes early without any refusal as an error', async () => {
+    const onRefusal = vi.fn();
+    const onError = vi.fn();
+
+    await runStream([messageStart], { onRefusal, onError });
+
+    expect(onRefusal).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('contains a throwing onRefusal: no onError, no retry, the failure is reported', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onError = vi.fn();
+    // A TypeError would be classified as a network error and retried if it
+    // escaped into the generic error path.
+    const onRefusal = vi.fn(() => {
+      throw new TypeError('handler failed');
+    });
+
+    await runStream(
+      [
+        messageStart,
+        refusalDelta({ type: 'refusal', category: 'cyber', explanation: null }),
+        { type: 'message_stop' },
+      ],
+      { onRefusal, onError },
+    );
+
+    expect(onRefusal).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(streamRequests()).toBe(1);
+    expect(reportError.mock.calls.map(([report]) => report.error_name)).toEqual([
+      'ModelRefusal',
+      'onRefusalCallback:TypeError',
+    ]);
+    expect(reportError.mock.calls[1][0].error_message).toBe('handler failed');
+  });
+
+  it('falls back to onError when the caller passes no onRefusal', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onError = vi.fn();
+    const onComplete = vi.fn();
+
+    await runStream(
+      [
+        messageStart,
+        refusalDelta({ type: 'refusal', category: 'cyber', explanation: null }),
+        { type: 'message_stop' },
+      ],
+      { onError, onComplete },
+    );
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toContain('safety filter');
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
   });
 
   it('leaves a normally ended stream alone: onComplete fires, onRefusal does not', async () => {
