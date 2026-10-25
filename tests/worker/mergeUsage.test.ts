@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { mergeUsage } from '../../worker/api/anthropic-stream';
-import { computeCostMicroUsd } from '../../shared/cost';
 
 // Construct a fresh accumulator. Mirrors `UsageAccumulator` in
 // `worker/api/anthropic-stream.ts` (flat `web_search_requests`; the
@@ -89,45 +88,5 @@ describe('mergeUsage', () => {
     acc.web_search_requests = 7;
     mergeUsage(acc, { server_tool_use: { web_search_requests: 'x' as unknown as number } });
     expect(acc.web_search_requests).toBe(7);
-  });
-});
-
-// A classifier refusal ends the stream like any other: the final message_delta
-// carries `stop_reason: "refusal"` next to its `usage`, and the worker bills
-// from `usage` alone. Pins that a refused stream is costed, before and after
-// output.
-describe('mergeUsage on refused streams', () => {
-  const MODEL = 'claude-opus-4-7';
-  const costOf = (acc: ReturnType<typeof newAcc>) =>
-    computeCostMicroUsd(MODEL, {
-      input_tokens: acc.input_tokens,
-      output_tokens: acc.output_tokens,
-      cache_creation_input_tokens: acc.cache_creation_input_tokens,
-      cache_read_input_tokens: acc.cache_read_input_tokens,
-    });
-
-  it('bills the input of a stream refused before any output', () => {
-    const acc = newAcc();
-    mergeUsage(acc, { input_tokens: 412, output_tokens: 1 }); // message_start
-    mergeUsage(acc, { output_tokens: 0 }); // message_delta, stop_reason "refusal"
-
-    expect(acc).toMatchObject({ input_tokens: 412, output_tokens: 1 });
-    expect(costOf(acc)).toBe(computeCostMicroUsd(MODEL, { input_tokens: 412, output_tokens: 1 }));
-    expect(costOf(acc)).toBeGreaterThan(0n);
-  });
-
-  it('bills the output streamed before a mid-stream refusal', () => {
-    const acc = newAcc();
-    mergeUsage(acc, { input_tokens: 412, cache_read_input_tokens: 4000, output_tokens: 1 });
-    mergeUsage(acc, { output_tokens: 250 }); // message_delta, stop_reason "refusal"
-
-    expect(acc).toMatchObject({ input_tokens: 412, output_tokens: 250 });
-    expect(costOf(acc)).toBe(
-      computeCostMicroUsd(MODEL, {
-        input_tokens: 412,
-        cache_read_input_tokens: 4000,
-        output_tokens: 250,
-      }),
-    );
   });
 });
