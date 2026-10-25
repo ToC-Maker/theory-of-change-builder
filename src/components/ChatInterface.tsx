@@ -1058,13 +1058,15 @@ export function ChatInterface({
     }
   }, [params.chartId, params.editToken, params.filename, location.pathname, getStorageKey]);
 
-  // Set by a refusal rollback that may leave `messages` empty. The save
-  // effect below skips empty arrays, so without this the refused turn would
-  // stay in localStorage, come back on reload and ride along on every send.
-  // Consumed by that effect, which runs with the key of the CURRENT route: a
-  // first message sent from `/` is stored under the chart key created
-  // mid-send, which the onRefusal closure (made before the navigate) can't see.
-  const purgeEmptyHistoryRef = useRef(false);
+  // The empty array a refusal rollback produced. The save effect below skips
+  // empty arrays, so without this the refused turn would stay in localStorage,
+  // come back on reload and ride along on every send. The effect purges only
+  // when `messages` is exactly this array, so a rollback that left state
+  // unchanged can never match a later, different empty array. It runs with the
+  // key of the CURRENT route: a first message sent from `/` is stored under
+  // the chart key created mid-send, which the onRefusal closure (made before
+  // the navigate) can't see.
+  const purgeEmptyHistoryRef = useRef<ChatMessage[] | null>(null);
 
   // Save messages to localStorage whenever they change
   useEffect(() => {
@@ -1073,13 +1075,13 @@ export function ChatInterface({
       // Only save non-empty message arrays to avoid clearing on mount
       if (messages.length > 0) {
         localStorage.setItem(storageKey, JSON.stringify(messages));
-      } else if (purgeEmptyHistoryRef.current) {
+      } else if (purgeEmptyHistoryRef.current === messages) {
+        purgeEmptyHistoryRef.current = null;
         localStorage.removeItem(storageKey);
       }
     } catch (error) {
       console.error('Failed to save chat history:', error);
     }
-    purgeEmptyHistoryRef.current = false;
   }, [messages, getStorageKey]);
 
   useEffect(() => {
@@ -2119,8 +2121,14 @@ export function ChatInterface({
             // prefix the model last saw (earlier signed thinking blocks stay
             // valid). Give the draft and attachments back so the user can
             // rephrase, unless they already started something new.
-            purgeEmptyHistoryRef.current = true;
-            setMessages((prev) => prev.filter((m) => m.id !== userMessageId));
+            const emptied: ChatMessage[] = [];
+            purgeEmptyHistoryRef.current = emptied;
+            setMessages((prev) => {
+              const rest = prev.filter((m) => m.id !== userMessageId);
+              // Refused message not there (user moved to another chart): leave it be.
+              if (rest.length === prev.length) return prev;
+              return rest.length === 0 ? emptied : rest;
+            });
             setInputValue((current) => current || inputValue);
             setChatAttachedFiles((current) => (current.length > 0 ? current : chatAttachedFiles));
             setComposerBlocker(refusalToBlocker(details));
@@ -3091,8 +3099,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // Undo onAccepted's deferred commit: the refused generation
             // prompt leaves the chat, the prior chat comes back, and the
             // Generate form (files, instructions) is still there to edit.
-            purgeEmptyHistoryRef.current = true;
-            setMessages(messages);
+            const emptied: ChatMessage[] = [];
+            purgeEmptyHistoryRef.current = emptied;
+            const restored = messages.length === 0 ? emptied : messages;
+            // Only while the chat is still exactly the refused generation
+            // prompt: after a move to another chart it isn't ours to overwrite.
+            setMessages((current) =>
+              current.length === 1 && current[0] === generationMessage ? restored : current,
+            );
             setCurrentMode('generate');
             setComposerBlocker(refusalToBlocker(details));
             resetStreamUiState();
