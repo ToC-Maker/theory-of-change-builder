@@ -14,7 +14,7 @@
 //     never the explanation or any content).
 //   - A refusal is acted on even when the stream drops or ends after its
 //     message_delta, and a drop never triggers the network retry (that would
-//     re-send and re-bill the refused prompt).
+//     re-send a prompt that is refused again).
 //   - A throwing onRefusal is contained like a throwing onComplete; without an
 //     onRefusal the refusal falls back to onError (guarded the same way).
 //   - A refusal already seen takes precedence over a cost-error event that
@@ -240,8 +240,8 @@ describe('chatService refusal handling', () => {
     );
 
     expect(onRefusal).toHaveBeenCalledTimes(1);
-    // 412 input tokens priced at the model's input rate: a refusal is billed
-    // from its usage like any other stream.
+    // 412 input tokens priced at the model's input rate: a refused stream's
+    // usage is costed like any other stream's.
     expect(onCostUpdate).toHaveBeenCalled();
     expect(onCostUpdate.mock.calls.at(-1)![0]).toBeGreaterThan(0);
     // The stream-end reconcile POST still fires from the `finally` block.
@@ -308,7 +308,7 @@ describe('chatService refusal handling', () => {
     expect(onRefusal).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
-    // A retry would re-send, and re-bill, a prompt that is refused again.
+    // A retry would re-send a prompt that is refused again.
     expect(streamRequests()).toBe(1);
     expect(reportError).toHaveBeenCalledTimes(1);
     expect(reportError.mock.calls[0][0].error_name).toBe('ModelRefusal');

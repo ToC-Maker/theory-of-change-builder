@@ -829,8 +829,9 @@ describe('refusalToBlocker', () => {
   });
 
   describe('selectBlocker: derived cap states win over a refusal banner', () => {
-    // The refused request was billed, so the banner must not read "edit and
-    // try again" at a user the refusal just pushed to the cap.
+    // The refused request's usage still counts toward the cap, so the banner
+    // must not read "edit and try again" at a user the refusal just pushed
+    // to it.
     const refusal = refusalToBlocker({ category: 'bio', explanation: null });
     const free = (used_usd: number) => ({ used_usd, limit_usd: LIFETIME_CAP_USD, tier: 'free' });
 

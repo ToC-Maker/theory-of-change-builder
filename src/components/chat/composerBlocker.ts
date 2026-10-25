@@ -281,9 +281,10 @@ export function selectBlocker(params: {
       ? null
       : eventBlocker;
 
-  // A refusal banner says "edit and try again", but the refused request was
-  // still billed: if it pushed the user to the cap, the cap state (and its
-  // blocked send) must show instead. It is returned below if none applies.
+  // A refusal banner says "edit and try again", but the refused request's
+  // usage still counts toward the cap: if it pushed the user there, the cap
+  // state (and its blocked send) must show instead. It is returned below if
+  // none applies.
   if (filteredEvent && filteredEvent.type !== 'refusal') return filteredEvent;
 
   // Derived cap_reached: user is already at-or-over the displayed cap.

@@ -308,13 +308,16 @@ export interface StreamCallbacks {
   onError?: (error: string) => void;
   /**
    * Fires instead of `onComplete` when the turn ended with
-   * `stop_reason: "refusal"`. Whatever streamed before the refusal is
-   * incomplete and is never passed on: no `onComplete`, so no edit
-   * instructions are parsed and no content blocks are handed to the caller
-   * for replay. The caller must drop the turn that was refused from its
-   * history (Anthropic: reset the context before continuing, otherwise the
-   * next request keeps being refused). Usage is still reported through
-   * `onCostUpdate` and the reconcile POST, as for any other stream.
+   * `stop_reason: "refusal"`. Chunks already delivered through `onContent`,
+   * `onThinking` and `onStreamPhase` are not retracted: the caller must
+   * discard them, since whatever streamed before a refusal is incomplete.
+   * What is withheld is `onComplete`: no edit instructions are parsed and no
+   * content blocks are handed over for replay. The caller must also drop the
+   * turn that was refused from its history (Anthropic: reset the context
+   * before continuing, otherwise the next request keeps being refused).
+   * Usage is still reported through `onCostUpdate` and the reconcile POST,
+   * as for any other stream. Without an `onRefusal`, the refusal goes to
+   * `onError` with a fixed message.
    */
   onRefusal?: (details: RefusalDetails) => void;
   onSearchStart?: () => void;
@@ -739,11 +742,11 @@ class ChatService {
     // output from one that cut a turn off mid-stream.
     let outputStarted = false;
     let refusalDelivered = false;
-    // Delivers a seen refusal once: at message_stop, or when the stream ends
-    // or drops after the refusal message_delta. The refusal is already known
-    // by then, and surfacing the drop as a transport error would retry the
-    // request, re-sending and re-billing a prompt that gets refused again.
-    // Returns whether it delivered.
+    // Delivers a seen refusal once, whichever ends the stream first:
+    // message_stop, a mid-stream error event, EOF without message_stop, or a
+    // non-abort drop. The refusal is already known by then, and surfacing a
+    // drop as a transport error would retry the request, re-sending a prompt
+    // that gets refused again. Returns whether it delivered.
     const finishRefusal = (): boolean => {
       if (!refusal || refusalDelivered) return false;
       refusalDelivered = true;
