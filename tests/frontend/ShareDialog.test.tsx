@@ -81,6 +81,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const mockOwnership = (isOwner: boolean) =>
+  vi.spyOn(ChartService, 'getChartByEditToken').mockResolvedValue({
+    chartId: 'chart-xyz',
+    chartData: { sections: [] } as never,
+    canEdit: true,
+    isOwner,
+  });
+
 const renderDialog = (props: Partial<ShareDialogProps> = {}) =>
   render(
     <MemoryRouter>
@@ -129,6 +137,29 @@ describe('ShareDialog', () => {
     });
     await waitFor(() => {
       expect(screen.getByText(/embed code/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('embed code gate', () => {
+    // App's level is 'restricted' for everyone who does not own the chart,
+    // so the gate has to follow what the dialog tells the visitor instead.
+    it('offers embed code to an anonymous visitor, whose links are open to anyone', async () => {
+      auth.isAuthenticated = false;
+      mockOwnership(false);
+      renderDialog({ linkSharingLevel: 'restricted' });
+
+      expect(await screen.findByText('Anyone with this link can view.')).toBeInTheDocument();
+      expect(screen.getByText(/embed code/i)).toBeInTheDocument();
+    });
+
+    it('offers no embed code to a signed-in non-owner, whose level the client does not know', async () => {
+      mockOwnership(false);
+      renderDialog({ linkSharingLevel: 'restricted' });
+
+      await waitFor(() => {
+        expect(screen.getByText('View link')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/embed code/i)).toBeNull();
     });
   });
 
@@ -317,13 +348,6 @@ describe('ShareDialog', () => {
   });
 
   describe('link status lines', () => {
-    const mockOwnership = (isOwner: boolean) =>
-      vi.spyOn(ChartService, 'getChartByEditToken').mockResolvedValue({
-        chartId: 'chart-xyz',
-        chartData: { sections: [] } as never,
-        canEdit: true,
-        isOwner,
-      });
     const restrictedClaims =
       /Approved viewers only|Approval required to edit|Editors must be approved/;
 

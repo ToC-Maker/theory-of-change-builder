@@ -4,7 +4,7 @@
 //   - Header
 //   - GeneralAccessSelector (3-mode radio group, always inline)
 //   - LinkCopyRow ×2 (view, edit)
-//   - Conditional embed-code expander (hidden under 'restricted')
+//   - Conditional embed-code expander (only where the view link is open to anyone)
 //   - PermissionsList (always inline for owners)
 //
 // Notable design choices, per user-direction stickies:
@@ -13,7 +13,7 @@
 //     trigger.
 //   - Delete-chart is NOT in the dialog (it moved to FileMenu in PR 1).
 //   - Chart ID is NOT displayed.
-//   - Embed code is hidden when `linkSharingLevel === 'restricted'`.
+//   - Embed code is hidden when the link status level is 'restricted' or unknown.
 //   - Permissions list is inline (no collapse toggle).
 //
 // State ownership (PR 2 fix-pass):
@@ -422,9 +422,9 @@ export function ShareDialog({
                 </div>
               )}
 
-              {/* Authenticated owners get the access selector. Anonymous
-                  edits keep the chart as restricted (the backend treats
-                  anon-owned charts as edit-token-gated regardless). */}
+              {/* Only a signed-in owner picks the access level. An anonymous
+                  chart has none to pick: its view link is open to anyone
+                  and its edit link works for whoever holds it. */}
               {isAuthenticated && isOwner && (
                 <section aria-label="General access">
                   <h3 className="text-xs font-medium text-gray-700 mb-2">General access</h3>
@@ -446,12 +446,11 @@ export function ShareDialog({
                 linkSharingLevel={linkStatusLevel}
               />
 
-              {/* Embed expander — hidden under Restricted mode (plan
-                  §99 + §170: a Restricted chart that gets embedded
-                  silently breaks for anonymous viewers; hide the
-                  affordance to make the failure mode unreachable from
-                  here). */}
-              {linkSharingLevel !== 'restricted' && embedCode && (
+              {/* Embed code is offered only where the view link is open to
+                  anyone: an embedded restricted chart breaks for
+                  anonymous viewers. Follows the level the link rows
+                  report, so it is withheld when that is unknown. */}
+              {linkStatusLevel !== null && linkStatusLevel !== 'restricted' && embedCode && (
                 <section>
                   <button
                     type="button"
