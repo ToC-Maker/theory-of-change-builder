@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useEdgeProperties } from '../../src/components/edge-editor/useEdgeProperties';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 interface MockMutationApi {
   mutate: ReturnType<typeof vi.fn>;
@@ -38,7 +39,7 @@ function makeMutationApi(initial: ToCData): MockMutationApi {
 }
 
 function makeData(): ToCData {
-  return {
+  return deepFreeze({
     sections: [
       {
         title: 'S',
@@ -65,7 +66,7 @@ function makeData(): ToCData {
         ],
       },
     ],
-  };
+  });
 }
 
 describe('useEdgeProperties', () => {

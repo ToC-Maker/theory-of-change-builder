@@ -10,6 +10,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 afterEach(() => {
   cleanup();
@@ -51,19 +52,19 @@ function nodeWrapperTop(): string {
 describe('TheoryOfChangeGraph node render clamp (PR #34 fb 46)', () => {
   it('renders in-range yPositions at center - height/2 (unchanged behavior)', () => {
     // jsdom measures no heights → the 76px default applies: top = 200 - 38.
-    render(<ToC data={makeData(200)} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData(200))} showEditButton={true} />);
     expect(nodeWrapperTop()).toBe('162px');
   });
 
   it('clamps an out-of-range yPosition to the top of the column body', () => {
     // yPosition 10 with the 76px default height → raw top would be
     // -28px, poking above the column body into the section title bar.
-    render(<ToC data={makeData(10)} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData(10))} showEditButton={true} />);
     expect(nodeWrapperTop()).toBe('0px');
   });
 
   it('clamps in view-only mode too', () => {
-    render(<ToC data={makeData(-100)} showEditButton={false} />);
+    render(<ToC data={deepFreeze(makeData(-100))} showEditButton={false} />);
     expect(nodeWrapperTop()).toBe('0px');
   });
 });

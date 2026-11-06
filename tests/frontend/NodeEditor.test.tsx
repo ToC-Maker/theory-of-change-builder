@@ -15,6 +15,7 @@ import React from 'react';
 import { NodeEditor } from '../../src/components/node-editor/NodeEditor';
 import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 // Minimal `useGraphMutation`-shaped API so `useNodeProperties` works
 // without spinning up the real hook. Records calls so we can assert
@@ -38,7 +39,7 @@ function makeMutationApi(initial: ToCData) {
 function makeData(
   nodes: { id: string; title?: string; text?: string; width?: number; color?: string }[],
 ): ToCData {
-  return {
+  return deepFreeze({
     sections: [
       {
         title: 'Section A',
@@ -56,7 +57,7 @@ function makeData(
         ],
       },
     ],
-  };
+  });
 }
 
 function renderEditor(props: {

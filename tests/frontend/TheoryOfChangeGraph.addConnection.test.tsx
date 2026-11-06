@@ -17,6 +17,7 @@ import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
+import { deepFreeze } from './helpers/deepFreeze';
 
 afterEach(() => {
   cleanup();
@@ -25,9 +26,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Fresh deep clone per test — pre-existing setDataAndNotify shallow-
-// clone mutation makes the data otherwise leak across tests. Same
-// rationale as the gutter test file.
+// A fresh object per test, deep-frozen where it is rendered: an updater
+// that writes into the state it receives throws.
 const makeData = (): ToCData => ({
   title: 'Test',
   sections: [
@@ -62,7 +62,7 @@ const makeData = (): ToCData => ({
 describe('TheoryOfChangeGraph.addConnection (PR 5 Task 5.2 idempotency)', () => {
   it('re-dropping on an already-connected target does not grow node.connections', async () => {
     const onDataChange = vi.fn();
-    render(<ToC data={makeData()} showEditButton={true} onDataChange={onDataChange} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} onDataChange={onDataChange} />);
 
     // Reveal the connection handles on the source node (they're gated
     // by isHovered || isHighlighted).

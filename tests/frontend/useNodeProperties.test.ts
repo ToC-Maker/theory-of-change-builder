@@ -18,6 +18,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useNodeProperties } from '../../src/components/node-editor/useNodeProperties';
 import { useGraphMutation } from '../../src/hooks/useGraphMutation';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 const flushMicrotasks = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 
@@ -55,7 +56,7 @@ function makeMutationApi(initial: ToCData): MockMutationApi {
 function makeData(
   nodes: { id: string; title?: string; text?: string; width?: number; color?: string }[],
 ): ToCData {
-  return {
+  return deepFreeze({
     sections: [
       {
         title: 'Section A',
@@ -73,7 +74,7 @@ function makeData(
         ],
       },
     ],
-  };
+  });
 }
 
 describe('useNodeProperties', () => {

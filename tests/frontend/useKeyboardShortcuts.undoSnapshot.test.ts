@@ -7,14 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useKeyboardShortcuts } from '../../src/hooks/useKeyboardShortcuts';
 import type { ToCData } from '../../src/types';
-
-function deepFreeze<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    Object.values(value).forEach(deepFreeze);
-  }
-  return value;
-}
+import { deepFreeze } from './helpers/deepFreeze';
 
 const node = (id: string, yPosition: number) => ({
   id,

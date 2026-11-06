@@ -25,6 +25,7 @@ import { usePointerDrag } from '../../src/hooks/usePointerDrag';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import type { LayoutSnapshot } from '../../src/hooks/useGraphLayout';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 vi.mock('../../src/services/loggingService', () => ({
   loggingService: { reportError: vi.fn() },
@@ -166,7 +167,7 @@ function setupChain() {
     containerRef.current = containerEl;
 
     const drag = usePointerDrag({
-      data: sampleData(),
+      data: deepFreeze(sampleData()),
       containerRef,
       getSnapshot: () => makeSnapshot(),
       editMode: true,

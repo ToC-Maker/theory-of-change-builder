@@ -49,6 +49,7 @@ import {
 } from '../../src/hooks/_canvasGestureState';
 import { loggingService } from '../../src/services/loggingService';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 afterEach(() => {
   cleanup();
@@ -64,7 +65,7 @@ const sourceId = 'source';
 const targetId = 'target';
 
 function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
-  return {
+  return deepFreeze({
     sections: [
       {
         title: 'A',
@@ -98,7 +99,7 @@ function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
         ],
       },
     ],
-  };
+  });
 }
 
 function makePointerDownEvent(init: {

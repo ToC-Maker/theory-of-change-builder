@@ -6,21 +6,14 @@
 
 import { useState } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 afterEach(() => {
   cleanup();
 });
-
-function deepFreeze<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    Object.values(value).forEach(deepFreeze);
-  }
-  return value;
-}
 
 // Section 0 has two columns so "between" is reachable; section 1 has one.
 const makeData = (): ToCData => ({
@@ -118,5 +111,86 @@ describe('adding a column or section builds new state and leaves the previous st
   it('section after the last section', async () => {
     const next = await clickAndCollect('add-section-after-last');
     expect(next.sections.map((s) => s.title)).toEqual(['S1', 'S2', 'New Section']);
+  });
+});
+
+describe('other edits leave the previous state intact', () => {
+  async function editAndCollect(edit: () => Promise<void>) {
+    const data = deepFreeze(makeData());
+    const before = JSON.parse(JSON.stringify(data));
+    const onDataChange = vi.fn();
+    render(<Controlled initial={data} onChange={onDataChange} />);
+    await edit();
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    expect(data).toEqual(before);
+    return onDataChange.mock.calls[0][0] as ToCData;
+  }
+
+  const clickById = (testId: string) =>
+    act(async () => {
+      (document.querySelector(`[data-testid="${testId}"]`) as HTMLElement).click();
+    });
+
+  const confirmDelete = () =>
+    act(async () => {
+      const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+      const button = Array.from(dialog.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'Delete',
+      );
+      button!.click();
+    });
+
+  it('deleting a column', async () => {
+    const next = await editAndCollect(async () => {
+      await clickById('column-delete-0-1');
+      await confirmDelete();
+    });
+    expect(next.sections[0].columns.map(nodeIds)).toEqual([['a']]);
+  });
+
+  it('deleting a section', async () => {
+    const next = await editAndCollect(async () => {
+      await clickById('section-delete-1');
+      await confirmDelete();
+    });
+    expect(next.sections.map((s) => s.title)).toEqual(['S1']);
+  });
+
+  it('nudging a selected node with an arrow key', async () => {
+    const next = await editAndCollect(async () => {
+      await act(async () => {
+        (document.querySelector('[data-tocb-node="a"]') as HTMLElement).click();
+      });
+      // The node editor focuses its title input, which suspends shortcuts.
+      await act(async () => {
+        (document.activeElement as HTMLElement).blur();
+      });
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+      });
+    });
+    expect(next.sections[0].columns[0].nodes[0].yPosition).toBe(120);
+  });
+
+  it('retitling the chart', async () => {
+    const next = await editAndCollect(async () => {
+      fireEvent.click(document.querySelector('h1') as HTMLElement);
+      const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Renamed' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await act(async () => {});
+    });
+    expect(next.title).toBe('Renamed');
+  });
+
+  it('retitling a section', async () => {
+    const next = await editAndCollect(async () => {
+      fireEvent.click(document.querySelector('h2') as HTMLElement);
+      const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'Renamed' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await act(async () => {});
+    });
+    expect(next.sections.map((s) => s.title)).toEqual(['Renamed', 'S2']);
   });
 });

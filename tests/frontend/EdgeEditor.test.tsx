@@ -13,6 +13,7 @@ import React from 'react';
 import { EdgeEditor } from '../../src/components/edge-editor/EdgeEditor';
 import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 function makeMutationApi(initial: ToCData) {
   const dataRef = { current: initial };
@@ -31,7 +32,7 @@ function makeMutationApi(initial: ToCData) {
 }
 
 function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
-  return {
+  return deepFreeze({
     sections: [
       {
         title: 'S',
@@ -59,7 +60,7 @@ function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
         ],
       },
     ],
-  };
+  });
 }
 
 function renderEdgeEditor(props: {

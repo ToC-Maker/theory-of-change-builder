@@ -27,6 +27,7 @@ import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
 import { _resetSwallowNextClickGuardForTest } from '../../src/hooks/useDismissOnOutsideEvent';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
+import { deepFreeze } from './helpers/deepFreeze';
 
 afterEach(() => {
   cleanup();
@@ -35,9 +36,8 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-// Fresh deep data per test — setDataAndNotify mutates `prevData.sections`
-// in place (shallow clone), so a shared fixture would leak across tests
-// (same rationale as TheoryOfChangeGraph.gutter.test.tsx).
+// A fresh object per test, deep-frozen where it is rendered: an updater
+// that writes into the state it receives throws.
 const makeData = (): ToCData => ({
   title: 'Test',
   sections: [
@@ -126,7 +126,7 @@ function columnCount(): number {
 
 describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   it('1. dismissing over a column gutter closes the editor without adding a column', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
     const before = columnCount();
 
@@ -138,7 +138,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('1b. dismissing over a section gutter closes the editor without adding a section', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
     const before = document.querySelectorAll('[data-testid="add-section-before"]').length;
 
@@ -150,7 +150,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('2. dismissing over empty canvas (column body) only closes the editor', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
     const nodesBefore = document.querySelectorAll('[data-tocb-node]').length;
     const colsBefore = columnCount();
@@ -164,7 +164,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('3. clicking node B while editing node A switches the editor (not swallowed)', () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
 
     gestureClick(q('[data-tocb-node="n-2"]'), at(400, 100));
@@ -177,7 +177,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('4. Cmd/Ctrl+click node B extends the selection (not dismissed, not swallowed)', () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
 
     const nodeB = q('[data-tocb-node="n-2"]');
@@ -191,7 +191,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('5. a second, separate gutter click after the dismissal adds the column', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
     const before = columnCount();
 
@@ -224,7 +224,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   // the unmount commit-flush notifies even with nothing buffered — so
   // "onDataChange not called" would be the wrong assertion.)
   it('6. double-click-to-create while an editor is open is consumed (no node)', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
 
     gestureDblClick(q('[data-column="0-0"]'), at(150, 300));
@@ -237,7 +237,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('6b. control: the same double-click gesture with no editor open creates a node', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     expect(document.querySelector('.node-editor')).toBeNull();
 
     gestureDblClick(q('[data-column="0-0"]'), at(150, 300));
@@ -250,7 +250,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('7. EdgeEditor: dismissing over a column gutter closes it without adding a column', async () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     // Open the EdgeEditor by clicking the connection's invisible hit
     // path (no recorded pointerdown → opens unconditionally).
     fireEvent.click(q('[data-tocb-connection-hitpath]'));
@@ -265,7 +265,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('8. clicking a connection while editing a node opens the EdgeEditor (switch flow)', () => {
-    render(<ToC data={makeData()} showEditButton={true} />);
+    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
     openNodeEditor('n-1');
 
     gestureClick(q('[data-tocb-connection-hitpath]'), at(250, 150));
