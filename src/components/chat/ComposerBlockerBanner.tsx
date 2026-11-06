@@ -186,6 +186,7 @@ function ComposerBlockerBannerImpl({
       );
 
     case 'advisory':
+    case 'refusal':
       // Soft warning — composer stays usable (shouldBlockSend returns
       // false except for cost_error_type='unknown' defensive sentinel).
       // Single amber pill with the detail text from the blocker.

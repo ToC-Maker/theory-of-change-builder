@@ -31,10 +31,15 @@ import {
   type ComposerBlocker,
   type RenderedBlocker,
   costErrorToBlocker,
+  refusalToBlocker,
   selectBlocker,
   shouldBlockSend,
   preserveCapClassOnly,
 } from './chat/composerBlocker';
+import {
+  rollbackRefusedMessage,
+  restoreChatAfterRefusedGeneration,
+} from '../utils/refusalRollback';
 import { GenerateConfirmDialog } from './chat/GenerateConfirmDialog';
 import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import type { ToCData } from '../types';
@@ -1057,6 +1062,16 @@ export function ChatInterface({
     }
   }, [params.chartId, params.editToken, params.filename, location.pathname, getStorageKey]);
 
+  // The empty array a refusal rollback produced. The save effect below skips
+  // empty arrays, so without this the refused turn would stay in localStorage,
+  // come back on reload and ride along on every send. The effect purges only
+  // when `messages` is exactly this array, so a rollback that left state
+  // unchanged can never match a later, different empty array. It runs with the
+  // key of the CURRENT route: a first message sent from `/` is stored under
+  // the chart key created mid-send, which the onRefusal closure (made before
+  // the navigate) can't see.
+  const purgeEmptyHistoryRef = useRef<ChatMessage[] | null>(null);
+
   // Save messages to localStorage whenever they change
   useEffect(() => {
     try {
@@ -1064,6 +1079,9 @@ export function ChatInterface({
       // Only save non-empty message arrays to avoid clearing on mount
       if (messages.length > 0) {
         localStorage.setItem(storageKey, JSON.stringify(messages));
+      } else if (purgeEmptyHistoryRef.current === messages) {
+        purgeEmptyHistoryRef.current = null;
+        localStorage.removeItem(storageKey);
       }
     } catch (error) {
       console.error('Failed to save chat history:', error);
@@ -2099,6 +2117,25 @@ export function ChatInterface({
               });
             }
           },
+          onRefusal: (details) => {
+            // The classifiers declined this turn. Anthropic: reset the
+            // context before continuing, or the next request keeps being
+            // refused. Drop the user message committed in onAccepted; no
+            // assistant turn was stamped, so history is back to exactly the
+            // prefix the model last saw (earlier signed thinking blocks stay
+            // valid). Give the draft and attachments back so the user can
+            // rephrase, unless they already started something new.
+            const emptied: ChatMessage[] = [];
+            purgeEmptyHistoryRef.current = emptied;
+            setMessages((prev) => rollbackRefusedMessage(prev, userMessageId, emptied));
+            setInputValue((current) => current || inputValue);
+            setChatAttachedFiles((current) => (current.length > 0 ? current : chatAttachedFiles));
+            setComposerBlocker(refusalToBlocker(details));
+            resetStreamUiState();
+            // The worker tallies a refused stream's usage like any other, so
+            // refresh the progress bar.
+            void refreshUsage();
+          },
           onError: (error: string) => {
             // Structured cost errors arrive via onCostError below with
             // typed data; this onError path is for transport-level failures
@@ -2862,6 +2899,9 @@ export function ChatInterface({
     // isLoading && !isStreaming). Set sync, BEFORE the streamMessage call,
     // so a slow preflight surfaces the spinner immediately.
     setIsLoading(true);
+    // Same send-start clear as handleSendMessage: advisory and refusal
+    // banners from an earlier turn don't outlive the next send.
+    setComposerBlocker(preserveCapClassOnly);
     // Defensive resets: hide leftover content if React commits before
     // onAccepted lands. Streaming visibility (isStreaming) and mode swap
     // (setCurrentMode('chat')) are deferred into onAccepted per C5/Q4 so
@@ -3054,6 +3094,21 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 console.error('Error applying graph edits:', error);
               }
             }
+          },
+          onRefusal: (details) => {
+            // Undo onAccepted's deferred commit: the refused generation
+            // prompt leaves the chat, the prior chat comes back, and the
+            // Generate form (files, instructions) is still there to edit.
+            const emptied: ChatMessage[] = [];
+            purgeEmptyHistoryRef.current = emptied;
+            const restored = messages.length === 0 ? emptied : messages;
+            setMessages((current) =>
+              restoreChatAfterRefusedGeneration(current, generationMessage.id, restored),
+            );
+            setCurrentMode('generate');
+            setComposerBlocker(refusalToBlocker(details));
+            resetStreamUiState();
+            void refreshUsage();
           },
           onError: (error: string) => {
             // Transport-level failures. Cost errors were swallowed in
