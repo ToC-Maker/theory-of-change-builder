@@ -22,10 +22,10 @@ afterEach(() => {
 
 // Several click-handlers in TheoryOfChangeGraph mutate `prevData.sections`
 // via `.splice()` inside the `setDataAndNotify` updater (the surrounding
-// `{ ...prevData }` is only a shallow copy). That mutation leaks into a
-// shared `makeBaseData()` fixture across tests, so each test gets a fresh deep
-// clone. Fixing the underlying mutation is out of PR 5 scope — see
-// `.implementation-log.md` "Deviations" for the follow-up.
+// `{ ...prevData }` is only a shallow copy). Had the fixture been a shared
+// constant, that mutation would leak between tests, so this factory builds a
+// fresh object per call. The mutation itself is a known defect in the
+// component that these tests work around rather than fix.
 const makeBaseData = (): ToCData => ({
   title: 'Test',
   sections: [
