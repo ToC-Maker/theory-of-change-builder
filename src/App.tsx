@@ -35,6 +35,7 @@ import {
 } from './services/authSessionHealth';
 import { SessionExpiredBanner } from './components/SessionExpiredBanner';
 import { isInputFocused } from './utils/isInputFocused';
+import { useUndoHistory } from './hooks/useUndoHistory';
 import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
 import type { Permission, LinkSharingLevel } from '../shared/permissions';
@@ -664,8 +665,14 @@ function ToCViewer() {
     loginWithRedirect,
   } = useAuth0();
   const [data, setData] = useState<ToCData | null>(null);
-  const [undoHistory, setUndoHistory] = useState<ToCData[]>([]);
-  const [redoHistory, setRedoHistory] = useState<ToCData[]>([]);
+  const {
+    undoHistory,
+    setUndoHistory,
+    redoHistory,
+    setRedoHistory,
+    saveToHistory,
+    flushPendingHistory,
+  } = useUndoHistory();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -927,52 +934,6 @@ function ToCViewer() {
     [initializeLogging],
   );
 
-  // Debounced undo history to group rapid successive operations
-  const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Feedback 67: the snapshot waiting out the 300ms grouping window.
-  // Undo/redo FLUSH this into the history instead of dropping it —
-  // previously an undo within 300ms of an edit cancelled the pending
-  // push outright, silently losing that edit's boundary (Ctrl+Z then
-  // restored the state from one operation EARLIER).
-  const pendingUndoSnapshotRef = useRef<ToCData | null>(null);
-
-  const saveToHistory = useCallback((currentData: ToCData) => {
-    if (!currentData) return;
-
-    // Deep clone the data to avoid reference issues
-    const clonedData = JSON.parse(JSON.stringify(currentData));
-
-    // Clear existing timeout
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-    }
-    pendingUndoSnapshotRef.current = clonedData;
-
-    // Set new timeout to save to history after a brief delay
-    undoTimeoutRef.current = setTimeout(() => {
-      undoTimeoutRef.current = null;
-      pendingUndoSnapshotRef.current = null;
-      setUndoHistory((prev) => [...prev, clonedData]);
-    }, 300); // 300ms delay to group rapid operations
-  }, []);
-
-  // Flush (not drop) the pending history snapshot. Returns the history
-  // array undo/redo should operate on. Shared by handleUndo/handleRedo
-  // so an undo issued inside the 300ms grouping window still sees the
-  // most recent boundary.
-  const flushPendingHistory = useCallback((history: ToCData[]): ToCData[] => {
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
-    }
-    if (pendingUndoSnapshotRef.current) {
-      const flushed = [...history, pendingUndoSnapshotRef.current];
-      pendingUndoSnapshotRef.current = null;
-      return flushed;
-    }
-    return history;
-  }, []);
-
   const saveToLocalStorage = useCallback(
     (dataToSave: ToCData, currentFilename?: string) => {
       try {
@@ -1046,7 +1007,7 @@ function ToCViewer() {
 
       console.log('JSON data uploaded successfully');
     },
-    [data, saveToHistory, saveToLocalStorage, saveChart],
+    [data, saveToHistory, setRedoHistory, saveToLocalStorage, saveChart],
   );
 
   const handleGraphUpdate = (newGraphData: ToCData) => {
@@ -1086,7 +1047,14 @@ function ToCViewer() {
         saveToLocalStorage(newData);
       }
     },
-    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange, saveChart],
+    [
+      saveToHistory,
+      setRedoHistory,
+      saveToLocalStorage,
+      currentEditToken,
+      logGraphChange,
+      saveChart,
+    ],
   );
 
   const handleUndo = useCallback(() => {
@@ -1127,7 +1095,16 @@ function ToCViewer() {
 
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [undoHistory, data, flushPendingHistory, saveToLocalStorage, logGraphChange, saveChart]);
+  }, [
+    undoHistory,
+    data,
+    flushPendingHistory,
+    setRedoHistory,
+    setUndoHistory,
+    saveToLocalStorage,
+    logGraphChange,
+    saveChart,
+  ]);
 
   const handleRedo = useCallback(() => {
     // L2 mitigation symmetric to handleUndo — see comment there.
@@ -1170,6 +1147,8 @@ function ToCViewer() {
     undoHistory,
     data,
     flushPendingHistory,
+    setRedoHistory,
+    setUndoHistory,
     saveToLocalStorage,
     logGraphChange,
     saveChart,
@@ -1335,15 +1314,6 @@ function ToCViewer() {
     enabled: Boolean(currentChartId && isAuthenticated && isOwner),
     onInvalidate: () => void fetchPermissions(),
   });
-
-  // Cleanup timeouts on unmount only (empty deps = only runs on mount/unmount)
-  useEffect(() => {
-    return () => {
-      if (undoTimeoutRef.current) {
-        clearTimeout(undoTimeoutRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const loadData = async () => {
