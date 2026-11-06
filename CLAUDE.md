@@ -265,6 +265,7 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 - `src/components/ChatInterface.tsx` - AI assistant UI
 - `src/services/chartService.ts` - API client for CRUD operations
 - `src/hooks/useChartSave.ts` - Every editor save (edit, import, AI replacement, undo, redo) goes through its `saveChart(data)`: one save in flight at a time, pending edits cleared only if unchanged since the save was sent, edits made before the chart has an edit token are sent once it arrives, retries with backoff (capped at 30s) while edits stay pending, for network and 5xx failures (401/403 only at the 30s cap, never cut short; other 4xx none), and at once when the browser comes back online or the tab is shown again
+- `src/hooks/useUndoHistory.ts` - Undo and redo stacks of whole-chart snapshots. A snapshot is the data object as it was before a change, so every graph updater (`mutate`, `mutateDebounced`, the add/delete/move handlers) returns new arrays and objects and never writes into the state it receives (the updater tests deep-freeze their fixtures). Changes closer together than 300 ms share one step, restoring the chart as it was before the first. Undo and redo are suppressed only while a text field has focus (`isTextEntryFocused`), not a slider or colour input.
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)
