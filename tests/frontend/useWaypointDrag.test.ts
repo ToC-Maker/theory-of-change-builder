@@ -558,6 +558,47 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
   });
 
+  describe('a throwing mutateDebounced or commit on drop', () => {
+    // jsdom reports an exception thrown by a listener as a window `error` event.
+    function dropReportingErrors(drop: () => void): unknown[] {
+      const errors: unknown[] = [];
+      const onError = (e: ErrorEvent) => {
+        e.preventDefault();
+        errors.push(e.error);
+      };
+      window.addEventListener('error', onError);
+      act(drop);
+      window.removeEventListener('error', onError);
+      return errors;
+    }
+
+    it.each(['mutateDebounced', 'commit'] as const)(
+      'still ends the gesture when %s throws',
+      (failing) => {
+        const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+        act(() => {
+          result.current
+            .bindWaypoint(sourceId, targetId, 0)
+            .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+        });
+        act(() => {
+          document.dispatchEvent(pointerEvent('pointermove', { clientX: 160, clientY: 90 }));
+        });
+        ctx[failing].mockImplementation(() => {
+          throw new Error(`${failing} failed`);
+        });
+
+        const errors = dropReportingErrors(() => {
+          document.dispatchEvent(pointerEvent('pointerup', { clientX: 160, clientY: 90 }));
+        });
+
+        expect(errors).toEqual([expect.objectContaining({ message: `${failing} failed` })]);
+        expect(isCanvasGestureActive()).toBe(false);
+        expect(result.current.isActive).toBe(false);
+      },
+    );
+  });
+
   describe('selection suppression', () => {
     const MARK = 'tocb-canvas-gesture';
 

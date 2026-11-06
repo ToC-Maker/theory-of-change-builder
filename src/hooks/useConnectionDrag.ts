@@ -251,30 +251,35 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
       const state = dragStateRef.current;
-      if (state) {
-        const targetId = nodeIdUnderPoint(e.clientX, e.clientY, state.sourceNodeId);
-        if (targetId) {
-          // Stale-node guard: same rationale as `usePointerDrag`. If
-          // the source or target was deleted (cross-tab race) between
-          // pointerdown and pointerup, log and abort.
-          if (!nodeExistsInData(dataRef.current, state.sourceNodeId)) {
-            loggingService.reportError({
-              error_name: 'stale-connection-source',
-              error_message: `Connection source ${state.sourceNodeId} no longer exists`,
-              request_metadata: { sourceNodeId: state.sourceNodeId, targetNodeId: targetId },
-            });
-          } else if (!nodeExistsInData(dataRef.current, targetId)) {
-            loggingService.reportError({
-              error_name: 'stale-connection-target',
-              error_message: `Connection target ${targetId} no longer exists`,
-              request_metadata: { sourceNodeId: state.sourceNodeId, targetNodeId: targetId },
-            });
-          } else {
-            onConnectRef.current(state.sourceNodeId, targetId);
+      // `onConnect` is caller code: if it throws, the gesture must still
+      // end, or the flag stays set and no later drag can start.
+      try {
+        if (state) {
+          const targetId = nodeIdUnderPoint(e.clientX, e.clientY, state.sourceNodeId);
+          if (targetId) {
+            // Stale-node guard: same rationale as `usePointerDrag`. If
+            // the source or target was deleted (cross-tab race) between
+            // pointerdown and pointerup, log and abort.
+            if (!nodeExistsInData(dataRef.current, state.sourceNodeId)) {
+              loggingService.reportError({
+                error_name: 'stale-connection-source',
+                error_message: `Connection source ${state.sourceNodeId} no longer exists`,
+                request_metadata: { sourceNodeId: state.sourceNodeId, targetNodeId: targetId },
+              });
+            } else if (!nodeExistsInData(dataRef.current, targetId)) {
+              loggingService.reportError({
+                error_name: 'stale-connection-target',
+                error_message: `Connection target ${targetId} no longer exists`,
+                request_metadata: { sourceNodeId: state.sourceNodeId, targetNodeId: targetId },
+              });
+            } else {
+              onConnectRef.current(state.sourceNodeId, targetId);
+            }
           }
         }
+      } finally {
+        cleanup();
       }
-      cleanup();
     },
     [cleanup],
   );

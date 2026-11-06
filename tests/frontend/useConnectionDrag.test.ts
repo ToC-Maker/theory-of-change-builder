@@ -653,6 +653,40 @@ describe('useConnectionDrag', () => {
     });
   });
 
+  describe('a throwing onConnect', () => {
+    it('still ends the gesture, so the next drag can start', () => {
+      const onConnect = vi.fn(() => {
+        throw new Error('onConnect failed');
+      });
+      appendFakeNode('target', { x: 200, y: 0, w: 100, h: 50 });
+      mockElementFromPoint();
+      const { result } = setupHook({ data: sampleData(), onConnect });
+      act(() => {
+        result.current
+          .bindHandle('source', 'right')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 50, clientY: 25, handleEl: makeMockHandle() }),
+          );
+      });
+
+      // jsdom reports an exception thrown by a listener as a window `error` event.
+      const errors: unknown[] = [];
+      const onError = (e: ErrorEvent) => {
+        e.preventDefault();
+        errors.push(e.error);
+      };
+      window.addEventListener('error', onError);
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 250, clientY: 25 }));
+      });
+      window.removeEventListener('error', onError);
+
+      expect(errors).toEqual([expect.objectContaining({ message: 'onConnect failed' })]);
+      expect(isCanvasGestureActive()).toBe(false);
+      expect(result.current.dragState).toBeNull();
+    });
+  });
+
   describe('isActive flag', () => {
     it('exposes isActive=true while drag is in flight, false otherwise', () => {
       const onConnect = vi.fn();

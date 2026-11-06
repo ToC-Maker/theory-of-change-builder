@@ -518,10 +518,15 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
         return;
       }
 
-      const pos = clientToContainerRef.current(e.clientX, e.clientY);
-      mutateDebouncedRef.current(buildReplayUpdater(state, pos), key);
-      commitRef.current(key);
-      cleanup();
+      // Both calls are caller code: if either throws, the gesture must
+      // still end, or the flag stays set and no later drag can start.
+      try {
+        const pos = clientToContainerRef.current(e.clientX, e.clientY);
+        mutateDebouncedRef.current(buildReplayUpdater(state, pos), key);
+        commitRef.current(key);
+      } finally {
+        cleanup();
+      }
     },
     [cleanup, buildReplayUpdater, armIfPastThreshold],
   );
