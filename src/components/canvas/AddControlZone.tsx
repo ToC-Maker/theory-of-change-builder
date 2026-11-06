@@ -7,8 +7,9 @@
 //
 // Stacking: the zone itself sits under the connection layer, so a
 // connection crossing the gap keeps its hover and click. The revealed
-// controls sit above the connection layer (but under the node connection
-// handles) so a click on a control is never swallowed by a connection.
+// controls sit above the connection layer but below nodes, so a click on
+// a control is never swallowed by a connection while the connection
+// handle of a node overhanging into the gap keeps its press.
 //
 // Text sizing: the zone width is fixed by the chart's gaps, so the
 // controls can only grow with the inverse of the zoom up to what fits in
@@ -16,7 +17,7 @@
 // full wording.
 
 import { useRef, useState } from 'react';
-import type { CSSProperties, MouseEvent } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { MOVE_THRESHOLD_PX } from '../../hooks/usePointerDrag';
 
 /** Padding of the canvas card around the graph, which the edge zones occupy. */
@@ -55,11 +56,24 @@ interface AddControlZoneProps {
   controls: AddControl[];
 }
 
+/**
+ * Anchors the zone in the gap after a column. Only edit mode needs the
+ * anchor, so view mode's DOM keeps the column bodies as direct children of
+ * the columns row.
+ */
+export function ColumnSlot({ editMode, children }: { editMode: boolean; children: ReactNode }) {
+  return editMode ? <div className="relative">{children}</div> : <>{children}</>;
+}
+
 export function AddControlZone({ testId, edge, width, zoomScale, controls }: AddControlZoneProps) {
-  const [stackTop, setStackTop] = useState<number | null>(null);
+  // The stack keeps its last position while it fades out, so it does not
+  // jump to the top of the zone on the way out.
+  const [stack, setStack] = useState({ top: 0, shown: false });
 
   const pillWidth = width - 2;
   const fontPx = Math.min(Math.max(BASE_FONT_PX, BASE_FONT_PX / zoomScale), pillWidth * 0.65);
+  // Roughly the label's length ("+ Section" is about 5.4 em of text) plus
+  // the same padding at both ends.
   const pillLength = Math.round(fontPx * 5.4 + 12);
   const stackHeight = controls.length * pillLength + (controls.length - 1) * PILL_GAP_PX;
 
@@ -71,7 +85,7 @@ export function AddControlZone({ testId, edge, width, zoomScale, controls }: Add
     const zoneHeight = rect.height / zoomScale;
     const pointerY = (e.clientY - rect.top) / zoomScale;
     const centered = pointerY - stackHeight / 2;
-    setStackTop(Math.max(0, Math.min(centered, zoneHeight - stackHeight)));
+    setStack({ top: Math.max(0, Math.min(centered, zoneHeight - stackHeight)), shown: true });
   };
 
   const zoneStyle: CSSProperties = {
@@ -86,12 +100,12 @@ export function AddControlZone({ testId, edge, width, zoomScale, controls }: Add
       data-testid={testId}
       data-export-exclude=""
       onMouseEnter={reveal}
-      onMouseLeave={() => setStackTop(null)}
+      onMouseLeave={() => setStack((current) => ({ ...current, shown: false }))}
     >
       <div
-        className="absolute z-10 flex flex-col opacity-0 pointer-events-none transition-opacity duration-100 data-[revealed=true]:opacity-100 data-[revealed=true]:pointer-events-auto"
-        style={{ left: 1, width: pillWidth, top: stackTop ?? 0, gap: PILL_GAP_PX }}
-        data-revealed={stackTop !== null}
+        className="absolute z-[5] flex flex-col opacity-0 pointer-events-none transition-opacity duration-100 data-[revealed=true]:opacity-100 data-[revealed=true]:pointer-events-auto"
+        style={{ left: 1, width: pillWidth, top: stack.top, gap: PILL_GAP_PX }}
+        data-revealed={stack.shown}
       >
         {controls.map((control) => (
           <AddControlButton

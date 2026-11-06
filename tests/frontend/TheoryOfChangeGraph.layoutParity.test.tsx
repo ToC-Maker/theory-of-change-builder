@@ -5,10 +5,14 @@
 // modes hand to the browser (gaps, widths, size budgets, node offsets).
 // The pixel-level comparison of rendered nodes and connection paths is
 // done in a real browser.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
+
+// The first graph render in a worker pulls in lazily loaded editor code, and
+// the parity tests render the whole graph twice, so the 5s default is tight.
+vi.setConfig({ testTimeout: 20_000 });
 
 afterEach(() => {
   cleanup();
@@ -126,6 +130,21 @@ describe('edit mode uses view mode geometry', () => {
   });
 });
 
+describe('view mode markup', () => {
+  it('keeps column bodies as direct children of the columns row, as before edit mode shared its layout', async () => {
+    const { container } = render(<ToC data={makeData()} showEditButton={false} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    for (const section of container.querySelectorAll<HTMLElement>('[data-section-index]')) {
+      const columnsRow = section.children[1];
+      for (const column of columnsRow.querySelectorAll('[data-column]')) {
+        expect(column.parentElement).toBe(columnsRow);
+      }
+    }
+  });
+});
+
 describe('section title bar while its label is edited', () => {
   const barFor = (container: HTMLElement) =>
     container.querySelector<HTMLElement>('[data-section-index="1"]')!.children[0] as HTMLElement;
@@ -165,6 +184,25 @@ describe('untitled chart in edit mode', () => {
 
     fireEvent.click(placeholder);
     expect(container.querySelector('input[type="text"]')).not.toBeNull();
+  });
+
+  it('reserves the title block in the chart size once a title is being typed', async () => {
+    const sizes: { width: number; height: number }[] = [];
+    const data = makeData({ title: '' });
+    const { getByText } = render(
+      <ToC data={data} showEditButton={true} onSizeChange={(size) => sizes.push(size)} />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const heightBefore = sizes[sizes.length - 1].height;
+
+    fireEvent.click(getByText('Click to add title'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(sizes[sizes.length - 1].height).toBe(heightBefore + 80);
   });
 
   it('shows no placeholder in view mode', async () => {

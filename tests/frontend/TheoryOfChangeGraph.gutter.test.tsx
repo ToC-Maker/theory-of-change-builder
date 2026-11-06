@@ -101,6 +101,20 @@ describe('add controls', () => {
     expect(document.querySelector('[data-testid^="add-"]')).toBeNull();
   });
 
+  it('sizes each zone to the gap it covers and attaches it to the side facing that gap', () => {
+    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    const zone = (testId: string) =>
+      document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!.style;
+
+    // Outer edges lie in the canvas card's padding (16px), the gap between
+    // sections is sectionPadding (32px), the gap between columns is
+    // columnPadding (24px).
+    expect(zone('add-zone-edge-start')).toMatchObject({ width: '16px', right: '100%' });
+    expect(zone('add-zone-edge-end')).toMatchObject({ width: '16px', left: '100%' });
+    expect(zone('add-zone-section-gap-0')).toMatchObject({ width: '32px', left: '100%' });
+    expect(zone('add-zone-column-gap-0-0')).toMatchObject({ width: '24px', left: '100%' });
+  });
+
   it('marks every zone for exclusion from exports', () => {
     render(<ToC data={makeBaseData()} showEditButton={true} />);
     const zones = document.querySelectorAll('[data-testid^="add-zone-"]');

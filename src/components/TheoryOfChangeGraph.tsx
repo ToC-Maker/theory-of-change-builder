@@ -25,7 +25,7 @@ import {
 import { buildConnectionPath } from './canvas/connectionPath';
 import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
 import { DropLandingIndicator } from './canvas/DropLandingIndicator';
-import { AddControlZone, CANVAS_EDGE_PX } from './canvas/AddControlZone';
+import { AddControlZone, CANVAS_EDGE_PX, ColumnSlot } from './canvas/AddControlZone';
 import type { AddControl } from './canvas/AddControlZone';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
@@ -1210,7 +1210,7 @@ export function ToC({
           <button
             type="button"
             data-export-exclude=""
-            className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-xs leading-4 text-gray-400 hover:text-indigo-600 transition-colors"
+            className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-xs leading-4 text-gray-500 hover:text-indigo-600 transition-colors"
             style={{ bottom: '100%' }}
             title="Click to edit title"
             onClick={() => setEditingTitle(true)}
@@ -1371,7 +1371,7 @@ export function ToC({
                       }}
                     >
                       {section.columns.map((column, colIndex) => (
-                        <div key={`${sectionIndex}-${colIndex}`} className="relative">
+                        <ColumnSlot key={`${sectionIndex}-${colIndex}`} editMode={editMode}>
                           {/* PR 5 Task 5.1: column body. No more
                             `layoutMode` red-state for empty columns
                             (delete-column moves to Task 5.3's hover-×
@@ -1520,7 +1520,7 @@ export function ToC({
                               ]}
                             />
                           )}
-                        </div>
+                        </ColumnSlot>
                       ))}
                     </div>
                     {editMode && renderSectionZones(sectionIndex)}
