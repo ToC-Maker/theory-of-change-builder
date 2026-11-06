@@ -374,8 +374,10 @@ export function useZoomPan({
         ) {
           swallowNextClick = true;
           // The browser dispatches the click in the same task as the
-          // mouseup; if none arrives (release over a different element)
-          // don't let the flag eat a later, unrelated click.
+          // mouseup. A release over another element in the page still
+          // produces one (on the nearest common ancestor); none arrives
+          // only when the button is released outside the document. Don't
+          // let the flag then eat a later, unrelated click.
           setTimeout(() => {
             swallowNextClick = false;
           }, 0);

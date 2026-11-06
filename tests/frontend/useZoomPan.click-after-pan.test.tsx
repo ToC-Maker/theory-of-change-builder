@@ -43,10 +43,19 @@ function setup() {
   return { onAdd, gutter: utils.getByTestId('gutter') };
 }
 
-/** One press / optional move / release, then the browser's trailing click. */
+/**
+ * One press / optional move / release, then the browser's trailing click
+ * (omitted with `click: false`, as when the button is released outside the
+ * document and the browser dispatches none).
+ */
 function gesture(
   gutter: HTMLElement,
-  { dx = 0, dy = 0, detail = 1 }: { dx?: number; dy?: number; detail?: number } = {},
+  {
+    dx = 0,
+    dy = 0,
+    detail = 1,
+    click = true,
+  }: { dx?: number; dy?: number; detail?: number; click?: boolean } = {},
 ) {
   act(() => {
     gutter.dispatchEvent(
@@ -71,7 +80,7 @@ function gesture(
       new MouseEvent('mouseup', { bubbles: true, clientX: 100 + dx, clientY: 100 + dy }),
     );
   });
-  fireEvent.click(gutter, { detail, clientX: 100 + dx, clientY: 100 + dy });
+  if (click) fireEvent.click(gutter, { detail, clientX: 100 + dx, clientY: 100 + dy });
 }
 
 describe('useZoomPan: click that follows a pan', () => {
@@ -97,6 +106,17 @@ describe('useZoomPan: click that follows a pan', () => {
   it('keeps clicks whose pointer jitter stays inside the dead-zone', () => {
     const { onAdd, gutter } = setup();
     gesture(gutter, { dx: MOVE_THRESHOLD_PX, dy: -MOVE_THRESHOLD_PX });
+    expect(onAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pan released with no trailing click does not swallow the next real click', async () => {
+    const { onAdd, gutter } = setup();
+    gesture(gutter, { dx: 60, click: false });
+
+    // The browser's click would have arrived in the same task as the
+    // release; once that task is over, none is coming.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.click(gutter, { detail: 1 });
     expect(onAdd).toHaveBeenCalledTimes(1);
   });
 
