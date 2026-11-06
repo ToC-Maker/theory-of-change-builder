@@ -136,6 +136,56 @@ async function withTransformNeutralized<T>(root: HTMLElement, fn: () => Promise<
 }
 
 /**
+ * SVG paint properties that `withSvgPaintPinned` copies from computed
+ * style onto inline style for the duration of a capture.
+ */
+const SVG_PAINT_PROPERTIES = [
+  'fill',
+  'fill-opacity',
+  'stroke',
+  'stroke-opacity',
+  'stroke-width',
+  'stroke-dasharray',
+  'stroke-linecap',
+  'stroke-linejoin',
+];
+
+/**
+ * html-to-image copies computed styles onto its clone of every HTML
+ * element, but deep-clones an `<svg>` as-is and never visits the
+ * elements inside it. SVG paint that a stylesheet class supplies is
+ * therefore missing from the capture: the connection paths carry
+ * `fill-none` as a Tailwind class, so in the exported image they fall
+ * back to the SVG default `fill: black` and every curve (and the
+ * transparent click-target path beside it) is painted as a solid black
+ * shape.
+ *
+ * Pin each paint property that isn't already inline onto the SVG
+ * descendants of `root`, run `fn`, then remove exactly what was added
+ * (in a `finally`, like `withTransformNeutralized`). Values are the
+ * computed ones, so the live canvas doesn't change.
+ */
+async function withSvgPaintPinned<T>(root: HTMLElement, fn: () => Promise<T>): Promise<T> {
+  const pinned: { el: SVGElement; prop: string }[] = [];
+  root.querySelectorAll<SVGElement>('svg *').forEach((el) => {
+    const computed = getComputedStyle(el);
+    for (const prop of SVG_PAINT_PROPERTIES) {
+      if (el.style.getPropertyValue(prop) !== '') continue;
+      const value = computed.getPropertyValue(prop);
+      if (value === '') continue;
+      el.style.setProperty(prop, value);
+      pinned.push({ el, prop });
+    }
+  });
+
+  try {
+    return await fn();
+  } finally {
+    for (const { el, prop } of pinned) el.style.removeProperty(prop);
+  }
+}
+
+/**
  * Shared capture-options shape for `toPng` / `toCanvas`. The `Options`
  * type from html-to-image is wider; we narrow to the fields we set.
  */
@@ -150,8 +200,9 @@ interface CaptureOptions {
 /**
  * Resolve `fontEmbedCSS` via html-to-image's `getFontEmbedCSS`, then
  * invoke `capture` with the merged options inside
- * `withTransformNeutralized`. Used by both `exportToPng` (renderer:
- * `toPng`) and `exportToPdf` (renderer: `toCanvas`).
+ * `withTransformNeutralized` and `withSvgPaintPinned`. Used by both
+ * `exportToPng` (renderer: `toPng`) and `exportToPdf` (renderer:
+ * `toCanvas`).
  *
  * On `getFontEmbedCSS` failure (cross-origin tainted stylesheet, CSP
  * blocked the fetch, etc.) we `console.warn` and pass `undefined` so
@@ -178,21 +229,23 @@ async function captureWithFonts<T>(
   }
 
   return withTransformNeutralized(canvasRoot, () =>
-    capture({
-      // Omit `fontEmbedCSS` when undefined so html-to-image performs
-      // its internal walk. When defined, pass through verbatim.
-      ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
-      // 2x for hidpi. `skipAutoScale: true` tells the library not to
-      // back off the resolution for "very large" trees — we already
-      // know our canvas size and want fidelity.
-      pixelRatio: 2,
-      skipAutoScale: true,
-      // White background so transparent PNGs don't look broken when
-      // dropped into a presentation. The canvas already has a white
-      // card, but other zoom states might bleed transparent edges.
-      backgroundColor: '#ffffff',
-      cacheBust: true,
-    }),
+    withSvgPaintPinned(canvasRoot, () =>
+      capture({
+        // Omit `fontEmbedCSS` when undefined so html-to-image performs
+        // its internal walk. When defined, pass through verbatim.
+        ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
+        // 2x for hidpi. `skipAutoScale: true` tells the library not to
+        // back off the resolution for "very large" trees — we already
+        // know our canvas size and want fidelity.
+        pixelRatio: 2,
+        skipAutoScale: true,
+        // White background so transparent PNGs don't look broken when
+        // dropped into a presentation. The canvas already has a white
+        // card, but other zoom states might bleed transparent edges.
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+      }),
+    ),
   );
 }
 

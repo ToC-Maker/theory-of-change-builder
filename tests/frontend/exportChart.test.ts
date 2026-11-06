@@ -342,6 +342,118 @@ describe('exportToPng — transform-snapshot logic (red-team Critical)', () => {
   });
 });
 
+describe('exportToPng — SVG paint survives the capture', () => {
+  // html-to-image deep-clones an <svg> without visiting its descendants,
+  // so paint that only a stylesheet class supplies (the connection paths'
+  // `fill-none`) is lost and the browser default `fill: black` paints a
+  // solid shape. The exporter pins the computed paint inline while the
+  // library runs.
+  function buildCanvas() {
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <svg>
+        <path id="by-class" class="fill-none" style="stroke: red"></path>
+        <path id="already-inline" class="fill-none" style="fill: blue"></path>
+      </svg>`;
+    document.body.appendChild(root);
+    return {
+      root,
+      byClass: root.querySelector('#by-class') as SVGElement,
+      alreadyInline: root.querySelector('#already-inline') as SVGElement,
+    };
+  }
+
+  // jsdom doesn't resolve SVG paint properties from stylesheets, so the
+  // cascade result for the `fill-none` class is supplied directly.
+  function stubComputedStyle() {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element) => {
+      const computed = real(el);
+      const paint = el.classList.contains('fill-none') ? { fill: 'none' } : {};
+      return {
+        getPropertyValue: (prop: string) =>
+          (paint as Record<string, string>)[prop] ?? computed.getPropertyValue(prop),
+      } as CSSStyleDeclaration;
+    });
+  }
+
+  it('pins class-supplied fill inline during the capture and removes it afterwards', async () => {
+    const { root, byClass, alreadyInline } = buildCanvas();
+    stubComputedStyle();
+
+    const seen: { byClassFill: string; alreadyInlineFill: string; stroke: string }[] = [];
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async () => {
+        seen.push({
+          byClassFill: byClass.style.getPropertyValue('fill'),
+          alreadyInlineFill: alreadyInline.style.getPropertyValue('fill'),
+          stroke: byClass.style.getPropertyValue('stroke'),
+        });
+        return 'data:image/png;base64,AAAA';
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await exportToPng(root, 'svg-paint');
+
+    // During the capture: the class-supplied fill is inline, an inline
+    // fill is left as authored, and the inline stroke is untouched.
+    expect(seen).toEqual([{ byClassFill: 'none', alreadyInlineFill: 'blue', stroke: 'red' }]);
+    // After: only what the exporter added is gone.
+    expect(byClass.style.getPropertyValue('fill')).toBe('');
+    expect(byClass.style.getPropertyValue('stroke')).toBe('red');
+    expect(alreadyInline.style.getPropertyValue('fill')).toBe('blue');
+  });
+
+  it('removes the pinned paint even when the capture throws', async () => {
+    const { root, byClass } = buildCanvas();
+    stubComputedStyle();
+
+    let fillWhenThrown = '';
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async () => {
+        fillWhenThrown = byClass.style.getPropertyValue('fill');
+        throw new Error('boom');
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await expect(exportToPng(root, 'svg-paint-throw')).rejects.toThrow('boom');
+    expect(fillWhenThrown).toBe('none');
+    expect(byClass.style.getPropertyValue('fill')).toBe('');
+  });
+
+  it('pins the paint for the PDF capture path too', async () => {
+    const { root, byClass } = buildCanvas();
+    stubComputedStyle();
+
+    let fillDuringCapture = '';
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(),
+      toCanvas: vi.fn(async () => {
+        fillDuringCapture = byClass.style.getPropertyValue('fill');
+        return { width: 10, height: 10, toDataURL: () => 'data:image/png;base64,AAAA' };
+      }),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+    class FakePdf {
+      addImage() {}
+      save() {}
+    }
+    vi.doMock('jspdf', () => ({ jsPDF: FakePdf, default: FakePdf }));
+
+    const { exportToPdf } = await import('../../src/utils/exportChart');
+    await exportToPdf(root, 'svg-paint-pdf');
+
+    expect(fillDuringCapture).toBe('none');
+    expect(byClass.style.getPropertyValue('fill')).toBe('');
+  });
+});
+
 describe('exportToPdf — fits canvas into a single page', () => {
   // Parameterized orientation cases. The implementation uses
   // `width >= height ? 'landscape' : 'portrait'`, so equal-dim ties
