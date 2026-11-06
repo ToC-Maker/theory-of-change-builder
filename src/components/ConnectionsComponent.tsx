@@ -48,6 +48,12 @@ interface ConnectionsComponentProps {
   hoveredConnections: Set<string>;
   curvature: number;
   editMode: boolean;
+  /**
+   * Whether the chart title block takes space above the sections. It
+   * does when the chart has a title (in both modes) and while the
+   * title of an untitled chart is being typed in edit mode.
+   */
+  titleBlockShown: boolean;
   sectionWidths: number[];
   columnPadding: number;
   sectionPadding: number;
@@ -122,6 +128,7 @@ export function ConnectionsComponent({
   hoveredConnections,
   curvature,
   editMode,
+  titleBlockShown,
   sectionWidths,
   columnPadding,
   sectionPadding,
@@ -194,20 +201,11 @@ export function ConnectionsComponent({
   const smoothUpdateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateSize = useCallback(() => {
-    // Calculate width based on actual section widths + gaps only.
-    //
-    // PR 5: edit mode always renders the column-gutter and section-
-    // padding affordances (`Task 5.1`). The width math accounts for
-    // those gutters whenever `editMode` is true (no `layoutMode`
-    // dependency). View mode still uses the bare section gaps.
+    // Width: the sections side by side with `sectionPadding` between
+    // them. Edit and view mode share this layout; the add controls are
+    // overlays and take no room.
     let totalWidth = 0;
 
-    if (editMode) {
-      // Section drop zone before first section.
-      totalWidth += sectionPadding;
-    }
-
-    // Use the actual calculated section widths, but account for title width too
     sectionWidths.forEach((sectionWidth, sectionIndex) => {
       // Measure actual rendered section title width from DOM
       const sectionTitleElement = containerRef.current?.querySelector(
@@ -218,39 +216,12 @@ export function ConnectionsComponent({
       // The title uses minWidth of sectionWidth and width: max-content, so it will always be at least sectionWidth
       const titleWidth = sectionTitleElement?.offsetWidth || sectionWidth;
 
-      // Use the wider of section width or measured title width
-      const effectiveSectionWidth = Math.max(sectionWidth, titleWidth);
-      totalWidth += effectiveSectionWidth;
+      totalWidth += Math.max(sectionWidth, titleWidth);
 
-      // Add extra width for the always-on column-gutter affordances in
-      // edit mode. (N+1) zones × columnPadding px each (before first
-      // + after each column).
-      if (editMode) {
-        // Count ALL columns in this section (including empty ones)
-        const columnCount = data.sections[sectionIndex].columns.length || 1;
-
-        const dropZonesWidth = (columnCount + 1) * columnPadding;
-
-        // Only add drop zones width if it's not already accounted for in the effective section width
-        // The effectiveSectionWidth might already be wider due to title
-        const sectionWithDropZones = sectionWidth + dropZonesWidth;
-        const additionalWidth = Math.max(0, sectionWithDropZones - effectiveSectionWidth);
-
-        totalWidth += additionalWidth;
-      }
-
-      // Section gap. In edit mode the section-padding gutter sits between
-      // sections (rendered by TheoryOfChangeGraph as the "before-section"
-      // affordance for sectionIndex+1); in view mode it's a bare gap.
       if (sectionIndex < sectionWidths.length - 1) {
         totalWidth += sectionPadding;
       }
     });
-
-    if (editMode) {
-      // Section drop zone after last section.
-      totalWidth += sectionPadding;
-    }
 
     // Calculate height based on content positions (avoid DOM measurements that change with zoom)
     let maxHeight = 0;
@@ -273,30 +244,15 @@ export function ConnectionsComponent({
 
     // Add header height, title height, and padding
     const headerHeight = 62; // Section header height (matches the -62px offset in columns)
-    // Graph title block height (includes margin). PR #34 fb4 issue 64:
-    // edit mode renders the title block even when `data.title` is empty
-    // (the "Click to add title" placeholder), so the budget must count
-    // it then too — otherwise the canvas card comes out 80px shorter
-    // than the rendered content and the column bodies / add affordances
-    // spill below it. Mirrors the unconditional 80 in the edit-mode
-    // column body height (TheoryOfChangeGraph).
-    const titleHeight = data.title || editMode ? 80 : 0;
+    // Graph title block height (includes margin).
+    const titleHeight = titleBlockShown ? 80 : 0;
     const padding = 0; // No extra padding needed
     const dynamicHeight = Math.max(maxHeight + headerHeight + titleHeight + padding, 800); // Minimum 800px
 
     const newSize = { width: totalWidth, height: dynamicHeight };
     setSvgSize(newSize);
     onSizeChangeRef.current(newSize);
-  }, [
-    sectionWidths,
-    data.sections,
-    data.title,
-    editMode,
-    nodeHeights,
-    columnPadding,
-    sectionPadding,
-    containerRef,
-  ]);
+  }, [sectionWidths, data.sections, titleBlockShown, nodeHeights, sectionPadding, containerRef]);
 
   useEffect(() => {
     // Immediate size calculation

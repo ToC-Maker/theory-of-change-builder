@@ -91,7 +91,6 @@ function renderLayout(containerEl: HTMLDivElement) {
       containerRef: { current: containerEl },
       columnPadding: 24,
       sectionPadding: 32,
-      editMode: true,
       zoomScale: ZOOM,
     }),
   );
