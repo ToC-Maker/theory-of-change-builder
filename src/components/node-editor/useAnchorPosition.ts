@@ -3,19 +3,22 @@
 // the active node) and `EdgeEditor` (anchored to the connection
 // midpoint).
 //
-// Subscriptions (per plan §3.2 / red-team "Anchor reposition on pan/zoom"):
+// Subscriptions:
 //   - `camera` prop change → reposition. The canvas pans/zooms by
 //     mutating camera; consumers re-render this hook with the new
 //     camera object and we recompute from getBoundingClientRect, which
 //     reflects the CSS-transformed position.
 //   - ResizeObserver on the anchor → reposition. Catches anchor resize
 //     (node width change, font reflow).
-//   - ResizeObserver on the overlay (when `overlayRef` is provided) →
-//     re-evaluates the flip decision. The MDXEditor in NodeEditor
-//     expands lazily as its chunk lands, so the overlay height grows
-//     after first mount; without re-observing we'd compute the flip
-//     on the (small) initial height and never reposition once the
-//     real height settled.
+//   - ResizeObserver on the overlay and on its direct children (when
+//     `overlayRef` is provided; the children are those present when the
+//     observer attaches) → re-evaluates the flip decision and the height
+//     cap. The MDXEditor in NodeEditor expands lazily as its chunk
+//     lands, so the overlay height grows after first mount; without
+//     re-observing we'd compute the flip on the (small) initial height
+//     and never reposition once the real height settled. Once the
+//     overlay is height-capped its box stops growing while its content
+//     keeps going, which only the children report.
 //   - Throttled MutationObserver on document.body → reposition.
 //     Catches DOM-tree shifts that move the anchor without firing
 //     ResizeObserver (sibling insert/delete, layout-only updates).
@@ -39,38 +42,39 @@
 // `position: fixed`).
 //
 // ---------------------------------------------------------------------------
-// Auto-flip (PR 7 feedback Editor: width-drag bug)
+// Placement and auto-flip
 // ---------------------------------------------------------------------------
 //
-// User feedback (PR 7): "the node editor should probably be above or
-// below the node, rather than to the side, as when I drag to change
-// the width of the note, it moves the editor, which moves the width
-// slider that I'm still dragging." NodeEditor now passes
-// `placement: 'bottom'` so width-drag does not horizontally translate
-// the editor under the cursor.
+// NodeEditor uses `placement: 'bottom'` rather than 'right': beside the
+// node, dragging the width slider widens the node, which moves the
+// editor and with it the slider track still under the cursor. Below the
+// node (centered on it) the track stays put during a width drag.
 //
-// To keep that promise on tall pages where a node near the bottom of
-// the viewport would push the editor below the fold, we also accept
-// `flip: true`. When set, the hook measures the overlay height (via
-// `overlayRef`) and flips to top-placement if the natural placement
-// would extend past the viewport. `'bottom'` flips to `'top'` and
-// `'right'` flips to `'left'`.
+// To keep the editor on screen when a node near the bottom of the
+// viewport would push it below the fold, we also accept `flip: true`.
+// When set, the hook measures the overlay height (via `overlayRef`) and
+// flips to the other side if the overlay doesn't fit on the preferred
+// one: `'bottom'` flips to `'top'` when that side has more room, and
+// `'right'` flips to `'left'` when it would pass the window's right edge
+// and the left side fits.
 //
 // ---------------------------------------------------------------------------
-// Containment: the overlay never leaves the visible area
+// Containment: a measured overlay stays inside the visible area
 // ---------------------------------------------------------------------------
 //
 // The visible area is the window minus `topInset` (the fixed top bar),
-// with an 8px margin on every side. The returned `{x, y}` always keeps
-// the overlay inside it, and `maxHeight` is the height the overlay may
-// take there: the room on the side of the anchor it was placed on, so
-// a tall overlay (long node details, a short window) must scroll
-// internally instead of running off the screen. The caller applies
-// `maxHeight` and `overflow-y: auto`. When neither side of the anchor
-// leaves at least `MIN_OVERLAY_HEIGHT`, the overlay is allowed to cover
-// the anchor rather than shrink into a sliver. An anchor panned out of
-// the visible area leaves the overlay pinned to the nearest edge,
-// still usable.
+// with an 8px margin on every side. Once the overlay has been measured,
+// the returned `{x, y}` keeps it inside that area, and `maxHeight` is the
+// height the overlay may take there: the room on the side of the anchor
+// it was placed on, so a tall overlay (long node details, a short
+// window) must scroll internally instead of running off the screen. The
+// caller applies `maxHeight` and `overflow-y: auto`. When neither side
+// of the anchor leaves at least `MIN_OVERLAY_HEIGHT`, the overlay is
+// allowed to cover the anchor rather than shrink into a sliver. An
+// anchor panned out of the visible area leaves the overlay pinned to the
+// nearest edge, still usable. Before the overlay has been measured (its
+// first frame, or no `overlayRef`) it is placed from the anchor alone:
+// `y` is not clamped and `maxHeight` is null.
 //
 // The overlay's height is read as its content height (`scrollHeight`),
 // not its box: a capped box is shorter than its content, and deciding
@@ -85,11 +89,12 @@ interface UseAnchorPositionArgs {
   /** The element to anchor against. */
   anchorRef: RefObject<HTMLElement | null>;
   /**
-   * The overlay element being positioned. When set with `flip: true`
-   * (and placement: 'bottom'), the hook reads the overlay's height
-   * and flips to top-placement when the natural bottom-placement
-   * would extend past the viewport. Optional: when unset, the hook
-   * computes from the anchor alone (no flip).
+   * The overlay element being positioned. The hook reads its width (to
+   * center it and keep it between the window's side edges, and to flip
+   * right to left) and its content height (to flip bottom to top, to
+   * keep it inside the vertical band and to derive `maxHeight`).
+   * Optional: when unset, the hook computes from the anchor alone: no
+   * flip, no clamping, `maxHeight` null.
    */
   overlayRef?: RefObject<HTMLElement | null>;
   /** Camera state; any change re-reads the anchor rect. */
@@ -172,8 +177,8 @@ function computePosition(args: ComputeArgs): OverlayPosition {
 
   if (placement === 'bottom' || placement === 'top') {
     // Horizontally CENTER the overlay on the anchor (rather than
-    // aligning its left edge to the anchor's left). Width-drag bug fix
-    // (PR 7): the canvas centers each column in its section via
+    // aligning its left edge to the anchor's left). Width drag: the
+    // canvas centers each column in its section via
     // `justify-content: center`. When the user drags the width slider,
     // the node grows, the column grows, and the column re-centers — so
     // the node's LEFT edge moves left by ΔW/2. The node's CENTER, by

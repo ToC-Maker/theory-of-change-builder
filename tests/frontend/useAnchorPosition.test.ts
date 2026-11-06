@@ -1,13 +1,15 @@
 // Tests for `useAnchorPosition` — repositions an overlay continuously
 // alongside its anchor element. The hook is the unification point for
-// the three subscription paths the plan §3.2 enumerates: camera changes
-// (pan/zoom), ResizeObserver (anchor resize), throttled MutationObserver
-// (DOM-tree changes that re-flow the anchor).
+// the four subscription paths: camera changes (pan/zoom),
+// ResizeObserver (anchor and overlay resize), throttled MutationObserver
+// (DOM-tree changes that re-flow the anchor) and window resize.
 //
 // Acceptance gates:
 //   - Camera prop changes → reposition (recomputed from element rect).
 //   - ResizeObserver callback → reposition.
+//   - Window resize → reposition now and on every frame for a moment.
 //   - No anchor → returns null (caller can skip rendering).
+//   - Once the overlay is measured, it stays inside the visible area.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import {
@@ -210,10 +212,9 @@ describe('useAnchorPosition', () => {
     expect(result.current?.x).toBe(308); // 200 + 100 + 8
   });
 
-  // PR 7 feedback-editor: bottom-placement centers the overlay on the
-  // anchor (not aligned left-edge), so a node that re-centers when its
-  // column grows during a width-slider drag doesn't drag the editor
-  // horizontally with it. This pair of tests covers the new contract.
+  // Bottom placement centers the overlay on the anchor (not aligned
+  // left-edge), so a node that re-centers when its column grows during a
+  // width-slider drag doesn't drag the editor horizontally with it.
   describe('placement: bottom with overlayRef + flip', () => {
     function makeOverlayRef(rect: { left?: number; top?: number; width: number; height: number }) {
       const el = document.createElement('div');
@@ -227,9 +228,9 @@ describe('useAnchorPosition', () => {
     }
 
     it('centers the overlay on the anchor when overlay width is known', () => {
-      const anchor = makeAnchorRef({ left: 100, top: 200, width: 80, height: 40 });
+      const anchor = makeAnchorRef({ left: 500, top: 200, width: 80, height: 40 });
       const overlay = makeOverlayRef({ width: 288, height: 100 });
-      // Force a generous viewport so the clamp doesn't engage.
+      // A generous viewport so neither edge clamp engages.
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
       Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
       const { result } = renderHook(() =>
@@ -243,13 +244,9 @@ describe('useAnchorPosition', () => {
         }),
       );
 
-      // anchor center = 100 + 80/2 = 140. Overlay center should equal
-      // 140 → overlay.left = 140 - 288/2 = -4. Y = 200 + 40 + 12 = 252.
-      // (Negative x is fine — the clamp's lower bound is 8, but the
-      // test viewport is wide enough that the floor doesn't apply
-      // unless we engineer it. We keep x small so the math is
-      // unambiguous.)
-      expect(result.current?.x).toBe(8); // clamped to floor (anchor center 140 - 144 < 8)
+      // anchor center = 500 + 80/2 = 540, so overlay.left = 540 - 288/2 = 396.
+      // Y = 200 + 40 + 12 = 252.
+      expect(result.current?.x).toBe(396);
       expect(result.current?.y).toBe(252);
     });
 
@@ -441,8 +438,9 @@ describe('useAnchorPosition', () => {
 
     it('measures the natural height through the cap (scrollHeight, not the capped box)', () => {
       // The box is capped at 250 but its content is 400 + 2 (border).
-      // Below the anchor only 250 is free; above it 500 is, so the
-      // overlay must move above rather than stay capped below.
+      // Below the anchor only 100 is free (692 - 592); above it 479 is
+      // (540 - 12 - 49), so the overlay must move above rather than stay
+      // capped below.
       const { result } = place(
         { left: 400, top: 540, width: 80, height: 40 },
         makeOverlay(288, 250, { scrollHeight: 400, clientHeight: 248 }),
