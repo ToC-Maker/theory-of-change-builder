@@ -307,4 +307,218 @@ describe('useAnchorPosition', () => {
       expect(xAfter).toBe(xBefore);
     });
   });
+
+  // The overlay must stay inside the visible area: below the fixed top
+  // bar, above the window's bottom edge, and between its side edges.
+  // A tall overlay takes the larger side of the anchor and gets a
+  // `maxHeight` so it can scroll internally instead of overflowing.
+  describe('viewport containment', () => {
+    const TOP_INSET = 41;
+    // computePosition's edge margin: 8px on every side.
+    const MARGIN = 8;
+
+    function setViewport(width: number, height: number) {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+    }
+
+    function makeOverlay(
+      width: number,
+      height: number,
+      content?: { scrollHeight: number; clientHeight: number },
+    ) {
+      const el = document.createElement('div');
+      setRect(el, { left: 0, top: 0, width, height });
+      if (content) {
+        Object.defineProperty(el, 'scrollHeight', {
+          configurable: true,
+          value: content.scrollHeight,
+        });
+        Object.defineProperty(el, 'clientHeight', {
+          configurable: true,
+          value: content.clientHeight,
+        });
+      }
+      return { current: el } as React.RefObject<HTMLElement>;
+    }
+
+    function place(
+      anchorRect: { left: number; top: number; width: number; height: number },
+      overlay: React.RefObject<HTMLElement>,
+      opts: { placement?: 'bottom' | 'right'; flip?: boolean; topInset?: number } = {},
+    ) {
+      const anchor = makeAnchorRef(anchorRect);
+      return renderHook(() =>
+        useAnchorPosition({
+          anchorRef: anchor,
+          overlayRef: overlay,
+          camera: { x: 0, y: 0, z: 1 },
+          placement: opts.placement ?? 'bottom',
+          offset: 12,
+          flip: opts.flip ?? true,
+          topInset: opts.topInset ?? TOP_INSET,
+        }),
+      );
+    }
+
+    // Viewport 1000x700: the usable band is y 49..692 (643px).
+    beforeEach(() => setViewport(1000, 700));
+
+    it('does not flip above when the room above is eaten by the top bar', () => {
+      // anchor.top - offset = 488 would hold a 460px overlay, but the
+      // top bar leaves only 488 - 49 = 439px.
+      const { result } = place(
+        { left: 400, top: 500, width: 80, height: 40 },
+        makeOverlay(288, 460),
+      );
+      expect(result.current?.y).toBe(49);
+      expect(result.current?.maxHeight).toBe(439);
+    });
+
+    it('keeps the overlay under the top bar after flipping above', () => {
+      const { result } = place(
+        { left: 400, top: 560, width: 80, height: 40 },
+        makeOverlay(288, 300),
+      );
+      // Below: 692 - 612 = 80 (no fit). Above: 560 - 12 - 300 = 248.
+      expect(result.current?.y).toBe(248);
+      expect(result.current!.y).toBeGreaterThanOrEqual(TOP_INSET + MARGIN);
+    });
+
+    it('caps the height at the larger side when neither side fits', () => {
+      // Below: 692 - (370 + 12) = 310. Above: 330 - 12 - 49 = 269.
+      const { result } = place(
+        { left: 400, top: 330, width: 80, height: 40 },
+        makeOverlay(288, 450),
+      );
+      expect(result.current?.maxHeight).toBe(310);
+      expect(result.current?.y).toBe(382);
+      expect(result.current!.y + 310).toBeLessThanOrEqual(700 - MARGIN);
+    });
+
+    it('caps a taller-than-the-window overlay inside the usable band', () => {
+      const { result } = place(
+        { left: 400, top: 330, width: 80, height: 40 },
+        makeOverlay(288, 3000),
+      );
+      const { y, maxHeight } = result.current!;
+      expect(maxHeight).not.toBeNull();
+      expect(y).toBeGreaterThanOrEqual(TOP_INSET + MARGIN);
+      expect(y + maxHeight!).toBeLessThanOrEqual(700 - MARGIN);
+    });
+
+    it('overlaps the anchor rather than shrink below a usable height', () => {
+      // 400px-tall window: 140px below and 139px above the anchor.
+      setViewport(1000, 400);
+      const { result } = place(
+        { left: 400, top: 200, width: 80, height: 40 },
+        makeOverlay(288, 450),
+      );
+      const { y, maxHeight } = result.current!;
+      expect(maxHeight).toBe(240);
+      expect(y).toBeGreaterThanOrEqual(TOP_INSET + MARGIN);
+      expect(y + 240).toBeLessThanOrEqual(400 - MARGIN);
+    });
+
+    it('pins the overlay to the top edge when its anchor is panned above the screen', () => {
+      const { result } = place(
+        { left: 400, top: -300, width: 80, height: 40 },
+        makeOverlay(288, 400),
+      );
+      expect(result.current?.y).toBe(TOP_INSET + MARGIN);
+    });
+
+    it('pins the overlay to the bottom edge when its anchor is panned below the screen', () => {
+      const { result } = place(
+        { left: 400, top: 900, width: 80, height: 40 },
+        makeOverlay(288, 400),
+      );
+      expect(result.current?.y).toBe(700 - MARGIN - 400);
+    });
+
+    it('measures the natural height through the cap (scrollHeight, not the capped box)', () => {
+      // The box is capped at 250 but its content is 400 + 2 (border).
+      // Below the anchor only 250 is free; above it 500 is, so the
+      // overlay must move above rather than stay capped below.
+      const { result } = place(
+        { left: 400, top: 540, width: 80, height: 40 },
+        makeOverlay(288, 250, { scrollHeight: 400, clientHeight: 248 }),
+      );
+      expect(result.current?.y).toBe(540 - 12 - 402);
+    });
+
+    it('watches the overlay content as well as its box', () => {
+      // Once capped, the box stops growing while the content still does.
+      const overlay = makeOverlay(288, 300);
+      const header = document.createElement('div');
+      const details = document.createElement('div');
+      overlay.current!.append(header, details);
+      const observed: Element[] = [];
+      class RecordingObserver extends ResizeObserverMock {
+        override observe = vi.fn((el: Element) => {
+          observed.push(el);
+        });
+      }
+      // @ts-expect-error - test shim
+      globalThis.ResizeObserver = RecordingObserver;
+
+      place({ left: 400, top: 330, width: 80, height: 40 }, overlay);
+
+      expect(observed).toContain(overlay.current);
+      expect(observed).toContain(header);
+      expect(observed).toContain(details);
+    });
+
+    it('reports no height cap while the overlay is unmeasured', () => {
+      const anchor = makeAnchorRef({ left: 400, top: 300, width: 80, height: 40 });
+      const { result } = renderHook(() =>
+        useAnchorPosition({
+          anchorRef: anchor,
+          camera: { x: 0, y: 0, z: 1 },
+          placement: 'bottom',
+          offset: 12,
+          flip: true,
+          topInset: TOP_INSET,
+        }),
+      );
+      expect(result.current?.maxHeight).toBeNull();
+    });
+
+    it('flips a right placement to the left edge and slides it up near the corner', () => {
+      // A point anchor (connection midpoint) near the bottom-right.
+      const { result } = place(
+        { left: 900, top: 600, width: 1, height: 1 },
+        makeOverlay(320, 330),
+        { placement: 'right', flip: true },
+      );
+      const { x, y } = result.current!;
+      expect(x).toBe(900 - 12 - 320);
+      expect(y).toBe(700 - MARGIN - 330);
+    });
+
+    it('keeps a right placement on the right when it fits', () => {
+      const { result } = place(
+        { left: 300, top: 200, width: 1, height: 1 },
+        makeOverlay(320, 330),
+        { placement: 'right', flip: true },
+      );
+      expect(result.current?.x).toBe(301 + 12);
+      expect(result.current?.y).toBe(200);
+    });
+
+    it('repositions when the window is resized', () => {
+      const { result } = place(
+        { left: 400, top: 330, width: 80, height: 40 },
+        makeOverlay(288, 450),
+      );
+      expect(result.current?.maxHeight).toBe(310);
+
+      setViewport(1000, 500);
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      // Below: 492 - 382 = 110. Above: 269. The larger side wins.
+      expect(result.current?.maxHeight).toBe(269);
+    });
+  });
 });

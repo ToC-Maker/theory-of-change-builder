@@ -21,6 +21,10 @@
 //     ResizeObserver (sibling insert/delete, layout-only updates).
 //     Throttled to one read per animation frame so a churning AI-edit
 //     stream doesn't repeatedly thrash.
+//   - Window `resize` → reposition now and on every frame for a
+//     moment. The canvas refits and re-centres itself a debounce after
+//     a resize without touching the camera, so the anchor moves with
+//     none of the signals above, and the visible area changed too.
 //
 // Note: callers pass a `RefObject<HTMLElement>` rather than the element
 // directly. Parents mutate `.current` on every render to point at the
@@ -29,9 +33,10 @@
 // re-subscribe when the underlying element changes — without the mirror,
 // they'd silently keep observing the FIRST element captured at mount.
 //
-// Returns the {x, y} the caller should place the overlay at (in
-// viewport coordinates, since `getBoundingClientRect` is viewport-relative
-// and the overlay portals to `document.body` with `position: fixed`).
+// Returns the {x, y, maxHeight} the caller should place the overlay at
+// (in viewport coordinates, since `getBoundingClientRect` is
+// viewport-relative and the overlay portals to `document.body` with
+// `position: fixed`).
 //
 // ---------------------------------------------------------------------------
 // Auto-flip (PR 7 feedback Editor: width-drag bug)
@@ -48,11 +53,31 @@
 // the viewport would push the editor below the fold, we also accept
 // `flip: true`. When set, the hook measures the overlay height (via
 // `overlayRef`) and flips to top-placement if the natural placement
-// would extend past the viewport. `'bottom'` is the only placement
-// that supports flip today; EdgeEditor's `'right'` keeps the legacy
-// no-flip behavior.
+// would extend past the viewport. `'bottom'` flips to `'top'` and
+// `'right'` flips to `'left'`.
+//
+// ---------------------------------------------------------------------------
+// Containment: the overlay never leaves the visible area
+// ---------------------------------------------------------------------------
+//
+// The visible area is the window minus `topInset` (the fixed top bar),
+// with an 8px margin on every side. The returned `{x, y}` always keeps
+// the overlay inside it, and `maxHeight` is the height the overlay may
+// take there: the room on the side of the anchor it was placed on, so
+// a tall overlay (long node details, a short window) must scroll
+// internally instead of running off the screen. The caller applies
+// `maxHeight` and `overflow-y: auto`. When neither side of the anchor
+// leaves at least `MIN_OVERLAY_HEIGHT`, the overlay is allowed to cover
+// the anchor rather than shrink into a sliver. An anchor panned out of
+// the visible area leaves the overlay pinned to the nearest edge,
+// still usable.
+//
+// The overlay's height is read as its content height (`scrollHeight`),
+// not its box: a capped box is shorter than its content, and deciding
+// the side from the capped box would flip-flop with the cap it was
+// given last time.
 import { useEffect, useState } from 'react';
-import type { RefObject } from 'react';
+import type { RefObject, WheelEvent } from 'react';
 
 export type Placement = 'right' | 'left' | 'top' | 'bottom';
 
@@ -75,80 +100,150 @@ interface UseAnchorPositionArgs {
   offset?: number;
   /**
    * When true, the hook may flip 'bottom' → 'top' if the overlay
-   * doesn't fit below the anchor in the viewport. Requires
-   * `overlayRef` to be set (otherwise we don't know the overlay's
-   * height and can't make the decision). Other placements ignore the
-   * flag (no flip).
+   * doesn't fit below the anchor in the viewport, and 'right' → 'left'
+   * if it doesn't fit beside it. Requires `overlayRef` to be set
+   * (otherwise we don't know the overlay's size and can't make the
+   * decision). 'top' and 'left' ignore the flag.
    */
   flip?: boolean;
+  /**
+   * Height (px) of fixed chrome at the top of the window that the
+   * overlay must stay below. Default: 0.
+   */
+  topInset?: number;
 }
 
 interface OverlayPosition {
   x: number;
   y: number;
+  /**
+   * The tallest the overlay may be where it was placed, or null while
+   * its size is unknown. Apply as `max-height` with `overflow-y: auto`.
+   */
+  maxHeight: number | null;
 }
 
-function computePosition(
-  anchorRect: DOMRect,
-  overlayWidth: number,
-  overlayHeight: number,
-  placement: Placement,
-  offset: number,
-  flip: boolean,
-  viewportWidth: number,
-  viewportHeight: number,
-): OverlayPosition {
-  // For bottom-placement we horizontally CENTER the overlay on the
-  // anchor (rather than aligning its left edge to the anchor's left).
-  // Width-drag bug fix (PR 7): the canvas centers each column in its
-  // section via `justify-content: center`. When the user drags the
-  // width slider, the node grows, the column grows, and the column
-  // re-centers — so the node's LEFT edge moves left by ΔW/2. The
-  // node's CENTER, by contrast, stays put. Anchoring the editor's
-  // center to the node's center keeps the slider track stationary in
-  // screen space while the user drags. (Falls back to anchor.left
-  // when we don't know the overlay's width yet, to avoid a flash at
-  // x=anchor.left+anchor.width/2.)
-  const anchorCenterX = anchorRect.left + anchorRect.width / 2;
-  const bottomX = overlayWidth > 0 ? anchorCenterX - overlayWidth / 2 : anchorRect.left;
-  // Clamp horizontally so the overlay doesn't run off the viewport
-  // (e.g. a node in the rightmost column of a wide section).
-  const clampedBottomX =
-    overlayWidth > 0 && viewportWidth > 0
-      ? Math.max(8, Math.min(bottomX, viewportWidth - overlayWidth - 8))
-      : bottomX;
+// How long after a window resize the overlay keeps following its
+// anchor frame by frame: longer than the canvas's own refit debounce.
+const RESIZE_FOLLOW_MS = 500;
+// Gap kept between the overlay and the edges of the visible area.
+const EDGE_MARGIN = 8;
+// Below this height a side of the anchor is not worth shrinking the
+// overlay into; it covers the anchor instead.
+const MIN_OVERLAY_HEIGHT = 240;
 
-  if (placement === 'bottom' && flip && overlayHeight > 0) {
-    // Available space below: viewport.height - anchor.bottom - offset.
-    // If the overlay would extend below the viewport AND there's more
-    // room above, flip to top. We compare the two spaces rather than
-    // applying a hard "must fit" rule, so a node near the bottom on a
-    // small viewport still picks the better of two bad options.
-    const spaceBelow = viewportHeight - anchorRect.bottom - offset;
-    const spaceAbove = anchorRect.top - offset;
-    const fitsBelow = overlayHeight <= spaceBelow;
-    const fitsAbove = overlayHeight <= spaceAbove;
-    if (!fitsBelow && fitsAbove) {
-      return { x: clampedBottomX, y: anchorRect.top - overlayHeight - offset };
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
+}
+
+interface ComputeArgs {
+  anchorRect: DOMRect;
+  overlayWidth: number;
+  /** Content height of the overlay, 0 while it is unmeasured. */
+  overlayHeight: number;
+  placement: Placement;
+  offset: number;
+  flip: boolean;
+  viewportWidth: number;
+  viewportHeight: number;
+  topInset: number;
+}
+
+function computePosition(args: ComputeArgs): OverlayPosition {
+  const {
+    anchorRect,
+    overlayWidth,
+    overlayHeight,
+    placement,
+    offset,
+    flip,
+    viewportWidth,
+    viewportHeight,
+    topInset,
+  } = args;
+  const minX = EDGE_MARGIN;
+  const maxX = viewportWidth - EDGE_MARGIN;
+  const minY = topInset + EDGE_MARGIN;
+  const maxY = viewportHeight - EDGE_MARGIN;
+  const bandHeight = Math.max(0, maxY - minY);
+  const sized = overlayHeight > 0 && viewportHeight > 0;
+  const clampX = (x: number) =>
+    overlayWidth > 0 && viewportWidth > 0 ? clamp(x, minX, maxX - overlayWidth) : x;
+
+  if (placement === 'bottom' || placement === 'top') {
+    // Horizontally CENTER the overlay on the anchor (rather than
+    // aligning its left edge to the anchor's left). Width-drag bug fix
+    // (PR 7): the canvas centers each column in its section via
+    // `justify-content: center`. When the user drags the width slider,
+    // the node grows, the column grows, and the column re-centers — so
+    // the node's LEFT edge moves left by ΔW/2. The node's CENTER, by
+    // contrast, stays put. Anchoring the editor's center to the node's
+    // center keeps the slider track stationary in screen space while
+    // the user drags. (Falls back to anchor.left when we don't know the
+    // overlay's width yet, to avoid a flash at
+    // x=anchor.left+anchor.width/2.)
+    const anchorCenterX = anchorRect.left + anchorRect.width / 2;
+    const x = clampX(overlayWidth > 0 ? anchorCenterX - overlayWidth / 2 : anchorRect.left);
+    if (!sized) {
+      return {
+        x,
+        y: placement === 'top' ? anchorRect.top - offset : anchorRect.bottom + offset,
+        maxHeight: null,
+      };
     }
-    if (!fitsBelow && !fitsAbove && spaceAbove > spaceBelow) {
-      return { x: clampedBottomX, y: anchorRect.top - overlayHeight - offset };
-    }
+    const spaceBelow = maxY - (anchorRect.bottom + offset);
+    const spaceAbove = anchorRect.top - offset - minY;
+    // Flip to the larger side when the overlay doesn't fit on the
+    // preferred one: with room on neither, the larger still shows more.
+    const side =
+      placement === 'bottom' && flip && overlayHeight > spaceBelow && spaceAbove > spaceBelow
+        ? 'top'
+        : placement;
+    // An anchor outside the visible area has no side to be next to:
+    // the whole band is open to the overlay.
+    const anchorVisible = anchorRect.bottom > minY && anchorRect.top < maxY;
+    const space = !anchorVisible ? bandHeight : side === 'bottom' ? spaceBelow : spaceAbove;
+    const maxHeight = Math.min(
+      bandHeight,
+      Math.max(space, Math.min(overlayHeight, MIN_OVERLAY_HEIGHT)),
+    );
+    const height = Math.min(overlayHeight, maxHeight);
+    const y = side === 'bottom' ? anchorRect.bottom + offset : anchorRect.top - offset - height;
+    return { x, y: clamp(y, minY, maxY - height), maxHeight };
   }
-  switch (placement) {
-    case 'right':
-      return { x: anchorRect.right + offset, y: anchorRect.top };
-    case 'left':
-      return { x: anchorRect.left - offset, y: anchorRect.top };
-    case 'top':
-      return { x: clampedBottomX, y: anchorRect.top - offset };
-    case 'bottom':
-      return { x: clampedBottomX, y: anchorRect.bottom + offset };
-  }
+
+  // 'right' / 'left': beside the anchor, top edges aligned.
+  const rightX = anchorRect.right + offset;
+  const leftX = anchorRect.left - offset - overlayWidth;
+  const known = overlayWidth > 0 && viewportWidth > 0;
+  const useLeft =
+    placement === 'left' || (flip && known && rightX + overlayWidth > maxX && leftX >= minX);
+  const x = clampX(useLeft ? leftX : rightX);
+  if (!sized) return { x, y: anchorRect.top, maxHeight: null };
+  const height = Math.min(overlayHeight, bandHeight);
+  return { x, y: clamp(anchorRect.top, minY, maxY - height), maxHeight: bandHeight };
+}
+
+/**
+ * `onWheel` for a scrollable overlay. The canvas pans on any wheel event
+ * in the document and cancels it, so without this a wheel over a
+ * height-capped overlay would pan the canvas instead of scrolling the
+ * overlay. Ctrl/Cmd+wheel still reaches the canvas as a zoom.
+ */
+export function keepWheelInOverlay(e: WheelEvent) {
+  if (!e.ctrlKey && !e.metaKey) e.stopPropagation();
 }
 
 export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition | null {
-  const { anchorRef, overlayRef, camera, placement = 'right', offset = 8, flip = false } = args;
+  const {
+    anchorRef,
+    overlayRef,
+    camera,
+    placement = 'right',
+    offset = 8,
+    flip = false,
+    topInset = 0,
+  } = args;
   const [position, setPosition] = useState<OverlayPosition | null>(null);
 
   // Track the anchor element in state so changes to `anchorRef.current`
@@ -189,22 +284,34 @@ export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition 
   function recompute(currentAnchor: HTMLElement, currentOverlay: HTMLElement | null) {
     const overlayRect = currentOverlay?.getBoundingClientRect();
     const overlayWidth = overlayRect?.width ?? 0;
-    const overlayHeight = overlayRect?.height ?? 0;
+    // Content height, not box height: a capped overlay scrolls, so its
+    // box (`height`) is shorter than its content (`scrollHeight`, which
+    // excludes the border the box adds back).
+    const overlayHeight =
+      currentOverlay && overlayRect
+        ? currentOverlay.scrollHeight + overlayRect.height - currentOverlay.clientHeight
+        : 0;
     const viewportWidth =
       typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 0;
     const viewportHeight =
       typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 0;
-    setPosition(
-      computePosition(
-        currentAnchor.getBoundingClientRect(),
-        overlayWidth,
-        overlayHeight,
-        placement,
-        offset,
-        flip,
-        viewportWidth,
-        viewportHeight,
-      ),
+    const next = computePosition({
+      anchorRect: currentAnchor.getBoundingClientRect(),
+      overlayWidth,
+      overlayHeight,
+      placement,
+      offset,
+      flip,
+      viewportWidth,
+      viewportHeight,
+      topInset,
+    });
+    // Per-frame callers (resize follow, DOM mutations) mostly land on the
+    // same spot: keep the old object so the overlay doesn't re-render.
+    setPosition((prev) =>
+      prev && prev.x === next.x && prev.y === next.y && prev.maxHeight === next.maxHeight
+        ? prev
+        : next,
     );
   }
 
@@ -222,7 +329,7 @@ export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition 
     }
     recompute(anchorEl, overlayEl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchorEl, overlayEl, placement, offset, flip, camera.x, camera.y, camera.z]);
+  }, [anchorEl, overlayEl, placement, offset, flip, topInset, camera.x, camera.y, camera.z]);
 
   // ResizeObserver on the anchor. We attach to the anchor itself so
   // width/height changes (node text reflow, AI edit changing the node
@@ -235,7 +342,7 @@ export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition 
     ro.observe(anchorEl);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchorEl, overlayEl, placement, offset, flip]);
+  }, [anchorEl, overlayEl, placement, offset, flip, topInset]);
 
   // ResizeObserver on the overlay. The overlay's own height changes
   // mid-life (e.g. NodeEditor's MDXEditor chunk lands and the
@@ -248,9 +355,12 @@ export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition 
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => recompute(anchorEl, overlayEl));
     ro.observe(overlayEl);
+    // A height-capped overlay's box stops growing while its content keeps
+    // going (its own scrollbar takes over), so watch the content too.
+    for (const child of Array.from(overlayEl.children)) ro.observe(child);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overlayEl, anchorEl, placement, offset, flip]);
+  }, [overlayEl, anchorEl, placement, offset, flip, topInset]);
 
   // Throttled MutationObserver on document.body. Catches DOM mutations
   // that don't trigger ResizeObserver on the anchor (sibling inserts,
@@ -280,7 +390,29 @@ export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition 
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchorEl, overlayEl, placement, offset, flip]);
+  }, [anchorEl, overlayEl, placement, offset, flip, topInset]);
+
+  useEffect(() => {
+    if (!anchorEl) return;
+    let rafId: number | null = null;
+    let followUntil = 0;
+    const follow = () => {
+      rafId = null;
+      recompute(anchorEl, overlayEl);
+      if (performance.now() < followUntil) rafId = requestAnimationFrame(follow);
+    };
+    const onResize = () => {
+      recompute(anchorEl, overlayEl);
+      followUntil = performance.now() + RESIZE_FOLLOW_MS;
+      if (rafId === null) rafId = requestAnimationFrame(follow);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchorEl, overlayEl, placement, offset, flip, topInset]);
 
   return position;
 }

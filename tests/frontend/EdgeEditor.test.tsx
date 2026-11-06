@@ -199,4 +199,59 @@ describe('EdgeEditor', () => {
     expect(aNode?.connections ?? []).toEqual([]);
     expect(aNode?.connectionIds).toEqual([]);
   });
+
+  describe('keeping inside the window', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // jsdom does no layout: fake a connection midpoint near the
+    // bottom-right of a 1000x700 window and a panel taller than the room.
+    function fakeLayout() {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 });
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        const r = this.classList.contains('edge-editor')
+          ? { left: 0, top: 0, width: 320, height: 330 }
+          : { left: 900, top: 600, width: 1, height: 1 };
+        return {
+          ...r,
+          right: r.left + r.width,
+          bottom: r.top + r.height,
+          x: r.left,
+          y: r.top,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    }
+
+    it('moves to the left of the midpoint and up when it would leave the window', () => {
+      fakeLayout();
+      renderEdgeEditor({});
+      const panel = document.querySelector('.edge-editor') as HTMLElement;
+
+      // Right of the point would end at 901 + 12 + 320 > 992: flip left.
+      expect(panel.style.left).toBe(`${900 - 12 - 320}px`);
+      // 600 + 330 > 692: slide up until the bottom margin.
+      expect(panel.style.top).toBe(`${700 - 8 - 330}px`);
+    });
+
+    it('keeps the wheel for its own scrolling, except for zoom', () => {
+      fakeLayout();
+      renderEdgeEditor({});
+      const panel = document.querySelector('.edge-editor') as HTMLElement;
+      const canvasWheel = vi.fn();
+      document.addEventListener('wheel', canvasWheel);
+      try {
+        fireEvent.wheel(panel, { deltaY: 100 });
+        expect(canvasWheel).not.toHaveBeenCalled();
+        fireEvent.wheel(panel, { deltaY: -100, ctrlKey: true });
+        expect(canvasWheel).toHaveBeenCalledTimes(1);
+      } finally {
+        document.removeEventListener('wheel', canvasWheel);
+      }
+    });
+  });
 });

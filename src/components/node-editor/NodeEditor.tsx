@@ -35,7 +35,11 @@
 //
 // `flip: true` lets the hook escalate to top-placement when the node
 // sits near the viewport's bottom edge and the editor wouldn't fit
-// below (e.g. a goal-column node on a short window).
+// below (e.g. a goal-column node on a short window). The hook also
+// keeps the editor inside the visible area (below the top bar) and
+// hands back the height it may take there; the panel applies it as
+// `max-height` and scrolls internally, so long details or a short
+// window never push its controls off screen.
 //
 // ---------------------------------------------------------------------------
 // Cleanup
@@ -84,9 +88,10 @@ import { TrashIcon } from '@heroicons/react/24/outline';
 import type { SetStateAction } from 'react';
 import type { ToCData } from '../../types';
 import { useNodeProperties } from './useNodeProperties';
-import { useAnchorPosition } from './useAnchorPosition';
+import { keepWheelInOverlay, useAnchorPosition } from './useAnchorPosition';
 import { DetailsEditor } from './DetailsEditor';
 import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
+import { TOP_BAR_HEIGHT_PX } from '../../hooks/useViewportOffset';
 import { isEditorSwitchTarget } from '../canvas/editorSwitchTargets';
 import { NODE_DOM_ATTR } from '../NodeComponent';
 
@@ -147,6 +152,7 @@ export function NodeEditor(props: NodeEditorProps) {
     placement: 'bottom',
     offset: 12,
     flip: true,
+    topInset: TOP_BAR_HEIGHT_PX,
   });
 
   // Cleanup: flush buffered title + details writes on unmount. This is
@@ -229,14 +235,20 @@ export function NodeEditor(props: NodeEditorProps) {
   return createPortal(
     <div
       ref={containerRef}
-      className="node-editor fixed z-[150] bg-white rounded-lg shadow-xl border border-gray-200 p-3 w-72 text-sm"
+      className="node-editor fixed z-[150] bg-white rounded-lg shadow-xl border border-gray-200 p-3 w-72 text-sm overflow-y-auto overflow-x-hidden"
       style={
         position
-          ? { left: position.x, top: position.y, fontFamily }
+          ? {
+              left: position.x,
+              top: position.y,
+              maxHeight: position.maxHeight ?? undefined,
+              fontFamily,
+            }
           : // Hide off-screen until the first measure lands, so we don't
             // flash at (0, 0).
             { left: -9999, top: -9999, fontFamily }
       }
+      onWheel={keepWheelInOverlay}
       onMouseDown={(e) => {
         // Clicks inside should NOT bubble out and trigger the outside-
         // click dismissal. Stopping propagation here also keeps the

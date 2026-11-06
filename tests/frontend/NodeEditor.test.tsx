@@ -156,6 +156,63 @@ describe('NodeEditor', () => {
     expect(commitKeys.some((k) => typeof k === 'string' && k.startsWith('details-'))).toBe(true);
   });
 
+  describe('keeping inside the window', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // jsdom does no layout: fake a node mid-window and a panel far taller
+    // than the room around it.
+    function fakeLayout() {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 });
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        const r = this.classList.contains('node-editor')
+          ? { left: 0, top: 0, width: 288, height: 2000 }
+          : { left: 400, top: 300, width: 80, height: 40 };
+        return {
+          ...r,
+          right: r.left + r.width,
+          bottom: r.top + r.height,
+          x: r.left,
+          y: r.top,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+      vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(1998);
+      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(1998);
+    }
+
+    it('caps its height to the room next to the node and scrolls past it', () => {
+      fakeLayout();
+      renderEditor({ selectedNodeIds: ['a'], data: makeData([{ id: 'a' }]) });
+      const panel = document.querySelector('.node-editor') as HTMLElement;
+
+      // Below the node: 700 - 8 - (340 + 12) = 340px; above only 239px.
+      expect(panel.style.top).toBe('352px');
+      expect(panel.style.maxHeight).toBe('340px');
+      expect(panel.className).toContain('overflow-y-auto');
+    });
+
+    it('keeps the wheel for its own scrolling, except for zoom', () => {
+      fakeLayout();
+      renderEditor({ selectedNodeIds: ['a'], data: makeData([{ id: 'a' }]) });
+      const panel = document.querySelector('.node-editor') as HTMLElement;
+      const canvasWheel = vi.fn();
+      document.addEventListener('wheel', canvasWheel);
+      try {
+        fireEvent.wheel(panel, { deltaY: 100 });
+        expect(canvasWheel).not.toHaveBeenCalled();
+        fireEvent.wheel(panel, { deltaY: -100, ctrlKey: true });
+        expect(canvasWheel).toHaveBeenCalledTimes(1);
+      } finally {
+        document.removeEventListener('wheel', canvasWheel);
+      }
+    });
+  });
+
   it('closes when the parent invokes the registered onDragStartedElsewhere callback', () => {
     const onRequestClose = vi.fn();
     let registeredCb: (() => void) | null = null;

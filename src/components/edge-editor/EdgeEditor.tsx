@@ -43,8 +43,9 @@ import { TrashIcon } from '@heroicons/react/24/outline';
 import type { SetStateAction } from 'react';
 import type { ToCData } from '../../types';
 import { useEdgeProperties } from './useEdgeProperties';
-import { useAnchorPosition } from '../node-editor/useAnchorPosition';
+import { keepWheelInOverlay, useAnchorPosition } from '../node-editor/useAnchorPosition';
 import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
+import { TOP_BAR_HEIGHT_PX } from '../../hooks/useViewportOffset';
 import { isEditorSwitchTarget } from '../canvas/editorSwitchTargets';
 
 type GraphUpdater = SetStateAction<ToCData>;
@@ -96,9 +97,12 @@ export function EdgeEditor(props: EdgeEditorProps) {
 
   const position = useAnchorPosition({
     anchorRef,
+    overlayRef: containerRef,
     camera,
     placement: 'right',
     offset: 12,
+    flip: true,
+    topInset: TOP_BAR_HEIGHT_PX,
   });
 
   // Unmount: flush buffered evidence + assumptions. Confidence uses
@@ -151,12 +155,18 @@ export function EdgeEditor(props: EdgeEditorProps) {
   return createPortal(
     <div
       ref={containerRef}
-      className="edge-editor fixed z-[150] bg-white rounded-lg shadow-xl border border-gray-200 p-3 w-80 text-sm"
+      className="edge-editor fixed z-[150] bg-white rounded-lg shadow-xl border border-gray-200 p-3 w-80 text-sm overflow-y-auto overflow-x-hidden"
       style={
         position
-          ? { left: position.x, top: position.y, fontFamily }
+          ? {
+              left: position.x,
+              top: position.y,
+              maxHeight: position.maxHeight ?? undefined,
+              fontFamily,
+            }
           : { left: -9999, top: -9999, fontFamily }
       }
+      onWheel={keepWheelInOverlay}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="edge-editor__header flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
