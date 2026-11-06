@@ -1,14 +1,10 @@
-// Tests for LinkCopyRow — single label per link with consistent copy
-// affordance. Two variants:
-//   - "view" link: neutral subtext.
-//   - "edit" link: subtext only includes "Anyone with this link can edit"
-//     copy when `linkSharingLevel === 'editor'` (L6 mitigation per plan
-//     §PR 2). For 'restricted' or 'viewer' the subtext is the safer
-//     "approval required" / "view-only collaborators" wording.
-//
-// Plan §user-direction: a single label per link (no title+subtitle
-// duplication). We mirror that by asserting the rendered label and
-// subtext exactly.
+// Tests for LinkCopyRow, one shareable link in the Share dialog:
+//   - a label naming the link, a line saying what it is for, a read-only
+//     URL field and a copy button named for the link it copies.
+//   - a status line about access: neutral for the view link; for the edit
+//     link, "Anyone with this link can edit" (as a warning) only at level
+//     'editor', "Approval required to edit." / "Editors must be approved."
+//     for 'restricted' / 'viewer'. No status line when the level is unknown.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { LinkCopyRow } from '../../src/components/share/LinkCopyRow';
@@ -51,6 +47,30 @@ describe('LinkCopyRow', () => {
     // The URL is rendered (readonly input) so the user can see it.
     const input = screen.getByDisplayValue('https://example.test/chart/c1');
     expect(input).toBeInTheDocument();
+  });
+
+  it('names each copy button for the link it copies', () => {
+    render(
+      <>
+        <LinkCopyRow variant="view" url="https://example.test/chart/c1" linkSharingLevel="viewer" />
+        <LinkCopyRow variant="edit" url="https://example.test/edit/tok" linkSharingLevel="viewer" />
+      </>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Copy view link' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy edit link' })).toBeInTheDocument();
+  });
+
+  it('labels each URL field with the name of its link', () => {
+    render(
+      <>
+        <LinkCopyRow variant="view" url="https://example.test/chart/c1" linkSharingLevel="viewer" />
+        <LinkCopyRow variant="edit" url="https://example.test/edit/tok" linkSharingLevel="viewer" />
+      </>,
+    );
+
+    expect(screen.getByLabelText('View link')).toHaveValue('https://example.test/chart/c1');
+    expect(screen.getByLabelText('Edit link')).toHaveValue('https://example.test/edit/tok');
   });
 
   it('renders a single label for the edit link', () => {

@@ -1,14 +1,12 @@
-// LinkCopyRow — single-label row with a readonly URL field and a copy
-// button (icon + click feedback).
+// LinkCopyRow — one shareable link in the Share dialog: a label with a
+// line saying what the link is for, a read-only URL field with a copy
+// button, and a status line saying who can open the link.
 //
-// Per user-direction sticky (PR 2):
-//   - one label per row (no title-then-subtitle duplication).
-//   - the edit variant must surface "Anyone with this link can edit"
-//     copy when `linkSharingLevel === 'editor'` (L6 mitigation).
-//
-// The container layout is intentionally flat (input + button + optional
-// subtext) so it composes cleanly inside ShareDialog.
-import { useEffect, useRef, useState } from 'react';
+// The status line is about access only and is left out when the level is
+// unknown (`null`), since a claim made without knowing it could be wrong.
+// The edit link's "Anyone with this link can edit" warning appears only at
+// level 'editor', the one level where the edit link needs no approval.
+import { useEffect, useId, useRef, useState } from 'react';
 import type { LinkSharingLevel } from '../../../shared/permissions';
 import { CopyButton } from './CopyButton';
 
@@ -43,7 +41,6 @@ function subtextFor(
 
   // edit variant
   if (level === 'editor') {
-    // L6 mitigation copy — must be visible verbatim.
     return { text: 'Anyone with this link can edit.', tone: 'warning' };
   }
   if (level === 'viewer') {
@@ -54,6 +51,7 @@ function subtextFor(
 
 export function LinkCopyRow({ variant, url, linkSharingLevel }: LinkCopyRowProps) {
   const [copied, setCopied] = useState(false);
+  const inputId = useId();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -82,11 +80,14 @@ export function LinkCopyRow({ variant, url, linkSharingLevel }: LinkCopyRowProps
   return (
     <div>
       <div className="flex flex-wrap items-baseline gap-x-2 mb-1">
-        <label className="text-xs font-medium text-gray-700">{label}</label>
+        <label htmlFor={inputId} className="text-xs font-medium text-gray-700">
+          {label}
+        </label>
         <span className="text-xs text-gray-500">{PURPOSE[variant]}</span>
       </div>
       <div className="flex items-center gap-2">
         <input
+          id={inputId}
           type="text"
           readOnly
           value={url}
@@ -95,7 +96,7 @@ export function LinkCopyRow({ variant, url, linkSharingLevel }: LinkCopyRowProps
             variant === 'view' ? 'bg-gray-50' : 'bg-blue-50'
           }`}
         />
-        <CopyButton onClick={handleCopy} copied={copied} />
+        <CopyButton onClick={handleCopy} copied={copied} label={`Copy ${label.toLowerCase()}`} />
       </div>
       {subtext && (
         <p

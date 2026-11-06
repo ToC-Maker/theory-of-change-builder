@@ -338,7 +338,8 @@ describe('ShareDialog', () => {
     await user.click(await screen.findByRole('button', { name: /embed code/i }));
 
     const buttons = [
-      ...screen.getAllByRole('button', { name: /^copy$/i }),
+      screen.getByRole('button', { name: /^copy view link$/i }),
+      screen.getByRole('button', { name: /^copy edit link$/i }),
       screen.getByRole('button', { name: /^copy embed code$/i }),
     ];
     expect(buttons).toHaveLength(3);
