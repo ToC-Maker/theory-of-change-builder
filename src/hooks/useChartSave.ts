@@ -150,7 +150,7 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
         const delay = refused
           ? RETRY_CAP_MS
           : (QUICK_RETRY_DELAYS_MS[retryCountRef.current] ?? RETRY_CAP_MS);
-        if (!refused) retryCountRef.current += 1;
+        retryCountRef.current += 1;
         // A newer edit's armed debounce retries sooner than the backoff.
         if (timerRef.current === null) {
           timerRef.current = setTimeout(flush, delay);
