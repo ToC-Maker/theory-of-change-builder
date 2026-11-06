@@ -23,10 +23,10 @@ import {
 import AuthButton from './components/AuthButton';
 import { TopBar } from './components/top-bar/TopBar';
 import { validateChartImport } from './utils/validateChartImport';
-import type { SaveError } from './components/top-bar/SaveIndicator';
 import { ShareDialog } from './components/share/ShareDialog';
 import { usePermissionsRefresh } from './hooks/usePermissionsRefresh';
 import { useChartSync } from './hooks/useChartSync';
+import { asSaveError, useChartSave } from './hooks/useChartSave';
 import { getFreshIdToken } from './utils/auth';
 import {
   reportAuthTokenFailure,
@@ -39,15 +39,6 @@ import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
 import type { Permission, LinkSharingLevel } from '../shared/permissions';
 import './App.css';
-
-// Helper: map a thrown error from a save attempt into the SaveIndicator
-// shape. Strips Anthropic/Fetch metadata that isn't useful in the pill.
-function asSaveError(err: unknown): SaveError {
-  if (err instanceof Error) {
-    return { message: err.message };
-  }
-  return { message: typeof err === 'string' ? err : 'Save failed' };
-}
 
 // Default empty template with 4 sections
 const emptyTemplate: ToCData = {
@@ -681,26 +672,6 @@ function ToCViewer() {
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
   const [currentEditToken, setCurrentEditToken] = useState<string | null>(null);
   const [currentChartId, setCurrentChartId] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  // Last save failure surfaced via the TopBar's SaveIndicator. Cleared
-  // when a subsequent save succeeds. SaveIndicator debounces its
-  // `reportError` ping per state-fingerprint so re-renders don't spam.
-  const [saveError, setSaveError] = useState<SaveError | null>(null);
-  // PR 7 fb (57): state mirror of `pendingChangesRef` (declared below),
-  // because a ref write doesn't re-render and the SaveIndicator must
-  // show "Unsaved changes" whenever local edits haven't been persisted
-  // — most importantly when a save FAILS (the save catch blocks leave
-  // the pending data in place; pre-fix the pill silently fell back to
-  // "Saved"). Always write through `setPendingChanges` so the ref (the
-  // synchronous source of truth for beforeunload/unmount flush) and
-  // this state can't drift. Declared up here (not next to the ref)
-  // because the save/undo/redo callbacks list it in their dependency
-  // arrays, which evaluate during render in source order.
-  const [hasPendingChanges, setHasPendingChanges] = useState(false);
-  const setPendingChanges = useCallback((next: ToCData | null) => {
-    pendingChangesRef.current = next;
-    setHasPendingChanges(next !== null);
-  }, []);
   // PR 1 task 1.7: sync button gone, "Last synced X ago" display gone.
   // setLastSyncTime kept (auto-sync still writes it) for future
   // observability hooks, but the helpers that read it are stripped.
@@ -1015,6 +986,11 @@ function ToCViewer() {
     [filename],
   );
 
+  // The one save path (edit, import, undo, redo). A failed save falls
+  // back to a localStorage copy of the unsaved data.
+  const { isSaving, saveError, setSaveError, hasPendingChanges, pendingChangesRef, saveChart } =
+    useChartSave({ editToken: currentEditToken, onSaveFailed: saveToLocalStorage });
+
   const loadFromLocalStorage = useCallback(
     (currentFilename?: string): ToCData | null => {
       try {
@@ -1062,39 +1038,12 @@ function ToCViewer() {
 
       // Set the uploaded data
       setData(validData);
-      setPendingChanges(validData);
+      saveChart(validData);
       saveToLocalStorage(validData);
-
-      // Trigger debounced database save for JSON upload
-      if (currentEditToken) {
-        if (saveTimeoutRef.current) {
-          clearTimeout(saveTimeoutRef.current);
-        }
-        setIsSaving(true);
-        saveTimeoutRef.current = setTimeout(() => {
-          if (pendingChangesRef.current && currentEditToken) {
-            console.log('Saving uploaded JSON to database');
-            ChartService.updateChart(currentEditToken, pendingChangesRef.current)
-              .then(() => {
-                setPendingChanges(null);
-                setIsSaving(false);
-                setSaveError(null);
-              })
-              .catch((err) => {
-                console.error('Failed to save uploaded JSON to database:', err);
-                setIsSaving(false);
-                setSaveError(asSaveError(err));
-              });
-          } else {
-            setIsSaving(false);
-          }
-          saveTimeoutRef.current = null;
-        }, 300);
-      }
 
       console.log('JSON data uploaded successfully');
     },
-    [data, saveToHistory, saveToLocalStorage, currentEditToken, setPendingChanges],
+    [data, saveToHistory, saveToLocalStorage, saveChart],
   );
 
   const handleGraphUpdate = (newGraphData: ToCData) => {
@@ -1106,12 +1055,6 @@ function ToCViewer() {
     console.log('Data after handleUploadJSON call:', data);
   };
 
-  // Debounced save to database
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Pending (not yet persisted) edits. Mutate via `setPendingChanges`
-  // only — see the hasPendingChanges mirror declared with the other
-  // save state above.
-  const pendingChangesRef = useRef<ToCData | null>(null);
   const dataRef = useRef<ToCData | null>(data);
   useEffect(() => {
     dataRef.current = data;
@@ -1130,53 +1073,17 @@ function ToCViewer() {
       setRedoHistory([]);
 
       setData(newData);
-      setPendingChanges(newData);
+      saveChart(newData);
 
       // Save debounced snapshot for logging (manual edits)
       logGraphChange(newData, 'manual_edit');
 
-      // Always save to localStorage immediately (local backup)
+      // A chart that doesn't exist yet only has the local copy.
       if (!currentEditToken) {
         saveToLocalStorage(newData);
-        return;
       }
-
-      // Debounce database saves
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        console.log('Debouncing - delaying save...');
-      }
-
-      // Show saving indicator
-      setIsSaving(true);
-
-      // Save to database after 300ms of no changes
-      saveTimeoutRef.current = setTimeout(() => {
-        if (pendingChangesRef.current && currentEditToken) {
-          console.log('Saving to database after debounce period');
-          ChartService.updateChart(currentEditToken, pendingChangesRef.current)
-            .then(() => {
-              console.log('Database save successful');
-              setPendingChanges(null);
-              setIsSaving(false);
-              setSaveError(null);
-            })
-            .catch((err) => {
-              console.error('Failed to save to database:', err);
-              // Fallback to localStorage if database fails
-              if (pendingChangesRef.current) {
-                saveToLocalStorage(pendingChangesRef.current);
-              }
-              setIsSaving(false);
-              setSaveError(asSaveError(err));
-            });
-        } else {
-          setIsSaving(false);
-        }
-        saveTimeoutRef.current = null;
-      }, 300); // 300ms debounce
     },
-    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange, setPendingChanges],
+    [saveToHistory, saveToLocalStorage, currentEditToken, logGraphChange, saveChart],
   );
 
   const handleUndo = useCallback(() => {
@@ -1207,52 +1114,17 @@ function ToCViewer() {
       setRedoHistory((prev) => [...prev, JSON.parse(JSON.stringify(data))]);
       setUndoHistory(newUndoHistory);
 
-      // Use handleDataChange to trigger debounced save, but skip history management
+      // Saves like an edit, but skips history management
       setData(previousState);
-      setPendingChanges(previousState);
+      saveChart(previousState);
       saveToLocalStorage(previousState);
 
       // Save undo snapshot for logging
       logGraphChange(previousState, 'undo');
 
-      // Trigger debounced database save for undo
-      if (currentEditToken) {
-        if (saveTimeoutRef.current) {
-          clearTimeout(saveTimeoutRef.current);
-        }
-        setIsSaving(true);
-        saveTimeoutRef.current = setTimeout(() => {
-          if (pendingChangesRef.current && currentEditToken) {
-            console.log('Saving undo state to database');
-            ChartService.updateChart(currentEditToken, pendingChangesRef.current)
-              .then(() => {
-                setPendingChanges(null);
-                setIsSaving(false);
-                setSaveError(null);
-              })
-              .catch((err) => {
-                console.error('Failed to save undo to database:', err);
-                setIsSaving(false);
-                setSaveError(asSaveError(err));
-              });
-          } else {
-            setIsSaving(false);
-          }
-          saveTimeoutRef.current = null;
-        }, 300);
-      }
-
       console.log('Undo performed, undo history length:', newUndoHistory.length);
     }
-  }, [
-    undoHistory,
-    data,
-    flushPendingHistory,
-    saveToLocalStorage,
-    currentEditToken,
-    logGraphChange,
-    setPendingChanges,
-  ]);
+  }, [undoHistory, data, flushPendingHistory, saveToLocalStorage, logGraphChange, saveChart]);
 
   const handleRedo = useCallback(() => {
     // L2 mitigation symmetric to handleUndo — see comment there.
@@ -1281,40 +1153,12 @@ function ToCViewer() {
       setUndoHistory((prev) => [...prev, JSON.parse(JSON.stringify(data))]);
       setRedoHistory(newRedoHistory);
 
-      // Use debounced save for redo as well
       setData(nextState);
-      setPendingChanges(nextState);
+      saveChart(nextState);
       saveToLocalStorage(nextState);
 
       // Save redo snapshot for logging
       logGraphChange(nextState, 'redo');
-
-      // Trigger debounced database save for redo
-      if (currentEditToken) {
-        if (saveTimeoutRef.current) {
-          clearTimeout(saveTimeoutRef.current);
-        }
-        setIsSaving(true);
-        saveTimeoutRef.current = setTimeout(() => {
-          if (pendingChangesRef.current && currentEditToken) {
-            console.log('Saving redo state to database');
-            ChartService.updateChart(currentEditToken, pendingChangesRef.current)
-              .then(() => {
-                setPendingChanges(null);
-                setIsSaving(false);
-                setSaveError(null);
-              })
-              .catch((err) => {
-                console.error('Failed to save redo to database:', err);
-                setIsSaving(false);
-                setSaveError(asSaveError(err));
-              });
-          } else {
-            setIsSaving(false);
-          }
-          saveTimeoutRef.current = null;
-        }, 300);
-      }
 
       console.log('Redo performed, redo history length:', newRedoHistory.length);
     }
@@ -1324,9 +1168,8 @@ function ToCViewer() {
     data,
     flushPendingHistory,
     saveToLocalStorage,
-    currentEditToken,
     logGraphChange,
-    setPendingChanges,
+    saveChart,
   ]);
 
   // Keyboard shortcut handler
@@ -1391,7 +1234,7 @@ function ToCViewer() {
         alert(err instanceof Error ? err.message : 'Failed to delete chart');
       }
     },
-    [currentEditToken, currentChartId, isAuthenticated],
+    [currentEditToken, currentChartId, isAuthenticated, setSaveError],
   );
 
   // Add beforeunload warning for unsaved changes
@@ -1409,13 +1252,7 @@ function ToCViewer() {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isSaving]);
-
-  // Store currentEditToken in a ref so cleanup can access latest value without re-running
-  const currentEditTokenRef = useRef(currentEditToken);
-  useEffect(() => {
-    currentEditTokenRef.current = currentEditToken;
-  }, [currentEditToken]);
+  }, [isSaving, pendingChangesRef]);
 
   // PR 2 fix-pass: single permissions poll. Replaces three overlapping
   // callers (ShareDialog's `loadPermissions`, `usePermissionsRefresh`,
@@ -1501,15 +1338,6 @@ function ToCViewer() {
     return () => {
       if (undoTimeoutRef.current) {
         clearTimeout(undoTimeoutRef.current);
-      }
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        // Save any pending changes immediately on unmount
-        if (pendingChangesRef.current && currentEditTokenRef.current) {
-          ChartService.updateChart(currentEditTokenRef.current, pendingChangesRef.current).catch(
-            console.error,
-          );
-        }
       }
     };
   }, []);
