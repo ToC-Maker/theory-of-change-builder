@@ -228,10 +228,14 @@ function computePosition(args: ComputeArgs): OverlayPosition {
  * `onWheel` for a scrollable overlay. The canvas pans on any wheel event
  * in the document and cancels it, so without this a wheel over a
  * height-capped overlay would pan the canvas instead of scrolling the
- * overlay. Ctrl/Cmd+wheel still reaches the canvas as a zoom.
+ * overlay. Ctrl/Cmd+wheel still reaches the canvas as a zoom, and so does
+ * a wheel over an overlay that has nothing to scroll.
  */
 export function keepWheelInOverlay(e: WheelEvent) {
-  if (!e.ctrlKey && !e.metaKey) e.stopPropagation();
+  const overlay = e.currentTarget;
+  if (!e.ctrlKey && !e.metaKey && overlay.scrollHeight > overlay.clientHeight) {
+    e.stopPropagation();
+  }
 }
 
 export function useAnchorPosition(args: UseAnchorPositionArgs): OverlayPosition | null {

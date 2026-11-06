@@ -270,6 +270,16 @@ describe('NodeEditor', () => {
 
         expect(wheelReachingCanvas(panel, { deltaY: -100, ctrlKey: true })).toBe(true);
       });
+
+      it('pans the canvas when the panel has nothing to scroll', () => {
+        fakeLayout({
+          panel: { left: 0, top: 0, width: 288, height: 200 },
+          content: { scrollHeight: 198, clientHeight: 198 },
+        });
+        const panel = openPanel();
+
+        expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(true);
+      });
     });
   });
 

@@ -308,6 +308,13 @@ describe('EdgeEditor', () => {
 
         expect(wheelReachingCanvas(panel, { deltaY: -100, ctrlKey: true })).toBe(true);
       });
+
+      it('pans the canvas when the panel has nothing to scroll', () => {
+        fakeLayout();
+        const panel = openPanel();
+
+        expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(true);
+      });
     });
   });
 });

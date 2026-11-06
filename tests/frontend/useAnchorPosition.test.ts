@@ -10,7 +10,10 @@
 //   - No anchor → returns null (caller can skip rendering).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useAnchorPosition } from '../../src/components/node-editor/useAnchorPosition';
+import {
+  keepWheelInOverlay,
+  useAnchorPosition,
+} from '../../src/components/node-editor/useAnchorPosition';
 
 // Minimal ResizeObserver shim so the hook's `observe`/`disconnect` calls
 // don't throw under jsdom. We capture the callback so tests can trigger it.
@@ -589,4 +592,36 @@ describe('useAnchorPosition', () => {
       expect(result.current?.maxHeight).toBe(269);
     });
   });
+});
+
+describe('keepWheelInOverlay', () => {
+  function wheel(
+    init: { ctrlKey?: boolean; metaKey?: boolean },
+    panel: { scrollHeight: number; clientHeight: number },
+  ) {
+    const stopPropagation = vi.fn();
+    keepWheelInOverlay({
+      ctrlKey: false,
+      metaKey: false,
+      ...init,
+      currentTarget: panel,
+      stopPropagation,
+    } as unknown as React.WheelEvent);
+    return stopPropagation.mock.calls.length > 0;
+  }
+
+  it('keeps the wheel for a panel that has content to scroll to', () => {
+    expect(wheel({}, { scrollHeight: 900, clientHeight: 300 })).toBe(true);
+  });
+
+  it('lets the wheel through to the canvas when the panel has nothing to scroll', () => {
+    expect(wheel({}, { scrollHeight: 300, clientHeight: 300 })).toBe(false);
+  });
+
+  it.each([{ ctrlKey: true }, { metaKey: true }])(
+    'lets a zoom gesture through to the canvas even over a scrolling panel (%o)',
+    (modifier) => {
+      expect(wheel(modifier, { scrollHeight: 900, clientHeight: 300 })).toBe(false);
+    },
+  );
 });
