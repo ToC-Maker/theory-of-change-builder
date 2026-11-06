@@ -231,7 +231,7 @@ describe('TopBar left-to-right order', () => {
     expect(precedes(trigger('Format'), trigger('Help'))).toBe(true);
   });
 
-  it('keeps Undo/Redo on the bar below md, next to the hamburger', () => {
+  it('keeps Undo/Redo on the bar below md, ahead of the hamburger in reading order', () => {
     renderWithRouter(<TopBar {...defaultProps} breakpoint="sm" />);
     const barButtons = within(screen.getByTestId('top-bar-row')).getAllByRole('button');
     const undo = barButtons.indexOf(screen.getByRole('button', { name: /^undo$/i }));

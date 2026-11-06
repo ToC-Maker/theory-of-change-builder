@@ -5,9 +5,9 @@
 //   right:   [SaveIndicator] [Share] [Profile]
 //
 // Below the `md` breakpoint (`window.innerWidth < 768`) the bar
-// collapses to a hamburger which opens `MobileMenu` carrying the same
-// surface. The breakpoint is decided here so the children stay simple
-// (no per-component matchMedia).
+// collapses to a hamburger which opens `MobileMenu`, carrying everything
+// but Undo/Redo, which stay on the bar. The breakpoint is decided here so
+// the children stay simple (no per-component matchMedia).
 //
 // The `breakpoint` prop is for tests — they pass `"sm"`/`"md"` to skip
 // the matchMedia path. In production the prop is left undefined and the
@@ -21,11 +21,11 @@
 // state (`openMenuId`) so siblings can switch on hover once any menu is
 // already open. The menu triggers sit in one flex wrapper with no gap,
 // and undo/redo sit between File and Format inside it, so the pointer
-// moving from one trigger to the next never leaves the wrapper (a
-// parent `gap-3` once left a 12px dead zone between triggers that broke
-// `pointerenter` switching). See `handleHoverOpen` below for the
-// standard menubar rule: hover only switches when a sibling is already
-// open — a casual mouse-over does NOT open menus.
+// moving from one trigger to the next never leaves the wrapper (a gap
+// between triggers is dead space that `pointerenter` switching cannot
+// cross). See `handleHoverOpen` below for the standard menubar rule:
+// hover only switches when a sibling is already open — a casual
+// mouse-over does NOT open menus.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ShareIcon } from '@heroicons/react/24/outline';
 import type { ToCData } from '../../types';
