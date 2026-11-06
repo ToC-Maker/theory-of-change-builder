@@ -178,6 +178,19 @@ describe('useChartSave: the normal save', () => {
     expect(result.current.isSaving).toBe(false);
   });
 
+  it('does not report Saving or send anything when the edit token arrives with no edit pending', async () => {
+    const { result, rerender } = setup(null);
+
+    // Opening an existing chart: the token arrives with nothing to save.
+    rerender({ editToken: 'tok' });
+    expect(result.current.isSaving).toBe(false);
+    await advance(1000);
+
+    expect(requests).toHaveLength(0);
+    expect(result.current.isSaving).toBe(false);
+    expect(result.current.hasPendingChanges).toBe(false);
+  });
+
   it('sends a debounced edit that is still waiting when the editor unmounts', async () => {
     const { save, unmount } = setup();
 
