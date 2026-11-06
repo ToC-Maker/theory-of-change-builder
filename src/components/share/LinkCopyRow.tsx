@@ -9,8 +9,8 @@
 // The container layout is intentionally flat (input + button + optional
 // subtext) so it composes cleanly inside ShareDialog.
 import { useEffect, useRef, useState } from 'react';
-import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
 import type { LinkSharingLevel } from '../../../shared/permissions';
+import { CopyButton } from './CopyButton';
 
 export type { LinkSharingLevel } from '../../../shared/permissions';
 
@@ -84,28 +84,7 @@ export function LinkCopyRow({ variant, url, linkSharingLevel }: LinkCopyRowProps
             variant === 'view' ? 'bg-gray-50' : 'bg-blue-50'
           }`}
         />
-        <button
-          type="button"
-          onClick={handleCopy}
-          aria-label={copied ? 'Copied' : 'Copy'}
-          className={`px-2 py-1 text-xs font-medium rounded transition-colors flex items-center gap-1 ${
-            variant === 'view'
-              ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
-          }`}
-        >
-          {copied ? (
-            <>
-              <CheckIcon className="w-3 h-3" />
-              Copied
-            </>
-          ) : (
-            <>
-              <ClipboardDocumentIcon className="w-3 h-3" />
-              Copy
-            </>
-          )}
-        </button>
+        <CopyButton onClick={handleCopy} copied={copied} />
       </div>
       {subtext && (
         <p

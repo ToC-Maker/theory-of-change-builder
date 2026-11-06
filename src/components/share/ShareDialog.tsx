@@ -43,6 +43,7 @@ import { ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { ChartService, type CreateChartResponse } from '../../services/chartService';
 import type { Permission, LinkSharingLevel } from '../../../shared/permissions';
 import type { ToCData } from '../../types';
+import { CopyButton } from './CopyButton';
 import { GeneralAccessSelector } from './GeneralAccessSelector';
 import { LinkCopyRow } from './LinkCopyRow';
 import { PermissionsList } from './PermissionsList';
@@ -472,13 +473,11 @@ export function ShareDialog({
                         className="w-full px-2 py-1 border border-gray-300 rounded text-xs bg-blue-50 font-mono resize-none overflow-hidden"
                         style={{ lineHeight: '1.5' }}
                       />
-                      <button
-                        type="button"
+                      <CopyButton
                         onClick={() => void copyEmbedCode(embedCode)}
-                        className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded hover:bg-blue-200 transition-colors"
-                      >
-                        {copiedEmbed ? 'Copied' : 'Copy embed code'}
-                      </button>
+                        copied={copiedEmbed}
+                        label="Copy embed code"
+                      />
                       <p className="text-xs text-gray-600">
                         Embed instructions:{' '}
                         <a

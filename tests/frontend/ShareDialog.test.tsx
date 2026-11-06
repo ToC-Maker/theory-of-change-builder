@@ -298,6 +298,24 @@ describe('ShareDialog', () => {
     });
   });
 
+  it('uses one copy-button style for the view link, the edit link and the embed code', async () => {
+    const user = userEvent.setup();
+    renderDialog({ linkSharingLevel: 'viewer' });
+    await waitFor(() => {
+      expect(screen.getByText('View link')).toBeInTheDocument();
+    });
+    await user.click(await screen.findByRole('button', { name: /embed code/i }));
+
+    const buttons = [
+      ...screen.getAllByRole('button', { name: /^copy$/i }),
+      screen.getByRole('button', { name: /^copy embed code$/i }),
+    ];
+    expect(buttons).toHaveLength(3);
+    const styles = new Set(buttons.map((b) => b.className));
+    expect(styles.size).toBe(1);
+    for (const b of buttons) expect(b).toHaveTextContent(/^Copy$/);
+  });
+
   describe('link status lines', () => {
     const mockOwnership = (isOwner: boolean) =>
       vi.spyOn(ChartService, 'getChartByEditToken').mockResolvedValue({
