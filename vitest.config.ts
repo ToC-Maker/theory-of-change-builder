@@ -2,7 +2,7 @@
 //
 // Project "workerd": runs everything under `tests/worker/**`, `tests/client/**`,
 // `tests/shared/**`, and the top-level `tests/*.test.ts` files inside the
-// Cloudflare Workers runtime via `@cloudflare/vitest-pool-workers`. These
+// Cloudflare Workers runtime via `@cloudflare/vitest-plugin`. These
 // tests exercise Worker bindings and shared helpers that need the workerd
 // environment.
 //
@@ -13,7 +13,7 @@
 //
 // Coverage stays at the top level so a single `vitest --coverage` run reports
 // combined output across both projects.
-import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
+import { cloudflareTest } from '@cloudflare/vitest-plugin';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 

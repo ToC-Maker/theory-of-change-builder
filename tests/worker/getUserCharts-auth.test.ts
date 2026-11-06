@@ -24,7 +24,7 @@
 //     enumerate someone else's charts.
 //
 // Infrastructure: the real handler runs against a test-local
-// `globalThis.fetch` router (this @cloudflare/vitest-pool-workers major
+// `globalThis.fetch` router (this @cloudflare/vitest-plugin major
 // no longer ships `fetchMock`; the pool itself reassigns global fetch,
 // so tests may too) that serves:
 //   - a locally generated RS256 public key as the tenant JWKS
