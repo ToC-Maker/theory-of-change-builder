@@ -1,7 +1,7 @@
 // TopBar — main horizontal navigation bar mounted at the top of the app.
 //
 // Layout (per plan §1.1):
-//   left:    [FileMenu] [FormatMenu] [HelpPanel] | [Undo] [Redo]
+//   left:    [FileMenu] [Undo] [Redo] [FormatMenu] [HelpPanel]
 //   right:   [SaveIndicator] [Share] [Profile]
 //
 // Below the `md` breakpoint (`window.innerWidth < 768`) the bar
@@ -207,6 +207,66 @@ export function TopBar(props: TopBarProps) {
   }, [openMenuId, cancelGraceClose]);
   useEffect(() => cancelGraceClose, [cancelGraceClose]);
 
+  // Undo / redo (edit mode only). At md they sit between File and Format
+  // inside the menubar group so the pointer crossing them while a menu is
+  // open stays within the hover-switch / grace-close subtree.
+  const undoRedo = (
+    <div className="flex items-center gap-1 self-center mx-1 sm:mx-2">
+      <button
+        type="button"
+        // L2 mitigation: preserve focus on the active text
+        // input so handleUndo's isInputFocused() check sees
+        // the truth.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={props.handleUndo}
+        disabled={props.undoHistory.length === 0}
+        // p-1.5 at every breakpoint (70): with the sm:w-5
+        // icon that's a 32px button — the old sm:p-2 (36px)
+        // left 2px breathing room in the 40px row.
+        className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        title={`Undo (${shortcuts.undoDisplay()})`}
+        aria-label="Undo"
+      >
+        <svg
+          className="w-4 h-4 sm:w-5 sm:h-5"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={props.handleRedo}
+        disabled={props.redoHistory.length === 0}
+        className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        title={`Redo (${shortcuts.redoDisplay()})`}
+        aria-label="Redo"
+      >
+        <svg
+          className="w-4 h-4 sm:w-5 sm:h-5"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6"
+          />
+        </svg>
+      </button>
+    </div>
+  );
+
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
       {/* PR 7 feedback (43): no vertical padding on the container —
@@ -240,8 +300,11 @@ export function TopBar(props: TopBarProps) {
               // edge (no `gap-*`) so `pointerenter` on a sibling fires
               // without the cursor traversing dead space in between.
               // Visual separation comes from each button's `px-2/3`
-              // padding rather than parent gap. Pointer enter/leave on
-              // this wrapper drive the grace-delayed full close (44).
+              // padding rather than parent gap. Undo/redo sit between
+              // File and Format inside the same group, so crossing
+              // them with a menu open never leaves the subtree.
+              // Pointer enter/leave on this wrapper drive the
+              // grace-delayed full close (44).
               // `self-stretch items-stretch` (43): the group escapes
               // the cluster's `items-center` and passes the full row
               // height down to the trigger buttons (`h-full`).
@@ -262,6 +325,7 @@ export function TopBar(props: TopBarProps) {
                   onOpenChange={(next) => setOpenMenuId(next ? 'file' : null)}
                   onHoverOpen={() => handleHoverOpen('file')}
                 />
+                {undoRedo}
                 <FormatMenu
                   editMode={props.editMode}
                   fontFamily={props.fontFamily}
@@ -309,63 +373,10 @@ export function TopBar(props: TopBarProps) {
               </>
             )}
 
-            {/* Undo / redo (edit mode only) */}
-            {!isViewer && (
-              <div className="flex items-center gap-1 ml-1 sm:ml-2">
-                <button
-                  type="button"
-                  // L2 mitigation: preserve focus on the active text
-                  // input so handleUndo's isInputFocused() check sees
-                  // the truth.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={props.handleUndo}
-                  disabled={props.undoHistory.length === 0}
-                  // p-1.5 at every breakpoint (70): with the sm:w-5
-                  // icon that's a 32px button — the old sm:p-2 (36px)
-                  // left 2px breathing room in the 40px row.
-                  className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  title={`Undo (${shortcuts.undoDisplay()})`}
-                  aria-label="Undo"
-                >
-                  <svg
-                    className="w-4 h-4 sm:w-5 sm:h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
-                    />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={props.handleRedo}
-                  disabled={props.redoHistory.length === 0}
-                  className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  title={`Redo (${shortcuts.redoDisplay()})`}
-                  aria-label="Redo"
-                >
-                  <svg
-                    className="w-4 h-4 sm:w-5 sm:h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6"
-                    />
-                  </svg>
-                </button>
-              </div>
-            )}
+            {/* Below md the menubar lives in the hamburger drawer, so
+              undo/redo stay on the bar itself, left of the hamburger's
+              cluster. At md they sit inside the menubar group (above). */}
+            {bp === 'sm' && !isViewer && undoRedo}
           </div>
 
           {/* Right cluster. sm:gap-3 (70): a touch more air between

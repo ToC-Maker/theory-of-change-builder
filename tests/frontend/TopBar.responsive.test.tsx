@@ -210,6 +210,38 @@ describe('TopBar responsive layout', () => {
   });
 });
 
+describe('TopBar left-to-right order', () => {
+  const trigger = (label: 'File' | 'Format' | 'Help') =>
+    screen
+      .getAllByRole('button', { name: new RegExp(`^${label}$`, 'i') })
+      .find((el) => el.getAttribute('aria-haspopup') === 'menu') as HTMLElement;
+  const precedes = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it('reads File, Undo/Redo, Format, Help at md', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    const undo = screen.getByRole('button', { name: /^undo$/i });
+    const redo = screen.getByRole('button', { name: /^redo$/i });
+    expect(precedes(trigger('File'), undo)).toBe(true);
+    expect(precedes(undo, redo)).toBe(true);
+    expect(precedes(redo, trigger('Format'))).toBe(true);
+    expect(precedes(trigger('Format'), trigger('Help'))).toBe(true);
+  });
+
+  it('keeps Undo/Redo on the bar below md, next to the hamburger', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="sm" />);
+    expect(screen.getByRole('button', { name: /^undo$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^redo$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open menu/i })).toBeInTheDocument();
+  });
+
+  it('has no Undo/Redo in viewer mode', () => {
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" showEditButton={false} />);
+    expect(screen.queryByRole('button', { name: /^undo$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^redo$/i })).toBeNull();
+  });
+});
+
 describe('TopBar geometry contract (PR #34 fb4 (70))', () => {
   // jsdom does no layout, so these are class-string contracts: they make
   // bar-geometry changes deliberate (update the test AND the mirror
@@ -515,6 +547,28 @@ describe('TopBar menubar grace-close on pointer exit (PR 7 feedback (44))', () =
     act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
     expect(expanded('Format')).toBe('true');
     expect(expanded('File')).toBe('false');
+  });
+
+  it('crossing Undo/Redo between File and Format neither closes nor breaks hover-switch', () => {
+    // Undo/Redo sit between File and Format, so the pointer travels
+    // File -> Undo -> Redo -> Format. They are part of the menubar
+    // subtree: no grace timer arms on the way, and Format still takes
+    // over the open menu.
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    const undo = screen.getByRole('button', { name: /^undo$/i });
+    const redo = screen.getByRole('button', { name: /^redo$/i });
+
+    fireEvent.click(trigger('File'));
+    fireEvent.pointerOut(trigger('File'), { relatedTarget: undo });
+    fireEvent.pointerOut(undo, { relatedTarget: redo });
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('File')).toBe('true');
+
+    fireEvent.pointerOut(redo, { relatedTarget: trigger('Format') });
+    expect(expanded('Format')).toBe('true');
+    expect(expanded('File')).toBe('false');
+    act(() => vi.advanceTimersByTime(MENUBAR_GRACE_CLOSE_MS * 3));
+    expect(expanded('Format')).toBe('true');
   });
 
   it('a pointer pass-through with no menu open arms nothing', () => {
