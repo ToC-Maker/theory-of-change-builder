@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, RefObject } from 'react';
 import { isCanvasGestureActive } from './_canvasGestureState';
+import { MOVE_THRESHOLD_PX } from './usePointerDrag';
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 5;
@@ -349,8 +350,36 @@ export function useZoomPan({
       setCamera(newCam);
     };
 
-    const handleMouseUp = () => {
+    // Panning moves the content with the cursor, so the element that was
+    // pressed (a "+ Column" / "+ Section" gutter, a section title, ...)
+    // is still under the pointer at release and the browser dispatches a
+    // `click` on it. A pan that travelled past the tap dead-zone is not a
+    // click: swallow that one trailing click so a drag never activates
+    // what it started on.
+    let swallowNextClick = false;
+    const handleClickCapture = (e: MouseEvent) => {
+      if (!swallowNextClick) return;
+      swallowNextClick = false;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
       if (isPanningRef.current) {
+        const start = panStartRef.current;
+        if (
+          start &&
+          (Math.abs(e.clientX - start.x) > MOVE_THRESHOLD_PX ||
+            Math.abs(e.clientY - start.y) > MOVE_THRESHOLD_PX)
+        ) {
+          swallowNextClick = true;
+          // The browser dispatches the click in the same task as the
+          // mouseup; if none arrives (release over a different element)
+          // don't let the flag eat a later, unrelated click.
+          setTimeout(() => {
+            swallowNextClick = false;
+          }, 0);
+        }
         isPanningRef.current = false;
         panStartRef.current = null;
         panStartCameraRef.current = null;
@@ -551,6 +580,7 @@ export function useZoomPan({
     document.addEventListener('mousedown', handleMouseDown);
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('click', handleClickCapture, true);
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('touchstart', handleTouchStart, { passive: false });
     document.addEventListener('touchmove', handleTouchMove, { passive: false });
@@ -562,6 +592,7 @@ export function useZoomPan({
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('click', handleClickCapture, true);
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('touchstart', handleTouchStart);
       document.removeEventListener('touchmove', handleTouchMove);
