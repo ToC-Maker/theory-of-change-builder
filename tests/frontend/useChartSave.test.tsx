@@ -268,6 +268,25 @@ describe('useChartSave: failures', () => {
     expect(result.current.isSaving).toBe(false);
   });
 
+  it('retries a request that timed out without an answer, and does not stay blocked behind it', async () => {
+    const { result, save } = setup();
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(
+      Object.assign(new Error('No answer within 30s'), { name: 'TimeoutError' }),
+    );
+    expect(result.current.saveError).toEqual({ message: 'No answer within 30s' });
+
+    save(V2);
+    await advance(300);
+    expect(requests).toHaveLength(2);
+    expect(requests[1].data).toBe(V2);
+    await requests[1].succeed();
+    expect(serverData).toBe(V2);
+    expect(result.current.hasPendingChanges).toBe(false);
+  });
+
   it('backs off between retries and gives up after a bounded number, still unsaved', async () => {
     const { result, save } = setup();
 

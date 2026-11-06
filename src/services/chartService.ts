@@ -22,6 +22,10 @@ export class ChartApiError extends Error {
   }
 }
 
+// A save the server has not answered by now is treated as failed so the
+// caller can retry: one stalled request must not hold up every later save.
+const UPDATE_CHART_TIMEOUT_MS = 30_000;
+
 export interface CreateChartResponse {
   chartId: string;
   editToken: string;
@@ -189,27 +193,43 @@ export class ChartService {
     // means every autosave 403s silently.
     const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
 
-    const response = await fetch(`${API_BASE}/updateChart`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ editToken, chartData }),
-    });
+    const timeout = new AbortController();
+    const timer = setTimeout(
+      () =>
+        timeout.abort(
+          new DOMException(
+            `The save request got no answer within ${UPDATE_CHART_TIMEOUT_MS / 1000}s`,
+            'TimeoutError',
+          ),
+        ),
+      UPDATE_CHART_TIMEOUT_MS,
+    );
+    try {
+      const response = await fetch(`${API_BASE}/updateChart`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ editToken, chartData }),
+        signal: timeout.signal,
+      });
 
-    if (!response.ok) {
-      // Prefer the worker's explanation (e.g. "Invalid or expired
-      // authentication. Please log in again.") — it feeds the
-      // SaveIndicator tooltip, where "Failed to update chart" gives the
-      // user nothing to act on.
-      let message = 'Failed to update chart';
-      try {
-        const errorData = (await response.json()) as { error?: string };
-        if (errorData?.error) {
-          message = errorData.error;
+      if (!response.ok) {
+        // Prefer the worker's explanation (e.g. "Invalid or expired
+        // authentication. Please log in again.") — it feeds the
+        // SaveIndicator tooltip, where "Failed to update chart" gives the
+        // user nothing to act on.
+        let message = 'Failed to update chart';
+        try {
+          const errorData = (await response.json()) as { error?: string };
+          if (errorData?.error) {
+            message = errorData.error;
+          }
+        } catch {
+          // Non-JSON body (proxy error page etc.) — keep the generic message.
         }
-      } catch {
-        // Non-JSON body (proxy error page etc.) — keep the generic message.
+        throw new ChartApiError(message, response.status);
       }
-      throw new ChartApiError(message, response.status);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
