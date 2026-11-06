@@ -216,12 +216,14 @@ describe('EdgeEditor', () => {
     // jsdom does no layout: fake a 1000x700 window, a connection midpoint
     // and a panel with the given box and content. `content` is the panel's
     // scrollHeight and clientHeight, which differ when the panel is capped
-    // and scrolls.
+    // and scrolls; `textarea` is the same pair for its text fields, which
+    // differ when their text overflows.
     function fakeLayout(
       opts: {
         midpoint?: Box;
         panel?: Box;
         content?: { scrollHeight: number; clientHeight: number };
+        textarea?: { scrollHeight: number; clientHeight: number };
       } = {},
     ) {
       const midpoint = opts.midpoint ?? { left: 900, top: 600, width: 1, height: 1 };
@@ -242,8 +244,18 @@ describe('EdgeEditor', () => {
           toJSON: () => ({}),
         } as DOMRect;
       });
-      vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(content.scrollHeight);
-      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(content.clientHeight);
+      const sizeOf = (el: Element) =>
+        opts.textarea && el instanceof HTMLTextAreaElement ? opts.textarea : content;
+      vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (
+        this: Element,
+      ) {
+        return sizeOf(this).scrollHeight;
+      });
+      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (
+        this: Element,
+      ) {
+        return sizeOf(this).clientHeight;
+      });
     }
 
     function openPanel() {
@@ -284,11 +296,11 @@ describe('EdgeEditor', () => {
         content: { scrollHeight: 900, clientHeight: 328 },
       };
 
-      function wheelReachingCanvas(panel: HTMLElement, init: WheelEventInit) {
+      function wheelReachingCanvas(target: HTMLElement, init: WheelEventInit) {
         const canvasWheel = vi.fn();
         document.addEventListener('wheel', canvasWheel);
         try {
-          fireEvent.wheel(panel, init);
+          fireEvent.wheel(target, init);
         } finally {
           document.removeEventListener('wheel', canvasWheel);
         }
@@ -302,18 +314,39 @@ describe('EdgeEditor', () => {
         expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(false);
       });
 
-      it('still zooms the canvas on Ctrl+wheel over a scrolling panel', () => {
-        fakeLayout(scrollingPanel);
-        const panel = openPanel();
+      it.each([{ ctrlKey: true }, { metaKey: true }])(
+        'still zooms the canvas on a wheel with %o over a scrolling panel',
+        (modifier) => {
+          fakeLayout(scrollingPanel);
+          const panel = openPanel();
 
-        expect(wheelReachingCanvas(panel, { deltaY: -100, ctrlKey: true })).toBe(true);
-      });
+          expect(wheelReachingCanvas(panel, { deltaY: -100, ...modifier })).toBe(true);
+        },
+      );
 
       it('pans the canvas when the panel has nothing to scroll', () => {
         fakeLayout();
         const panel = openPanel();
 
         expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(true);
+      });
+
+      // A long evidence text scrolls inside its textarea while the panel
+      // around it fits the window.
+      it('scrolls a text field whose text overflows instead of panning the canvas', () => {
+        fakeLayout({ textarea: { scrollHeight: 300, clientHeight: 80 } });
+        openPanel();
+        const evidence = screen.getByRole('textbox', { name: /evidence/i });
+
+        expect(wheelReachingCanvas(evidence, { deltaY: 100 })).toBe(false);
+      });
+
+      it('pans the canvas over a text field that holds all of its text', () => {
+        fakeLayout({ textarea: { scrollHeight: 80, clientHeight: 80 } });
+        openPanel();
+        const evidence = screen.getByRole('textbox', { name: /evidence/i });
+
+        expect(wheelReachingCanvas(evidence, { deltaY: 100 })).toBe(true);
       });
     });
   });

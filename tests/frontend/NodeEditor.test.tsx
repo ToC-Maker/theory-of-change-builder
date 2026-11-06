@@ -264,12 +264,15 @@ describe('NodeEditor', () => {
         expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(false);
       });
 
-      it('still zooms the canvas on Ctrl+wheel over a scrolling panel', () => {
-        fakeLayout(scrollingPanel);
-        const panel = openPanel();
+      it.each([{ ctrlKey: true }, { metaKey: true }])(
+        'still zooms the canvas on a wheel with %o over a scrolling panel',
+        (modifier) => {
+          fakeLayout(scrollingPanel);
+          const panel = openPanel();
 
-        expect(wheelReachingCanvas(panel, { deltaY: -100, ctrlKey: true })).toBe(true);
-      });
+          expect(wheelReachingCanvas(panel, { deltaY: -100, ...modifier })).toBe(true);
+        },
+      );
 
       it('pans the canvas when the panel has nothing to scroll', () => {
         fakeLayout({

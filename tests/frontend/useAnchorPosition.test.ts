@@ -12,10 +12,7 @@
 //   - Once the overlay is measured, it stays inside the visible area.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import {
-  keepWheelInOverlay,
-  useAnchorPosition,
-} from '../../src/components/node-editor/useAnchorPosition';
+import { useAnchorPosition } from '../../src/components/node-editor/useAnchorPosition';
 
 // Minimal ResizeObserver shim so the hook's `observe`/`disconnect` calls
 // don't throw under jsdom. We capture the callback so tests can trigger it.
@@ -549,9 +546,9 @@ describe('useAnchorPosition', () => {
         act(() => {
           window.dispatchEvent(new Event('resize'));
         });
-        // The first frame after the resize has run when the canvas
-        // re-centres itself, which no signal the hook listens to reports:
-        // only a later frame of the loop sees the anchor move.
+        // The canvas re-centres itself after the first frame, which no
+        // signal the hook listens to reports: only a later frame of the
+        // loop sees the anchor move.
         act(() => {
           vi.advanceTimersByTime(20);
         });
@@ -590,36 +587,4 @@ describe('useAnchorPosition', () => {
       expect(result.current?.maxHeight).toBe(269);
     });
   });
-});
-
-describe('keepWheelInOverlay', () => {
-  function wheel(
-    init: { ctrlKey?: boolean; metaKey?: boolean },
-    panel: { scrollHeight: number; clientHeight: number },
-  ) {
-    const stopPropagation = vi.fn();
-    keepWheelInOverlay({
-      ctrlKey: false,
-      metaKey: false,
-      ...init,
-      currentTarget: panel,
-      stopPropagation,
-    } as unknown as React.WheelEvent);
-    return stopPropagation.mock.calls.length > 0;
-  }
-
-  it('keeps the wheel for a panel that has content to scroll to', () => {
-    expect(wheel({}, { scrollHeight: 900, clientHeight: 300 })).toBe(true);
-  });
-
-  it('lets the wheel through to the canvas when the panel has nothing to scroll', () => {
-    expect(wheel({}, { scrollHeight: 300, clientHeight: 300 })).toBe(false);
-  });
-
-  it.each([{ ctrlKey: true }, { metaKey: true }])(
-    'lets a zoom gesture through to the canvas even over a scrolling panel (%o)',
-    (modifier) => {
-      expect(wheel(modifier, { scrollHeight: 900, clientHeight: 300 })).toBe(false);
-    },
-  );
 });
