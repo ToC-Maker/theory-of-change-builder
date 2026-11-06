@@ -31,3 +31,26 @@ export function isInputFocused(): boolean {
   if (ce !== null && ce !== undefined && ce !== 'false') return true;
   return false;
 }
+
+// Input types that take no typed text. After the user drags a slider or
+// picks a colour the control keeps focus, and Ctrl+Z means nothing to it.
+const NON_TEXT_INPUT_TYPES = new Set([
+  'range',
+  'color',
+  'checkbox',
+  'radio',
+  'button',
+  'submit',
+  'reset',
+  'file',
+  'image',
+]);
+
+// Like `isInputFocused`, but false for controls that take no typed text.
+// Undo/redo use this: a focused text field owns Ctrl+Z (native text
+// undo); a focused slider does not, so the chart's history applies.
+export function isTextEntryFocused(): boolean {
+  if (!isInputFocused()) return false;
+  const el = document.activeElement;
+  return !(el instanceof HTMLInputElement && NON_TEXT_INPUT_TYPES.has(el.type));
+}

@@ -34,7 +34,7 @@ import {
   resetAuthSessionHealth,
 } from './services/authSessionHealth';
 import { SessionExpiredBanner } from './components/SessionExpiredBanner';
-import { isInputFocused } from './utils/isInputFocused';
+import { isTextEntryFocused } from './utils/isInputFocused';
 import { useUndoHistory } from './hooks/useUndoHistory';
 import { clearChartSpend } from './utils/byokSpend';
 import type { ToCData } from './types';
@@ -1064,7 +1064,7 @@ function ToCViewer() {
     // graph history. Toolbar undo buttons that fire handleUndo MUST pair
     // this with `onMouseDown={(e) => e.preventDefault()}` so the click
     // doesn't shift focus to the button before this check runs.
-    if (isInputFocused()) return;
+    if (isTextEntryFocused()) return;
 
     // Feedback 67: flush — never drop — a snapshot still inside the
     // 300ms grouping window, so the operation the user is undoing is
@@ -1108,7 +1108,7 @@ function ToCViewer() {
 
   const handleRedo = useCallback(() => {
     // L2 mitigation symmetric to handleUndo — see comment there.
-    if (isInputFocused()) return;
+    if (isTextEntryFocused()) return;
 
     // Feedback 67: same flush-not-drop rule as handleUndo. (A pending
     // snapshot here implies a data change after the last undo, which
@@ -1157,9 +1157,9 @@ function ToCViewer() {
   // Keyboard shortcut handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't interfere with text editing: shared util keeps this in
-      // sync with handleUndo/handleRedo and useKeyboardShortcuts.
-      if (isInputFocused()) return;
+      // A focused text field keeps Ctrl+Z for its own text undo (same
+      // guard as handleUndo/handleRedo).
+      if (isTextEntryFocused()) return;
 
       if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
         event.preventDefault();
