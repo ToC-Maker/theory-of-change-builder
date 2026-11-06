@@ -11,7 +11,7 @@
 
 import { useState } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
 import { deepFreeze } from './helpers/deepFreeze';
@@ -78,7 +78,9 @@ async function editAndCollect(edit: () => void) {
   const onDataChange = vi.fn();
   render(<Controlled initial={data} onChange={onDataChange} />);
   edit();
-  await Promise.resolve();
+  // The graph notifies the parent in a microtask; the parent's state
+  // update from it belongs inside act.
+  await act(async () => {});
   expect(onDataChange).toHaveBeenCalledTimes(1);
   expect(data).toEqual(before);
   return onDataChange.mock.calls[0][0] as ToCData;
