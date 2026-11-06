@@ -84,6 +84,32 @@ describe('LinkCopyRow', () => {
     expect(screen.queryByText(/Anyone with this link can edit/i)).toBeNull();
   });
 
+  it('says what each link is for, whether or not a status line follows', () => {
+    const levels = ['restricted', 'viewer', 'editor', null] as const;
+    for (const level of levels) {
+      const { unmount } = render(
+        <>
+          <LinkCopyRow
+            variant="view"
+            url="https://example.test/chart/c1"
+            linkSharingLevel={level}
+          />
+          <LinkCopyRow
+            variant="edit"
+            url="https://example.test/edit/tok"
+            linkSharingLevel={level}
+          />
+        </>,
+      );
+      expect(screen.getByText('Share this to show or embed the chart.')).toBeInTheDocument();
+      expect(screen.getByText('Share this with people helping you build it.')).toBeInTheDocument();
+      // The label itself stays a single plain label.
+      expect(screen.getByText('View link')).toBeInTheDocument();
+      expect(screen.getByText('Edit link')).toBeInTheDocument();
+      unmount();
+    }
+  });
+
   it('shows no status line when the level is unknown', () => {
     const { container } = render(
       <>

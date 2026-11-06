@@ -21,6 +21,14 @@ export interface LinkCopyRowProps {
   linkSharingLevel: LinkSharingLevel | null;
 }
 
+// Why the two links differ: the view link is for audiences, the edit link
+// for co-builders. Kept beside the label so the status line below the
+// field stays a statement about access only.
+const PURPOSE: Record<'view' | 'edit', string> = {
+  view: 'Share this to show or embed the chart.',
+  edit: 'Share this with people helping you build it.',
+};
+
 function subtextFor(
   variant: 'view' | 'edit',
   level: LinkSharingLevel | null,
@@ -73,7 +81,10 @@ export function LinkCopyRow({ variant, url, linkSharingLevel }: LinkCopyRowProps
 
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
+      <div className="flex flex-wrap items-baseline gap-x-2 mb-1">
+        <label className="text-xs font-medium text-gray-700">{label}</label>
+        <span className="text-xs text-gray-500">{PURPOSE[variant]}</span>
+      </div>
       <div className="flex items-center gap-2">
         <input
           type="text"
