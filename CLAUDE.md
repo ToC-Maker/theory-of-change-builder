@@ -25,9 +25,6 @@ npm run format:check
 npm test
 npm run preflight        # typecheck + lint + format:check + build + test, in parallel
 npm run preflight:serial # same as preflight but sequential (easier to read when debugging a failure)
-
-# Storybook
-npm run storybook        # Component development (port 6006)
 ```
 
 For full-stack dev with HMR: run `npm run dev` in one terminal (Worker + API),
@@ -43,7 +40,7 @@ read, `npm run preflight:serial` runs the same gates sequentially.
 
 ## Stack
 
-- **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS + React Router 7
+- **Frontend**: React 19 + TypeScript + Vite + Tailwind CSS + React Router 7
 - **Backend**: Cloudflare Workers (with Static Assets)
 - **Database**: Neon PostgreSQL (serverless)
 - **Auth**: Auth0 (JWT validation server-side via `jose`)
@@ -292,9 +289,12 @@ For Auth0 integration details or permission system changes, see `worker/_shared/
 
 ## Testing
 
-Run all worker-side unit tests: `npm test`. Tests live under `tests/worker/` and use vitest + `@cloudflare/vitest-pool-workers` to execute in a real Workers runtime. Watch mode: `npm run test:watch`.
+Run everything: `npm test` (watch mode: `npm run test:watch`; one project: `npx vitest run --project frontend`). `vitest.config.ts` defines two Vitest projects:
 
-Current coverage: `computeCostMicroUsd`, tier predicates, AES-GCM BYOK key round-trip, Turnstile session-cookie HMAC. Add tests for new Worker helpers alongside the code; especially `anon-id.ts`, the kill-switch logic in `anthropic-stream.ts`, and `reserveCost` race-safety tests.
+- **`workerd`**: `tests/worker/`, `tests/client/`, `tests/shared/` and the top-level `tests/*.test.ts`. They run inside a real Workers runtime via `@cloudflare/vitest-plugin`, with bindings and secrets from `wrangler.jsonc` and `.dev.vars`.
+- **`frontend`**: `tests/frontend/**/*.test.{ts,tsx}`. They run in jsdom with React Testing Library and `@testing-library/jest-dom` for components, hooks and client utilities.
+
+Add tests for new Worker helpers alongside the code; especially `anon-id.ts`, the kill-switch logic in `anthropic-stream.ts`, and `reserveCost` race-safety tests. jsdom does not do layout, so geometry (overflow, positions) needs a manual browser check.
 
 Manual testing is still needed for end-to-end flows (graph editing, permissions, AI streaming):
 1. Create chart → 2. Edit nodes/connections → 3. Share with different users → 4. Test permission flows
