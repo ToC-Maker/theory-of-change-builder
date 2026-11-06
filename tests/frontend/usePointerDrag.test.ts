@@ -722,6 +722,43 @@ describe('usePointerDrag', () => {
     });
   });
 
+  describe('selection suppression', () => {
+    const MARK = 'tocb-canvas-gesture';
+
+    it('suppresses text selection for the whole node drag and restores it on drop and on cancel', () => {
+      const { result } = setupHook({ data: sampleData(), onDrop: vi.fn() });
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl: makeMockElement() });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(true);
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 100, clientY: 200 }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+
+      const down2 = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl: makeMockElement() });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down2);
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(true);
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+    });
+
+    it('restores selection when the hook unmounts mid-drag', () => {
+      const { result, unmount } = setupHook({ data: sampleData(), onDrop: vi.fn() });
+      const down = pointerDownEvent({ clientX: 100, clientY: 200, nodeEl: makeMockElement() });
+      act(() => {
+        result.current.bindNode('n-1').onPointerDown(down);
+      });
+      unmount();
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+    });
+  });
+
   describe('cleanup', () => {
     it('clears isCanvasGestureActive when the hook unmounts mid-drag', () => {
       const onDrop = vi.fn();

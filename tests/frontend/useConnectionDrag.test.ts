@@ -480,6 +480,56 @@ describe('useConnectionDrag', () => {
     });
   });
 
+  describe('selection suppression', () => {
+    const MARK = 'tocb-canvas-gesture';
+    const start = (result: ReturnType<typeof setupHook>['result']) => {
+      const e = pointerDownEvent({ clientX: 100, clientY: 50, handleEl: makeMockHandle() });
+      act(() => {
+        result.current.bindHandle('source', 'right').onPointerDown(e);
+      });
+    };
+
+    it('suppresses text selection from the press until the drop', () => {
+      const { result } = setupHook({ data: sampleData(), onConnect: vi.fn() });
+      start(result);
+      expect(document.documentElement.classList.contains(MARK)).toBe(true);
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 5, clientY: 5 }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+    });
+
+    it('clears text that was highlighted before the press', () => {
+      document.body.innerHTML = '<h1 id="t">Chart title</h1>';
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById('t')!);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+      const { result } = setupHook({ data: sampleData(), onConnect: vi.fn() });
+      start(result);
+      expect(window.getSelection()!.toString()).toBe('');
+    });
+
+    it.each([
+      ['pointercancel', () => pointerEvent('pointercancel', {})],
+      ['Escape', () => new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })],
+    ])('restores selection on %s', (_name, make) => {
+      const { result } = setupHook({ data: sampleData(), onConnect: vi.fn() });
+      start(result);
+      act(() => {
+        document.dispatchEvent(make());
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+    });
+
+    it('restores selection when the hook unmounts mid-drag', () => {
+      const { result, unmount } = setupHook({ data: sampleData(), onConnect: vi.fn() });
+      start(result);
+      unmount();
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+    });
+  });
+
   describe('cleanup', () => {
     it('clears isCanvasGestureActive when the hook unmounts mid-drag', () => {
       const onConnect = vi.fn();

@@ -162,6 +162,7 @@ function setupHook(args: {
 }): {
   ctx: HookContext;
   result: ReturnType<typeof renderHook>['result'];
+  unmount: () => void;
 } {
   const mutateDebounced = vi.fn();
   const commit = vi.fn();
@@ -173,7 +174,7 @@ function setupHook(args: {
   // The hook reads the latest data via a ref-mirrored `dataRef`.
   // Provide a function so callers can mutate the data they pass in.
   const dataRef = { current: args.data };
-  const { result, rerender } = renderHook(
+  const { result, rerender, unmount } = renderHook(
     ({ data }: { data: ToCData }) =>
       useWaypointDrag({
         data,
@@ -202,7 +203,7 @@ function setupHook(args: {
       dataRef.current = next;
     },
   });
-  return { ctx, result };
+  return { ctx, result, unmount };
 }
 
 /** Apply the last buffered updater to `data` and return the connection. */
@@ -454,6 +455,47 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
       expect(isCanvasGestureActive()).toBe(false);
       expect(result.current.isActive).toBe(false);
+    });
+  });
+
+  describe('selection suppression', () => {
+    const MARK = 'tocb-canvas-gesture';
+
+    it('suppresses text selection from the press of a waypoint or edge drag until it ends', () => {
+      const { result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(true);
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 100, clientY: 50 }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+    });
+
+    it('restores selection on pointercancel and when the hook unmounts mid-drag', () => {
+      const { result, unmount } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(true);
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointercancel', {}));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      expect(document.documentElement.classList.contains(MARK)).toBe(true);
+      unmount();
+      expect(document.documentElement.classList.contains(MARK)).toBe(false);
     });
   });
 
