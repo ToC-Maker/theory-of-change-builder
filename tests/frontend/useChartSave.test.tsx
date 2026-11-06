@@ -7,9 +7,11 @@
 //   - "Saved" (no pending changes, no error) only once the server holds
 //     the latest local data: a save that lands must not clear edits made
 //     after it was sent
-//   - a failed save keeps the edits pending and the failure visible,
-//     retries a bounded number of times for network errors and 5xx, and
-//     does not retry auth/permission refusals (401/403)
+//   - a failed save keeps the edits pending and the failure visible and
+//     retries for as long as they stay pending: quickly at first, then
+//     every 30 seconds for network errors and 5xx, and only every 30
+//     seconds for 401/403 (which a transient token failure can cause);
+//     other 4xx are not retried
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { useChartSave } from '../../src/hooks/useChartSave';
@@ -431,19 +433,22 @@ describe('useChartSave: failures', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('does not retry a refused save on online or visibility events either', async () => {
+  it('does not cut the wait after a refused save short on online or visibility events', async () => {
     const { save } = setup();
 
     save(V1);
     await advance(300);
     await requests[0].fail(new ChartApiError('Invalid or expired authentication.', 403));
 
+    await advance(1000);
     await act(async () => {
       window.dispatchEvent(new Event('online'));
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await advance(120_000);
     expect(requests).toHaveLength(1);
+
+    await advance(29_000);
+    expect(requests).toHaveLength(2);
   });
 
   it('starts over with a fast attempt when a new edit arrives during a long wait', async () => {
@@ -489,19 +494,35 @@ describe('useChartSave: failures', () => {
     expect(requests).toHaveLength(2);
   });
 
+  // A 401/403 can come from an auth token that failed to resolve once, so
+  // the edit is not left waiting for another edit; a refusal that is real
+  // is not worth hammering, so it is retried only at the slow interval.
   it.each([401, 403])(
-    'does not retry a %i, which belongs to the session-expired flow',
+    'retries a %i every 30 seconds, never quickly, and shows Saved once the server accepts',
     async (status) => {
       const { result, save } = setup();
+      const refusal = () => new ChartApiError('Invalid or expired authentication.', status);
 
       save(V1);
       await advance(300);
-      await requests[0].fail(new ChartApiError('Invalid or expired authentication.', status));
-
-      await advance(60_000);
-      expect(requests).toHaveLength(1);
+      await requests[0].fail(refusal());
       expect(result.current.saveError).toEqual({ message: 'Invalid or expired authentication.' });
       expect(result.current.hasPendingChanges).toBe(true);
+      expect(result.current.isSaving).toBe(true);
+
+      for (let attempt = 2; attempt <= 4; attempt++) {
+        await advance(29_999);
+        expect(requests).toHaveLength(attempt - 1);
+        await advance(1);
+        expect(requests).toHaveLength(attempt);
+        expect(requests[attempt - 1].data).toBe(V1);
+        if (attempt < 4) await requests[attempt - 1].fail(refusal());
+      }
+
+      await requests[3].succeed();
+      expect(serverData).toBe(V1);
+      expect(result.current.saveError).toBeNull();
+      expect(result.current.hasPendingChanges).toBe(false);
       expect(result.current.isSaving).toBe(false);
     },
   );
@@ -517,12 +538,12 @@ describe('useChartSave: failures', () => {
     expect(requests).toHaveLength(1);
   });
 
-  it('sends the next edit made after giving up, and recovers on success', async () => {
+  it('sends the next edit made after a save the server will not accept, and recovers on success', async () => {
     const { result, save } = setup();
 
     save(V1);
     await advance(300);
-    await requests[0].fail(new ChartApiError('Invalid or expired authentication.', 403));
+    await requests[0].fail(new ChartApiError('Chart not found or invalid edit token', 404));
     expect(result.current.isSaving).toBe(false);
 
     save(V2);

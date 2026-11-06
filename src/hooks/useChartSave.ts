@@ -14,9 +14,11 @@
 //      retries for as long as they stay pending: three quick retries with
 //      growing delays, then one every RETRY_CAP_MS, for network errors and
 //      5xx. Coming back online or returning to the tab retries at once. A
-//      401/403 (refused session or permission) or other 4xx gets no retry,
-//      since the server will refuse the same request again; the next edit
-//      starts a fresh attempt, with a freshly resolved auth token.
+//      401/403 can come from an auth token that failed to resolve this
+//      once, so it is retried too, but only every RETRY_CAP_MS and never
+//      cut short: a refusal that is real will not clear up in seconds. Any
+//      other 4xx gets no retry, since the server will answer the same
+//      again; the next edit starts a fresh attempt.
 //
 // `pendingChangesRef` is the latest data the server is not known to hold.
 // It is also what the chart sync (`useChartSync`) and the beforeunload
@@ -45,9 +47,14 @@ export function asSaveError(err: unknown): SaveError {
   return { message: typeof err === 'string' ? err : 'Save failed' };
 }
 
-// A network failure carries no status; a 5xx may pass. Anything else the
-// server answered (401/403, 404, 400, ...) will answer the same again.
-const isRetryable = (err: unknown): boolean => !(err instanceof ChartApiError) || err.status >= 500;
+const isAuthRefusal = (err: unknown): boolean =>
+  err instanceof ChartApiError && (err.status === 401 || err.status === 403);
+
+// A network failure carries no status; a 5xx may pass, and so may a 401/403
+// from a token that failed to resolve. Anything else the server answered
+// (404, 400, ...) will answer the same again.
+const isRetryable = (err: unknown): boolean =>
+  !(err instanceof ChartApiError) || err.status >= 500 || isAuthRefusal(err);
 
 export interface UseChartSaveArgs {
   /** Edit token of the open chart; null before the chart exists. */
@@ -79,7 +86,9 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
   // Debounce timer, or the retry-delay timer after a failure. Null when
   // neither is armed.
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // True while `timerRef` holds a retry delay rather than a debounce.
+  // True while `timerRef` holds a retry delay that coming online or
+  // returning to the tab may cut short: not a debounce, and not the slow
+  // wait after a 401/403.
   const retryWaitRef = useRef(false);
   const inFlightRef = useRef(false);
   const retryCountRef = useRef(0);
@@ -137,12 +146,15 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
           setIsSaving(false);
           return;
         }
-        const delay = QUICK_RETRY_DELAYS_MS[retryCountRef.current] ?? RETRY_CAP_MS;
-        retryCountRef.current += 1;
+        const refused = isAuthRefusal(err);
+        const delay = refused
+          ? RETRY_CAP_MS
+          : (QUICK_RETRY_DELAYS_MS[retryCountRef.current] ?? RETRY_CAP_MS);
+        if (!refused) retryCountRef.current += 1;
         // A newer edit's armed debounce retries sooner than the backoff.
         if (timerRef.current === null) {
           timerRef.current = setTimeout(flush, delay);
-          retryWaitRef.current = true;
+          retryWaitRef.current = !refused;
         }
       },
     );

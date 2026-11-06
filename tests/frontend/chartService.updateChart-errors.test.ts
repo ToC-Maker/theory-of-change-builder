@@ -1,7 +1,8 @@
 // ChartService.updateChart failures carry the HTTP status so the save
-// loop can retry server-side failures (5xx, network) and leave auth and
-// permission failures (401/403) to the session-expired flow. A request
-// the server never answers fails after a timeout, also as a retryable
+// loop can tell what to retry: network failures and 5xx quickly and then
+// every 30 seconds, 401/403 (which a token that failed to resolve can
+// cause) only every 30 seconds, and other 4xx not at all. A request the
+// server never answers fails after a timeout, also as a retryable
 // (status-less) failure, so one stalled request cannot hold the save
 // loop forever.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
