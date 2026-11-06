@@ -205,6 +205,20 @@ describe('untitled chart in edit mode', () => {
     expect(sizes[sizes.length - 1].height).toBe(heightBefore + 80);
   });
 
+  it('keeps the prompt at a readable on-screen size when the chart is zoomed out', async () => {
+    const promptAt = (zoomScale: number) => {
+      const { getByText } = render(
+        <ToC data={makeData({ title: '' })} showEditButton={true} zoomScale={zoomScale} />,
+      );
+      return getByText('Click to add title');
+    };
+
+    // Content pixels divided by the zoom make the on-screen size constant.
+    expect(promptAt(0.25).style.transform).toContain('scale(4)');
+    cleanup();
+    expect(promptAt(2).style.transform).toContain('scale(0.5)');
+  });
+
   it('shows no placeholder in view mode', async () => {
     const { queryByText } = render(<ToC data={makeData({ title: '' })} showEditButton={false} />);
     expect(queryByText('Click to add title')).toBeNull();

@@ -1204,14 +1204,22 @@ export function ToC({
           }
         }}
       >
-        {/* Prompt for an untitled chart. It sits in the canvas card's top
-          padding, above the sections, so view mode's layout is kept. */}
+        {/* Prompt for an untitled chart: a chip floating just above the
+          canvas card, so view mode's layout is kept. It is sized in
+          on-screen pixels (content pixels divided by the zoom) so it
+          stays readable when the chart is zoomed out to fit. */}
         {editMode && !titleBlockShown && (
           <button
             type="button"
             data-export-exclude=""
-            className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-xs leading-4 text-gray-500 hover:text-indigo-600 transition-colors"
-            style={{ bottom: '100%' }}
+            className="absolute left-1/2 whitespace-nowrap rounded-md border border-gray-300 bg-white px-2 py-1 text-gray-600 shadow-sm hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+            style={{
+              bottom: `calc(100% + ${CANVAS_EDGE_PX + 6 / zoomScale}px)`,
+              fontSize: 13,
+              lineHeight: 1.2,
+              transform: `translateX(-50%) scale(${1 / zoomScale})`,
+              transformOrigin: 'bottom center',
+            }}
             title="Click to edit title"
             onClick={() => setEditingTitle(true)}
           >
