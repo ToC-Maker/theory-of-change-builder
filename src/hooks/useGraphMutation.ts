@@ -114,7 +114,8 @@ export interface UseGraphMutationResult {
   // "absorb new initialData prop" effect (AI-edit / external-state-replace
   // path). Routes through the same `dataRef.current` write that the
   // mutate paths use, so a subsequent `mutate(prev => ...)` derives from
-  // the post-replacement state.
+  // the post-replacement state. A state this hook already notified the
+  // parent of (the parent echoing it back) is ignored.
   setData: Dispatch<SetStateAction<ToCData>>;
   mutate: (updater: GraphUpdater) => void;
   mutateDebounced: (updater: GraphUpdater, key: string) => void;
@@ -161,6 +162,13 @@ export function useGraphMutation(
   // produced two notifications (Red-Team Important).
   const pendingNotifyRef = useRef(false);
 
+  // States already handed to the parent. The parent keeps them as its own
+  // state and passes them back as `initialData`, and the caller then feeds
+  // that echo to `setData` from an effect that runs after the render
+  // carrying it. By then the user may have edited again, so applying the
+  // echo would roll the newer local state back to the older one.
+  const notifiedRef = useRef(new WeakSet<ToCData>());
+
   // Buffered debounced updaters. Insertion-ordered (Map preserves order),
   // so `commit()` with no args flushes in the order keys were first added.
   // Latest-write-wins per key.
@@ -179,6 +187,7 @@ export function useGraphMutation(
     queueMicrotask(() => {
       pendingNotifyRef.current = false;
       if (!isMountedRef.current) return; // L7 guard
+      notifiedRef.current.add(dataRef.current);
       onDataChangeRef.current?.(dataRef.current);
     });
   }, []);
@@ -204,7 +213,12 @@ export function useGraphMutation(
   // by any user mutation silently wipes the replacement (AI edit lost).
   // Does NOT call `scheduleNotify`: the parent already owns the new
   // value (it triggered the replacement), so re-emitting it would loop.
+  //
+  // A state this hook itself notified the parent of is not a replacement:
+  // it is already here, or superseded by newer local edits, so it is
+  // ignored (see `notifiedRef`).
   const setDataExternal = useCallback<Dispatch<SetStateAction<ToCData>>>((value) => {
+    if (typeof value !== 'function' && notifiedRef.current.has(value)) return;
     const next = applyUpdater(dataRef.current, value);
     dataRef.current = next;
     setData(next);
