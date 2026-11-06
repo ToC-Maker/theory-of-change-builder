@@ -264,7 +264,7 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 - `src/components/TheoryOfChangeGraph.tsx` - Graph SVG renderer
 - `src/components/ChatInterface.tsx` - AI assistant UI
 - `src/services/chartService.ts` - API client for CRUD operations
-- `src/hooks/useChartSave.ts` - Every editor save (edit, import, AI replacement, undo, redo) goes through its `saveChart(data)`: one save in flight at a time, pending edits cleared only if unchanged since the save was sent, bounded retries for network and 5xx failures (none for 401/403)
+- `src/hooks/useChartSave.ts` - Every editor save (edit, import, AI replacement, undo, redo) goes through its `saveChart(data)`: one save in flight at a time, pending edits cleared only if unchanged since the save was sent, retries with backoff (capped at 30s) while edits stay pending, for network and 5xx failures (none for 401/403), and at once when the browser comes back online or the tab is shown again
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)

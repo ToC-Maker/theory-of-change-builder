@@ -11,7 +11,7 @@
 //     retries a bounded number of times for network errors and 5xx, and
 //     does not retry auth/permission refusals (401/403)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { useChartSave } from '../../src/hooks/useChartSave';
 import { ChartApiError, ChartService } from '../../src/services/chartService';
 import type { ToCData } from '../../src/types';
@@ -96,6 +96,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount first: a hook left mounted keeps its window and document
+  // listeners and would answer the next test's online/visibility events.
+  cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
@@ -287,34 +290,182 @@ describe('useChartSave: failures', () => {
     expect(result.current.hasPendingChanges).toBe(false);
   });
 
-  it('backs off between retries and gives up after a bounded number, still unsaved', async () => {
+  it('retries quickly at first, then every 30 seconds for as long as the edit is pending', async () => {
+    const { result, save } = setup();
+    const outage = () => new ChartApiError('Failed to update chart', 503);
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(outage());
+
+    // Three quick retries, each wait longer than the last.
+    await advance(1000);
+    expect(requests).toHaveLength(2);
+    await requests[1].fail(outage());
+    await advance(1999);
+    expect(requests).toHaveLength(2);
+    await advance(1);
+    expect(requests).toHaveLength(3);
+    await requests[2].fail(outage());
+    await advance(4000);
+    expect(requests).toHaveLength(4);
+    await requests[3].fail(outage());
+
+    // Then a capped interval, with no end while the edit stays unsaved.
+    for (let attempt = 5; attempt <= 8; attempt++) {
+      await advance(29_999);
+      expect(requests).toHaveLength(attempt - 1);
+      await advance(1);
+      expect(requests).toHaveLength(attempt);
+      await requests[attempt - 1].fail(outage());
+      expect(result.current.saveError).toEqual({ message: 'Failed to update chart' });
+      expect(result.current.hasPendingChanges).toBe(true);
+    }
+  });
+
+  it('delivers the edit and shows Saved after an outage of over a minute, with no further edits', async () => {
+    const { result, save } = setup();
+    const outage = () => new TypeError('Failed to fetch');
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(outage());
+    // 1s + 2s + 4s of quick retries, then 30s intervals: past one minute.
+    for (let i = 1; i <= 3; i++) {
+      await advance(1000 * 2 ** (i - 1));
+      await requests[i].fail(outage());
+    }
+    await advance(30_000);
+    await requests[4].fail(outage());
+    await advance(30_000);
+    expect(requests).toHaveLength(6);
+    expect(result.current.saveError).not.toBeNull();
+    expect(result.current.hasPendingChanges).toBe(true);
+    expect(serverData).toBeNull();
+
+    await requests[5].succeed();
+
+    expect(serverData).toBe(V1);
+    expect(result.current.saveError).toBeNull();
+    expect(result.current.hasPendingChanges).toBe(false);
+    expect(result.current.isSaving).toBe(false);
+    await advance(120_000);
+    expect(requests).toHaveLength(6);
+  });
+
+  it('retries at once when the browser comes back online during a wait', async () => {
     const { result, save } = setup();
 
     save(V1);
     await advance(300);
-    await requests[0].fail(new ChartApiError('Failed to update chart', 503));
+    await requests[0].fail(new TypeError('Failed to fetch'));
+    expect(requests).toHaveLength(1);
 
-    await advance(1000);
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
     expect(requests).toHaveLength(2);
-    await requests[1].fail(new ChartApiError('Failed to update chart', 503));
+    expect(requests[1].data).toBe(V1);
 
-    // The second wait is longer than the first.
-    await advance(1000);
-    expect(requests).toHaveLength(2);
-    await advance(1000);
-    expect(requests).toHaveLength(3);
-    await requests[2].fail(new ChartApiError('Failed to update chart', 503));
-
-    await advance(4000);
-    expect(requests).toHaveLength(4);
-    await requests[3].fail(new ChartApiError('Failed to update chart', 503));
-
-    // Out of retries: nothing more is sent, and the failure stays up.
+    await requests[1].succeed();
+    expect(result.current.hasPendingChanges).toBe(false);
     await advance(60_000);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('retries at once when the tab becomes visible again, but not while it is hidden', async () => {
+    const { save } = setup();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(new TypeError('Failed to fetch'));
+
+    visibility.mockReturnValue('hidden');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(requests).toHaveLength(1);
+
+    visibility.mockReturnValue('visible');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(requests).toHaveLength(2);
+    visibility.mockRestore();
+  });
+
+  it('does not send early on online or visibility events when no save has failed', async () => {
+    const { save } = setup();
+
+    save(V1);
+    await advance(100);
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(requests).toHaveLength(0);
+
+    await advance(200);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('does not retry a refused save on online or visibility events either', async () => {
+    const { save } = setup();
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(new ChartApiError('Invalid or expired authentication.', 403));
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await advance(120_000);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('starts over with a fast attempt when a new edit arrives during a long wait', async () => {
+    const { save } = setup();
+    const outage = () => new TypeError('Failed to fetch');
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(outage());
+    for (let i = 1; i <= 3; i++) {
+      await advance(1000 * 2 ** (i - 1));
+      await requests[i].fail(outage());
+    }
+    // Now in the 30s wait.
+    await advance(10_000);
     expect(requests).toHaveLength(4);
-    expect(result.current.saveError).toEqual({ message: 'Failed to update chart' });
-    expect(result.current.hasPendingChanges).toBe(true);
-    expect(result.current.isSaving).toBe(false);
+
+    save(V2);
+    await advance(300);
+    expect(requests).toHaveLength(5);
+    expect(requests[4].data).toBe(V2);
+    await requests[4].fail(outage());
+
+    // The quick schedule applies again.
+    await advance(1000);
+    expect(requests).toHaveLength(6);
+  });
+
+  it('stops retrying once the editor has unmounted', async () => {
+    const { save, unmount } = setup();
+    const outage = () => new TypeError('Failed to fetch');
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(outage());
+    unmount();
+
+    // The one last attempt on the way out fails too.
+    expect(requests).toHaveLength(2);
+    await requests[1].fail(outage());
+
+    await advance(300_000);
+    expect(requests).toHaveLength(2);
   });
 
   it.each([401, 403])(

@@ -11,11 +11,12 @@
 //      pending: clearing it would show "Saved" over data the server never
 //      received.
 //   3. A failed save keeps the edits pending and the failure visible, and
-//      retries a bounded number of times with growing delays for network
-//      errors and 5xx. A 401/403 (refused session or permission) or other
-//      4xx gets no retry, since the server will refuse the same request
-//      again; the next edit starts a fresh attempt, with a freshly
-//      resolved auth token.
+//      retries for as long as they stay pending: three quick retries with
+//      growing delays, then one every RETRY_CAP_MS, for network errors and
+//      5xx. Coming back online or returning to the tab retries at once. A
+//      401/403 (refused session or permission) or other 4xx gets no retry,
+//      since the server will refuse the same request again; the next edit
+//      starts a fresh attempt, with a freshly resolved auth token.
 //
 // `pendingChangesRef` is the latest data the server is not known to hold.
 // It is also what the chart sync (`useChartSync`) and the beforeunload
@@ -29,8 +30,10 @@ import { ChartApiError, ChartService } from '../services/chartService';
 import type { ToCData } from '../types';
 
 const SAVE_DEBOUNCE_MS = 300;
-// Delay before each retry of a failed save; its length bounds the retries.
-const RETRY_DELAYS_MS = [1000, 2000, 4000];
+// Delays before the first retries of a failed save; every later retry
+// waits RETRY_CAP_MS.
+const QUICK_RETRY_DELAYS_MS = [1000, 2000, 4000];
+const RETRY_CAP_MS = 30_000;
 
 // Map a thrown error from a save attempt into the SaveIndicator shape.
 // Strips fetch metadata that isn't useful in the pill.
@@ -75,8 +78,12 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
   // Debounce timer, or the retry-delay timer after a failure. Null when
   // neither is armed.
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True while `timerRef` holds a retry delay rather than a debounce.
+  const retryWaitRef = useRef(false);
   const inFlightRef = useRef(false);
   const retryCountRef = useRef(0);
+  // A save that fails after the editor has gone gets no further retries.
+  const mountedRef = useRef(true);
 
   const editTokenRef = useRef(editToken);
   const onSaveFailedRef = useRef(onSaveFailed);
@@ -89,6 +96,7 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
   // does nothing: the landing handler sends the newer data itself.
   const flush = useCallback(function flush() {
     timerRef.current = null;
+    retryWaitRef.current = false;
     const sent = pendingChangesRef.current;
     const token = editTokenRef.current;
     if (!sent || !token) {
@@ -124,14 +132,17 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
         const latest = pendingChangesRef.current;
         if (latest) onSaveFailedRef.current?.(latest);
 
-        const delay = isRetryable(err) ? RETRY_DELAYS_MS[retryCountRef.current] : undefined;
-        if (delay === undefined) {
+        if (!isRetryable(err) || !mountedRef.current) {
           setIsSaving(false);
           return;
         }
+        const delay = QUICK_RETRY_DELAYS_MS[retryCountRef.current] ?? RETRY_CAP_MS;
         retryCountRef.current += 1;
         // A newer edit's armed debounce retries sooner than the backoff.
-        if (timerRef.current === null) timerRef.current = setTimeout(flush, delay);
+        if (timerRef.current === null) {
+          timerRef.current = setTimeout(flush, delay);
+          retryWaitRef.current = true;
+        }
       },
     );
   }, []);
@@ -146,13 +157,35 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       setIsSaving(true);
       timerRef.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
+      retryWaitRef.current = false;
     },
     [flush],
   );
 
+  // Coming back online or returning to the tab ends a retry wait early:
+  // the connection that failed the save may be back.
+  useEffect(() => {
+    mountedRef.current = true;
+    const retryNow = () => {
+      if (!retryWaitRef.current || timerRef.current === null) return;
+      clearTimeout(timerRef.current);
+      flush();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') retryNow();
+    };
+    window.addEventListener('online', retryNow);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('online', retryNow);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [flush]);
+
   // Leaving the editor must not drop an edit still waiting out its delay.
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         flush();
