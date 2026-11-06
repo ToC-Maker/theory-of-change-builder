@@ -12,8 +12,28 @@ import {
   ListsToggle,
   BlockTypeSelect,
   Separator,
+  type Translation,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
+
+// The library's default "Block type" label reads as jargon in the
+// toolbar, so the select is called "Text style" instead. Only these
+// strings are overridden; every other key keeps the library's default
+// text. The library's own default translator isn't exported, so the
+// `{{name}}` interpolation it does (e.g. "Heading {{level}}") is
+// repeated here.
+const TEXT_OVERRIDES = new Map([
+  ['toolbar.blockTypeSelect.placeholder', 'Text style'],
+  ['toolbar.blockTypeSelect.selectBlockTypeTooltip', 'Select text style'],
+]);
+
+const translation: Translation = (key, defaultValue, interpolations = {}) => {
+  let value = TEXT_OVERRIDES.get(key) ?? defaultValue;
+  for (const [name, replacement] of Object.entries(interpolations)) {
+    value = value.replaceAll(`{{${name}}}`, String(replacement));
+  }
+  return value;
+};
 
 interface MDXEditorComponentProps {
   markdown: string;
@@ -39,6 +59,7 @@ export function MDXEditorComponent({
         markdown={markdown}
         onChange={onChange}
         placeholder={placeholder}
+        translation={translation}
         plugins={[
           headingsPlugin(),
           listsPlugin(),
