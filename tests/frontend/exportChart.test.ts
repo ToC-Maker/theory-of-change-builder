@@ -514,3 +514,61 @@ describe('exportToPdf — fits canvas into a single page', () => {
     expect(savedFilename).toBe('pdf-test.pdf');
   });
 });
+
+describe('exports leave editing controls out', () => {
+  // The add controls and the "Click to add title" prompt are marked
+  // `data-export-exclude`; html-to-image calls the capture `filter` for
+  // every node it clones (text nodes included) and drops those it rejects
+  // together with their children.
+  type CaptureFilter = (node: Node) => boolean;
+
+  const marked = () => {
+    const el = document.createElement('div');
+    el.setAttribute('data-export-exclude', '');
+    return el;
+  };
+
+  it('PNG capture rejects marked elements and keeps all other nodes', async () => {
+    let filter: CaptureFilter | undefined;
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async (_node: HTMLElement, opts: { filter?: CaptureFilter }) => {
+        filter = opts.filter;
+        return 'data:image/png;base64,AAAA';
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await exportToPng(document.createElement('div'), 'filter-test');
+
+    expect(filter).toBeDefined();
+    expect(filter!(marked())).toBe(false);
+    expect(filter!(document.createElement('div'))).toBe(true);
+    expect(filter!(document.createTextNode('Funding'))).toBe(true);
+  });
+
+  it('PDF capture rejects marked elements and keeps all other nodes', async () => {
+    let filter: CaptureFilter | undefined;
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(),
+      toCanvas: vi.fn(async (_node: HTMLElement, opts: { filter?: CaptureFilter }) => {
+        filter = opts.filter;
+        return { width: 10, height: 10, toDataURL: () => 'data:image/png;base64,AAAA' };
+      }),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+    class FakePdf {
+      addImage() {}
+      save() {}
+    }
+    vi.doMock('jspdf', () => ({ jsPDF: FakePdf, default: FakePdf }));
+
+    const { exportToPdf } = await import('../../src/utils/exportChart');
+    await exportToPdf(document.createElement('div'), 'filter-test');
+
+    expect(filter).toBeDefined();
+    expect(filter!(marked())).toBe(false);
+    expect(filter!(document.createTextNode('Funding'))).toBe(true);
+  });
+});

@@ -202,6 +202,16 @@ interface CaptureOptions {
   skipAutoScale: boolean;
   backgroundColor: string;
   cacheBust: boolean;
+  filter: (node: Node) => boolean;
+}
+
+/**
+ * html-to-image calls this for every node it clones, text nodes
+ * included. Editing aids (add controls, the "Click to add title"
+ * prompt) carry `data-export-exclude` and stay out of the image.
+ */
+function includeInExport(node: Node): boolean {
+  return !(node instanceof Element && node.hasAttribute('data-export-exclude'));
 }
 
 /**
@@ -251,6 +261,7 @@ async function captureWithFonts<T>(
         // card, but other zoom states might bleed transparent edges.
         backgroundColor: '#ffffff',
         cacheBust: true,
+        filter: includeInExport,
       }),
     ),
   );
