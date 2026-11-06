@@ -10,6 +10,7 @@ import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import type { ToCData } from '../../src/types';
+import { deepFreeze } from './helpers/deepFreeze';
 
 const makeData = (): ToCData => ({
   title: 'Test',
@@ -78,8 +79,8 @@ function pointer(type: string, x: number, y: number) {
   return event;
 }
 
-async function startDrag() {
-  render(<ToC data={makeData()} showEditButton={true} />);
+async function startDrag(onDataChange?: (data: ToCData) => void) {
+  render(<ToC data={deepFreeze(makeData())} showEditButton={true} onDataChange={onDataChange} />);
   // Let the layout hook's rAF-coalesced rect refresh read the stubbed rects.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -156,6 +157,18 @@ describe('TheoryOfChangeGraph drag landing indicator', { timeout: 20_000 }, () =
     expect(indicator()).not.toBeNull();
     act(() => void document.dispatchEvent(pointer('pointercancel', 100, 400)));
     expect(indicator()).toBeNull();
+  });
+
+  it('dropping on another column moves the node there and leaves the previous state intact', async () => {
+    const onDataChange = vi.fn();
+    await startDrag(onDataChange);
+    move(300, 400);
+    await act(async () => {
+      document.dispatchEvent(pointer('pointerup', 300, 400));
+    });
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    const next = onDataChange.mock.calls[0][0] as ToCData;
+    expect(next.sections[0].columns.map((c) => c.nodes.map((n) => n.id))).toEqual([[], ['n-1']]);
   });
 
   it('is gone when the canvas unmounts mid-drag', async () => {
