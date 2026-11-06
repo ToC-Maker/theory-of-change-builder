@@ -1,6 +1,6 @@
 // TopBar — main horizontal navigation bar mounted at the top of the app.
 //
-// Layout (per plan §1.1):
+// Layout:
 //   left:    [FileMenu] [Undo] [Redo] [FormatMenu] [HelpPanel]
 //   right:   [SaveIndicator] [Share] [Profile]
 //
@@ -13,20 +13,19 @@
 // the matchMedia path. In production the prop is left undefined and the
 // component decides at runtime.
 //
-// L2 button-focus mitigation: undo/redo buttons get
-// `onMouseDown={(e) => e.preventDefault()}` so clicking them while a
-// text input has focus doesn't shift focus to the button before
-// `handleUndo`/`handleRedo` read `document.activeElement`. (PR 0
-// applied this to the old EditToolbar; the new TopBar must keep it.)
+// Focus: undo/redo buttons get `onMouseDown={(e) => e.preventDefault()}`
+// so clicking them while a text input has focus doesn't shift focus to
+// the button before `handleUndo`/`handleRedo` read `document.activeElement`.
 //
-// Menubar hover-switch (PR 7 feedback (37)): TopBar lifts the
-// "which top-level menu is open" state (`openMenuId`) so siblings
-// can switch on hover once any menu is already open. The three menu
-// triggers also sit edge-to-edge in their own no-gap flex wrapper
-// (the parent's `gap-3` was creating a 12px dead zone between menu
-// buttons that broke `pointerenter` switching). See `handleHoverOpen`
-// below for the standard menubar rule: hover only switches when a
-// sibling is already open — a casual mouse-over does NOT open menus.
+// Menubar hover-switch: TopBar lifts the "which top-level menu is open"
+// state (`openMenuId`) so siblings can switch on hover once any menu is
+// already open. The menu triggers sit in one flex wrapper with no gap,
+// and undo/redo sit between File and Format inside it, so the pointer
+// moving from one trigger to the next never leaves the wrapper (a
+// parent `gap-3` once left a 12px dead zone between triggers that broke
+// `pointerenter` switching). See `handleHoverOpen` below for the
+// standard menubar rule: hover only switches when a sibling is already
+// open — a casual mouse-over does NOT open menus.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ShareIcon } from '@heroicons/react/24/outline';
 import type { ToCData } from '../../types';
@@ -40,8 +39,8 @@ import { shortcuts } from '../../utils/keyboardShortcuts';
 type Breakpoint = 'sm' | 'md';
 
 export interface TopBarProps {
-  // Mode + selection (PR 1 strips the in-bar mode toggle). The public
-  // viewer route carries its own "View-only" chip (ToCViewerOnly).
+  // Mode. There is no in-bar mode toggle; the public viewer route
+  // carries its own "View-only" chip (ToCViewerOnly).
   editMode: boolean;
   showEditButton: boolean;
 
@@ -54,7 +53,7 @@ export interface TopBarProps {
   // Save status.
   isSaving: boolean;
   saveError: SaveError | null;
-  // PR 7 fb (57): true while local edits haven't been persisted —
+  // True while local edits haven't been persisted —
   // drives the SaveIndicator "Unsaved changes" state (including after
   // a failed save, where edits silently survive only locally).
   hasPendingChanges: boolean;
@@ -77,7 +76,7 @@ export interface TopBarProps {
   isOwner?: boolean;
   currentChartId?: string | null;
   onDeleteChart?: (chartId: string) => void;
-  // PR 6 Task 6.2: Export + Import wiring. `data` feeds the export
+  // Export and import. `data` feeds the export
   // entries (filename from data.title, payload from current state) and
   // also lets Import warn before overwriting existing nodes. Both
   // optional so the viewer route can omit them; FileMenu disables the
@@ -86,10 +85,10 @@ export interface TopBarProps {
   onImportJson?: (next: ToCData) => void;
 
   // Share button click handler. The dialog lives at App level
-  // (PR 2's `ShareDialog`); TopBar just exposes the affordance.
+  // (`ShareDialog`); TopBar just exposes the affordance.
   onShareClick?: () => void;
 
-  // PR 2 §769: notification badge for the Share button. Counts pending
+  // Notification badge for the Share button. Counts pending
   // access requests the current user (owner) can approve. 0 = hidden.
   pendingRequestCount?: number;
 
@@ -129,7 +128,7 @@ function useBreakpoint(forced?: Breakpoint): Breakpoint {
 
 type MenuId = 'file' | 'format' | 'help';
 
-// PR 7 feedback (44): once the pointer leaves the menubar AND its open
+// Once the pointer leaves the menubar AND its open
 // dropdown/flyout entirely, everything closes after this grace delay.
 // Generous enough that accidental exits (crossing the gap between the
 // dropdown and a sibling trigger, overshooting an item) don't slam the
@@ -149,7 +148,7 @@ export function TopBar(props: TopBarProps) {
 
   const isViewer = !props.showEditButton;
 
-  // PR 7 feedback (37): lifted "which menu is open" state. `null`
+  // Lifted "which menu is open" state. `null`
   // means no menu is open; setting it to a different id closes the
   // previously open menu (the controlled-`isOpen` prop on each menu
   // becomes false) and opens the new one. Hover-switch only fires
@@ -170,7 +169,7 @@ export function TopBar(props: TopBarProps) {
   // `setOpen(false)`, which routes through `onOpenChange` back into
   // `openMenuId` on the controlled path.
 
-  // PR 7 feedback (44): grace-delayed close when the pointer leaves
+  // Grace-delayed close when the pointer leaves
   // the menubar subtree entirely. The dropdown panels and side
   // flyouts are DOM descendants of the menubar wrapper (absolutely
   // positioned, but still children), so a single pointerenter/leave
@@ -214,15 +213,14 @@ export function TopBar(props: TopBarProps) {
     <div className="flex items-center gap-1 self-center mx-1 sm:mx-2">
       <button
         type="button"
-        // L2 mitigation: preserve focus on the active text
-        // input so handleUndo's isInputFocused() check sees
-        // the truth.
+        // Keep focus on the active text input so handleUndo's
+        // isInputFocused() check sees the truth.
         onMouseDown={(e) => e.preventDefault()}
         onClick={props.handleUndo}
         disabled={props.undoHistory.length === 0}
-        // p-1.5 at every breakpoint (70): with the sm:w-5
-        // icon that's a 32px button — the old sm:p-2 (36px)
-        // left 2px breathing room in the 40px row.
+        // p-1.5 at every breakpoint: with the sm:w-5 icon
+        // that's a 32px button, 4px clear above and below
+        // in the 40px row.
         className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         title={`Undo (${shortcuts.undoDisplay()})`}
         aria-label="Undo"
@@ -269,20 +267,20 @@ export function TopBar(props: TopBarProps) {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-300 shadow-sm">
-      {/* PR 7 feedback (43): no vertical padding on the container —
-        the menubar triggers must reach the bar's top and bottom edges
-        (native-menubar hit target). Non-menubar children re-center
-        through their own `items-center` wrappers.
+      {/* No vertical padding on the container: the menubar triggers
+        must reach the bar's top and bottom edges (native-menubar hit
+        target). Non-menubar children re-center through their own
+        `items-center` wrappers.
 
-        PR #34 fb4 (70): 40px row (native menubars run ~38-40px; the
-        old 52px read tall against its content) — fixed-height controls
-        are 32px (undo/redo p-1.5, Share py-1.5, profile badge w-8) so
-        each keeps 4px breathing room. The rendered bar is 40 + 1px
-        border-b = 41px; TOP_BAR_HEIGHT_PX (useViewportOffset.ts) and
-        the chat drawer's `top` (ChatInterface.tsx) mirror that — keep
-        all three in sync (TopBar.responsive.test.tsx pins it).
+        The row is 40px (native menubars run ~38-40px) and the
+        fixed-height controls are 32px (undo/redo p-1.5, Share py-1.5,
+        profile badge w-8), so each keeps 4px breathing room. The
+        rendered bar is 40 + 1px border-b = 41px; TOP_BAR_HEIGHT_PX
+        (useViewportOffset.ts) and the chat drawer's `top`
+        (ChatInterface.tsx) mirror that — keep all three in sync
+        (TopBar.responsive.test.tsx pins it).
 
-        Also (70): no left padding at md, so the menubar cluster —
+        No left padding at md, so the menubar cluster —
         and its full-height hover fill — starts at the screen edge
         like a native menubar. Below md the leftmost content is
         undo/redo (edit) or the hamburger bar (the menubar moves into
@@ -296,17 +294,17 @@ export function TopBar(props: TopBarProps) {
           {/* Left cluster */}
           <div className="flex items-center gap-1 sm:gap-3 min-w-0">
             {bp === 'md' && !isViewer && (
-              // Menubar group: the three top-level menus sit edge-to-
-              // edge (no `gap-*`) so `pointerenter` on a sibling fires
-              // without the cursor traversing dead space in between.
-              // Visual separation comes from each button's `px-2/3`
-              // padding rather than parent gap. Undo/redo sit between
-              // File and Format inside the same group, so crossing
-              // them with a menu open never leaves the subtree.
+              // Menubar group: no `gap-*` between the menus, so
+              // `pointerenter` on a sibling fires without the cursor
+              // traversing dead space in between. Visual separation
+              // comes from each button's `px-2/3` padding rather than
+              // parent gap. Undo/redo sit between File and Format
+              // inside the same group, so crossing them with a menu
+              // open never leaves the subtree.
               // Pointer enter/leave on this wrapper drive the
-              // grace-delayed full close (44).
-              // `self-stretch items-stretch` (43): the group escapes
-              // the cluster's `items-center` and passes the full row
+              // grace-delayed full close.
+              // `self-stretch items-stretch`: the group escapes the
+              // cluster's `items-center` and passes the full row
               // height down to the trigger buttons (`h-full`).
               <div
                 className="flex items-stretch self-stretch"
@@ -351,8 +349,8 @@ export function TopBar(props: TopBarProps) {
             )}
             {bp === 'md' && isViewer && (
               // Same grace-close treatment as the edit-mode menubar
-              // group (44) — the wrapper covers the trigger and its
-              // dropdown panel — and the same full-height stretch (43).
+              // group — the wrapper covers the trigger and its
+              // dropdown panel — and the same full-height stretch.
               <div
                 className="flex items-stretch self-stretch"
                 onPointerEnter={cancelGraceClose}
@@ -373,9 +371,9 @@ export function TopBar(props: TopBarProps) {
             {bp === 'sm' && !isViewer && undoRedo}
           </div>
 
-          {/* Right cluster. sm:gap-3 (70): a touch more air between
-            Share and the profile badge, matching the left cluster's
-            gap rhythm. */}
+          {/* Right cluster. sm:gap-3: a touch more air between Share
+            and the profile badge, matching the left cluster's gap
+            rhythm. */}
           <div className="flex items-center gap-1 sm:gap-3">
             {bp === 'md' && (
               <>
@@ -389,10 +387,9 @@ export function TopBar(props: TopBarProps) {
                   <button
                     type="button"
                     onClick={onShareClick}
-                    // py-1.5 at every breakpoint (70): 32px tall, same
-                    // as undo/redo and the profile badge, with 4px
-                    // breathing room in the 40px row (old sm:py-2 was
-                    // 36px).
+                    // py-1.5 at every breakpoint: 32px tall, same as
+                    // undo/redo and the profile badge, with 4px
+                    // breathing room in the 40px row.
                     className="relative px-2 sm:px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors flex items-center gap-1 sm:gap-2"
                   >
                     <ShareIcon className="w-4 h-4" />

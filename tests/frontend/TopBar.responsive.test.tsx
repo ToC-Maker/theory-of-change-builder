@@ -10,7 +10,15 @@
 // breakpoint switch and that the hamburger drawer renders the expected
 // content list.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, cleanup, fireEvent, createEvent } from '@testing-library/react';
+import {
+  act,
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+  createEvent,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { TopBar, MENUBAR_GRACE_CLOSE_MS } from '../../src/components/top-bar/TopBar';
@@ -225,9 +233,11 @@ describe('TopBar left-to-right order', () => {
 
   it('keeps Undo/Redo on the bar below md, next to the hamburger', () => {
     renderWithRouter(<TopBar {...defaultProps} breakpoint="sm" />);
-    expect(screen.getByRole('button', { name: /^undo$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^redo$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /open menu/i })).toBeInTheDocument();
+    const barButtons = within(screen.getByTestId('top-bar-row')).getAllByRole('button');
+    const undo = barButtons.indexOf(screen.getByRole('button', { name: /^undo$/i }));
+    const redo = barButtons.indexOf(screen.getByRole('button', { name: /^redo$/i }));
+    const hamburger = barButtons.indexOf(screen.getByRole('button', { name: /open menu/i }));
+    expect([undo, redo, hamburger]).toEqual([0, 1, 2]);
   });
 
   it('has no Undo/Redo in viewer mode', () => {
@@ -237,14 +247,13 @@ describe('TopBar left-to-right order', () => {
   });
 });
 
-describe('TopBar geometry contract (PR #34 fb4 (70))', () => {
+describe('TopBar geometry contract', () => {
   // jsdom does no layout, so these are class-string contracts: they make
   // bar-geometry changes deliberate (update the test AND the mirror
-  // constants) rather than silent. Real-rect verification was done with
-  // a CDP harness during PR #34 review; re-verify in a browser when
-  // changing bar geometry.
+  // constants) rather than silent. Re-verify in a browser when changing
+  // bar geometry.
   //
-  // DOM shape contract (stable since round 2): the testid'd row's parent
+  // DOM shape contract: the testid'd row's parent
   // is the padded frame; the row's first child is the left cluster
   // (whose first child is the menubar group at md), and its last child
   // is the right cluster.
@@ -264,7 +273,7 @@ describe('TopBar geometry contract (PR #34 fb4 (70))', () => {
     expect(TOP_BAR_HEIGHT_PX).toBe(Number(minH![1]) + 1);
   });
 
-  it('drops the frame left padding at md so the menubar cluster sits flush left (70)', () => {
+  it('drops the frame left padding at md so the menubar cluster sits flush left', () => {
     renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
     // No all-breakpoint horizontal padding (px-*) — that's what inset
     // the File trigger 8-16px from the screen edge.
