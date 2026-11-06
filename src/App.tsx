@@ -986,8 +986,11 @@ function ToCViewer() {
     [filename],
   );
 
-  // The one save path (edit, import, undo, redo). A failed save falls
-  // back to a localStorage copy of the unsaved data.
+  // The one save path (edit, import, undo, redo). After a failed save the
+  // unsaved data is also written to localStorage, but only the file-based
+  // load path reads that copy back: for a chart opened by edit token it is
+  // not a recovery path, and the save itself is retried while the edits
+  // stay pending.
   const { isSaving, saveError, setSaveError, hasPendingChanges, pendingChangesRef, saveChart } =
     useChartSave({ editToken: currentEditToken, onSaveFailed: saveToLocalStorage });
 

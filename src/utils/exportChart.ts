@@ -19,7 +19,7 @@
 // libraries into the entry chunk and break both budgets.
 //
 // ---------------------------------------------------------------------------
-// Transform/font traps (red-team Critical, plan §164-168)
+// Capture traps: transform, font and SVG paint
 // ---------------------------------------------------------------------------
 //
 // html-to-image reads layout boxes off the live DOM node. If the
@@ -43,6 +43,13 @@
 // be wrong: the library's check is `options.fontEmbedCSS != null`,
 // which accepts the empty string verbatim and skips the fallback walk
 // entirely.
+//
+// SVG paint: html-to-image copies computed styles onto its clone of each
+// HTML element but deep-clones an `<svg>` as-is, so paint that a
+// stylesheet class supplies (the connection paths' `fill-none`) is lost
+// and the curves export as solid black shapes. `withSvgPaintPinned` pins
+// the computed paint onto the SVG elements for the duration of the
+// capture and removes it afterwards.
 import type { ToCData } from '../types';
 
 /**

@@ -9,8 +9,9 @@ const API_BASE = '/api';
 
 /**
  * A non-2xx answer from the chart API. `status` lets callers tell a
- * server-side failure that may pass (5xx) from one that will not
- * (401/403 auth and permission, 404 unknown chart).
+ * server-side failure that may pass (5xx), a refusal that a failed token
+ * refresh can cause (401/403), and one that will not pass (404 unknown
+ * chart).
  */
 export class ChartApiError extends Error {
   readonly status: number;
