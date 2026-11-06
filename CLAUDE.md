@@ -72,9 +72,13 @@ Inside the graph, edit mode and view mode have the same geometry: node rects and
 
 - The gap between sections is `sectionPadding` (32px) and between columns `columnPadding` (24px), in both modes.
 - A section title bar is as wide as its title, at least as wide as its columns. While its label is edited it keeps the width it had when the editor opened.
-- The chart title block takes space only when the chart has a title (or while one is being typed). The "Click to add title" prompt of an untitled chart is an overlay in the canvas card's top padding.
+- The chart title block takes space only when the chart has a title (or while one is being typed). The "Click to add title" prompt of an untitled chart is a chip floating just above the canvas card; it is sized in on-screen pixels (content pixels divided by the zoom) so it stays readable at fit zoom.
 - Edit mode gives column bodies an explicit height and lets the graph container take its height from content. Both are invisible and keep the empty space below nodes double-clickable.
-- Add-column and add-section controls are overlays (`src/components/canvas/AddControlZone.tsx`), shown while the pointer is over a gap: one control between columns, three between sections, two at each outer edge of the chart (inside the card's 16px padding). They are `role="button"` divs, not `<button>`s, because a press on a `<button>` never starts a canvas pan; a press that travels past `MOVE_THRESHOLD_PX` adds nothing.
+- Add-column and add-section controls are overlays (`src/components/canvas/AddControlZone.tsx`): one zone over each gap between columns (one control), each gap between sections (three), and each outer edge of the chart (two, in the card's 16px padding).
+  - At rest a zone shows a faint dashed hairline and a "+" badge at the columns' mid-height. The controls appear after the pointer has rested on the zone for `HOVER_INTENT_MS` (a sweep across the chart shows nothing), or at once on a click on the badge. They hide `HOVER_GRACE_MS` after the pointer leaves.
+  - Controls are sized in on-screen pixels (divided by the canvas zoom): at least `MOUSE_TARGET_PX` wide for mouse and pen, `TOUCH_TARGET_PX` for touch, with a 12px (touch 14px) label, at any zoom. They overhang the gap, are placed where they cover no node or connection if the zone has room, and sit below nodes; where there is no such spot they sit above nodes while open.
+  - Touch takes two taps: the first, on the gap or its badge, opens the controls; the second, on a control, adds. They close on a tap elsewhere or after `TOUCH_OPEN_MS`.
+  - Controls are `role="button"` divs, not `<button>`s, because a press on a `<button>` never starts a canvas pan; a press that travels past `MOVE_THRESHOLD_PX` adds nothing.
 - Elements with `data-export-exclude` are dropped from PNG and PDF exports (`src/utils/exportChart.ts`).
 
 ### AI Edit System
@@ -278,7 +282,7 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 - `src/hooks/useChartSave.ts` - Every editor save (edit, import, AI replacement, undo, redo) goes through its `saveChart(data)`: one save in flight at a time, pending edits cleared only if unchanged since the save was sent, edits made before the chart has an edit token are sent once it arrives, retries with backoff (capped at 30s) while edits stay pending, for network and 5xx failures (401/403 only at the 30s cap, never cut short; other 4xx none), and at once when the browser comes back online or the tab is shown again
 - `src/hooks/useUndoHistory.ts` - Undo and redo stacks of whole-chart snapshots. A snapshot is the data object as it was before a change, so every graph updater (`mutate`, `mutateDebounced`, the add/delete/move handlers) returns new arrays and objects and never writes into the state it receives (the updater tests deep-freeze their fixtures). Changes closer together than 300 ms share one step, restoring the chart as it was before the first. Undo and redo are suppressed only while a text field has focus (`isTextEntryFocused`), not a slider or colour input.
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
-- `src/components/canvas/AddControlZone.tsx` - Hover zones with the add-column / add-section controls, laid over the gaps of the chart
+- `src/components/canvas/AddControlZone.tsx` - Zones with the add-column / add-section controls and their resting cue, laid over the gaps of the chart
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)
 - `worker/api/anthropic-stream.ts` - AI streaming proxy (SSE, usage UPSERT, kill-switch, Turnstile gate). Exports `buildAssistantBlocksForCountTokens` (count_tokens validation rules) and `collectAssistantBlocksForAnalytics` (raw `content_blocks` capture).

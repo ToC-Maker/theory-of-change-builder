@@ -1078,6 +1078,7 @@ export function ToC({
           <AddControlZone
             testId="add-zone-edge-start"
             edge="left"
+            outerEdge
             width={CANVAS_EDGE_PX}
             zoomScale={zoomScale}
             controls={[
@@ -1090,6 +1091,7 @@ export function ToC({
           <AddControlZone
             testId="add-zone-edge-end"
             edge="right"
+            outerEdge
             width={CANVAS_EDGE_PX}
             zoomScale={zoomScale}
             controls={[
@@ -1242,10 +1244,7 @@ export function ToC({
               >
                 <div className="flex">
                   {/* Section title positioned to center over actual columns */}
-                  <div
-                    className={clsx('flex flex-col', editMode && 'relative')}
-                    data-section-index={sectionIndex}
-                  >
+                  <div className="flex flex-col" data-section-index={sectionIndex}>
                     <div
                       className={clsx(
                         'rounded py-3 mb-2 px-3',
@@ -1372,7 +1371,7 @@ export function ToC({
                       )}
                     </div>
                     <div
-                      className="flex"
+                      className={clsx('flex', editMode && 'relative')}
                       style={{
                         gap: `${columnPadding}px`,
                         justifyContent: 'center',
@@ -1530,8 +1529,8 @@ export function ToC({
                           )}
                         </ColumnSlot>
                       ))}
+                      {editMode && renderSectionZones(sectionIndex)}
                     </div>
-                    {editMode && renderSectionZones(sectionIndex)}
                   </div>
                 </div>
               </div>
