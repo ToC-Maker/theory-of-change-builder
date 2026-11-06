@@ -7,14 +7,15 @@
 //      out when the running save lands, so an older save can never land
 //      after a newer one and overwrite it.
 //   2. A landing save clears the pending edits only if nothing changed
-//      since it was sent. Clearing unconditionally dropped any edit made
-//      during the request (the "Saved" pill then showed over data the
-//      server never received).
+//      since it was sent. An edit made during the request has to stay
+//      pending: clearing it would show "Saved" over data the server never
+//      received.
 //   3. A failed save keeps the edits pending and the failure visible, and
 //      retries a bounded number of times with growing delays for network
-//      errors and 5xx. 401/403 (auth and permission) and other 4xx are
-//      not retried: no retry changes the answer, and the session-expired
-//      banner owns the recovery. The next edit starts a fresh attempt.
+//      errors and 5xx. A 401/403 (refused session or permission) or other
+//      4xx gets no retry, since the server will refuse the same request
+//      again; the next edit starts a fresh attempt, with a freshly
+//      resolved auth token.
 //
 // `pendingChangesRef` is the latest data the server is not known to hold.
 // It is also what the chart sync (`useChartSync`) and the beforeunload
