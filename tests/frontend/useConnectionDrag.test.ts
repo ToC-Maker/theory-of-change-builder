@@ -589,6 +589,70 @@ describe('useConnectionDrag', () => {
     });
   });
 
+  describe('document listeners', () => {
+    // A listener left behind by a finished gesture sees later events with
+    // no gesture of its own to guard on, and its cleanup clears the shared
+    // gesture flag, un-claiming a drag that another hook has since begun.
+    const strayEvents = () => {
+      document.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2 }));
+      document.dispatchEvent(pointerEvent('pointermove', { clientX: 5, clientY: 5 }));
+      document.dispatchEvent(pointerEvent('pointerup', { clientX: 5, clientY: 5 }));
+      document.dispatchEvent(pointerEvent('pointercancel', {}));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    };
+
+    const endings: Array<[string, () => void]> = [
+      [
+        'pointerup',
+        () => document.dispatchEvent(pointerEvent('pointerup', { clientX: 9, clientY: 9 })),
+      ],
+      ['pointercancel', () => document.dispatchEvent(pointerEvent('pointercancel', {}))],
+      [
+        'Escape',
+        () =>
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+      ],
+      [
+        'a second pointer',
+        () => document.dispatchEvent(pointerEvent('pointerdown', { pointerId: 2 })),
+      ],
+    ];
+
+    it.each(endings)('are released after the gesture ends by %s', (_name, end) => {
+      const { result } = setupHook({ data: sampleData(), onConnect: vi.fn() });
+      act(() => {
+        result.current
+          .bindHandle('source', 'right')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 50, clientY: 25, handleEl: makeMockHandle() }),
+          );
+      });
+      act(end);
+      expect(isCanvasGestureActive()).toBe(false);
+
+      act(() => setCanvasGestureActive(true));
+      act(strayEvents);
+      expect(isCanvasGestureActive()).toBe(true);
+    });
+
+    it('are released when the hook unmounts mid-drag', () => {
+      const { result, unmount } = setupHook({ data: sampleData(), onConnect: vi.fn() });
+      act(() => {
+        result.current
+          .bindHandle('source', 'right')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 50, clientY: 25, handleEl: makeMockHandle() }),
+          );
+      });
+      unmount();
+      expect(isCanvasGestureActive()).toBe(false);
+
+      act(() => setCanvasGestureActive(true));
+      act(strayEvents);
+      expect(isCanvasGestureActive()).toBe(true);
+    });
+  });
+
   describe('isActive flag', () => {
     it('exposes isActive=true while drag is in flight, false otherwise', () => {
       const onConnect = vi.fn();
