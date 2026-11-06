@@ -1,12 +1,12 @@
-// Tests for the shared focus-check utility.
+// Tests for the shared focus-check utilities.
 //
-// Returns true for INPUT, TEXTAREA, contentEditable elements; false
-// otherwise (including for the BODY and unfocused state).
-//
-// Used by `App.handleUndo/handleRedo`, `useKeyboardShortcuts`, and the
-// L2 mitigation on toolbar undo buttons (which also need
-// `onMouseDown={(e) => e.preventDefault()}` to keep focus on the
-// previously-active input across the click).
+// `isInputFocused` is true for any INPUT, TEXTAREA or contentEditable
+// element; false otherwise (including for the BODY and unfocused state).
+// `useKeyboardShortcuts` uses it. `App.handleUndo/handleRedo` use
+// `isTextEntryFocused`, which excludes controls that take no typed text.
+// The toolbar undo buttons also need `onMouseDown={(e) =>
+// e.preventDefault()}` to keep focus on the previously-active input
+// across the click.
 import { describe, it, expect, afterEach } from 'vitest';
 import { isInputFocused, isTextEntryFocused } from '../../src/utils/isInputFocused';
 

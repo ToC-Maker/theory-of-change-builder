@@ -252,10 +252,9 @@ export function useKeyboardShortcuts({
   // Enhanced keyboard event handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't interfere with any keyboard shortcut while user is typing
-      // in an INPUT / TEXTAREA / contentEditable. Shared helper so the
-      // check stays in sync with App.handleUndo/handleRedo + toolbar
-      // L2 mitigation.
+      // Don't interfere with any keyboard shortcut while any input has
+      // focus (an arrow key must reach a focused slider). Undo/redo use
+      // the narrower isTextEntryFocused.
       if (isInputFocused()) return;
 
       // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)

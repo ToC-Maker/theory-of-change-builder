@@ -214,7 +214,7 @@ export function TopBar(props: TopBarProps) {
       <button
         type="button"
         // Keep focus on the active text input so handleUndo's
-        // isInputFocused() check sees the truth.
+        // isTextEntryFocused() check sees the truth.
         onMouseDown={(e) => e.preventDefault()}
         onClick={props.handleUndo}
         disabled={props.undoHistory.length === 0}

@@ -1066,9 +1066,8 @@ function ToCViewer() {
     // doesn't shift focus to the button before this check runs.
     if (isTextEntryFocused()) return;
 
-    // Feedback 67: flush — never drop — a snapshot still inside the
-    // 300ms grouping window, so the operation the user is undoing is
-    // the one that actually gets undone.
+    // Flush, never drop, a snapshot still inside the grouping window,
+    // so the operation the user is undoing is the one that gets undone.
     const effectiveUndoHistory = flushPendingHistory(undoHistory);
 
     if (effectiveUndoHistory.length > 0 && data) {
@@ -1110,7 +1109,7 @@ function ToCViewer() {
     // L2 mitigation symmetric to handleUndo — see comment there.
     if (isTextEntryFocused()) return;
 
-    // Feedback 67: same flush-not-drop rule as handleUndo. (A pending
+    // Same flush-not-drop rule as handleUndo. (A pending
     // snapshot here implies a data change after the last undo, which
     // also cleared redoHistory — so this is unreachable in practice;
     // kept for invariant safety.)
@@ -1598,8 +1597,7 @@ function ToCViewer() {
         hasPendingChanges={hasPendingChanges}
         currentEditToken={currentEditToken}
         // Format-menu setters write through `handleDataChange` so the
-        // canonical state lives in `data.*` (TheoryOfChangeGraph's
-        // initialData effect picks them up).
+        // canonical state lives in `data.*`, which the graph renders from.
         fontFamily={data.fontFamily ?? "'Ubuntu', sans-serif"}
         setFontFamily={(next) => handleDataChange({ ...data, fontFamily: next })}
         textSize={data.textSize ?? 1}

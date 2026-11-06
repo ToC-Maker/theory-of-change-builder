@@ -54,15 +54,15 @@
 //   (C) own-echo skip — a snapshot deep-equal to current local data is
 //       bookkept (lastSyncedData, interval reset) but not re-applied,
 //       so the post-save echo doesn't churn identity through the ToC
-//       initialData effect (height recalcs, settings re-sync).
+//       initialData effect (height recalcs).
 //
-// Why fix HERE and not in TheoryOfChangeGraph's settings-sync effect:
-// App-level `data` is the single owner (the PR-0 mutation-seam design);
-// ToC's local curvature/textSize/padding states are faithful followers
-// of `initialData`. The revert was the OWNER being corrupted by a stale
-// write — making followers resist their owner would create divergence
-// and break the AI-edit/external-replace path. Guarding the owner fixes
-// curvature and every sibling setting at once.
+// Why fix HERE and not in the graph: App-level `data` is the single
+// owner (the PR-0 mutation-seam design) and the graph renders its
+// curvature, text size and paddings straight from `initialData`. The
+// revert was the OWNER being corrupted by a stale write — making the
+// graph resist its owner would create divergence and break the
+// AI-edit/external-replace path. Guarding the owner fixes curvature
+// and every sibling setting at once.
 import { useEffect } from 'react';
 import type { MutableRefObject } from 'react';
 import { ChartService } from '../services/chartService';
