@@ -155,6 +155,27 @@ describe('useChartSave: the normal save', () => {
     expect(requests[0]).toMatchObject({ token: 'new-tok', data: V2 });
   });
 
+  it('sends edits made before the chart existed once its edit token arrives, with no further edit', async () => {
+    const { result, save, rerender } = setup(null);
+
+    // Edited while the chart was still being created.
+    save(V1);
+    await advance(1000);
+    expect(requests).toHaveLength(0);
+
+    rerender({ editToken: 'new-tok' });
+    await advance(300);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ token: 'new-tok', data: V1 });
+    expect(result.current.isSaving).toBe(true);
+
+    await requests[0].succeed();
+    expect(serverData).toBe(V1);
+    expect(result.current.hasPendingChanges).toBe(false);
+    expect(result.current.isSaving).toBe(false);
+  });
+
   it('sends a debounced edit that is still waiting when the editor unmounts', async () => {
     const { save, unmount } = setup();
 

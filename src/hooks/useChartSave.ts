@@ -22,7 +22,8 @@
 // It is also what the chart sync (`useChartSync`) and the beforeunload
 // warning read, so it is written synchronously and stays set from the
 // edit until a save of that exact data succeeds. With no edit token (the
-// chart does not exist yet) edits are marked pending but nothing is sent.
+// chart does not exist yet) edits are marked pending and sent once the
+// token arrives.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import type { SaveError } from '../components/top-bar/SaveIndicator';
@@ -161,6 +162,22 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
     },
     [flush],
   );
+
+  // A chart is created on first Share or Generate, so edits can be made
+  // before it has a token (and while it is being created). They were marked
+  // pending with nowhere to go; send them once the token arrives instead of
+  // waiting for another edit, which may never come.
+  useEffect(() => {
+    if (
+      editToken &&
+      pendingChangesRef.current &&
+      timerRef.current === null &&
+      !inFlightRef.current
+    ) {
+      setIsSaving(true);
+      timerRef.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
+    }
+  }, [editToken, flush]);
 
   // Coming back online or returning to the tab ends a retry wait early:
   // the connection that failed the save may be back.
