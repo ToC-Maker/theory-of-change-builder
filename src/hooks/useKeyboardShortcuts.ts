@@ -172,36 +172,44 @@ export function useKeyboardShortcuts({
       }
 
       setDataAndNotify((prevData) => {
-        const newData = { ...prevData };
-
-        // Ensure target section has at least one column
-        if (newData.sections[targetSectionIndex].columns.length === 0) {
-          newData.sections[targetSectionIndex].columns.push({ nodes: [] });
-          targetColumnIndex = 0;
-        }
-
-        const sourceSection = newData.sections[sectionIndex];
-        const targetSection = newData.sections[targetSectionIndex];
-        const sourceColumn = sourceSection.columns[columnIndex];
-        const targetColumn = targetSection.columns[targetColumnIndex];
-
-        // Find the node to move
-        const nodeToMove = sourceColumn.nodes.find((node) => node.id === nodeId);
+        const nodeToMove = prevData.sections[sectionIndex].columns[columnIndex].nodes.find(
+          (node) => node.id === nodeId,
+        );
         if (!nodeToMove) return prevData;
 
-        // Remove node from source column
-        sourceColumn.nodes = sourceColumn.nodes.filter((node) => node.id !== nodeId);
+        // A target section without columns gets an empty one to receive the node.
+        const targetHasColumns = prevData.sections[targetSectionIndex].columns.length > 0;
+        const destinationIndex = targetHasColumns ? targetColumnIndex : 0;
+        const destinationNodes = targetHasColumns
+          ? prevData.sections[targetSectionIndex].columns[destinationIndex].nodes
+          : [];
 
         // Add node to target column with preserved yPosition or calculate new position
         const nodeWithPosition = {
           ...nodeToMove,
           yPosition:
             nodeToMove.yPosition ||
-            targetColumn.nodes.length * 180 + 30 + (nodeHeights[nodeId] || 150) / 2,
+            destinationNodes.length * 180 + 30 + (nodeHeights[nodeId] || 150) / 2,
         };
-        targetColumn.nodes.push(nodeWithPosition);
 
-        return newData;
+        return {
+          ...prevData,
+          sections: prevData.sections.map((section, sIndex) => ({
+            ...section,
+            columns: (sIndex === targetSectionIndex && !targetHasColumns
+              ? [{ nodes: [] }]
+              : section.columns
+            ).map((column, cIndex) => {
+              if (sIndex === sectionIndex && cIndex === columnIndex) {
+                return { ...column, nodes: column.nodes.filter((node) => node.id !== nodeId) };
+              }
+              if (sIndex === targetSectionIndex && cIndex === destinationIndex) {
+                return { ...column, nodes: [...column.nodes, nodeWithPosition] };
+              }
+              return column;
+            }),
+          })),
+        };
       });
     },
     [editMode, findNodeLocation, data.sections, setDataAndNotify, nodeHeights],

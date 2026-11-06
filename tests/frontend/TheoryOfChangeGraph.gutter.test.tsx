@@ -12,7 +12,7 @@
 // in view mode.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
 
@@ -20,12 +20,7 @@ afterEach(() => {
   cleanup();
 });
 
-// Several click-handlers in TheoryOfChangeGraph mutate `prevData.sections`
-// via `.splice()` inside the `setDataAndNotify` updater (the surrounding
-// `{ ...prevData }` is only a shallow copy). Had the fixture been a shared
-// constant, that mutation would leak between tests, so this factory builds a
-// fresh object per call. The mutation itself is a known defect in the
-// component that these tests work around rather than fix.
+// A fresh object per call, so no test sees another test's data.
 const makeBaseData = (): ToCData => ({
   title: 'Test',
   sections: [
@@ -93,40 +88,40 @@ describe('TheoryOfChangeGraph (PR 5 Task 5.1 always-on gutters)', () => {
     expect(document.querySelector('[data-testid^="add-column-after-"]')).toBeNull();
   });
 
-  it('clicking the before-section gutter splices a new section at that index', () => {
+  // `onDataChange` is flushed via queueMicrotask in useGraphMutation. A plain
+  // click inside an async act lets that microtask run before React renders
+  // and re-absorbs the unchanged data prop (the order in a browser).
+  it('clicking the before-section gutter splices a new section at that index', async () => {
     const onDataChange = vi.fn();
     render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
     const beforeFirst = document.querySelectorAll('[data-testid="add-section-before"]')[0];
     expect(beforeFirst).toBeTruthy();
-    fireEvent.click(beforeFirst);
-
-    // `onDataChange` is flushed via queueMicrotask in useGraphMutation;
-    // we wait for the microtask then assert.
-    return Promise.resolve().then(() => {
-      // The new section is inserted at index 0; existing sections
-      // shift right.
-      expect(onDataChange).toHaveBeenCalled();
-      const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
-      expect(arg.sections.length).toBe(3);
-      expect(arg.sections[0].title).toBe('New Section');
-      expect(arg.sections[1].title).toBe('Inputs');
+    await act(async () => {
+      (beforeFirst as HTMLElement).click();
     });
+
+    // The new section is inserted at index 0; existing sections shift right.
+    expect(onDataChange).toHaveBeenCalled();
+    const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
+    expect(arg.sections.length).toBe(3);
+    expect(arg.sections[0].title).toBe('New Section');
+    expect(arg.sections[1].title).toBe('Inputs');
   });
 
-  it('clicking the before-first-column gutter splices a new column at index 0', () => {
+  it('clicking the before-first-column gutter splices a new column at index 0', async () => {
     const onDataChange = vi.fn();
     render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
-    const gutter = document.querySelector('[data-testid="add-column-before-0-0"]')!;
-    fireEvent.click(gutter);
-
-    return Promise.resolve().then(() => {
-      expect(onDataChange).toHaveBeenCalled();
-      const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
-      // Section 0 now has 2 columns; the new one is at index 0 with no nodes.
-      expect(arg.sections[0].columns.length).toBe(2);
-      expect(arg.sections[0].columns[0].nodes.length).toBe(0);
-      expect(arg.sections[0].columns[1].nodes.length).toBe(1);
+    const gutter = document.querySelector('[data-testid="add-column-before-0-0"]') as HTMLElement;
+    await act(async () => {
+      gutter.click();
     });
+
+    expect(onDataChange).toHaveBeenCalled();
+    const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
+    // Section 0 now has 2 columns; the new one is at index 0 with no nodes.
+    expect(arg.sections[0].columns.length).toBe(2);
+    expect(arg.sections[0].columns[0].nodes.length).toBe(0);
+    expect(arg.sections[0].columns[1].nodes.length).toBe(1);
   });
 
   it('clicking the after-column gutter splices a new column after that column', () => {

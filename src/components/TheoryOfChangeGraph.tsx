@@ -23,6 +23,34 @@ import { DropLandingIndicator } from './canvas/DropLandingIndicator';
 import { GutterAffordance } from './canvas/GutterAffordance';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
+// The data an updater receives is the object App keeps as the undo
+// snapshot, so insertions copy every array they extend instead of
+// splicing it.
+const insertSection = (data: ToCData, index: number): ToCData => ({
+  ...data,
+  sections: [
+    ...data.sections.slice(0, index),
+    { title: 'New Section', columns: [{ nodes: [] }] },
+    ...data.sections.slice(index),
+  ],
+});
+
+const insertColumn = (data: ToCData, sectionIndex: number, index: number): ToCData => ({
+  ...data,
+  sections: data.sections.map((section, i) =>
+    i === sectionIndex
+      ? {
+          ...section,
+          columns: [
+            ...section.columns.slice(0, index),
+            { nodes: [] },
+            ...section.columns.slice(index),
+          ],
+        }
+      : section,
+  ),
+});
+
 // PR 1 task 1.7: TopBar at App-level took over undo/redo/save-status,
 // so the old prop drilling for those (`undoHistory`, `redoHistory`,
 // `handleUndo`, `handleRedo`, `isSaving`, `lastSyncTime`,
@@ -1252,14 +1280,7 @@ export function ToC({
                   width={sectionPadding}
                   testId="add-section-before"
                   onClick={() => {
-                    setDataAndNotify((prevData) => {
-                      const newData = { ...prevData };
-                      newData.sections.splice(sectionIndex, 0, {
-                        title: 'New Section',
-                        columns: [{ nodes: [] }],
-                      });
-                      return newData;
-                    });
+                    setDataAndNotify((prevData) => insertSection(prevData, sectionIndex));
                   }}
                 />
               )}
@@ -1438,13 +1459,9 @@ export function ToC({
                               width={columnPadding}
                               testId={`add-column-before-${sectionIndex}-${colIndex}`}
                               onClick={() => {
-                                setDataAndNotify((prevData) => {
-                                  const newData = { ...prevData };
-                                  newData.sections[sectionIndex].columns.splice(0, 0, {
-                                    nodes: [],
-                                  });
-                                  return newData;
-                                });
+                                setDataAndNotify((prevData) =>
+                                  insertColumn(prevData, sectionIndex, 0),
+                                );
                               }}
                             />
                           )}
@@ -1599,13 +1616,9 @@ export function ToC({
                               testId={`add-column-after-${sectionIndex}-${colIndex}`}
                               onClick={() => {
                                 // Add new column
-                                setDataAndNotify((prevData) => {
-                                  const newData = { ...prevData };
-                                  newData.sections[sectionIndex].columns.splice(colIndex + 1, 0, {
-                                    nodes: [],
-                                  });
-                                  return newData;
-                                });
+                                setDataAndNotify((prevData) =>
+                                  insertColumn(prevData, sectionIndex, colIndex + 1),
+                                );
                               }}
                             />
                           )}
@@ -1625,14 +1638,7 @@ export function ToC({
                   width={sectionPadding}
                   testId="add-section-after-last"
                   onClick={() => {
-                    setDataAndNotify((prevData) => {
-                      const newData = { ...prevData };
-                      newData.sections.splice(sectionIndex + 1, 0, {
-                        title: 'New Section',
-                        columns: [{ nodes: [] }],
-                      });
-                      return newData;
-                    });
+                    setDataAndNotify((prevData) => insertSection(prevData, sectionIndex + 1));
                   }}
                 />
               )}
