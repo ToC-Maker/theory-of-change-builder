@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
+import { computeLandingIndicator } from '../utils/landingIndicator';
 import { computeAlignedSections } from '../utils/alignNodes';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
@@ -18,6 +19,7 @@ import { useConnectionDrag } from '../hooks/useConnectionDrag';
 import { useWaypointDrag } from '../hooks/useWaypointDrag';
 import { buildConnectionPath } from './canvas/connectionPath';
 import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
+import { DropLandingIndicator } from './canvas/DropLandingIndicator';
 import { GutterAffordance } from './canvas/GutterAffordance';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
@@ -1854,6 +1856,23 @@ export function ToC({
           />
         )}
 
+        {/* Landing indicator: a thin insertion line in the target
+            column (or a tinted gutter for a new column) at the spot
+            the node will land. Computed from the same placement
+            formula `handleDrop` uses; absent unless a drag has left
+            the tap dead-zone. */}
+        {dragState ? (
+          <DropLandingIndicator
+            indicator={computeLandingIndicator({
+              dragState,
+              snapshot: getSnapshot(),
+              zoomScale,
+              nodeHeight: nodeHeights[dragState.nodeId] || 76,
+            })}
+            zoomScale={zoomScale}
+          />
+        ) : null}
+
         {/* PR 4 + PR 7 feedback (#3): single cursor-following ghost
             that is a visual clone of the dragged node. Renders the
             actual title/color/size/font so the user is looking at the
@@ -1863,8 +1882,8 @@ export function ToC({
             target. The original node still renders at half opacity in
             place via NodeComponent's `isDragging` prop above (visual
             anchor for the source location). No separate drop-preview
-            silhouette: the column area's existing hover state already
-            signals "drop will land here". The ghost sits in the same
+            silhouette: the landing indicator above marks the spot with a
+            line, never a second node shape. The ghost sits in the same
             transform stack as the canvas so it translates with pan/zoom. */}
         {dragState && dragState.hasMoved && graphContainerRef.current
           ? (() => {
