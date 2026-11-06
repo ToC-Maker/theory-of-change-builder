@@ -7,6 +7,21 @@ export type { AuthTokenProvider } from './requestTokenSource';
 
 const API_BASE = '/api';
 
+/**
+ * A non-2xx answer from the chart API. `status` lets callers tell a
+ * server-side failure that may pass (5xx) from one that will not
+ * (401/403 auth and permission, 404 unknown chart).
+ */
+export class ChartApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ChartApiError';
+    this.status = status;
+  }
+}
+
 export interface CreateChartResponse {
   chartId: string;
   editToken: string;
@@ -194,7 +209,7 @@ export class ChartService {
       } catch {
         // Non-JSON body (proxy error page etc.) — keep the generic message.
       }
-      throw new Error(message);
+      throw new ChartApiError(message, response.status);
     }
   }
 
