@@ -3,10 +3,15 @@
 // alone. The data prop is deep-frozen here: an updater that splices,
 // pushes to or assigns into a nested array or object of the previous
 // state throws instead of silently rewriting the undo snapshot.
+//
+// fireEvent renders and flushes effects before the graph's queued change
+// notification runs, so each edit must also survive that re-render: a node
+// moved to another column remounts, and the graph must not answer by
+// re-absorbing its unchanged data prop and reporting the old chart.
 
 import { useState } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, act, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
 import { deepFreeze } from './helpers/deepFreeze';
@@ -66,28 +71,24 @@ function Controlled({ initial, onChange }: { initial: ToCData; onChange: (d: ToC
 const nodeIds = (col: ToCData['sections'][number]['columns'][number]) => col.nodes.map((n) => n.id);
 
 // Renders the graph on frozen data, runs `edit`, and returns the one change
-// the parent was notified of. A plain click inside an async act keeps the
-// production order: the parent is notified before React renders and
-// re-absorbs the old prop.
-async function editAndCollect(edit: () => Promise<void>) {
+// the parent was notified of.
+async function editAndCollect(edit: () => void) {
   const data = deepFreeze(makeData());
   const before = JSON.parse(JSON.stringify(data));
   const onDataChange = vi.fn();
   render(<Controlled initial={data} onChange={onDataChange} />);
-  await edit();
+  edit();
+  await Promise.resolve();
   expect(onDataChange).toHaveBeenCalledTimes(1);
   expect(data).toEqual(before);
   return onDataChange.mock.calls[0][0] as ToCData;
 }
 
+const byId = (testId: string, index = 0) =>
+  document.querySelectorAll(`[data-testid="${testId}"]`)[index] as HTMLElement;
+
 const clickGutter = (testId: string, index = 0) =>
-  editAndCollect(async () => {
-    const gutter = document.querySelectorAll(`[data-testid="${testId}"]`)[index] as HTMLElement;
-    expect(gutter).toBeTruthy();
-    await act(async () => {
-      gutter.click();
-    });
-  });
+  editAndCollect(() => fireEvent.click(byId(testId, index)));
 
 describe('adding a column or section builds new state and leaves the previous state intact', () => {
   it('column before the first column', async () => {
@@ -122,71 +123,61 @@ describe('adding a column or section builds new state and leaves the previous st
 });
 
 describe('other edits leave the previous state intact', () => {
-  const clickById = (testId: string) =>
-    act(async () => {
-      (document.querySelector(`[data-testid="${testId}"]`) as HTMLElement).click();
-    });
+  const confirmDelete = () => {
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+    const button = Array.from(dialog.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Delete',
+    );
+    fireEvent.click(button!);
+  };
 
-  const confirmDelete = () =>
-    act(async () => {
-      const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
-      const button = Array.from(dialog.querySelectorAll('button')).find(
-        (b) => b.textContent?.trim() === 'Delete',
-      );
-      button!.click();
-    });
+  // The node editor focuses its title input, which suspends shortcuts.
+  const selectNodeAndPress = (nodeId: string, key: string) => () => {
+    fireEvent.click(document.querySelector(`[data-tocb-node="${nodeId}"]`) as HTMLElement);
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(window, { key });
+  };
+
+  const retitle = (heading: string) => () => {
+    fireEvent.click(document.querySelector(heading) as HTMLElement);
+    const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Renamed' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+  };
 
   it('deleting a column', async () => {
-    const next = await editAndCollect(async () => {
-      await clickById('column-delete-0-1');
-      await confirmDelete();
+    const next = await editAndCollect(() => {
+      fireEvent.click(byId('column-delete-0-1'));
+      confirmDelete();
     });
     expect(next.sections[0].columns.map(nodeIds)).toEqual([['a']]);
   });
 
   it('deleting a section', async () => {
-    const next = await editAndCollect(async () => {
-      await clickById('section-delete-1');
-      await confirmDelete();
+    const next = await editAndCollect(() => {
+      fireEvent.click(byId('section-delete-1'));
+      confirmDelete();
     });
     expect(next.sections.map((s) => s.title)).toEqual(['S1']);
   });
 
   it('nudging a selected node with an arrow key', async () => {
-    const next = await editAndCollect(async () => {
-      await act(async () => {
-        (document.querySelector('[data-tocb-node="a"]') as HTMLElement).click();
-      });
-      // The node editor focuses its title input, which suspends shortcuts.
-      await act(async () => {
-        (document.activeElement as HTMLElement).blur();
-      });
-      await act(async () => {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
-      });
-    });
+    const next = await editAndCollect(selectNodeAndPress('a', 'ArrowDown'));
     expect(next.sections[0].columns[0].nodes[0].yPosition).toBe(120);
   });
 
+  it('moving a selected node into the next column with an arrow key', async () => {
+    const next = await editAndCollect(selectNodeAndPress('a', 'ArrowRight'));
+    expect(next.sections[0].columns.map(nodeIds)).toEqual([[], ['b', 'a']]);
+  });
+
   it('retitling the chart', async () => {
-    const next = await editAndCollect(async () => {
-      fireEvent.click(document.querySelector('h1') as HTMLElement);
-      const input = document.querySelector('input[type="text"]') as HTMLInputElement;
-      fireEvent.change(input, { target: { value: 'Renamed' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await act(async () => {});
-    });
+    const next = await editAndCollect(retitle('h1'));
     expect(next.title).toBe('Renamed');
   });
 
   it('retitling a section', async () => {
-    const next = await editAndCollect(async () => {
-      fireEvent.click(document.querySelector('h2') as HTMLElement);
-      const input = document.querySelector('input[type="text"]') as HTMLInputElement;
-      fireEvent.change(input, { target: { value: 'Renamed' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await act(async () => {});
-    });
+    const next = await editAndCollect(retitle('h2'));
     expect(next.sections.map((s) => s.title)).toEqual(['Renamed', 'S2']);
   });
 });

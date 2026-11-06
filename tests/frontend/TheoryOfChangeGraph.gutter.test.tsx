@@ -12,7 +12,7 @@
 // in view mode.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import type { ToCData } from '../../src/types';
 
@@ -88,40 +88,40 @@ describe('TheoryOfChangeGraph (PR 5 Task 5.1 always-on gutters)', () => {
     expect(document.querySelector('[data-testid^="add-column-after-"]')).toBeNull();
   });
 
-  // `onDataChange` is flushed via queueMicrotask in useGraphMutation. A plain
-  // click inside an async act lets that microtask run before React renders
-  // and re-absorbs the unchanged data prop (the order in a browser).
-  it('clicking the before-section gutter splices a new section at that index', async () => {
+  it('clicking the before-section gutter splices a new section at that index', () => {
     const onDataChange = vi.fn();
     render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
     const beforeFirst = document.querySelectorAll('[data-testid="add-section-before"]')[0];
     expect(beforeFirst).toBeTruthy();
-    await act(async () => {
-      (beforeFirst as HTMLElement).click();
-    });
+    fireEvent.click(beforeFirst);
 
-    // The new section is inserted at index 0; existing sections shift right.
-    expect(onDataChange).toHaveBeenCalled();
-    const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
-    expect(arg.sections.length).toBe(3);
-    expect(arg.sections[0].title).toBe('New Section');
-    expect(arg.sections[1].title).toBe('Inputs');
+    // `onDataChange` is flushed via queueMicrotask in useGraphMutation;
+    // we wait for the microtask then assert.
+    return Promise.resolve().then(() => {
+      // The new section is inserted at index 0; existing sections
+      // shift right.
+      expect(onDataChange).toHaveBeenCalled();
+      const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
+      expect(arg.sections.length).toBe(3);
+      expect(arg.sections[0].title).toBe('New Section');
+      expect(arg.sections[1].title).toBe('Inputs');
+    });
   });
 
-  it('clicking the before-first-column gutter splices a new column at index 0', async () => {
+  it('clicking the before-first-column gutter splices a new column at index 0', () => {
     const onDataChange = vi.fn();
     render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
-    const gutter = document.querySelector('[data-testid="add-column-before-0-0"]') as HTMLElement;
-    await act(async () => {
-      gutter.click();
-    });
+    const gutter = document.querySelector('[data-testid="add-column-before-0-0"]')!;
+    fireEvent.click(gutter);
 
-    expect(onDataChange).toHaveBeenCalled();
-    const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
-    // Section 0 now has 2 columns; the new one is at index 0 with no nodes.
-    expect(arg.sections[0].columns.length).toBe(2);
-    expect(arg.sections[0].columns[0].nodes.length).toBe(0);
-    expect(arg.sections[0].columns[1].nodes.length).toBe(1);
+    return Promise.resolve().then(() => {
+      expect(onDataChange).toHaveBeenCalled();
+      const arg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
+      // Section 0 now has 2 columns; the new one is at index 0 with no nodes.
+      expect(arg.sections[0].columns.length).toBe(2);
+      expect(arg.sections[0].columns[0].nodes.length).toBe(0);
+      expect(arg.sections[0].columns[1].nodes.length).toBe(1);
+    });
   });
 
   it('clicking the after-column gutter splices a new column after that column', () => {

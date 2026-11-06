@@ -214,13 +214,20 @@ export function ToC({
     }, 50); // Slightly longer delay to ensure DOM updates
   }, [nodeRefs]);
 
-  // Update internal data state when prop changes
+  // Update internal data state when prop changes. Separate from the
+  // height recalculation below: that callback changes whenever nodes
+  // remount (a node moved to another column), and re-running this effect
+  // then would replace an edit not yet reported to the parent with the
+  // unchanged prop.
   useEffect(() => {
     console.log('ToC component received new initialData:', initialData);
     setData(initialData);
-    // Recalculate node heights when data changes (e.g., from AI edits)
+  }, [initialData, setData]);
+
+  // Recalculate node heights when data changes (e.g., from AI edits)
+  useEffect(() => {
     recalculateAllNodeHeights();
-  }, [initialData, recalculateAllNodeHeights, setData]);
+  }, [initialData, recalculateAllNodeHeights]);
 
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
