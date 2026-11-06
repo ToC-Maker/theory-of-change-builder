@@ -85,12 +85,14 @@
 // double-click) from committing collapse/no-op edits or leaving
 // uncommitted preview state behind.
 //
-// On Escape / pointercancel / second-pointer we DO NOT commit; we also
-// call `discardBuffered(key)` so the `mutateDebounced` 200ms idle timer
-// can't fire an auto-commit and turn a cancel into a delayed commit.
-// The synchronous `writeLocal` side effect of prior `mutateDebounced`
-// calls remains in local state (matching the existing slider behavior),
-// but no parent notify / undo entry lands.
+// On Escape / pointercancel / second-pointer we DO NOT commit, and the
+// connection goes back to the waypoints it had when the press landed: the
+// preview is overwritten through `mutateDebounced` (a local write; the
+// hook-level `setData` would ignore a state it already notified), and then
+// `discardBuffered(key)` drops that buffered write so neither the 200ms
+// idle timer nor a later `commit()` can turn the cancel into a save. No
+// parent notify and no undo entry land, and a later unrelated edit saves
+// the connection as it was.
 //
 // ---------------------------------------------------------------------------
 // Coordinate translation
@@ -171,12 +173,11 @@ export interface UseWaypointDragArgs {
   /** Flush the buffered updater under `key` → one parent notify. */
   commit: (key?: string) => void;
   /**
-   * Drop the buffered updater for `key` WITHOUT a parent notify. Used
-   * on Escape / pointercancel / second-pointer to make cancel semantics
-   * true: the buffered live-preview state stays in memory but no undo
-   * entry lands when the 200ms idle timer fires.
+   * Drop the buffered updater for `key` WITHOUT a parent notify. Called
+   * on Escape / pointercancel / second-pointer right after the preview is
+   * written back, so no undo entry lands when the 200ms idle timer fires.
    */
-  discardBuffered?: (key: string) => void;
+  discardBuffered: (key: string) => void;
   /**
    * Translate viewport client coords to container-local coords. Pure;
    * the hook calls it on every armed pointermove.
@@ -239,17 +240,19 @@ function findConnection(
   return undefined;
 }
 
+type Waypoints = Array<{ x: number; y: number }>;
+
 /**
- * Pure: produce a new ToCData where the connection (S→T) has its
- * `waypoints` field replaced by `updater(current)`. Preserves all
- * other state (immutable copy along the path). Returns the input
- * unchanged if the connection isn't found (defensive — stale-edge race).
+ * Pure: produce a new ToCData where the connection (S→T) is replaced by
+ * `update(connection)`. Preserves all other state (immutable copy along
+ * the path). Returns the input unchanged if the connection isn't found
+ * (defensive — stale-edge race) or `update` returns the connection as is.
  */
-function updateConnectionWaypoints(
+function updateConnection(
   data: ToCData,
   sourceNodeId: string,
   targetNodeId: string,
-  updater: (current: Array<{ x: number; y: number }>) => Array<{ x: number; y: number }>,
+  update: (conn: Connection) => Connection,
 ): ToCData {
   let changed = false;
   const sections = data.sections.map((section) => ({
@@ -262,12 +265,10 @@ function updateConnectionWaypoints(
         const idx = node.connections.findIndex((c) => c.targetId === targetNodeId);
         if (idx < 0) return node;
         const conn = node.connections[idx];
-        const current = conn.waypoints ?? [];
-        const next = updater(current);
+        const newConn = update(conn);
         // Skip allocation if no change (insert/move-by-zero edge).
-        if (next === current) return node;
+        if (newConn === conn) return node;
         changed = true;
-        const newConn: Connection = { ...conn, waypoints: next };
         const newConns = node.connections.slice();
         newConns[idx] = newConn;
         return { ...node, connections: newConns };
@@ -275,6 +276,34 @@ function updateConnectionWaypoints(
     })),
   }));
   return changed ? { ...data, sections } : data;
+}
+
+function updateConnectionWaypoints(
+  data: ToCData,
+  sourceNodeId: string,
+  targetNodeId: string,
+  updater: (current: Waypoints) => Waypoints,
+): ToCData {
+  return updateConnection(data, sourceNodeId, targetNodeId, (conn) => {
+    const current = conn.waypoints ?? [];
+    const next = updater(current);
+    return next === current ? conn : { ...conn, waypoints: next };
+  });
+}
+
+/** Put back the connection's `waypoints` field exactly (absent when it had none). */
+function restoreConnectionWaypoints(
+  data: ToCData,
+  sourceNodeId: string,
+  targetNodeId: string,
+  original: Waypoints | undefined,
+): ToCData {
+  return updateConnection(data, sourceNodeId, targetNodeId, (conn) => {
+    const restored = { ...conn };
+    if (original === undefined) delete restored.waypoints;
+    else restored.waypoints = original;
+    return restored;
+  });
 }
 
 export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResult {
@@ -323,6 +352,10 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   // The mutateDebounced key for the in-flight gesture. One key per
   // gesture so commit() flushes the whole drag as ONE entry.
   const gestureKeyRef = useRef<string | null>(null);
+
+  // The connection's `waypoints` as they were when the press landed, so a
+  // cancel can put them back.
+  const originalWaypointsRef = useRef<Waypoints | undefined>(undefined);
 
   // Drag-threshold bookkeeping: where the press landed (client coords)
   // and whether the gesture has crossed DRAG_THRESHOLD_PX. Until armed,
@@ -393,7 +426,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       }
       if (cancel) {
         const key = gestureKeyRef.current;
-        if (key !== null) discardBufferedRef.current?.(key);
+        if (key !== null) discardBufferedRef.current(key);
       }
       // Record the click-suppression flag BEFORE resetting the gesture
       // state. Cancel paths (Escape/pointercancel) record too: the
@@ -531,27 +564,47 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     [cleanup, buildReplayUpdater, armIfPastThreshold],
   );
 
+  // Escape / pointercancel / second pointer: undo what the preview wrote
+  // and end the gesture without committing. A press that never crossed the
+  // drag threshold wrote nothing, so there is nothing to put back.
+  const cancelGesture = useCallback(() => {
+    const state = dragStateRef.current;
+    const key = gestureKeyRef.current;
+    try {
+      if (state && key !== null && gestureArmedRef.current) {
+        const original = originalWaypointsRef.current;
+        mutateDebouncedRef.current(
+          (prev) =>
+            restoreConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, original),
+          key,
+        );
+      }
+    } finally {
+      cleanup(true);
+    }
+  }, [cleanup]);
+
   const handlePointerCancel = useCallback(
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
-      cleanup(true);
+      cancelGesture();
     },
-    [cleanup],
+    [cancelGesture],
   );
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === 'Escape') cleanup(true);
+      if (e.key === 'Escape') cancelGesture();
     },
-    [cleanup],
+    [cancelGesture],
   );
 
   const handleSecondPointer = useCallback(
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId === activePointerIdRef.current) return;
-      cleanup(true);
+      cancelGesture();
     },
-    [cleanup],
+    [cancelGesture],
   );
 
   const installDocListeners = useCallback(() => {
@@ -625,6 +678,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       activePointerIdRef.current = e.pointerId;
       setCanvasGestureActive(true);
       gestureKeyRef.current = buildKey(sourceNodeId, targetNodeId);
+      originalWaypointsRef.current = conn.waypoints;
       gestureStartClientRef.current = { x: e.clientX, y: e.clientY };
       gestureArmedRef.current = false;
       // Subscribe NOW, synchronously — see `docListenersRef`.
