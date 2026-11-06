@@ -458,6 +458,38 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
   });
 
+  describe('same-task press and release (effect-free listener install)', () => {
+    it('hears a pointerup dispatched before passive effects flush, then runs the next drag normally', () => {
+      const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+
+      // Down + up inside ONE act() callback: the passive effect that
+      // used to install the document listeners has not run when the
+      // pointerup dispatches.
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 100, clientY: 50 }));
+      });
+
+      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(isCanvasGestureActive()).toBe(false);
+      expect(result.current.isActive).toBe(false);
+
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 160, clientY: 90 }));
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 160, clientY: 90 }));
+      });
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+  });
+
   describe('selection suppression', () => {
     const MARK = 'tocb-canvas-gesture';
 

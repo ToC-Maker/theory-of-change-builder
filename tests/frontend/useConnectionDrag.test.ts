@@ -480,6 +480,47 @@ describe('useConnectionDrag', () => {
     });
   });
 
+  describe('same-task press and release (effect-free listener install)', () => {
+    it('hears a pointerup dispatched before passive effects flush, then runs the next drag from its own source', () => {
+      const onConnect = vi.fn();
+      appendFakeNode('target', { x: 500, y: 500, w: 100, h: 50 });
+      mockElementFromPoint();
+      const { result } = setupHook({ data: sampleData(), onConnect });
+
+      // Down + up inside ONE act() callback: the passive effect that
+      // used to install the document listeners has not run when the
+      // pointerup dispatches (a trackpad tap whose up lands before
+      // React's effect flush).
+      act(() => {
+        result.current
+          .bindHandle('source', 'right')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 10, clientY: 10, handleEl: makeMockHandle() }),
+          );
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+      });
+
+      // The gesture completes instead of jamming: a stuck gesture blocks
+      // every later drag and would hand the next drop the wrong source.
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(result.current.dragState).toBeNull();
+      expect(isCanvasGestureActive()).toBe(false);
+
+      act(() => {
+        result.current
+          .bindHandle('other', 'right')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 20, clientY: 20, handleEl: makeMockHandle() }),
+          );
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 520, clientY: 520 }));
+      });
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      expect(onConnect).toHaveBeenCalledWith('other', 'target');
+    });
+  });
+
   describe('selection suppression', () => {
     const MARK = 'tocb-canvas-gesture';
     const start = (result: ReturnType<typeof setupHook>['result']) => {

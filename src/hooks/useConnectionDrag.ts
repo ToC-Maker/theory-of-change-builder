@@ -180,9 +180,36 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
   const activePointerIdRef = useRef<number | null>(null);
   const captureElRef = useRef<HTMLElement | null>(null);
 
-  // Cleanup: release capture, clear flag, reset state. Safe to call
-  // multiple times.
+  // The exact handler references currently subscribed on `document`.
+  // They are installed imperatively in `startDrag` (not from an effect
+  // keyed on `dragState`): an effect only attaches after React has
+  // flushed passive effects, so a pointerup dispatched in the same task
+  // as the pointerdown (a trackpad tap) was never heard and the gesture
+  // stayed active, handing the next drag a stale source. The listeners
+  // exist before `startDrag` returns, as in `usePointerDrag`.
+  const docListenersRef = useRef<{
+    move: (e: PointerEvent) => void;
+    up: (e: PointerEvent) => void;
+    cancel: (e: PointerEvent) => void;
+    keydown: (e: KeyboardEvent) => void;
+    down: (e: PointerEvent) => void;
+  } | null>(null);
+
+  const removeDocListeners = useCallback(() => {
+    const l = docListenersRef.current;
+    if (!l) return;
+    document.removeEventListener('pointermove', l.move);
+    document.removeEventListener('pointerup', l.up);
+    document.removeEventListener('pointercancel', l.cancel);
+    document.removeEventListener('keydown', l.keydown);
+    document.removeEventListener('pointerdown', l.down);
+    docListenersRef.current = null;
+  }, []);
+
+  // Cleanup: unsubscribe document listeners, release capture, clear
+  // flag, reset state. Safe to call multiple times.
   const cleanup = useCallback(() => {
+    removeDocListeners();
     const el = captureElRef.current;
     const pointerId = activePointerIdRef.current;
     if (el && pointerId != null) {
@@ -200,7 +227,7 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
     activePointerIdRef.current = null;
     setCanvasGestureActive(false);
     setDragState(null);
-  }, [setDragState]);
+  }, [removeDocListeners, setDragState]);
 
   // pointermove — update ghostPos, hit-test for target node.
   const handlePointerMove = useCallback(
@@ -277,23 +304,23 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
     [cleanup],
   );
 
-  // Subscribe document listeners only while a drag is in flight.
-  useEffect(() => {
-    if (dragState == null) return;
+  const installDocListeners = useCallback(() => {
+    // Never double-subscribe (a no-op when nothing is installed).
+    removeDocListeners();
+    docListenersRef.current = {
+      move: handlePointerMove,
+      up: handlePointerUp,
+      cancel: handlePointerCancel,
+      keydown: handleKeyDown,
+      down: handleSecondPointer,
+    };
     document.addEventListener('pointermove', handlePointerMove);
     document.addEventListener('pointerup', handlePointerUp);
     document.addEventListener('pointercancel', handlePointerCancel);
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('pointerdown', handleSecondPointer);
-    return () => {
-      document.removeEventListener('pointermove', handlePointerMove);
-      document.removeEventListener('pointerup', handlePointerUp);
-      document.removeEventListener('pointercancel', handlePointerCancel);
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('pointerdown', handleSecondPointer);
-    };
   }, [
-    dragState,
+    removeDocListeners,
     handlePointerMove,
     handlePointerUp,
     handlePointerCancel,
@@ -301,14 +328,16 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
     handleSecondPointer,
   ]);
 
-  // Hook-unmount safety: clear gesture flag if hook tears down mid-drag.
+  // Hook-unmount safety: drop the document listeners and clear the
+  // gesture flag if the hook tears down mid-drag.
   useEffect(() => {
     return () => {
+      removeDocListeners();
       if (isCanvasGestureActive() && dragStateRef.current !== null) {
         setCanvasGestureActive(false);
       }
     };
-  }, []);
+  }, [removeDocListeners]);
 
   // Latest editMode ref so the per-id handler reads it at call time
   // instead of closing over a render-time value.
@@ -340,6 +369,8 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
 
       activePointerIdRef.current = e.pointerId;
       setCanvasGestureActive(true);
+      // Subscribe NOW, synchronously — see `docListenersRef`.
+      installDocListeners();
 
       setDragState({
         sourceNodeId: nodeId,
@@ -354,7 +385,7 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
       // dot sits inside the node root. Stop here.)
       e.stopPropagation();
     },
-    [setDragState],
+    [setDragState, installDocListeners],
   );
 
   const bindHandle = useCallback(

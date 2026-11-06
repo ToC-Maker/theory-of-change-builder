@@ -343,13 +343,41 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     [],
   );
 
-  // Cleanup releases the pointer, clears the gesture flag, resets
-  // state. Safe to call multiple times. `cancel=true` (Escape /
+  // The exact handler references currently subscribed on `document`.
+  // They are installed imperatively in `startGesture` (not from an
+  // effect keyed on `dragState`): an effect only attaches after React
+  // has flushed passive effects, so a pointerup dispatched in the same
+  // task as the pointerdown (a trackpad tap) was never heard and the
+  // gesture stayed active. The listeners exist before `startGesture`
+  // returns, as in `usePointerDrag`.
+  const docListenersRef = useRef<{
+    move: (e: PointerEvent) => void;
+    up: (e: PointerEvent) => void;
+    cancel: (e: PointerEvent) => void;
+    keydown: (e: KeyboardEvent) => void;
+    down: (e: PointerEvent) => void;
+  } | null>(null);
+
+  const removeDocListeners = useCallback(() => {
+    const l = docListenersRef.current;
+    if (!l) return;
+    document.removeEventListener('pointermove', l.move);
+    document.removeEventListener('pointerup', l.up);
+    document.removeEventListener('pointercancel', l.cancel);
+    document.removeEventListener('keydown', l.keydown);
+    document.removeEventListener('pointerdown', l.down);
+    docListenersRef.current = null;
+  }, []);
+
+  // Cleanup unsubscribes the document listeners, releases the pointer,
+  // clears the gesture flag, resets state. Safe to call multiple
+  // times. `cancel=true` (Escape /
   // pointercancel / second-pointer) also discards the buffered
   // `mutateDebounced` updater so the 200ms idle timer cannot fire an
   // auto-commit that would turn cancel into a delayed commit.
   const cleanup = useCallback(
     (cancel = false) => {
+      removeDocListeners();
       const el = captureElRef.current;
       const pointerId = activePointerIdRef.current;
       if (el && pointerId != null) {
@@ -382,7 +410,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       setCanvasGestureActive(false);
       setDragState(null);
     },
-    [setDragState],
+    [removeDocListeners, setDragState],
   );
 
   // The single write shape of the gesture: REPLACE the connection's
@@ -521,23 +549,23 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     [cleanup],
   );
 
-  // Subscribe document listeners only while a drag is in flight.
-  useEffect(() => {
-    if (dragState == null) return;
+  const installDocListeners = useCallback(() => {
+    // Never double-subscribe (a no-op when nothing is installed).
+    removeDocListeners();
+    docListenersRef.current = {
+      move: handlePointerMove,
+      up: handlePointerUp,
+      cancel: handlePointerCancel,
+      keydown: handleKeyDown,
+      down: handleSecondPointer,
+    };
     document.addEventListener('pointermove', handlePointerMove);
     document.addEventListener('pointerup', handlePointerUp);
     document.addEventListener('pointercancel', handlePointerCancel);
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('pointerdown', handleSecondPointer);
-    return () => {
-      document.removeEventListener('pointermove', handlePointerMove);
-      document.removeEventListener('pointerup', handlePointerUp);
-      document.removeEventListener('pointercancel', handlePointerCancel);
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('pointerdown', handleSecondPointer);
-    };
   }, [
-    dragState,
+    removeDocListeners,
     handlePointerMove,
     handlePointerUp,
     handlePointerCancel,
@@ -545,14 +573,16 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     handleSecondPointer,
   ]);
 
-  // Hook-unmount safety: clear gesture flag if hook tears down mid-drag.
+  // Hook-unmount safety: drop the document listeners and clear the
+  // gesture flag if the hook tears down mid-drag.
   useEffect(() => {
     return () => {
+      removeDocListeners();
       if (isCanvasGestureActive() && dragStateRef.current !== null) {
         setCanvasGestureActive(false);
       }
     };
-  }, []);
+  }, [removeDocListeners]);
 
   // ----- gesture starters ----------------------------------------------
 
@@ -592,6 +622,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       gestureKeyRef.current = buildKey(sourceNodeId, targetNodeId);
       gestureStartClientRef.current = { x: e.clientX, y: e.clientY };
       gestureArmedRef.current = false;
+      // Subscribe NOW, synchronously — see `docListenersRef`.
+      installDocListeners();
 
       setDragState({
         kind,
@@ -602,7 +634,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
       e.stopPropagation();
     },
-    [buildKey, setDragState],
+    [buildKey, setDragState, installDocListeners],
   );
 
   /**
