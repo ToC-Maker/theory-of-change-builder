@@ -229,13 +229,13 @@ export function useChartSync({
     // Initial sync after a short delay
     const initialTimer = setTimeout(syncData, 1000);
 
-    // Dynamic interval
+    // Dynamic interval: re-armed on every tick so a backoff step takes
+    // effect, and never dropped: at the 60s cap an active user keeps
+    // polling (idle and hidden tabs are skipped inside syncData).
     const runSync = () => {
       syncData();
       clearInterval(interval);
-      if (syncInterval < 60000 || consecutiveUnchanged < 10) {
-        interval = setInterval(runSync, syncInterval);
-      }
+      interval = setInterval(runSync, syncInterval);
     };
     interval = setInterval(runSync, syncInterval);
 
