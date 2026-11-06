@@ -90,13 +90,13 @@ The AI modifies graphs via structured JSON edits in `src/utils/graphEdits.ts`:
 
 Three access patterns:
 1. `/` - Create new chart (edit mode)
-2. `/chart/{chartId}` - View-only (public)
+2. `/chart/{chartId}` - View-only (public, except an owned chart at `restricted`, which needs a signed-in approved user)
 3. `/edit/{editToken}` - Edit mode (permission-controlled)
 
 **Permission System:**
 - Anonymous charts (`user_id` NULL): Anyone with edit token can edit
 - Authenticated charts: Owner must approve access requests (status: pending/approved/rejected)
-- Link sharing levels: `restricted` (approval required), `viewer` (public view), `editor` (public edit)
+- Link sharing levels: `restricted` (approval required to view or edit; the column default), `viewer` (public view link, editing still needs approval), `editor` (public view and edit)
 - Set `link_sharing_level='editor'` to bypass approval workflow
 
 If you encounter 401/403 errors, check: token validity, permission status, link sharing level.
