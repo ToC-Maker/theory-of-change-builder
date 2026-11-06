@@ -1,13 +1,11 @@
-// useChartSync — the poll cadence must settle at the 60s cap, not stop.
+// useChartSync — the poll cadence settles at the 60s cap and stays there.
 //
-// While the chart stays unchanged the interval backs off from 10s toward
-// 60s. After ten unchanged polls AT the cap the interval used to be
-// cleared and never re-armed, so a user who stayed active in an editor
-// with no remote changes stopped receiving other people's edits about
-// 5.7 minutes after load. Hidden-tab and 5-minute idle skipping are
-// separate and keep working.
+// While the chart is unchanged the interval backs off from 10s toward
+// 60s. An active user must keep polling at the cap indefinitely so other
+// people's edits keep arriving; a hidden tab or a user idle for five
+// minutes is skipped without ending the poll.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { cleanup, renderHook } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
 import { useChartSync } from '../../src/hooks/useChartSync';
 import { ChartService } from '../../src/services/chartService';
@@ -69,6 +67,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount first: a hook left mounted keeps its document listeners and
+  // would answer the next test's visibility events.
+  cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
@@ -99,5 +100,25 @@ describe('useChartSync poll cadence', () => {
     await vi.advanceTimersByTimeAsync(3 * MINUTE);
 
     expect(mockGetChart.mock.calls.length - callsBeforeIdle).toBe(callsWhileIdle);
+  });
+
+  it('skips polls while the tab is hidden and syncs at once when it returns', async () => {
+    mountSync();
+    await advanceWhileActive(MINUTE);
+
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    const callsWhenHidden = mockGetChart.mock.calls.length;
+    await advanceWhileActive(4 * MINUTE);
+    expect(mockGetChart.mock.calls.length).toBe(callsWhenHidden);
+
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGetChart.mock.calls.length).toBe(callsWhenHidden + 1);
+
+    // And the poll carries on afterwards.
+    await advanceWhileActive(2 * MINUTE);
+    expect(mockGetChart.mock.calls.length).toBeGreaterThan(callsWhenHidden + 1);
   });
 });

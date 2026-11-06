@@ -250,6 +250,8 @@ describe('useChartSave: failures', () => {
     expect(result.current.hasPendingChanges).toBe(true);
     expect(result.current.pendingChangesRef.current).toBe(V1);
     expect(onSaveFailed).toHaveBeenCalledWith(V1);
+    // Waiting out the backoff still counts as saving: the edit is not abandoned.
+    expect(result.current.isSaving).toBe(true);
 
     // First retry after the first backoff step.
     await advance(1000);
@@ -258,6 +260,7 @@ describe('useChartSave: failures', () => {
     // Still failed while the retry is out.
     expect(result.current.saveError).not.toBeNull();
     expect(result.current.hasPendingChanges).toBe(true);
+    expect(result.current.isSaving).toBe(true);
 
     await requests[1].succeed();
     expect(result.current.saveError).toBeNull();
@@ -384,5 +387,51 @@ describe('useChartSave: failures', () => {
     await advance(300);
     expect(requests).toHaveLength(3);
     expect(requests[2].data).toBe(V2);
+  });
+
+  it('sends an edit that came due during the failed save after the backoff', async () => {
+    const { save } = setup();
+
+    save(V1);
+    await advance(300);
+    save(V2);
+    // V2's debounce comes due while the first save is still out and is held.
+    await advance(400);
+    expect(requests).toHaveLength(1);
+
+    await requests[0].fail(networkError());
+    expect(requests).toHaveLength(1);
+
+    await advance(1000);
+    expect(requests).toHaveLength(2);
+    expect(requests[1].data).toBe(V2);
+  });
+
+  it('makes one last attempt when the editor unmounts during a retry wait', async () => {
+    const { save, unmount } = setup();
+
+    save(V1);
+    await advance(300);
+    await requests[0].fail(networkError());
+
+    unmount();
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].data).toBe(V1);
+  });
+
+  it('sends an edit still waiting behind a running save even if the editor unmounts first', async () => {
+    const { save, unmount } = setup();
+
+    save(V1);
+    await advance(300);
+    save(V2);
+    unmount();
+
+    // V2 waits behind the running save, then goes out when it lands.
+    expect(requests).toHaveLength(1);
+    await requests[0].succeed();
+    expect(requests).toHaveLength(2);
+    expect(requests[1].data).toBe(V2);
   });
 });
