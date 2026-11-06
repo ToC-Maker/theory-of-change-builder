@@ -17,13 +17,15 @@ export type { LinkSharingLevel } from '../../../shared/permissions';
 export interface LinkCopyRowProps {
   variant: 'view' | 'edit';
   url: string;
-  linkSharingLevel: LinkSharingLevel;
+  /** The chart's link-sharing level, or null when the client doesn't know it (no status line is shown). */
+  linkSharingLevel: LinkSharingLevel | null;
 }
 
 function subtextFor(
   variant: 'view' | 'edit',
-  level: LinkSharingLevel,
-): { text: string; tone: 'neutral' | 'warning' } {
+  level: LinkSharingLevel | null,
+): { text: string; tone: 'neutral' | 'warning' } | null {
+  if (level === null) return null;
   if (variant === 'view') {
     if (level === 'restricted') {
       return { text: 'Approved viewers only.', tone: 'neutral' };
@@ -105,13 +107,15 @@ export function LinkCopyRow({ variant, url, linkSharingLevel }: LinkCopyRowProps
           )}
         </button>
       </div>
-      <p
-        className={`text-xs mt-1 ${
-          subtext.tone === 'warning' ? 'text-amber-700' : 'text-gray-500'
-        }`}
-      >
-        {subtext.text}
-      </p>
+      {subtext && (
+        <p
+          className={`text-xs mt-1 ${
+            subtext.tone === 'warning' ? 'text-amber-700' : 'text-gray-500'
+          }`}
+        >
+          {subtext.text}
+        </p>
+      )}
     </div>
   );
 }

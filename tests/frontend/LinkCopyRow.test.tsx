@@ -84,6 +84,16 @@ describe('LinkCopyRow', () => {
     expect(screen.queryByText(/Anyone with this link can edit/i)).toBeNull();
   });
 
+  it('shows no status line when the level is unknown', () => {
+    const { container } = render(
+      <>
+        <LinkCopyRow variant="view" url="https://example.test/chart/c1" linkSharingLevel={null} />
+        <LinkCopyRow variant="edit" url="https://example.test/edit/tok" linkSharingLevel={null} />
+      </>,
+    );
+    expect(container.querySelectorAll('p')).toHaveLength(0);
+  });
+
   it('does NOT show edit-link warning on the view link variant', () => {
     render(
       <LinkCopyRow variant="view" url="https://example.test/chart/c1" linkSharingLevel="editor" />,

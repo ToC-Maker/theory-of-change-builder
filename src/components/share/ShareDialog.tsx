@@ -316,6 +316,18 @@ export function ShareDialog({
 
   if (!open) return null;
 
+  // What the link rows may say about who can open each link. The owner
+  // sees the level stored for the chart. A visitor who isn't signed in
+  // can only be here through an unowned chart (public view, edit by
+  // token) or a chart whose level is 'editor', so both links are open to
+  // anyone. A signed-in non-owner could also be an approved collaborator
+  // on a restricted chart, and the client can't tell which: say nothing.
+  const linkStatusLevel: LinkSharingLevel | null = !isAuthenticated
+    ? 'editor'
+    : isOwner
+      ? linkSharingLevel
+      : null;
+
   const aspectW = containerSize?.width || 16;
   const aspectH = containerSize?.height || 9;
   const embedCode =
@@ -425,12 +437,12 @@ export function ShareDialog({
               <LinkCopyRow
                 variant="view"
                 url={shareData.viewUrl}
-                linkSharingLevel={linkSharingLevel}
+                linkSharingLevel={linkStatusLevel}
               />
               <LinkCopyRow
                 variant="edit"
                 url={shareData.editUrl}
-                linkSharingLevel={linkSharingLevel}
+                linkSharingLevel={linkStatusLevel}
               />
 
               {/* Embed expander — hidden under Restricted mode (plan

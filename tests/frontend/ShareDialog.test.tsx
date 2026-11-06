@@ -32,10 +32,11 @@ import type { Permission, LinkSharingLevel } from '../../shared/permissions';
 
 // Auth0 stub. We only need useAuth0().{user, isAuthenticated, isLoading}
 // for ShareDialog; we don't exercise the Auth0Provider lifecycle.
+const auth = vi.hoisted(() => ({ isAuthenticated: true }));
 vi.mock('@auth0/auth0-react', () => ({
   useAuth0: () => ({
     user: { email: 'owner@example.test', sub: 'auth0|abc' },
-    isAuthenticated: true,
+    isAuthenticated: auth.isAuthenticated,
     isLoading: false,
   }),
 }));
@@ -64,6 +65,7 @@ const baseProps: ShareDialogProps = {
 };
 
 beforeEach(() => {
+  auth.isAuthenticated = true;
   vi.spyOn(ChartService, 'getChartByEditToken').mockResolvedValue({
     chartId: 'chart-xyz',
     chartData: { sections: [] } as never,
@@ -293,6 +295,49 @@ describe('ShareDialog', () => {
     renderDialog({ permissionsFetchError: 'hook fetch failed' });
     await waitFor(() => {
       expect(screen.getByText(/couldn't verify current sharing level/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('link status lines', () => {
+    const mockOwnership = (isOwner: boolean) =>
+      vi.spyOn(ChartService, 'getChartByEditToken').mockResolvedValue({
+        chartId: 'chart-xyz',
+        chartData: { sections: [] } as never,
+        canEdit: true,
+        isOwner,
+      });
+    const restrictedClaims =
+      /Approved viewers only|Approval required to edit|Editors must be approved/;
+
+    it('tells an anonymous visitor that anyone with the links can view and edit, whatever level App holds', async () => {
+      auth.isAuthenticated = false;
+      mockOwnership(false);
+      // App's default for a non-owner is 'restricted'; it says nothing about this chart.
+      renderDialog({ linkSharingLevel: 'restricted' });
+      await waitFor(() => {
+        expect(screen.getByText('View link')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Anyone with this link can view.')).toBeInTheDocument();
+      expect(screen.getByText('Anyone with this link can edit.')).toBeInTheDocument();
+      expect(screen.queryByText(restrictedClaims)).toBeNull();
+    });
+
+    it('states nothing about access for a signed-in non-owner, whose level the client does not know', async () => {
+      mockOwnership(false);
+      renderDialog({ linkSharingLevel: 'restricted' });
+      await waitFor(() => {
+        expect(screen.getByText('View link')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(restrictedClaims)).toBeNull();
+      expect(screen.queryByText(/Anyone with this link/)).toBeNull();
+    });
+
+    it('reports the stored level to the owner', async () => {
+      renderDialog({ linkSharingLevel: 'restricted' });
+      await waitFor(() => {
+        expect(screen.getByText('Approved viewers only.')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Approval required to edit.')).toBeInTheDocument();
     });
   });
 });
