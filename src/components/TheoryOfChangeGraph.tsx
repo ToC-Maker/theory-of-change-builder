@@ -148,13 +148,16 @@ export function ToC({
   // ever flips `showEditButton`, this component re-renders with the
   // new value rather than freezing the mount-time value.
   const editMode = showEditButton;
-  const [curvature, setCurvature] = useState(initialData.curvature ?? 0.5);
-  const [textSize, setTextSize] = useState(initialData.textSize ?? 1); // 0.5 to 2.0 scale
-  const [fontFamily, setFontFamily] = useState(initialData.fontFamily ?? "'Ubuntu', sans-serif"); // Default font family
+  // The Format menu writes these into the data, so they follow the prop.
+  // A setting that is not set renders its default: undo can restore a
+  // chart that never had it.
+  const curvature = initialData.curvature ?? 0.5;
+  const textSize = initialData.textSize ?? 1; // 0.5 to 2.0 scale
+  const fontFamily = initialData.fontFamily ?? "'Ubuntu', sans-serif";
+  const columnPadding = initialData.columnPadding ?? 24; // pixels
+  const sectionPadding = initialData.sectionPadding ?? 32; // pixels
   const [nodeWidth, setNodeWidth] = useState(192); // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff'); // Default white background
-  const [columnPadding, setColumnPadding] = useState(initialData.columnPadding ?? 24); // Default column padding in pixels
-  const [sectionPadding, setSectionPadding] = useState(initialData.sectionPadding ?? 32); // Default section padding in pixels
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
   // PR 3: `editingNodeId` / `nodePopup` / `edgePopup` state retired —
@@ -218,31 +221,6 @@ export function ToC({
     // Recalculate node heights when data changes (e.g., from AI edits)
     recalculateAllNodeHeights();
   }, [initialData, recalculateAllNodeHeights, setData]);
-
-  // Update settings when data changes
-  useEffect(() => {
-    if (initialData.textSize !== undefined) {
-      setTextSize(initialData.textSize);
-    }
-    if (initialData.curvature !== undefined) {
-      setCurvature(initialData.curvature);
-    }
-    if (initialData.columnPadding !== undefined) {
-      setColumnPadding(initialData.columnPadding);
-    }
-    if (initialData.sectionPadding !== undefined) {
-      setSectionPadding(initialData.sectionPadding);
-    }
-    if (initialData.fontFamily !== undefined) {
-      setFontFamily(initialData.fontFamily);
-    }
-  }, [
-    initialData.textSize,
-    initialData.curvature,
-    initialData.columnPadding,
-    initialData.sectionPadding,
-    initialData.fontFamily,
-  ]);
 
   // Generate unique node ID
   const generateNodeId = useCallback((): string => {
