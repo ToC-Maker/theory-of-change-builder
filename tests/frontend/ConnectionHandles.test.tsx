@@ -1,11 +1,14 @@
 // PR 5 Task 5.2 regression test for ConnectionHandles.
 //
 // Asserts:
-//   - Renders nothing when `visible=false` (default state for nodes that
-//     aren't hovered or selected).
-//   - Renders two handle dots when `visible=true` (left + right edge),
-//     each carrying `data-tocb-connection-handle="<nodeId>|<side>"` so
-//     test selectors can pin them.
+//   - Stays mounted when `visible=false` (nodes that aren't hovered or
+//     selected): the hover state that shows the handle renders a frame
+//     after the pointer arrives, so a press that beats it must still land
+//     on the handle instead of on the node or edge beneath. The dot is
+//     only hidden visually.
+//   - Renders two handle targets (left + right edge) carrying
+//     `data-tocb-connection-handle="<nodeId>|<side>"` so test selectors
+//     can pin them.
 //   - Pointer-down on a handle dot invokes the binder returned by
 //     `bindHandle(nodeId, side)`.
 
@@ -24,11 +27,38 @@ const makeBindHandle =
   (_nodeId: string, _side: HandleSide) => ({ onPointerDown });
 
 describe('ConnectionHandles', () => {
-  it('renders nothing when visible=false', () => {
-    const { container } = render(
-      <ConnectionHandles nodeId="n-1" visible={false} bindHandle={makeBindHandle(vi.fn())} />,
+  it('keeps both handles mounted but hidden when visible=false', () => {
+    render(<ConnectionHandles nodeId="n-1" visible={false} bindHandle={makeBindHandle(vi.fn())} />);
+    for (const side of ['left', 'right']) {
+      const handle = document.querySelector(`[data-tocb-connection-handle="n-1|${side}"]`);
+      expect(handle).not.toBeNull();
+      expect(handle?.querySelector('[data-tocb-handle-dot]')?.className).toMatch(/\bopacity-0\b/);
+    }
+  });
+
+  it('shows the dots when visible=true', () => {
+    render(<ConnectionHandles nodeId="n-1" visible={true} bindHandle={makeBindHandle(vi.fn())} />);
+    const dot = document.querySelector('[data-tocb-handle-dot]');
+    expect(dot?.className).toMatch(/\bopacity-100\b/);
+  });
+
+  it('starts the gesture from a hidden handle (press before the hover render)', () => {
+    const onPointerDown = vi.fn();
+    render(
+      <ConnectionHandles nodeId="n-1" visible={false} bindHandle={makeBindHandle(onPointerDown)} />,
     );
-    expect(container.firstChild).toBeNull();
+    const right = document.querySelector(
+      '[data-tocb-connection-handle="n-1|right"]',
+    ) as HTMLElement;
+    fireEvent.pointerDown(right, { pointerId: 1 });
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps hidden handles out of the keyboard tab order', () => {
+    render(<ConnectionHandles nodeId="n-1" visible={false} bindHandle={makeBindHandle(vi.fn())} />);
+    document.querySelectorAll('[data-tocb-connection-handle]').forEach((h) => {
+      expect(h.getAttribute('tabindex')).toBe('-1');
+    });
   });
 
   it('renders two handle dots (left + right) when visible=true', () => {

@@ -87,4 +87,19 @@ describe('NodeComponent (PR 4 pointer surface)', () => {
     fireEvent.pointerDown(root!, { clientX: 50, clientY: 60 });
     expect(onPointerDown).not.toHaveBeenCalled();
   });
+
+  it('mounts the connection handles in edit mode before the node is hovered', () => {
+    // The hover render trails the pointer by a frame; a press in that
+    // window must still find the handle (see ConnectionHandles).
+    const bindConnectionHandle = () => ({ onPointerDown: vi.fn() });
+    render(<NodeComponent {...baseProps({ bindConnectionHandle, isHovered: false })} />);
+    expect(document.querySelector('[data-tocb-connection-handle="n-1|left"]')).not.toBeNull();
+    expect(document.querySelector('[data-tocb-connection-handle="n-1|right"]')).not.toBeNull();
+  });
+
+  it('mounts no connection handles in view mode', () => {
+    const bindConnectionHandle = () => ({ onPointerDown: vi.fn() });
+    render(<NodeComponent {...baseProps({ bindConnectionHandle, editMode: false })} />);
+    expect(document.querySelector('[data-tocb-connection-handle]')).toBeNull();
+  });
 });
