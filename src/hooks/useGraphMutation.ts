@@ -27,7 +27,9 @@
 //   commit(key?)
 //     Flush buffered keys. With a key, flushes just that key; without, all
 //     keys in insertion order. The flush dispatches `onDataChange` via
-//     `queueMicrotask` (same scheduling as `mutate`).
+//     `queueMicrotask` (same scheduling as `mutate`). Keys that aren't
+//     buffered (never written, or already flushed by the idle timer) are
+//     skipped: committing them notifies nobody.
 //
 // ---------------------------------------------------------------------------
 // Why queueMicrotask, not setTimeout(0)
@@ -220,8 +222,14 @@ export function useGraphMutation(
   // and queue the coalesced parent notify. State has already been updated
   // by the preceding `mutateDebounced` calls (live preview), so this just
   // notifies the parent.
+  //
+  // A key that isn't buffered has nothing to report: either it was never
+  // written (an editor opened and closed untouched) or the idle timer
+  // already notified for it. Notifying anyway would hand the parent an
+  // unchanged state as a new edit: a full-chart save and an empty undo step.
   const commitOne = useCallback(
     (key: string) => {
+      if (!bufferedRef.current.has(key)) return;
       const timer = idleTimersRef.current.get(key);
       if (timer !== undefined) {
         clearTimeout(timer);

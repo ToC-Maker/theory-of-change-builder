@@ -9,6 +9,9 @@
 //      produces exactly one `onDataChange` invocation. (Red-Team Critical
 //      finding "Slider callsite migration": this is the intended L3 fix.)
 //   4. Multiple synchronous mutate() calls collapse to a single notify.
+//   5. commit() of a key with nothing buffered notifies nobody: closing an
+//      editor that changed nothing must not look like an edit (a save
+//      and an undo step).
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useGraphMutation } from '../../src/hooks/useGraphMutation';
@@ -119,5 +122,109 @@ describe('useGraphMutation.commit', () => {
     const emitted = onDataChange.mock.calls[0]?.[0];
     expect(emitted?.curvature).toBe(0.6);
     expect(emitted?.textSize).toBe(2);
+  });
+});
+
+describe('useGraphMutation.commit with nothing buffered', () => {
+  it('commit(key) for a key that was never written does not notify the parent', async () => {
+    // Opening a node editor and closing it with Escape (or blurring a
+    // field that was never typed in) commits the title/details keys.
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+    act(() => {
+      result.current.commit('title-n1');
+      result.current.commit('details-n1');
+    });
+    await flushMicrotasks();
+
+    expect(onDataChange).not.toHaveBeenCalled();
+  });
+
+  it('commit() with no arguments and nothing buffered does not notify the parent', async () => {
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+    act(() => {
+      result.current.commit();
+    });
+    await flushMicrotasks();
+
+    expect(onDataChange).not.toHaveBeenCalled();
+  });
+
+  it('commit(key) for an unrelated key leaves another key buffered and notifies once, when that one flushes', async () => {
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+    act(() => {
+      result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.9 }), 'curvature');
+      result.current.commit('title-n1');
+    });
+    await flushMicrotasks();
+    expect(onDataChange).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.commit('curvature');
+    });
+    await flushMicrotasks();
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    expect(onDataChange.mock.calls[0]?.[0].curvature).toBe(0.9);
+  });
+
+  it('commit(key) after the idle timer already flushed that key does not notify a second time', async () => {
+    // Typing, pausing 200ms (idle flush notifies), then closing the
+    // editor: the close-time commit has nothing new to report. A second
+    // notify would push an identical state as an extra undo step and an
+    // extra save.
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced((prev) => ({ ...prev, title: 'typed' }), 'title-n1');
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(200);
+        await Promise.resolve();
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        result.current.commit('title-n1');
+        await Promise.resolve();
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('typing after an idle flush buffers the key again, so the close-time commit still notifies', async () => {
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced((prev) => ({ ...prev, title: 'ty' }), 'title-n1');
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(200);
+        await Promise.resolve();
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        result.current.mutateDebounced((prev) => ({ ...prev, title: 'typed' }), 'title-n1');
+        result.current.commit('title-n1');
+        await Promise.resolve();
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(2);
+      expect(onDataChange.mock.calls[1]?.[0].title).toBe('typed');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

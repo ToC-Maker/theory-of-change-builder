@@ -157,8 +157,9 @@ export function NodeEditor(props: NodeEditorProps) {
 
   // Cleanup: flush buffered title + details writes on unmount. This is
   // the canonical "close → commit" edge for the editor. Calling commit
-  // with the current selection key is safe even if nothing's buffered
-  // (the underlying useGraphMutation no-ops on an unknown key).
+  // with the current selection key is safe even if nothing's buffered:
+  // useGraphMutation skips keys it holds no write for, so closing an
+  // editor that changed nothing notifies the parent of nothing.
   //
   // We track the LATEST commit closures via refs: `commitTitle` /
   // `commitDetails` are `useCallback`-wrapped with `[commit, selKey]`
