@@ -194,21 +194,25 @@ export function useKeyboardShortcuts({
 
         return {
           ...prevData,
-          sections: prevData.sections.map((section, sIndex) => ({
-            ...section,
-            columns: (sIndex === targetSectionIndex && !targetHasColumns
-              ? [{ nodes: [] }]
-              : section.columns
-            ).map((column, cIndex) => {
-              if (sIndex === sectionIndex && cIndex === columnIndex) {
-                return { ...column, nodes: column.nodes.filter((node) => node.id !== nodeId) };
-              }
-              if (sIndex === targetSectionIndex && cIndex === destinationIndex) {
-                return { ...column, nodes: [...column.nodes, nodeWithPosition] };
-              }
-              return column;
-            }),
-          })),
+          sections: prevData.sections.map((section, sIndex) => {
+            if (sIndex !== sectionIndex && sIndex !== targetSectionIndex) return section;
+            const columns =
+              sIndex === targetSectionIndex && !targetHasColumns
+                ? [{ nodes: [] }]
+                : section.columns;
+            return {
+              ...section,
+              columns: columns.map((column, cIndex) => {
+                if (sIndex === sectionIndex && cIndex === columnIndex) {
+                  return { ...column, nodes: column.nodes.filter((node) => node.id !== nodeId) };
+                }
+                if (sIndex === targetSectionIndex && cIndex === destinationIndex) {
+                  return { ...column, nodes: [...column.nodes, nodeWithPosition] };
+                }
+                return column;
+              }),
+            };
+          }),
         };
       });
     },

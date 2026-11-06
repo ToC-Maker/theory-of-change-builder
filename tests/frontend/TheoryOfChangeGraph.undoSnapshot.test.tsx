@@ -65,67 +65,63 @@ function Controlled({ initial, onChange }: { initial: ToCData; onChange: (d: ToC
 
 const nodeIds = (col: ToCData['sections'][number]['columns'][number]) => col.nodes.map((n) => n.id);
 
-async function clickAndCollect(testId: string, index = 0) {
+// Renders the graph on frozen data, runs `edit`, and returns the one change
+// the parent was notified of. A plain click inside an async act keeps the
+// production order: the parent is notified before React renders and
+// re-absorbs the old prop.
+async function editAndCollect(edit: () => Promise<void>) {
   const data = deepFreeze(makeData());
   const before = JSON.parse(JSON.stringify(data));
   const onDataChange = vi.fn();
   render(<Controlled initial={data} onChange={onDataChange} />);
-  const gutter = document.querySelectorAll(`[data-testid="${testId}"]`)[index];
-  expect(gutter).toBeTruthy();
-  // A plain click inside an async act keeps the production order: the
-  // parent is notified before React renders and re-absorbs the old prop.
-  await act(async () => {
-    (gutter as HTMLElement).click();
-  });
+  await edit();
   expect(onDataChange).toHaveBeenCalledTimes(1);
   expect(data).toEqual(before);
   return onDataChange.mock.calls[0][0] as ToCData;
 }
 
+const clickGutter = (testId: string, index = 0) =>
+  editAndCollect(async () => {
+    const gutter = document.querySelectorAll(`[data-testid="${testId}"]`)[index] as HTMLElement;
+    expect(gutter).toBeTruthy();
+    await act(async () => {
+      gutter.click();
+    });
+  });
+
 describe('adding a column or section builds new state and leaves the previous state intact', () => {
   it('column before the first column', async () => {
-    const next = await clickAndCollect('add-column-before-0-0');
+    const next = await clickGutter('add-column-before-0-0');
     expect(next.sections[0].columns.map(nodeIds)).toEqual([[], ['a'], ['b']]);
   });
 
   it('column between two columns', async () => {
-    const next = await clickAndCollect('add-column-after-0-0');
+    const next = await clickGutter('add-column-after-0-0');
     expect(next.sections[0].columns.map(nodeIds)).toEqual([['a'], [], ['b']]);
   });
 
   it('column after the last column', async () => {
-    const next = await clickAndCollect('add-column-after-0-1');
+    const next = await clickGutter('add-column-after-0-1');
     expect(next.sections[0].columns.map(nodeIds)).toEqual([['a'], ['b'], []]);
   });
 
   it('section before the first section', async () => {
-    const next = await clickAndCollect('add-section-before', 0);
+    const next = await clickGutter('add-section-before', 0);
     expect(next.sections.map((s) => s.title)).toEqual(['New Section', 'S1', 'S2']);
   });
 
   it('section between two sections', async () => {
-    const next = await clickAndCollect('add-section-before', 1);
+    const next = await clickGutter('add-section-before', 1);
     expect(next.sections.map((s) => s.title)).toEqual(['S1', 'New Section', 'S2']);
   });
 
   it('section after the last section', async () => {
-    const next = await clickAndCollect('add-section-after-last');
+    const next = await clickGutter('add-section-after-last');
     expect(next.sections.map((s) => s.title)).toEqual(['S1', 'S2', 'New Section']);
   });
 });
 
 describe('other edits leave the previous state intact', () => {
-  async function editAndCollect(edit: () => Promise<void>) {
-    const data = deepFreeze(makeData());
-    const before = JSON.parse(JSON.stringify(data));
-    const onDataChange = vi.fn();
-    render(<Controlled initial={data} onChange={onDataChange} />);
-    await edit();
-    expect(onDataChange).toHaveBeenCalledTimes(1);
-    expect(data).toEqual(before);
-    return onDataChange.mock.calls[0][0] as ToCData;
-  }
-
   const clickById = (testId: string) =>
     act(async () => {
       (document.querySelector(`[data-testid="${testId}"]`) as HTMLElement).click();
