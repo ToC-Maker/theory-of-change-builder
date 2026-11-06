@@ -58,7 +58,7 @@ export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHan
       <button
         type="button"
         tabIndex={-1}
-        aria-label="Drag to connect from left edge"
+        aria-hidden="true"
         data-tocb-connection-handle={`${nodeId}|left`}
         onPointerDown={left.onPointerDown}
         // The handle is interactive; suppress the parent node's
@@ -72,7 +72,7 @@ export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHan
       <button
         type="button"
         tabIndex={-1}
-        aria-label="Drag to connect from right edge"
+        aria-hidden="true"
         data-tocb-connection-handle={`${nodeId}|right`}
         onPointerDown={right.onPointerDown}
         onClick={(e) => e.stopPropagation()}

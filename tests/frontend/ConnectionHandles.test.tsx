@@ -13,7 +13,7 @@
 //     `bindHandle(nodeId, side)`.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen } from '@testing-library/react';
 import { ConnectionHandles } from '../../src/components/canvas/ConnectionHandles';
 import type { HandleSide } from '../../src/hooks/useConnectionDrag';
 
@@ -52,6 +52,14 @@ describe('ConnectionHandles', () => {
     ) as HTMLElement;
     fireEvent.pointerDown(right, { pointerId: 1 });
     expect(onPointerDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps both handles out of the accessibility tree', () => {
+    // Pointer-only affordances that do nothing on activation: a screen
+    // reader would list two dead buttons on every node.
+    render(<ConnectionHandles nodeId="n-1" visible={true} bindHandle={makeBindHandle(vi.fn())} />);
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getAllByRole('button', { hidden: true })).toHaveLength(2);
   });
 
   it('keeps hidden handles out of the keyboard tab order', () => {
