@@ -3602,9 +3602,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                   </div>
                   <p className="font-medium text-gray-700">Generate a full draft in one pass.</p>
                   <p className="mt-2 text-xs">
-                    Describe what you want to build; that is enough on its own. Attaching documents
-                    is optional and helps when you have source material. Generate runs a deep
-                    analysis and writes your Theory of Change directly on the canvas.
+                    Describe what you want to build, attach documents, or do both: either one is
+                    enough to start. Documents help when you have source material. Generate runs a
+                    deep analysis and writes your Theory of Change directly on the canvas.
                   </p>
                   <p className="mt-2 text-xs">
                     Once you submit, this view switches to chat — you can follow the cost ticking
@@ -4169,7 +4169,7 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                           void startGeneration();
                         }
                       }}
-                      placeholder="Describe it (documents optional)…"
+                      placeholder="A description, files, or both…"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none overflow-y-auto"
                       disabled={isLoading || isStreaming}
                       rows={1}
