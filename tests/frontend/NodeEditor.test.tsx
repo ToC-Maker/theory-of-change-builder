@@ -13,6 +13,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { NodeEditor } from '../../src/components/node-editor/NodeEditor';
+import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
 import type { ToCData } from '../../src/types';
 
 // Minimal `useGraphMutation`-shaped API so `useNodeProperties` works
@@ -161,17 +162,32 @@ describe('NodeEditor', () => {
       vi.restoreAllMocks();
     });
 
-    // jsdom does no layout: fake a node mid-window and a panel far taller
-    // than the room around it.
-    function fakeLayout() {
+    interface Box {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }
+
+    // jsdom does no layout: fake a 1000x700 window, a node, and a panel
+    // with the given box and content. `content` is the panel's scrollHeight
+    // and clientHeight, which differ when the panel is capped and scrolls.
+    function fakeLayout(
+      opts: {
+        node?: Box;
+        panel?: Box;
+        content?: { scrollHeight: number; clientHeight: number };
+      } = {},
+    ) {
+      const node = opts.node ?? { left: 400, top: 300, width: 80, height: 40 };
+      const panel = opts.panel ?? { left: 0, top: 0, width: 288, height: 2000 };
+      const content = opts.content ?? { scrollHeight: 1998, clientHeight: 1998 };
       Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 });
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 });
       vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
         this: HTMLElement,
       ) {
-        const r = this.classList.contains('node-editor')
-          ? { left: 0, top: 0, width: 288, height: 2000 }
-          : { left: 400, top: 300, width: 80, height: 40 };
+        const r = this.classList.contains('node-editor') ? panel : node;
         return {
           ...r,
           right: r.left + r.width,
@@ -181,14 +197,18 @@ describe('NodeEditor', () => {
           toJSON: () => ({}),
         } as DOMRect;
       });
-      vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(1998);
-      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(1998);
+      vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(content.scrollHeight);
+      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(content.clientHeight);
+    }
+
+    function openPanel() {
+      renderEditor({ selectedNodeIds: ['a'], data: makeData([{ id: 'a' }]) });
+      return document.querySelector('.node-editor') as HTMLElement;
     }
 
     it('caps its height to the room next to the node and scrolls past it', () => {
       fakeLayout();
-      renderEditor({ selectedNodeIds: ['a'], data: makeData([{ id: 'a' }]) });
-      const panel = document.querySelector('.node-editor') as HTMLElement;
+      const panel = openPanel();
 
       // Below the node: 700 - 8 - (340 + 12) = 340px; above only 239px.
       expect(panel.style.top).toBe('352px');
@@ -196,20 +216,60 @@ describe('NodeEditor', () => {
       expect(panel.className).toContain('overflow-y-auto');
     });
 
-    it('keeps the wheel for its own scrolling, except for zoom', () => {
-      fakeLayout();
-      renderEditor({ selectedNodeIds: ['a'], data: makeData([{ id: 'a' }]) });
-      const panel = document.querySelector('.node-editor') as HTMLElement;
-      const canvasWheel = vi.fn();
-      document.addEventListener('wheel', canvasWheel);
-      try {
-        fireEvent.wheel(panel, { deltaY: 100 });
-        expect(canvasWheel).not.toHaveBeenCalled();
-        fireEvent.wheel(panel, { deltaY: -100, ctrlKey: true });
-        expect(canvasWheel).toHaveBeenCalledTimes(1);
-      } finally {
-        document.removeEventListener('wheel', canvasWheel);
+    it('moves above a node near the bottom of the window when it does not fit below', () => {
+      // Room below: 692 - (640 + 12) = 40px; above: 600 - 12 - 49 = 539px.
+      fakeLayout({
+        node: { left: 400, top: 600, width: 80, height: 40 },
+        panel: { left: 0, top: 0, width: 288, height: 400 },
+        content: { scrollHeight: 398, clientHeight: 398 },
+      });
+      const panel = openPanel();
+
+      expect(panel.style.top).toBe(`${600 - 12 - 400}px`);
+    });
+
+    it('stays below the top bar when its node is scrolled up behind it', () => {
+      fakeLayout({
+        node: { left: 400, top: -300, width: 80, height: 40 },
+        panel: { left: 0, top: 0, width: 288, height: 400 },
+        content: { scrollHeight: 398, clientHeight: 398 },
+      });
+      const panel = openPanel();
+
+      expect(parseFloat(panel.style.top)).toBeGreaterThanOrEqual(TOP_BAR_HEIGHT_PX);
+    });
+
+    describe('the mouse wheel', () => {
+      // A capped, scrolling panel: its content is far taller than its box.
+      const scrollingPanel = {
+        panel: { left: 0, top: 0, width: 288, height: 340 },
+        content: { scrollHeight: 1998, clientHeight: 338 },
+      };
+
+      function wheelReachingCanvas(panel: HTMLElement, init: WheelEventInit) {
+        const canvasWheel = vi.fn();
+        document.addEventListener('wheel', canvasWheel);
+        try {
+          fireEvent.wheel(panel, init);
+        } finally {
+          document.removeEventListener('wheel', canvasWheel);
+        }
+        return canvasWheel.mock.calls.length > 0;
       }
+
+      it('scrolls the panel instead of panning the canvas when the panel can scroll', () => {
+        fakeLayout(scrollingPanel);
+        const panel = openPanel();
+
+        expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(false);
+      });
+
+      it('still zooms the canvas on Ctrl+wheel over a scrolling panel', () => {
+        fakeLayout(scrollingPanel);
+        const panel = openPanel();
+
+        expect(wheelReachingCanvas(panel, { deltaY: -100, ctrlKey: true })).toBe(true);
+      });
     });
   });
 

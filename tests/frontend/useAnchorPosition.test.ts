@@ -506,6 +506,74 @@ describe('useAnchorPosition', () => {
       expect(result.current?.y).toBe(200);
     });
 
+    it('lets a right placement take the whole usable band', () => {
+      const { result } = place(
+        { left: 300, top: 200, width: 1, height: 1 },
+        makeOverlay(320, 330),
+        { placement: 'right', flip: true },
+      );
+      expect(result.current?.maxHeight).toBe(700 - MARGIN - (TOP_INSET + MARGIN));
+    });
+
+    it('keeps the overlay inside the right edge when its anchor is near it', () => {
+      // Centered on the anchor it would start at 980 - 144 = 836 and end
+      // past the window; the last place it fits starts at 1000 - 8 - 288.
+      const { result } = place(
+        { left: 940, top: 300, width: 80, height: 40 },
+        makeOverlay(288, 100),
+      );
+      expect(result.current?.x).toBe(1000 - MARGIN - 288);
+    });
+
+    it('keeps following the anchor frame by frame after a window resize, then stops', () => {
+      vi.useFakeTimers({
+        toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance'],
+      });
+      try {
+        const anchor = makeAnchorRef({ left: 400, top: 300, width: 80, height: 40 });
+        const overlay = makeOverlay(288, 100);
+        const { result } = renderHook(() =>
+          useAnchorPosition({
+            anchorRef: anchor,
+            overlayRef: overlay,
+            camera: { x: 0, y: 0, z: 1 },
+            placement: 'bottom',
+            offset: 12,
+            flip: true,
+            topInset: TOP_INSET,
+          }),
+        );
+        expect(result.current?.x).toBe(400 + 40 - 144);
+
+        act(() => {
+          window.dispatchEvent(new Event('resize'));
+        });
+        // The first frame after the resize has run when the canvas
+        // re-centres itself, which no signal the hook listens to reports:
+        // only a later frame of the loop sees the anchor move.
+        act(() => {
+          vi.advanceTimersByTime(20);
+        });
+        setRect(anchor.current!, { left: 600, top: 300, width: 80, height: 40 });
+        act(() => {
+          vi.advanceTimersByTime(50);
+        });
+        expect(result.current?.x).toBe(600 + 40 - 144);
+
+        // Past the follow window the loop has ended.
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+        setRect(anchor.current!, { left: 700, top: 300, width: 80, height: 40 });
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        expect(result.current?.x).toBe(600 + 40 - 144);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('repositions when the window is resized', () => {
       const { result } = place(
         { left: 400, top: 330, width: 80, height: 40 },

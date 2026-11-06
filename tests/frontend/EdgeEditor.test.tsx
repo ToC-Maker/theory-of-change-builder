@@ -11,6 +11,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { EdgeEditor } from '../../src/components/edge-editor/EdgeEditor';
+import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
 import type { ToCData } from '../../src/types';
 
 function makeMutationApi(initial: ToCData) {
@@ -205,17 +206,33 @@ describe('EdgeEditor', () => {
       vi.restoreAllMocks();
     });
 
-    // jsdom does no layout: fake a connection midpoint near the
-    // bottom-right of a 1000x700 window and a panel taller than the room.
-    function fakeLayout() {
+    interface Box {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    }
+
+    // jsdom does no layout: fake a 1000x700 window, a connection midpoint
+    // and a panel with the given box and content. `content` is the panel's
+    // scrollHeight and clientHeight, which differ when the panel is capped
+    // and scrolls.
+    function fakeLayout(
+      opts: {
+        midpoint?: Box;
+        panel?: Box;
+        content?: { scrollHeight: number; clientHeight: number };
+      } = {},
+    ) {
+      const midpoint = opts.midpoint ?? { left: 900, top: 600, width: 1, height: 1 };
+      const panel = opts.panel ?? { left: 0, top: 0, width: 320, height: 330 };
+      const content = opts.content ?? { scrollHeight: 328, clientHeight: 328 };
       Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 });
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 });
       vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
         this: HTMLElement,
       ) {
-        const r = this.classList.contains('edge-editor')
-          ? { left: 0, top: 0, width: 320, height: 330 }
-          : { left: 900, top: 600, width: 1, height: 1 };
+        const r = this.classList.contains('edge-editor') ? panel : midpoint;
         return {
           ...r,
           right: r.left + r.width,
@@ -225,12 +242,18 @@ describe('EdgeEditor', () => {
           toJSON: () => ({}),
         } as DOMRect;
       });
+      vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(content.scrollHeight);
+      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(content.clientHeight);
+    }
+
+    function openPanel() {
+      renderEdgeEditor({});
+      return document.querySelector('.edge-editor') as HTMLElement;
     }
 
     it('moves to the left of the midpoint and up when it would leave the window', () => {
       fakeLayout();
-      renderEdgeEditor({});
-      const panel = document.querySelector('.edge-editor') as HTMLElement;
+      const panel = openPanel();
 
       // Right of the point would end at 901 + 12 + 320 > 992: flip left.
       expect(panel.style.left).toBe(`${900 - 12 - 320}px`);
@@ -238,20 +261,53 @@ describe('EdgeEditor', () => {
       expect(panel.style.top).toBe(`${700 - 8 - 330}px`);
     });
 
-    it('keeps the wheel for its own scrolling, except for zoom', () => {
+    it('caps its height to the usable band and scrolls past it', () => {
       fakeLayout();
-      renderEdgeEditor({});
-      const panel = document.querySelector('.edge-editor') as HTMLElement;
-      const canvasWheel = vi.fn();
-      document.addEventListener('wheel', canvasWheel);
-      try {
-        fireEvent.wheel(panel, { deltaY: 100 });
-        expect(canvasWheel).not.toHaveBeenCalled();
-        fireEvent.wheel(panel, { deltaY: -100, ctrlKey: true });
-        expect(canvasWheel).toHaveBeenCalledTimes(1);
-      } finally {
-        document.removeEventListener('wheel', canvasWheel);
+      const panel = openPanel();
+
+      // The band runs from the top bar (41) + 8 to the bottom edge - 8.
+      expect(panel.style.maxHeight).toBe(`${700 - 8 - (41 + 8)}px`);
+      expect(panel.className).toContain('overflow-y-auto');
+    });
+
+    it('stays below the top bar when its midpoint is scrolled up behind it', () => {
+      fakeLayout({ midpoint: { left: 500, top: -300, width: 1, height: 1 } });
+      const panel = openPanel();
+
+      expect(parseFloat(panel.style.top)).toBeGreaterThanOrEqual(TOP_BAR_HEIGHT_PX);
+    });
+
+    describe('the mouse wheel', () => {
+      // A capped, scrolling panel: its content is far taller than its box.
+      const scrollingPanel = {
+        panel: { left: 0, top: 0, width: 320, height: 330 },
+        content: { scrollHeight: 900, clientHeight: 328 },
+      };
+
+      function wheelReachingCanvas(panel: HTMLElement, init: WheelEventInit) {
+        const canvasWheel = vi.fn();
+        document.addEventListener('wheel', canvasWheel);
+        try {
+          fireEvent.wheel(panel, init);
+        } finally {
+          document.removeEventListener('wheel', canvasWheel);
+        }
+        return canvasWheel.mock.calls.length > 0;
       }
+
+      it('scrolls the panel instead of panning the canvas when the panel can scroll', () => {
+        fakeLayout(scrollingPanel);
+        const panel = openPanel();
+
+        expect(wheelReachingCanvas(panel, { deltaY: 100 })).toBe(false);
+      });
+
+      it('still zooms the canvas on Ctrl+wheel over a scrolling panel', () => {
+        fakeLayout(scrollingPanel);
+        const panel = openPanel();
+
+        expect(wheelReachingCanvas(panel, { deltaY: -100, ctrlKey: true })).toBe(true);
+      });
     });
   });
 });
