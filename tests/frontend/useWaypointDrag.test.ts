@@ -463,9 +463,9 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     it('hears a pointerup dispatched before passive effects flush, then runs the next drag normally', () => {
       const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
 
-      // Down + up inside ONE act() callback: the passive effect that
-      // used to install the document listeners has not run when the
-      // pointerup dispatches.
+      // Down + up inside ONE act() callback: React has not flushed
+      // passive effects when the pointerup dispatches, so the listeners
+      // must already be installed.
       act(() => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)

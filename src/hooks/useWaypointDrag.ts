@@ -377,12 +377,11 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   );
 
   // The exact handler references currently subscribed on `document`.
-  // They are installed imperatively in `startGesture` (not from an
-  // effect keyed on `dragState`): an effect only attaches after React
+  // They are installed imperatively in `startGesture`, not from an
+  // effect keyed on `dragState`: an effect only attaches after React
   // has flushed passive effects, so a pointerup dispatched in the same
-  // task as the pointerdown (a trackpad tap) was never heard and the
-  // gesture stayed active. The listeners exist before `startGesture`
-  // returns, as in `usePointerDrag`.
+  // task as the pointerdown (a trackpad tap) would go unheard and leave
+  // the gesture active.
   const docListenersRef = useRef<{
     move: (e: PointerEvent) => void;
     up: (e: PointerEvent) => void;

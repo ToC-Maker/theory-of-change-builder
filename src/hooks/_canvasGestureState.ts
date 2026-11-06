@@ -1,12 +1,14 @@
 // Shared canvas-gesture coordination — one module-scope boolean ref.
 //
-// Mutual-exclusion primitive shared by three drag hooks across the
-// figma-redesign PR series. Each checks the flag on `pointerdown` and
-// short-circuits if another canvas gesture is in flight:
+// Mutual-exclusion primitive shared by the three drag hooks. Each checks
+// the flag on `pointerdown`, short-circuits if another canvas gesture is
+// in flight, and holds the flag itself for the length of its own gesture:
 //
-//   PR 4: `usePointerDrag`     (node drag)           — primary writer.
-//   PR 5: `useConnectionDrag`  (connection handles)  — reader.
-//   PR 7: `useWaypointDrag`    (path waypoints)      — reader.
+//   `usePointerDrag`     (node drag)
+//   `useConnectionDrag`  (connection handles)
+//   `useWaypointDrag`    (path waypoints)
+//
+// `useZoomPan` only reads it, so a canvas pan never starts under a drag.
 //
 // Why module-scope (not React state):
 //   - Pointer-event handlers fire OUTSIDE the React render cycle. A

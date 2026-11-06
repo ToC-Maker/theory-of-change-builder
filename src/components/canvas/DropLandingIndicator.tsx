@@ -1,8 +1,8 @@
 // Drag landing indicator — the thin mark that shows where a dragged
-// node will land. Deliberately NOT node-shaped: an earlier version drew
-// a second node outline next to the cursor-following clone and readers
-// could not tell which one was the node. An insertion line (or a tinted
-// gutter for a new column) cannot be mistaken for one.
+// node will land. Deliberately NOT node-shaped: a second node outline
+// next to the cursor-following clone would be indistinguishable from the
+// node being dragged. An insertion line (or a tinted gutter for a new
+// column) cannot be mistaken for one.
 //
 // Absolutely positioned, pointer-transparent overlay in the canvas
 // transform stack, so it never reflows the columns and moves with

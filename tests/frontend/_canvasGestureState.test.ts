@@ -1,13 +1,9 @@
-// Tests for the cross-PR canvas gesture mutex module.
-//
-// PR 4 ships `_canvasGestureState.ts` as the primitive PR 5
-// (`useConnectionDrag`) and PR 7 (`useWaypointDrag`) lean on. The
-// failure mode the test-analyzer flagged (and that motivates having
-// this file at all): a future PR adds its own drag hook, forgets to
-// clear the flag on cleanup, and node-drag silently stops working
-// from then on with no console log to triage by. The reader-side
-// contract is dead simple — three exports, one mutable boolean — but
-// "simple" is exactly when regressions land unobserved.
+// Tests for the canvas gesture mutex module, which the node, connection
+// and waypoint drag hooks all lean on. The failure mode that motivates
+// this file: a drag hook forgets to clear the flag on cleanup, and every
+// other drag silently stops working from then on with no console log to
+// triage by. The contract is dead simple — three exports, one mutable
+// boolean — but "simple" is exactly when regressions land unobserved.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   isCanvasGestureActive,
@@ -50,7 +46,7 @@ describe('_canvasGestureState', () => {
   it('survives multiple readers — get returns the same value', () => {
     // The point of a module singleton: every reader sees the same flag
     // without coordination. This pins the no-stateful-snapshot
-    // contract PR 5/7 lean on.
+    // contract the drag hooks lean on.
     setCanvasGestureActive(true);
     const a = isCanvasGestureActive();
     const b = isCanvasGestureActive();
@@ -61,11 +57,12 @@ describe('_canvasGestureState', () => {
   });
 });
 
-// A canvas gesture must never turn into a text selection or a native
-// drag of an existing selection: either one takes over the pointer
-// (the browser fires `pointercancel`) or leaves highlighted text behind
-// the connection line. The module owns that for all three gesture
-// hooks, so it is pinned here once.
+// A canvas gesture must never turn into a text selection, or into a
+// native drag of an existing selection. A native drag takes over the
+// pointer (the browser fires `pointercancel`) and kills the gesture; a
+// selection made by the drag leaves highlighted text behind the
+// connection line. The module owns that for all three gesture hooks, so
+// it is pinned here once.
 describe('_canvasGestureState selection suppression', () => {
   const MARK = 'tocb-canvas-gesture';
 

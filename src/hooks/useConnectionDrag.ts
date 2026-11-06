@@ -181,12 +181,11 @@ export function useConnectionDrag(args: UseConnectionDragArgs): UseConnectionDra
   const captureElRef = useRef<HTMLElement | null>(null);
 
   // The exact handler references currently subscribed on `document`.
-  // They are installed imperatively in `startDrag` (not from an effect
-  // keyed on `dragState`): an effect only attaches after React has
+  // They are installed imperatively in `startDrag`, not from an effect
+  // keyed on `dragState`: an effect only attaches after React has
   // flushed passive effects, so a pointerup dispatched in the same task
-  // as the pointerdown (a trackpad tap) was never heard and the gesture
-  // stayed active, handing the next drag a stale source. The listeners
-  // exist before `startDrag` returns, as in `usePointerDrag`.
+  // as the pointerdown (a trackpad tap) would go unheard and leave the
+  // gesture active, handing the next drag a stale source.
   const docListenersRef = useRef<{
     move: (e: PointerEvent) => void;
     up: (e: PointerEvent) => void;

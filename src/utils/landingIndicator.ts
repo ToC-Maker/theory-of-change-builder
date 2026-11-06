@@ -1,13 +1,15 @@
 // Where the drag landing indicator draws, in CONTENT space (container-
 // relative px with the zoom transform factored out — the same space as
-// the layout snapshot, `node.yPosition` and the node wrappers' `top`).
+// the layout snapshot's column rects).
 //
 // The indicator must agree with what `handleDrop` does on release, so
 // node targets go through `computeDropCenterY` (the single placement
-// formula) instead of re-deriving it. Note the two Y conventions:
-// `dragOverLocation.yPosition` is the CURSOR's column-local Y, while a
-// node's stored `yPosition` is its CENTER; the node renders with
-// `top = centerY - height/2`, so that is the edge the line marks.
+// formula) instead of re-deriving it. Note the Y conventions: the drop
+// target's `yPosition` is the CURSOR's Y, and a node's stored
+// `yPosition` is its CENTER Y, both column-local (0 is the top of the
+// column body), as is the `top` of the node wrapper, which renders at
+// `centerY - height/2`. That is the edge the line marks, so the column's
+// content-space `top` is added to reach content space.
 import type { DragState } from '../hooks/usePointerDrag';
 import type { LayoutSnapshot } from '../hooks/useGraphLayout';
 import { computeDropCenterY } from './nodePosition';

@@ -487,10 +487,10 @@ describe('useConnectionDrag', () => {
       mockElementFromPoint();
       const { result } = setupHook({ data: sampleData(), onConnect });
 
-      // Down + up inside ONE act() callback: the passive effect that
-      // used to install the document listeners has not run when the
-      // pointerup dispatches (a trackpad tap whose up lands before
-      // React's effect flush).
+      // Down + up inside ONE act() callback: React has not flushed
+      // passive effects when the pointerup dispatches (a trackpad tap
+      // whose up lands before the flush), so the listeners must already
+      // be installed.
       act(() => {
         result.current
           .bindHandle('source', 'right')
