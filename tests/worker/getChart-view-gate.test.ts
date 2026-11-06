@@ -3,9 +3,10 @@
 //
 // An owned chart whose `link_sharing_level` is `restricted` (or NULL, which
 // the handler treats as `restricted`) must refuse an unauthenticated viewer
-// with 403; any other combination must serve the chart. This gate has locked
-// owners' public view links out twice in production, so the five cells that
-// matter are pinned here, each with no Authorization header:
+// with 403; any other combination must serve the chart. `restricted` is the
+// column default, so a mistake here silently changes who can open owners' view
+// links. The five cells that matter are pinned here, each with no Authorization
+// header:
 //
 //   owner? | level      | expected
 //   -------+------------+---------

@@ -90,7 +90,7 @@ The AI modifies graphs via structured JSON edits in `src/utils/graphEdits.ts`:
 
 Three access patterns:
 1. `/` - Create new chart (edit mode)
-2. `/chart/{chartId}` - View-only (public, except an owned chart at `restricted`, which needs a signed-in approved user)
+2. `/chart/{chartId}` - View-only (public, except an owned chart at `restricted` or NULL, which needs the signed-in owner or an approved user)
 3. `/edit/{editToken}` - Edit mode (permission-controlled)
 
 **Permission System:**

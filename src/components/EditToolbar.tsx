@@ -779,8 +779,9 @@ export function EditToolbar({
     showMobileMenu,
   ]);
 
-  // The General access menu opens below the last control of the scrollable
-  // share panel, so its last option can start below the fold; scroll it into view.
+  // The General access menu overlays the bottom of the scrollable share panel and
+  // can extend past the end of its content, leaving its last option below the
+  // fold; scroll it into view.
   useEffect(() => {
     if (showGeneralAccessDropdown) {
       generalAccessMenuRef.current?.scrollIntoView({ block: 'nearest' });
@@ -809,7 +810,6 @@ export function EditToolbar({
 
   if (!showEditButton) return null;
 
-  // Unknown levels read as restricted, as on the server.
   const currentAccess =
     GENERAL_ACCESS_OPTIONS.find((option) => option.value === linkSharingLevel) ??
     GENERAL_ACCESS_OPTIONS[0];
