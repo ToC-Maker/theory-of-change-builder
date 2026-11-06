@@ -590,6 +590,19 @@ function ToCViewerOnly() {
         </div>
       </div>
 
+      {/* Read-only chip - top-left, opposite the Make a Copy button. The viewer
+        route mounts no TopBar, so this is the only place it can say so
+        (hidden in iframes like the rest of the fixed chrome). */}
+      {!isInIframe && (
+        <span
+          className="fixed z-50 px-2 py-1 text-xs font-medium text-gray-600 bg-white/90 border border-gray-200 rounded-lg shadow-sm"
+          style={{ top: '16px', left: '16px' }}
+          title="You can look at this chart but not change it"
+        >
+          View-only
+        </span>
+      )}
+
       {/* Make a Copy button - fixed position outside transform context (hidden in iframes) */}
       {!isInIframe && (
         <button

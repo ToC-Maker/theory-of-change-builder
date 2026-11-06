@@ -40,8 +40,8 @@ import { shortcuts } from '../../utils/keyboardShortcuts';
 type Breakpoint = 'sm' | 'md';
 
 export interface TopBarProps {
-  // Mode + selection (PR 1 strips the in-bar mode toggle; viewer mode
-  // shows a read-only badge instead).
+  // Mode + selection (PR 1 strips the in-bar mode toggle). The public
+  // viewer route carries its own "View-only" chip (ToCViewerOnly).
   editMode: boolean;
   showEditButton: boolean;
 
@@ -350,27 +350,21 @@ export function TopBar(props: TopBarProps) {
               </div>
             )}
             {bp === 'md' && isViewer && (
-              <>
-                {/* Same grace-close treatment as the edit-mode
-                  menubar group (44) — the wrapper covers the trigger
-                  and its dropdown panel — and the same full-height
-                  stretch (43). */}
-                <div
-                  className="flex items-stretch self-stretch"
-                  onPointerEnter={cancelGraceClose}
-                  onPointerLeave={handleMenubarPointerLeave}
-                >
-                  <HelpPanel
-                    isOpen={openMenuId === 'help'}
-                    onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
-                    // Viewer mode has only one menu — no sibling to
-                    // switch from. `onHoverOpen` is omitted (no-op).
-                  />
-                </div>
-                <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded">
-                  View-only
-                </span>
-              </>
+              // Same grace-close treatment as the edit-mode menubar
+              // group (44) — the wrapper covers the trigger and its
+              // dropdown panel — and the same full-height stretch (43).
+              <div
+                className="flex items-stretch self-stretch"
+                onPointerEnter={cancelGraceClose}
+                onPointerLeave={handleMenubarPointerLeave}
+              >
+                <HelpPanel
+                  isOpen={openMenuId === 'help'}
+                  onOpenChange={(next) => setOpenMenuId(next ? 'help' : null)}
+                  // Viewer mode has only one menu — no sibling to
+                  // switch from. `onHoverOpen` is omitted (no-op).
+                />
+              </div>
             )}
 
             {/* Below md the menubar lives in the hamburger drawer, so

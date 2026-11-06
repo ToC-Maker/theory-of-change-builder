@@ -106,11 +106,6 @@ describe('TopBar responsive layout', () => {
     expect(screen.queryByText(/sync now/i)).toBeNull();
   });
 
-  it('renders a read-only badge when showEditButton=false', () => {
-    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" showEditButton={false} />);
-    expect(screen.getByText(/view.?only|read.?only/i)).toBeInTheDocument();
-  });
-
   it('calls preventDefault on undo/redo mousedown so text-input focus survives', () => {
     // L2 mitigation: clicking the toolbar undo/redo while a text input
     // is focused must not steal focus before handleUndo / handleRedo
