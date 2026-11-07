@@ -241,6 +241,7 @@ export function AddControlZone({
     const zone = zoneRef.current;
     if (!zone) return;
     window.clearTimeout(hideTimer.current);
+    window.clearTimeout(intentTimer.current);
     intentTimer.current = undefined;
     const spot = placeControls(
       zone,

@@ -294,6 +294,24 @@ describe('add controls', () => {
         expect(stack.className).toContain('z-30');
       });
 
+      it('does not place the controls again when a click opens them inside the hover-intent window', () => {
+        layOut(400, 80);
+        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        const zone = zoneOf('add-zone-section-gap-0');
+        fireEvent.pointerEnter(zone, { pointerType: 'mouse', clientY: 100 });
+        advance(HOVER_INTENT_MS / 2);
+
+        fireEvent.click(zone.querySelector('[data-add-badge]')!, { clientY: 300 });
+        const stack = zone.querySelector<HTMLElement>('[data-revealed]')!;
+        // Centred on the click: 300 - 81 / 2.
+        expect(stack.style.top).toBe('259.5px');
+
+        // The timer armed by the pointer entering must not fire a second
+        // placement at the pointer's earlier position.
+        advance(HOVER_INTENT_MS);
+        expect(stack.style.top).toBe('259.5px');
+      });
+
       it('keeps the controls within the columns, below the section title bar', () => {
         layOut(400, 80);
         const stack = openAt(10);
