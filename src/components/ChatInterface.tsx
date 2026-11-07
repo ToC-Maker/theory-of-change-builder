@@ -650,6 +650,16 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
   );
 });
 
+// The chat message for an AI reply whose edits the app could not apply.
+function editErrorMessage(error: unknown): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
+    timestamp: new Date(),
+  };
+}
+
 export function ChatInterface({
   isCollapsed,
   onToggle,
@@ -2200,13 +2210,7 @@ export function ChatInterface({
                 });
 
                 // Add an error message to the chat
-                const errorMessage: ChatMessage = {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
-                  timestamp: new Date(),
-                };
-                setMessages((prev) => [...prev, errorMessage]);
+                setMessages((prev) => [...prev, editErrorMessage(error)]);
               }
             } else {
               console.log('No edit instructions, callback, or graph data:', {
@@ -3244,6 +3248,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
                 onAIEdit(graphData, applyEdits(graphData, editInstructions));
               } catch (error) {
                 console.error('Error applying graph edits:', error);
+                // Not logged as an AI edit: Generate does not log its assistant
+                // message, which a logged edit would reference.
+                setMessages((prev) => [...prev, editErrorMessage(error)]);
               }
             }
           },
