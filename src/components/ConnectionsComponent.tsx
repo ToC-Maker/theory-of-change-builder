@@ -195,11 +195,12 @@ export function ConnectionsComponent({
 
   // The editor addresses its connection by the two end nodes, so a
   // connection deleted by someone else (or left dangling by a deleted end
-  // node) closes the editor; otherwise the next keystroke in it would
-  // write against a line that is gone. Dropping the state, not just
-  // hiding the editor, keeps it closed if the connection comes back (an
-  // undo). The updater returns the same state while the connection
-  // exists, so ordinary edits cause no extra render.
+  // node) closes the editor instead of leaving it over a line that is
+  // gone, where a keystroke would go nowhere (`patchConnection` leaves a
+  // missing connection absent). Dropping the state, not just hiding the
+  // editor, keeps it closed if the connection comes back (an undo). The
+  // updater returns the same state while the connection exists, so
+  // ordinary edits cause no extra render.
   useLayoutEffect(() => {
     setSelectedEdge((current) => (current && hasConnection(data, current) ? current : null));
   }, [data]);

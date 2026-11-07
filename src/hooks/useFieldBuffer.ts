@@ -7,11 +7,11 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  * The buffer is seeded from `source` and reseeded when `resetKey` changes
  * (a different node or connection was selected). While the user types, the
  * buffer is the typed text and `source` follows it, so an unchanged or
- * echoing `source` never rewrites the field. When `source` changes to
- * something the user did not write, someone else changed the field, and the
- * buffer adopts it. Adopting never touches a field being typed in: the
- * chart keeps the user's text until it is saved, so a remote change to that
- * field cannot reach `source` before then.
+ * echoing `source` never rewrites the field. Any other change of `source`
+ * is adopted: the hook cannot tell a collaborator's save from a stale value
+ * the chart reverted to. Keeping a field stable under the user's hands while
+ * they type is therefore the chart's job (it keeps the user's unsaved text
+ * as `source`), not this hook's.
  *
  * `mixed` means `source` stands for several differing values (a multi-node
  * selection), so it is a placeholder, not something to show.

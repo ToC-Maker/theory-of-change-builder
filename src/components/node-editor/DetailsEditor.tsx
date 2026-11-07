@@ -40,7 +40,10 @@
 //   - Focus is inside it: `setMarkdown`, which also empties the undo
 //     history (see MDXEditor.tsx). The caret moves to the start of the
 //     document; no position is right in text someone else rewrote.
-// Neither fires `onChange`, so the text is not saved back.
+// Neither produces an `onChange` that is forwarded, so the text is not
+// saved back: `setMarkdown` is silent, and a fresh editor reports the text it
+// opened with, when that is not in normal form, as `onChange(text, true)`,
+// which is dropped (see below).
 //
 // MDXEditor also calls `onChange(text, true)` on open when the stored text
 // is not in its normal form. That reports no edit, so it is not forwarded;
@@ -63,22 +66,15 @@
 // fallback (retry button + plain-text preview) so the surrounding
 // NodeEditor stays functional.
 import { Suspense, lazy, useCallback, useLayoutEffect, useRef, useState } from 'react';
-import type { ComponentType, LazyExoticComponent, Ref } from 'react';
+import type { ComponentProps, ComponentType, LazyExoticComponent } from 'react';
 import type { MDXEditorMethods } from '@mdxeditor/editor';
+import type { MDXEditorComponent } from '../MDXEditor';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { loggingService } from '../../services/loggingService';
 
-// Subset of `MDXEditorComponent`'s prop signature that DetailsEditor
-// actually passes. Kept structural (not `typeof MDXEditorComponent`) so
-// the lazy-factory escape hatch doesn't drag in the heavy
-// `@mdxeditor/editor` types and force them into this file's chunk.
-interface MDXEditorPropsShape {
-  markdown: string;
-  onChange?: (markdown: string, initialMarkdownNormalize: boolean) => void;
-  editorRef?: Ref<MDXEditorMethods>;
-  placeholder?: string;
-  fontFamily?: string;
-}
+// The lazily loaded editor's props, read from the component itself. The
+// imports above are type-only, so the chunk still loads on demand.
+type MDXEditorProps = ComponentProps<typeof MDXEditorComponent>;
 
 interface DetailsEditorProps {
   markdown: string;
@@ -92,7 +88,7 @@ interface DetailsEditorProps {
    * to inject a rejecting promise (verifies the local ErrorBoundary).
    * Production callers should always use the default.
    */
-  lazyFactory?: () => LazyExoticComponent<ComponentType<MDXEditorPropsShape>>;
+  lazyFactory?: () => LazyExoticComponent<ComponentType<MDXEditorProps>>;
 }
 
 // Lazy import — defers the lexical / mdast / mdxeditor chunk (~600 KB
@@ -102,12 +98,8 @@ interface DetailsEditorProps {
 // Returned as a factory so Retry can rebuild a fresh lazy component
 // (React.lazy caches rejected promises — re-using the same instance
 // after a chunk-load failure would re-throw the cached rejection).
-function buildLazyMDXEditor(): LazyExoticComponent<ComponentType<MDXEditorPropsShape>> {
-  return lazy(() =>
-    import('../MDXEditor').then((m) => ({
-      default: m.MDXEditorComponent as ComponentType<MDXEditorPropsShape>,
-    })),
-  );
+function buildLazyMDXEditor(): LazyExoticComponent<ComponentType<MDXEditorProps>> {
+  return lazy(() => import('../MDXEditor').then((m) => ({ default: m.MDXEditorComponent })));
 }
 
 // Eager module-load: kicks off the chunk download as soon as this
