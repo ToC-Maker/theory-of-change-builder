@@ -4,6 +4,7 @@ import { handler as anthropicStream } from './api/anthropic-stream';
 import { handler as createChart } from './api/createChart';
 import { handler as getChart } from './api/getChart';
 import { handler as updateChart } from './api/updateChart';
+import { handler as pollChart } from './api/pollChart';
 import { handler as deleteChart } from './api/deleteChart';
 import { handler as getUserCharts } from './api/getUserCharts';
 import { handler as managePermissions } from './api/managePermissions';
@@ -37,6 +38,7 @@ const routes: [HttpMethod, string, Handler][] = [
   ['POST', '/api/createChart', createChart],
   ['GET', '/api/getChart', getChart],
   ['POST', '/api/updateChart', updateChart],
+  ['POST', '/api/pollChart', pollChart],
   ['DELETE', '/api/deleteChart', deleteChart],
   ['GET', '/api/getUserCharts', getUserCharts],
   ['*', '/api/managePermissions', managePermissions],
