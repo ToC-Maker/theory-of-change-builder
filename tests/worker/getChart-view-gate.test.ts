@@ -55,6 +55,8 @@ beforeAll(() => {
       const body = (await req.json()) as CapturedQuery;
       dbQueries.push(body);
       if (/^\s*SELECT .* FROM charts/is.test(body.query)) {
+        // The row carries `version` only when the statement selects it.
+        const selectsVersion = /\bversion\b/i.test(body.query);
         return Response.json({
           command: 'SELECT',
           rowCount: 1,
@@ -63,9 +65,17 @@ beforeAll(() => {
             { name: 'chart_data', dataTypeID: JSONB },
             { name: 'user_id', dataTypeID: TEXT },
             { name: 'link_sharing_level', dataTypeID: TEXT },
-            { name: 'version', dataTypeID: INT4 },
+            ...(selectsVersion ? [{ name: 'version', dataTypeID: INT4 }] : []),
           ],
-          rows: [['chart-1', '{"sections":[]}', chartRow.userId, chartRow.level, '7']],
+          rows: [
+            [
+              'chart-1',
+              '{"sections":[]}',
+              chartRow.userId,
+              chartRow.level,
+              ...(selectsVersion ? ['7'] : []),
+            ],
+          ],
         });
       }
       // The view_count UPDATE.

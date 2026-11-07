@@ -1,8 +1,8 @@
 // Fake Neon HTTP endpoint + Auth0 JWKS for the chart-save and chart-poll
 // tests. The real handlers run against a replacement `globalThis.fetch`
 // that plays the `/sql` endpoint of @neondatabase/serverless (it POSTs
-// {query, params}, expects array-mode text rows plus `fields` metadata;
-// see plans/.../captures/server-driver-wire.md for a raw capture) and the
+// {query, params} with `neon-array-mode`, expects text rows plus `fields`
+// metadata whose `dataTypeID` tells it how to parse each column) and the
 // tenant's JWKS.
 //
 // Statements are matched by their text, and the fake keeps one `charts`
@@ -59,6 +59,15 @@ function neonResult(command: string, fields: [string, number][], rows: unknown[]
 
 /** The statement text on one line, so patterns don't depend on how a template literal is wrapped. */
 const flat = (query: string) => query.replace(/\s+/g, ' ').trim();
+
+/** A write returns its row only when the statement asks for it with `RETURNING version`, as Postgres does. */
+function returningVersion(q: string, version: number) {
+  return neonResult(
+    'UPDATE',
+    /\bRETURNING version\b/i.test(q) ? [['version', INT4]] : [],
+    /\bRETURNING version\b/i.test(q) ? [[String(version)]] : [],
+  );
+}
 
 /** The value bound to the `$n` that follows `pattern` in the statement text. */
 function paramAfter(s: Statement, pattern: RegExp): unknown {
@@ -160,7 +169,7 @@ export class ChartFake {
       return neonResult('INSERT', [], []);
     }
     if (/^INSERT INTO charts/i.test(q)) {
-      return neonResult('INSERT', [['version', INT4]], [['1']]);
+      return returningVersion(q, 1);
     }
 
     const tokenMatches = (c: ChartRow | null): c is ChartRow =>
@@ -220,13 +229,13 @@ export class ChartFake {
       const matches =
         tokenMatches(chart) &&
         (!hasBase || chart.version === Number(paramAfter(s, /AND version = \$(\d+)/i)));
-      if (!matches || !chart) return neonResult('UPDATE', [['version', INT4]], []);
+      if (!matches || !chart) return neonResult('UPDATE', [], []);
       const next = JSON.parse(String(paramAfter(s, /chart_data = \$(\d+)/)));
       // BEFORE UPDATE OF chart_data trigger: bump only when the data changed.
       if (JSON.stringify(next) !== JSON.stringify(chart.chart_data)) chart.version += 1;
       chart.chart_data = next;
       chart.chart_title = String(paramAfter(s, /chart_title = \$(\d+)/));
-      return neonResult('UPDATE', [['version', INT4]], [[String(chart.version)]]);
+      return returningVersion(q, chart.version);
     }
 
     throw new Error(`Unexpected SQL in test: ${q}`);

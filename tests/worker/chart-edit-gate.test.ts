@@ -2,12 +2,11 @@
 // `POST /api/pollChart` share one gate (worker/_shared/chart-edit-access.ts),
 // so every case below runs against both endpoints.
 //
-// The gate's history: commit 533e6ba made owned charts whose
-// link_sharing_level is not 'editor' require a valid Bearer JWT (the owner's,
-// or a collaborator with an `approved` chart_permissions row). The client's
-// autosave attached only a mount-time token, so a missing or expired token
-// made every save 403 ("it seems the chart isn't saved"). The edit token alone
-// still suffices for anonymous charts and for owned charts shared as 'editor'.
+// The edit token alone suffices for anonymous charts and for owned charts
+// shared as 'editor'. Any other owned chart needs a valid Bearer JWT: the
+// owner's, or a collaborator with an `approved` chart_permissions row. A save
+// that is refused for lack of one is what made autosave fail silently when the
+// client's token had expired.
 //
 // Two properties matter beyond the status code: a refused caller never learns
 // the chart's version or content, and a refusal never writes.
@@ -206,6 +205,7 @@ afterAll(() => fake.uninstall());
 describe.each(endpoints)('edit gate on $name', ({ name, call }) => {
   it.each(cases)('$name', async (c) => {
     const row: ChartRow = { ...ROW, ...c.chart };
+    const before = structuredClone(row);
     fake.reset(row);
     if (c.permission) fake.permissions.set('auth0|collab', c.permission);
 
@@ -228,6 +228,6 @@ describe.each(endpoints)('edit gate on $name', ({ name, call }) => {
     expect(body).not.toHaveProperty('version');
     expect(body).not.toHaveProperty('chartData');
     expect(fake.writes()).toEqual([]);
-    expect(fake.chart).toEqual(row);
+    expect(fake.chart).toEqual(before);
   });
 });

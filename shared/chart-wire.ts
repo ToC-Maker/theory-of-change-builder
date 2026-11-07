@@ -41,7 +41,7 @@ export interface UpdateChartOk {
 
 export interface UpdateChartConflict {
   error: 'conflict';
-  /** The current version, newer than the save's `baseVersion`. */
+  /** The current version, which differs from the save's `baseVersion`: newer, or older after a database restore. */
   version: number;
   /** The chart as stored at `version`. */
   chartData: unknown;
