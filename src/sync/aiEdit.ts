@@ -71,10 +71,10 @@ export function prepareAIResult(asSent: ToCData, result: ChartInput): ToCData {
         nodes: column.nodes.map((node) => ({
           ...node,
           id: ids.get(node),
-          ...(node.connections && {
+          ...(Array.isArray(node.connections) && {
             connections: node.connections.map((c) => ({ ...c, targetId: retarget(c.targetId) })),
           }),
-          connectionIds: (node.connectionIds ?? []).map(retarget),
+          connectionIds: Array.isArray(node.connectionIds) ? node.connectionIds.map(retarget) : [],
         })),
       })),
     })),

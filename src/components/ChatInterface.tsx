@@ -161,7 +161,7 @@ interface ChatInterfaceProps {
    */
   onAIEdit?: (asSent: ToCData, result: ChartInput) => ToCData;
   /** The user loads a generated chart: it replaces the whole chart. */
-  onLoadGeneratedGraph?: (chart: ChartInput) => void;
+  onLoadGeneratedGraph?: (chart: ToCData) => void;
   highlightedNodes?: Set<string>;
   // Called when an action in Chat/Generate (e.g. auto-saving the chart on
   // first file upload) creates a new chart row. The parent uses this to
@@ -885,7 +885,7 @@ export function ChatInterface({
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [additionalInstructions, setAdditionalInstructions] = useState('');
-  const [generatedGraphData, setGeneratedGraphData] = useState<ChartInput | null>(null);
+  const [generatedGraphData, setGeneratedGraphData] = useState<ToCData | null>(null);
   // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
   // list of {id, file_id} chips so the chip area can render them with the
   // same AttachedFilesBar as Chat mode. Text/markdown files continue to be
@@ -1960,7 +1960,7 @@ export function ChatInterface({
     // so the stream headers downstream use the 12-char id and not the
     // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
     const resolvedChart = await ensureChartExists();
-    // Q1: explicit null-check. ensureChartExists returns null when the chart
+    // Explicit null-check. ensureChartExists returns null when the chart
     // could not be loaded or created (it already set an advisory composer
     // blocker in those branches). Bail cleanly — without the
     // check, we'd proceed with undefined chartId, optimistically commit

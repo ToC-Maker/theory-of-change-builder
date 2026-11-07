@@ -1053,7 +1053,7 @@ function ToCViewer() {
   );
 
   const handleLoadGeneratedGraph = useCallback(
-    (chart: ChartInput) => changeAs('none', () => doc.replace(normalizeChart(chart))),
+    (chart: ToCData) => changeAs('none', () => doc.replace(chart)),
     [doc, changeAs],
   );
 
@@ -1512,8 +1512,7 @@ function ToCViewer() {
         saveError={saveError}
         // Drives the SaveIndicator "Unsaved changes" state: the document's
         // own account of what the server does not hold, so a failed autosave
-        // (the round-2 silent-save bug) shows as unsaved instead of a stale
-        // "Saved".
+        // shows as unsaved instead of a stale "Saved".
         hasPendingChanges={status.unsaved}
         currentEditToken={currentEditToken}
         // Format-menu setters edit the document, so the canonical state lives

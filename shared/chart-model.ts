@@ -114,8 +114,8 @@ export class ChartShapeError extends Error {
 /**
  * Gives every section and column an id, makes node ids unique across the
  * chart (filling missing ones) and makes each node's `connections` canonical:
- * built from the legacy `connectionIds` at confidence 50 when absent, a
- * repeated target dropped (the first is kept), and `connectionIds` rewritten
+ * built from the legacy `connectionIds` at confidence 50 when absent (or not an
+ * array), a repeated target dropped (the first is kept), and `connectionIds` rewritten
  * to list the same targets. Pure, deterministic (two tabs reading the same
  * id-less chart agree on every id) and idempotent. Never mutates `raw`; parts
  * it does not touch are shared with it, not copied.
@@ -125,9 +125,9 @@ export class ChartShapeError extends Error {
  * gets a `~k` suffix, and so does a later repeat of a stored id.
  *
  * Throws `ChartShapeError` (its `reason` an index path) when the chart is not
- * an object with a `sections` array, a section, column, node or connection is
- * not an object, a section lacks its `columns` array, a column its `nodes`
- * array, or a node's `connections` is present but not an array.
+ * an object with a `sections` array, a section, column, node or connection
+ * entry is not an object, or a section lacks its `columns` array or a column
+ * its `nodes` array.
  */
 export function normalizeChart(raw: unknown): ToCData {
   assertChartShape(raw);
@@ -210,10 +210,11 @@ export function assertChartShape(raw: unknown): asserts raw is ChartInput {
       (column as { nodes: unknown[] }).nodes.forEach((node, k) => {
         const inNode = `${inColumn}.nodes[${k}]`;
         if (!isObject(node)) fail(`${inNode} is not an object`);
+        // A `connections` that is not an array counts as absent (the node renders from
+        // its `connectionIds`), so only the entries of an array can be malformed.
         const { connections } = node as { connections?: unknown };
-        if (connections === undefined) return;
-        if (!Array.isArray(connections)) fail(`${inNode}.connections is not an array`);
-        (connections as unknown[]).forEach((connection, m) => {
+        if (!Array.isArray(connections)) return;
+        connections.forEach((connection, m) => {
           if (!isObject(connection)) fail(`${inNode}.connections[${m}] is not an object`);
         });
       });

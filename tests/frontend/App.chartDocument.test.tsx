@@ -361,19 +361,20 @@ describe('what the chat, import and generate flows hand to the document', () => 
   );
 
   it(
-    'loads a generated chart as the whole chart, with ids, and undo brings the old one back',
+    'loads a generated chart as the whole chart, and undo brings the old one back',
     async () => {
       await openEditor();
-      const generated: ChartInput = {
+      // What `parseGeneratedGraph` hands the chat: already normalised.
+      const generated = normalizeChart({
         title: 'Generated',
         sections: [{ title: 'Inputs', columns: [{ nodes: [node('g1', 100, { title: 'Gen' })] }] }],
-      };
+      });
 
       act(() => chat().onLoadGeneratedGraph(generated));
 
       expect(await shown('Gen')).toBeInTheDocument();
       expect(screen.queryByText('Alpha')).toBeNull();
-      expect(committed().sections.map((s) => s.id)).toEqual(['s0']);
+      expect(committed()).toEqual(generated);
 
       act(() => top().handleUndo());
       expect(await shown('Alpha')).toBeInTheDocument();

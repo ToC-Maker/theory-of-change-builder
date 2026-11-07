@@ -84,6 +84,29 @@ describe('validateChartImport', () => {
     }
   });
 
+  it('accepts a node whose connections is not an array and draws it from its connectionIds', () => {
+    const result = validateChartImport({
+      sections: [
+        {
+          columns: [
+            {
+              nodes: [
+                { id: 'n1', connections: null, connectionIds: ['n2'] },
+                { id: 'n2', connectionIds: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.sections[0].columns[0].nodes[0].connections).toEqual([
+        { targetId: 'n2', confidence: 50 },
+      ]);
+    }
+  });
+
   it('returns the chart normalised, with ids and canonical connections', () => {
     const result = validateChartImport({
       title: 'T',
@@ -151,24 +174,6 @@ describe('validateChartImport', () => {
     {
       input: { sections: [{ columns: [{ nodes: null }] }] },
       expectedReason: /sections\[0\]\.columns\[0\]\.nodes is not an array/,
-    },
-    {
-      input: {
-        sections: [
-          {
-            columns: [
-              {
-                nodes: [
-                  {
-                    connections: 'not-an-array',
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      expectedReason: /connections is not an array/,
     },
     {
       input: {

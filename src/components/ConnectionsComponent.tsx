@@ -401,9 +401,8 @@ export function ConnectionsComponent({
                 confidence: conn.confidence,
                 evidence: conn.evidence,
                 assumptions: conn.assumptions,
-                // PR 7: forward optional waypoints. Empty/undefined =
-                // falls back to auto-bezier (byte-identical to
-                // pre-PR-7 rendering, see
+                // Forward optional waypoints. Empty/undefined = falls back to
+                // the automatic bezier (see
                 // `tests/frontend/connectionPath.waypoints.test.ts`).
                 waypoints: conn.waypoints,
               };

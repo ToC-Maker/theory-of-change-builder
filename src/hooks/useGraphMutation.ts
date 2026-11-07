@@ -48,8 +48,7 @@
 // `mutate` safe to call from a React updater or a render: each preview notifies
 // the store's subscribers synchronously (React warns "Cannot update a component
 // while rendering a different component"), so call `mutate` and
-// `mutateDebounced` from event handlers and effects. The scheduling shape is
-// pinned by `useGraphMutation.queueMicrotask-scheduling-shape.test.ts`.
+// `mutateDebounced` from event handlers and effects.
 //
 // Unmounting commits the marked keys at once: the store outlives the canvas, so
 // the typed text must not wait for an idle timer that no longer exists.

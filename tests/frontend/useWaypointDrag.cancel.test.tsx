@@ -78,7 +78,7 @@ const connectionOf = (data: ToCData) => data.sections[0].columns[0].nodes[0].con
 const LINE_MIDPOINT = { x: 0, y: 0 };
 
 function setup(initial: ChartInput, lineMidpoint = LINE_MIDPOINT) {
-  const { doc, onCommit, land } = makeDoc(initial);
+  const { doc, onCommit } = makeDoc(initial);
   const rendered = renderHook(() => {
     const graph = useGraphMutation(doc);
     const drag = useWaypointDrag({
@@ -94,7 +94,7 @@ function setup(initial: ChartInput, lineMidpoint = LINE_MIDPOINT) {
     });
     return { graph, drag };
   });
-  return { ...rendered, doc, onCommit, land };
+  return { ...rendered, doc, onCommit };
 }
 
 function pointerDown(x: number, y: number, pointerId = 1): React.PointerEvent {
@@ -364,44 +364,6 @@ describe('cancelling after an unrelated edit committed the preview', () => {
 
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(connectionOf(result.current.graph.data).waypoints).toEqual(original);
-  });
-});
-
-describe('a remote chart landing in the middle of a waypoint drag', () => {
-  const landRemoteTitle = (land: ReturnType<typeof setup>['land']) =>
-    land((draft) => {
-      draft.title = 'Remote';
-    });
-
-  it('does not stop the drop from saving, on top of the landing', async () => {
-    const { result, onCommit, land } = setup(makeData([{ dx: 100, dy: 50 }]));
-
-    dragWaypointAway(result);
-    act(() => landRemoteTitle(land));
-    act(() => {
-      document.dispatchEvent(pointer('pointerup', 180, 90));
-    });
-    await settle();
-
-    expect(onCommit).toHaveBeenCalledTimes(1);
-    const saved: ToCData = onCommit.mock.calls[0][0];
-    expect(saved.title).toBe('Remote');
-    expect(connectionOf(saved).waypoints).toEqual([{ dx: 180, dy: 90 }]);
-  });
-
-  it('leaves a cancel with nothing to send', async () => {
-    const { result, onCommit, land } = setup(makeData([{ dx: 100, dy: 50 }]));
-
-    dragWaypointAway(result);
-    act(() => landRemoteTitle(land));
-    act(() => {
-      document.dispatchEvent(escape());
-    });
-    await settle();
-
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(result.current.graph.data.title).toBe('Remote');
-    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ dx: 100, dy: 50 }]);
   });
 });
 

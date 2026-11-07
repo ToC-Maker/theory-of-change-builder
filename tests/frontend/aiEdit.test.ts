@@ -184,6 +184,27 @@ describe('prepareAIResult with a result that is not a chart', () => {
   });
 });
 
+describe('prepareAIResult with edge lists that are not arrays', () => {
+  // The shape check lets a non-array `connections` through (stored charts have
+  // them), so the reply's own copy of one must not crash the id rewrite.
+  it.each([
+    ['connections is null', { connections: null, connectionIds: ['c'] }],
+    ['connections is a string', { connections: 'x', connectionIds: ['c'] }],
+    [
+      'connectionIds is a string',
+      { connections: [{ targetId: 'c', confidence: 70 }], connectionIds: 'c' },
+    ],
+  ])('keeps the edge when %s', (_label, edges) => {
+    const asSent = connectedChart();
+    const result = asInput(asSent);
+    Object.assign(result.sections[0].columns[0].nodes[0], edges);
+
+    const prepared = prepareAIResult(asSent, result);
+
+    expect(findNode(prepared, 'a')?.connections?.map((c) => c.targetId)).toEqual(['c']);
+  });
+});
+
 describe('addNodePaths', () => {
   it('aiEdit_hides_container_ids_from_model', () => {
     const withPaths = addNodePaths(connectedChart());

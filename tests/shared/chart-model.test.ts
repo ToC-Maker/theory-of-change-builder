@@ -117,6 +117,18 @@ describe('normalizeChart connections', () => {
     expect(out.connectionIds).toEqual(['b']);
   });
 
+  it('treats_a_connections_value_that_is_not_an_array_as_absent', () => {
+    // Stored charts render such a node from its connectionIds, so loading must not fail on it.
+    for (const connections of [null, 'x', {}, 0]) {
+      const out = nodeOf(node('a', { connections, connectionIds: ['b'] }));
+      expect(out.connections, JSON.stringify(connections)).toEqual([
+        { targetId: 'b', confidence: 50 },
+      ]);
+      expect(out.connectionIds).toEqual(['b']);
+    }
+    expect(nodeOf(node('a', { connections: null, connectionIds: [] })).connections).toEqual([]);
+  });
+
   it('keeps_first_of_duplicate_targets', () => {
     const out = nodeOf(
       node('a', {
@@ -273,9 +285,6 @@ describe('normalizeChart shape and purity', () => {
     );
     expect(reasonFor({ sections: [{ columns: [{ nodes: [{}, 'a'] }] }] })).toBe(
       'sections[0].columns[0].nodes[1] is not an object',
-    );
-    expect(reasonFor({ sections: [{ columns: [{ nodes: [{ connections: 'x' }] }] }] })).toBe(
-      'sections[0].columns[0].nodes[0].connections is not an array',
     );
     expect(reasonFor({ sections: [{ columns: [{ nodes: [{ connections: [{}, null] }] }] }] })).toBe(
       'sections[0].columns[0].nodes[0].connections[1] is not an object',

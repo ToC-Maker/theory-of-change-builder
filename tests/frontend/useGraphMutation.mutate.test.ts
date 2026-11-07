@@ -5,8 +5,8 @@
 //      same task).
 //   2. The store commits exactly once per mutate, on a microtask, so the
 //      commit runs after the event handler's own work and not inside the updater.
-//   3. Two synchronous `mutate` calls collapse to one commit via the shared
-//      queueMicrotask slot.
+//   (Two synchronous `mutate` calls collapsing to one commit is pinned in
+//   `useGraphMutation.commit.test.ts`.)
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useGraphMutation } from '../../src/hooks/useGraphMutation';
@@ -38,23 +38,6 @@ describe('useGraphMutation.mutate', () => {
 
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit.mock.calls[0]?.[0].title).toBe('changed');
-  });
-
-  it('collapses two synchronous mutate calls into one commit', async () => {
-    const { doc, onCommit } = makeDoc(makeData());
-    const { result } = renderHook(() => useGraphMutation(doc));
-
-    act(() => {
-      result.current.mutate((prev) => ({ ...prev, title: 'first' }));
-      result.current.mutate((prev) => ({ ...prev, title: 'second' }));
-    });
-
-    expect(result.current.data.title).toBe('second');
-    await flushMicrotasks();
-
-    // Both writes land, but they are committed once, as one step.
-    expect(onCommit).toHaveBeenCalledTimes(1);
-    expect(onCommit.mock.calls[0]?.[0].title).toBe('second');
   });
 
   it('accepts a non-function updater', async () => {

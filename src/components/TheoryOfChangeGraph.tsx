@@ -508,16 +508,7 @@ export function ToC({
       const sourceLocation = findNodeLocation(sourceId);
       if (!sourceLocation) return false;
 
-      const sourceNode = sourceLocation.node;
-
-      // Check if connection exists in either direction
-      if (sourceNode.connections) {
-        return sourceNode.connections.some((conn) => conn.targetId === targetId);
-      } else if (sourceNode.connectionIds) {
-        return sourceNode.connectionIds.includes(targetId);
-      }
-
-      return false;
+      return sourceLocation.node.connections?.some((conn) => conn.targetId === targetId) ?? false;
     },
     [findNodeLocation],
   );
@@ -534,21 +525,11 @@ export function ToC({
           columns: section.columns.map((column) => ({
             ...column,
             nodes: column.nodes.map((node) => {
-              if (node.id === sourceId) {
-                // Remove connection
-                if (node.connections) {
-                  return {
-                    ...node,
-                    connections: node.connections.filter((conn) => conn.targetId !== targetId),
-                  };
-                } else if (node.connectionIds) {
-                  return {
-                    ...node,
-                    connectionIds: node.connectionIds.filter((id) => id !== targetId),
-                  };
-                }
-              }
-              return node;
+              if (node.id !== sourceId || !node.connections) return node;
+              return {
+                ...node,
+                connections: node.connections.filter((conn) => conn.targetId !== targetId),
+              };
             }),
           })),
         })),
@@ -602,25 +583,11 @@ export function ToC({
         columns: section.columns.map((column) => ({
           ...column,
           nodes: column.nodes.map((node) => {
-            if (node.id === sourceId) {
-              // Add new connection
-              if (node.connections) {
-                return {
-                  ...node,
-                  connections: [...node.connections, { targetId, confidence: 75 }],
-                };
-              } else {
-                return {
-                  ...node,
-                  connectionIds: [...node.connectionIds, targetId],
-                  connections: [
-                    ...node.connectionIds.map((id) => ({ targetId: id, confidence: 50 })),
-                    { targetId, confidence: 75 },
-                  ],
-                };
-              }
-            }
-            return node;
+            if (node.id !== sourceId) return node;
+            return {
+              ...node,
+              connections: [...(node.connections ?? []), { targetId, confidence: 75 }],
+            };
           }),
         })),
       })),
@@ -850,20 +817,9 @@ export function ToC({
             ...column,
             nodes: column.nodes.map((node) => {
               if (node.id !== sourceId) return node;
-              if (node.connections) {
-                return {
-                  ...node,
-                  connections: [...node.connections, { targetId, confidence: 75 }],
-                };
-              }
-              // Old format → migrate to new on first write.
               return {
                 ...node,
-                connectionIds: [...(node.connectionIds || []), targetId],
-                connections: [
-                  ...(node.connectionIds || []).map((id) => ({ targetId: id, confidence: 50 })),
-                  { targetId, confidence: 75 },
-                ],
+                connections: [...(node.connections ?? []), { targetId, confidence: 75 }],
               };
             }),
           })),
@@ -973,25 +929,15 @@ export function ToC({
         const node = nodeLocation.node;
 
         // Add nodes that this node connects TO (outgoing connections)
-        if (node.connections) {
-          node.connections.forEach((conn) => allConnectedNodes.add(conn.targetId));
-        } else if (node.connectionIds) {
-          node.connectionIds.forEach((connId) => allConnectedNodes.add(connId));
-        }
+        node.connections?.forEach((conn) => allConnectedNodes.add(conn.targetId));
       }
 
       // Find nodes that connect TO this node (incoming connections)
       data.sections.forEach((section) => {
         section.columns.forEach((column) => {
           column.nodes.forEach((otherNode) => {
-            if (otherNode.connections) {
-              if (otherNode.connections.some((conn) => conn.targetId === nodeId)) {
-                allConnectedNodes.add(otherNode.id);
-              }
-            } else if (otherNode.connectionIds) {
-              if (otherNode.connectionIds.includes(nodeId)) {
-                allConnectedNodes.add(otherNode.id);
-              }
+            if (otherNode.connections?.some((conn) => conn.targetId === nodeId)) {
+              allConnectedNodes.add(otherNode.id);
             }
           });
         });
@@ -1011,18 +957,10 @@ export function ToC({
       section.columns.forEach((column) => {
         column.nodes.forEach((node) => {
           if (node.id === hoveredNode) {
-            // Handle both old connectionIds and new connections format
-            if (node.connections) {
-              node.connections.forEach((conn) => connections.add(conn.targetId));
-            } else {
-              node.connectionIds.forEach((id) => connections.add(id));
-            }
+            node.connections?.forEach((conn) => connections.add(conn.targetId));
           }
           // Check if any connection points to the hovered node
-          const hasConnectionTo = node.connections
-            ? node.connections.some((conn) => conn.targetId === hoveredNode)
-            : node.connectionIds.includes(hoveredNode);
-          if (hasConnectionTo) {
+          if (node.connections?.some((conn) => conn.targetId === hoveredNode)) {
             connections.add(node.id);
           }
         });
