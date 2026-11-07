@@ -136,8 +136,8 @@ describe('exportToJson', () => {
                       targetId: 'n2',
                       confidence: 75,
                       waypoints: [
-                        { x: 100, y: 50 },
-                        { x: 200, y: 75 },
+                        { dx: 100, dy: 50 },
+                        { dx: -20, dy: 75 },
                       ],
                     },
                   ],
@@ -166,8 +166,8 @@ describe('exportToJson', () => {
     // the explicit assertion still fails loudly.
     expect(parsed).toEqual(dataWithWaypoints);
     expect(parsed.sections[0].columns[0].nodes[0].connections![0].waypoints).toEqual([
-      { x: 100, y: 50 },
-      { x: 200, y: 75 },
+      { dx: 100, dy: 50 },
+      { dx: -20, dy: 75 },
     ]);
   });
 

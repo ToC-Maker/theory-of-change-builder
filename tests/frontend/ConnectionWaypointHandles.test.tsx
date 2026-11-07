@@ -7,9 +7,10 @@
 //     point), 0 waypoint handles.
 //   - 1 waypoint  → 0 midpoint affordances (no recursive splitting),
 //     1 waypoint handle.
-//   - N waypoints (legacy chart) → 0 midpoint affordances, N waypoint
-//     handles (legacy waypoints stay visible/draggable; dragging any
-//     one collapses to the single-waypoint model — hook-level test).
+//   - N waypoints (several valid offsets, from an import or AI edit) →
+//     0 midpoint affordances, N waypoint handles (each stays draggable;
+//     dragging any one collapses to the single-waypoint model, a
+//     hook-level test).
 //   - `dragInProgress` hides the midpoint affordance.
 //   - Midpoint pointerdown binds via `bindMidpoint(s, t, 0)`.
 //   - Waypoint pointerdown binds via `bindWaypoint(s, t, wpIdx)`.
@@ -132,7 +133,7 @@ describe('ConnectionWaypointHandles', () => {
       expect(container.querySelectorAll('[data-tocb-waypoint-handle]').length).toBe(1);
     });
 
-    it('legacy 2-waypoint chart → 0 midpoint affordances, 2 waypoint handles', () => {
+    it('a 2-waypoint connection → 0 midpoint affordances, 2 waypoint handles', () => {
       const anchors = [
         { x: 0, y: 0 },
         { x: 33, y: 33 }, // wp[0]

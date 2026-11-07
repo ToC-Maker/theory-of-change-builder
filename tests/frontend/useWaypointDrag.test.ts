@@ -9,9 +9,8 @@
 //     the drag threshold (a plain click must not create a waypoint).
 //   - `bindWaypoint(sourceId, targetId, waypointIndex)` — drag the
 //     existing waypoint. Every write REPLACES the whole waypoints
-//     array with `[draggedPos]`: legacy multi-waypoint charts (created
-//     before the single-waypoint redesign) collapse to the dragged
-//     waypoint on their first edit.
+//     array with the dragged waypoint's offset: a connection carrying
+//     several waypoints collapses to the dragged one on its first edit.
 //   - `bindWaypoint(...).onDoubleClick` — remove the waypoint(s)
 //     entirely (reset to the automatic curve). One commit, one undo
 //     entry.
@@ -48,7 +47,7 @@ import {
   _resetCanvasGestureStateForTest,
 } from '../../src/hooks/_canvasGestureState';
 import { loggingService } from '../../src/services/loggingService';
-import type { ToCData } from '../../src/types';
+import type { ToCData, WaypointOffset } from '../../src/types';
 import { deepFreeze } from './helpers/deepFreeze';
 
 afterEach(() => {
@@ -64,7 +63,7 @@ afterEach(() => {
 const sourceId = 'source';
 const targetId = 'target';
 
-function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
+function makeData(waypoints?: WaypointOffset[]): ToCData {
   return deepFreeze({
     sections: [
       {
@@ -151,6 +150,7 @@ interface HookContext {
   commit: ReturnType<typeof vi.fn>;
   discardBuffered: ReturnType<typeof vi.fn>;
   clientToContainer: ReturnType<typeof vi.fn>;
+  getLineMidpoint: ReturnType<typeof vi.fn>;
   data: ToCData;
   rerender: (props: { data: ToCData }) => void;
 }
@@ -160,6 +160,9 @@ function setupHook(args: {
   editMode?: boolean;
   // Maps client coords to container-local coords. Default: identity.
   translate?: (cx: number, cy: number) => { x: number; y: number };
+  // Midpoint of the source -> target line, the origin of stored offsets.
+  // Default: the container origin, so offsets equal container coords.
+  lineMidpoint?: { x: number; y: number };
 }): {
   ctx: HookContext;
   result: ReturnType<typeof renderHook>['result'];
@@ -172,6 +175,8 @@ function setupHook(args: {
   const clientToContainer = vi.fn(
     args.translate ?? ((cx: number, cy: number) => ({ x: cx, y: cy })),
   );
+  const lineMidpoint = args.lineMidpoint ?? { x: 0, y: 0 };
+  const getLineMidpoint = vi.fn(() => lineMidpoint);
 
   // The hook reads the latest data via a ref-mirrored `dataRef`.
   // Provide a function so callers can mutate the data they pass in.
@@ -186,6 +191,7 @@ function setupHook(args: {
         discardBuffered,
         notifyCount,
         clientToContainer,
+        getLineMidpoint,
       }),
     { initialProps: { data: args.data } },
   );
@@ -194,6 +200,7 @@ function setupHook(args: {
     commit,
     discardBuffered,
     clientToContainer,
+    getLineMidpoint,
     data: args.data,
     rerender: (props) => {
       dataRef.current = props.data;
@@ -245,7 +252,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(ctx.mutateDebounced).toHaveBeenCalled();
       expect(ctx.commit).toHaveBeenCalledTimes(1);
 
-      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 150, y: 200 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 150, dy: 200 }]);
     });
 
     it('a sub-threshold press+release (plain click) creates NOTHING', () => {
@@ -271,11 +278,11 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(result.current.isActive).toBe(false);
     });
 
-    it('collapses to the single dragged waypoint even if legacy waypoints exist', () => {
+    it('collapses to the single dragged waypoint even if waypoints already exist', () => {
       // The UI no longer offers midpoint affordances when waypoints
       // exist, but the hook must stay consistent with the
       // single-waypoint model if invoked that way (defensive).
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -287,7 +294,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 175, clientY: 75 }));
       });
 
-      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 175, y: 75 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 175, dy: 75 }]);
     });
   });
 
@@ -387,7 +394,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('bindWaypoint — move THE waypoint', () => {
     it('updates the waypoint position on pointerup', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -402,12 +409,12 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 160, clientY: 80 }));
       });
 
-      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 160, y: 80 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 160, dy: 80 }]);
       expect(ctx.commit).toHaveBeenCalledTimes(1);
     });
 
     it('a sub-threshold press+release on a waypoint commits nothing', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -424,12 +431,12 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
   });
 
-  describe('legacy multi-waypoint charts (PR #34 feedback 53 compat policy)', () => {
-    it('dragging any waypoint of a legacy multi-waypoint connection collapses to the dragged one', () => {
+  describe('connections carrying several waypoints', () => {
+    it('dragging any waypoint of a multi-waypoint connection collapses to the dragged one', () => {
       const data = makeData([
-        { x: 60, y: 100 },
-        { x: 140, y: 100 },
-        { x: 220, y: 100 },
+        { dx: 60, dy: 100 },
+        { dx: 140, dy: 100 },
+        { dx: 220, dy: 100 },
       ]);
       const { ctx, result } = setupHook({ data });
 
@@ -446,15 +453,15 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 150, clientY: 180 }));
       });
 
-      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 150, y: 180 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 150, dy: 180 }]);
       expect(ctx.commit).toHaveBeenCalledTimes(1);
     });
 
-    it('a sub-threshold click on a legacy waypoint does NOT collapse the others', () => {
-      // A plain click is not an edit: the legacy shape must survive.
+    it('a sub-threshold click on one of several waypoints does NOT collapse the others', () => {
+      // A plain click is not an edit: the stored waypoints must survive.
       const data = makeData([
-        { x: 60, y: 100 },
-        { x: 140, y: 100 },
+        { dx: 60, dy: 100 },
+        { dx: 140, dy: 100 },
       ]);
       const { ctx, result } = setupHook({ data });
 
@@ -474,7 +481,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('bindWaypoint — double-click resets to the automatic curve', () => {
     it('clears the waypoints array and commits once', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -485,10 +492,10 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(ctx.commit).toHaveBeenCalledTimes(1);
     });
 
-    it('clears ALL waypoints of a legacy multi-waypoint connection', () => {
+    it('clears ALL waypoints of a multi-waypoint connection', () => {
       const data = makeData([
-        { x: 60, y: 100 },
-        { x: 140, y: 100 },
+        { dx: 60, dy: 100 },
+        { dx: 140, dy: 100 },
       ]);
       const { ctx, result } = setupHook({ data });
 
@@ -501,7 +508,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('does nothing when editMode=false', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data, editMode: false });
 
       act(() => {
@@ -515,7 +522,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('mutual exclusion', () => {
     it('short-circuits pointerdown when isCanvasGestureActive=true', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => setCanvasGestureActive(true));
@@ -532,7 +539,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('sets isCanvasGestureActive=true during the drag and clears it on release', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { result } = setupHook({ data });
 
       expect(isCanvasGestureActive()).toBe(false);
@@ -557,7 +564,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('same-task press and release (effect-free listener install)', () => {
     it('hears a pointerup dispatched before passive effects flush, then runs the next drag normally', () => {
-      const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      const { ctx, result } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
 
       // Down + up inside ONE act() callback: React has not flushed
       // passive effects when the pointerup dispatches, so the listeners
@@ -624,7 +631,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     ];
 
     it.each(endings)('are released after the gesture ends by %s', (_name, end) => {
-      const { result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      const { result } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
       act(() => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)
@@ -639,7 +646,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('are released when the hook unmounts mid-drag', () => {
-      const { result, unmount } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      const { result, unmount } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
       act(() => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)
@@ -671,7 +678,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     it.each(['mutateDebounced', 'commit'] as const)(
       'still ends the gesture when %s throws',
       (failing) => {
-        const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+        const { ctx, result } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
         act(() => {
           result.current
             .bindWaypoint(sourceId, targetId, 0)
@@ -697,7 +704,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('a throwing mutateDebounced on cancel', () => {
     it('still ends the gesture when the restore write throws on Escape', () => {
-      const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      const { ctx, result } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
       act(() => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)
@@ -731,7 +738,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     const MARK = 'tocb-canvas-gesture';
 
     it('suppresses text selection from the press of a waypoint or edge drag until it ends', () => {
-      const { result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      const { result } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
       act(() => {
         result.current
           .bindPath(sourceId, targetId)
@@ -745,7 +752,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('restores selection on pointercancel and when the hook unmounts mid-drag', () => {
-      const { result, unmount } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      const { result, unmount } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
       act(() => {
         result.current
           .bindWaypoint(sourceId, targetId, 0)
@@ -770,7 +777,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('escape cancel', () => {
     it('clears state on Escape, no commit, no parent notify', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -797,7 +804,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       // A buffered key is flushed by any `commit()` without a key, which
       // would save the restored state as if the user had released. The
       // hook calls `discardBuffered(key)` on cancel paths.
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -818,7 +825,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('discards the buffered updater on pointercancel', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -840,7 +847,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('discards the buffered updater when a second pointer interrupts the gesture', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -873,7 +880,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       // this (no throw, no corrupt write) and the drop site is the only
       // place where the stale-drop log should fire (pointermove-internal
       // logging would flood per-tick during the race).
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -925,7 +932,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('does not report stale-waypoint-drop on a successful drop', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { result } = setupHook({ data });
 
       act(() => {
@@ -943,7 +950,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('editMode guard', () => {
     it('does not start drag when editMode=false', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data, editMode: false });
 
       act(() => {
@@ -980,7 +987,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
       });
 
-      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 140, y: 190 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 140, dy: 190 }]);
       expect(ctx.commit).toHaveBeenCalledTimes(1);
       expect(isCanvasGestureActive()).toBe(false);
     });
@@ -990,8 +997,8 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       // whole array with [cursorPos]. Legacy multi-waypoint charts
       // collapse exactly as they do for handle drags.
       const data = makeData([
-        { x: 60, y: 100 },
-        { x: 140, y: 100 },
+        { dx: 60, dy: 100 },
+        { dx: 140, dy: 100 },
       ]);
       const { ctx, result } = setupHook({ data });
 
@@ -1004,7 +1011,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 200, clientY: 250 }));
       });
 
-      expect(lastConnection(ctx, data).waypoints).toEqual([{ x: 200, y: 250 }]);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 200, dy: 250 }]);
       expect(ctx.commit).toHaveBeenCalledTimes(1);
     });
 
@@ -1232,7 +1239,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
   describe('resetWaypoints — shared reset seam (dblclick + EdgeEditor button)', () => {
     it('is callable without an event (EdgeEditor "Reset path" button) and commits once', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data });
 
       act(() => {
@@ -1256,7 +1263,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
 
     it('no-ops when editMode=false', () => {
-      const data = makeData([{ x: 100, y: 50 }]);
+      const data = makeData([{ dx: 100, dy: 50 }]);
       const { ctx, result } = setupHook({ data, editMode: false });
 
       act(() => {
@@ -1265,6 +1272,61 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
       expect(ctx.mutateDebounced).not.toHaveBeenCalled();
       expect(ctx.commit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('offsets from the line midpoint', () => {
+    it('stores the drop position relative to the midpoint of the source -> target line', () => {
+      const data = makeData([]);
+      const { ctx, result } = setupHook({ data, lineMidpoint: { x: 100, y: 40 } });
+
+      act(() => {
+        result.current
+          .bindMidpoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 40 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 150, clientY: 200 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 150, clientY: 200 }));
+      });
+
+      expect(ctx.getLineMidpoint).toHaveBeenCalledWith(sourceId, targetId);
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 50, dy: 160 }]);
+    });
+
+    it('applies the same offset rule to a drag that starts on the edge', () => {
+      const data = makeData([{ dx: 5, dy: 5 }]);
+      const { ctx, result } = setupHook({ data, lineMidpoint: { x: 100, y: 40 } });
+
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 60, clientY: 40 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 80, clientY: 10 }));
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: -20, dy: -30 }]);
+    });
+
+    it('replaces old absolute {x, y} waypoints with a single offset on the first drag', () => {
+      const oldFormat = [{ x: 120, y: 240 }] as unknown as WaypointOffset[];
+      const data = makeData(oldFormat);
+      const { ctx, result } = setupHook({ data, lineMidpoint: { x: 100, y: 40 } });
+
+      act(() => {
+        result.current
+          .bindPath(sourceId, targetId)
+          .onPointerDown(makePointerDownEvent({ clientX: 60, clientY: 40 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 130, clientY: 90 }));
+      });
+
+      expect(lastConnection(ctx, data).waypoints).toEqual([{ dx: 30, dy: 50 }]);
     });
   });
 
@@ -1289,7 +1351,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
 
       const connection = lastConnection(ctx, ctx.data);
       // (250-50)/2, (300-100)/2 -> (100, 100).
-      expect(connection.waypoints).toEqual([{ x: 100, y: 100 }]);
+      expect(connection.waypoints).toEqual([{ dx: 100, dy: 100 }]);
     });
   });
 });

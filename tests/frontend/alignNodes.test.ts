@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { computeAlignedSections } from '../../src/utils/alignNodes';
-import type { ToCData } from '../../src/types';
+import type { ToCData, WaypointOffset } from '../../src/types';
 
 type Sections = ToCData['sections'];
 
@@ -120,28 +120,19 @@ describe('computeAlignedSections', () => {
   });
 });
 
-// PR #34 round-4 feedback 68: custom waypoints must FOLLOW alignment.
-// Alignment previously moved nodes through a write path that never ran
-// the drag path's waypoint translation, leaving the user's bend parked
-// at stale absolute coordinates (live evidence: endpoints moved ±10px,
-// waypoint stayed put). Decision: translate each connection's
-// waypoints by the MEAN of its two endpoints' alignment deltas — the
-// exact generalization of the drag path's half-delta rule
-// (TheoryOfChangeGraph.handleDrop: one endpoint moved by d → waypoints
-// shift d/2; here both endpoints may move, contributing d/2 each).
-// Because the translation happens inside the same pure computation,
-// alignment stays ONE mutation → ONE undo entry, and undo restores the
-// waypoints exactly (purity test above).
-describe('computeAlignedSections — waypoint translation (feedback 68)', () => {
+// Custom waypoints are offsets from the midpoint of their connection's
+// line, so moving the endpoints moves the bend with them and alignment
+// has nothing to translate. The connection objects must come through
+// untouched, which also keeps alignment ONE mutation -> ONE undo entry
+// (undo restores the previous sections object as is).
+describe('computeAlignedSections — waypoints', () => {
+  const waypoints = [{ dx: 40, dy: -25 }];
+
   function connected(
     nodes: Array<{
       id: string;
       yPosition?: number;
-      connections?: Array<{
-        targetId: string;
-        confidence: number;
-        waypoints?: Array<{ x: number; y: number }>;
-      }>;
+      connections?: Array<{ targetId: string; confidence: number; waypoints?: WaypointOffset[] }>;
     }>,
   ): Sections {
     return [
@@ -152,116 +143,24 @@ describe('computeAlignedSections — waypoint translation (feedback 68)', () => 
     ];
   }
 
-  it('shifts a waypoint by half the delta when only the source endpoint moves', () => {
-    // a (100) groups with partner (140) → both to 120; a's delta +20.
-    // far (500) is alone → delta 0. Waypoint on a→far shifts by
-    // (+20 + 0) / 2 = +10 in y; x untouched.
+  it('moves the endpoint nodes and leaves the waypoint offsets as they were', () => {
+    // a (100) groups with partner (140) -> both to 120. The a -> far
+    // connection keeps its offset from the (now moved) line midpoint.
     const input = connected([
-      {
-        id: 'a',
-        yPosition: 100,
-        connections: [{ targetId: 'far', confidence: 75, waypoints: [{ x: 300, y: 250 }] }],
-      },
+      { id: 'a', yPosition: 100, connections: [{ targetId: 'far', confidence: 75, waypoints }] },
       { id: 'partner', yPosition: 140 },
       { id: 'far', yPosition: 500 },
     ]);
     const result = computeAlignedSections(input, {});
-    expect(result[0].columns[0].nodes[0].connections![0].waypoints).toEqual([{ x: 300, y: 260 }]);
+    const moved = result[0].columns[0].nodes[0];
+    expect(moved.yPosition).toBe(120);
+    expect(moved.connections).toBe(input[0].columns[0].nodes[0].connections);
+    expect(moved.connections![0].waypoints).toEqual(waypoints);
   });
 
-  it('shifts a waypoint by half the delta when only the target endpoint moves', () => {
+  it('does not mutate the input', () => {
     const input = connected([
-      {
-        id: 'far',
-        yPosition: 500,
-        connections: [{ targetId: 'a', confidence: 75, waypoints: [{ x: 300, y: 250 }] }],
-      },
-      { id: 'a', yPosition: 100 },
-      { id: 'partner', yPosition: 140 },
-    ]);
-    const result = computeAlignedSections(input, {});
-    expect(result[0].columns[0].nodes[0].connections![0].waypoints).toEqual([{ x: 300, y: 260 }]);
-  });
-
-  it('sums both endpoint contributions when source and target both move', () => {
-    // Groups: {a:100, p1:140} → 120 (a +20) and {b:400, p2:420} → 410
-    // (b +10). Waypoint on a→b shifts by (+20 + +10) / 2 = +15.
-    const input = connected([
-      {
-        id: 'a',
-        yPosition: 100,
-        connections: [{ targetId: 'b', confidence: 75, waypoints: [{ x: 300, y: 250 }] }],
-      },
-      { id: 'p1', yPosition: 140 },
-      { id: 'b', yPosition: 400 },
-      { id: 'p2', yPosition: 420 },
-    ]);
-    const result = computeAlignedSections(input, {});
-    expect(result[0].columns[0].nodes[0].connections![0].waypoints).toEqual([{ x: 300, y: 265 }]);
-  });
-
-  it('leaves the waypoint alone when both endpoints are in the same two-node group (deltas cancel)', () => {
-    const input = connected([
-      {
-        id: 'a',
-        yPosition: 100,
-        connections: [{ targetId: 'b', confidence: 75, waypoints: [{ x: 300, y: 250 }] }],
-      },
-      { id: 'b', yPosition: 140 },
-    ]);
-    const result = computeAlignedSections(input, {});
-    expect(result[0].columns[0].nodes[0].connections![0].waypoints).toEqual([{ x: 300, y: 250 }]);
-  });
-
-  it('translates every entry of a legacy multi-waypoint array', () => {
-    const input = connected([
-      {
-        id: 'a',
-        yPosition: 100,
-        connections: [
-          {
-            targetId: 'far',
-            confidence: 75,
-            waypoints: [
-              { x: 300, y: 250 },
-              { x: 350, y: 280 },
-            ],
-          },
-        ],
-      },
-      { id: 'partner', yPosition: 140 },
-      { id: 'far', yPosition: 500 },
-    ]);
-    const result = computeAlignedSections(input, {});
-    expect(result[0].columns[0].nodes[0].connections![0].waypoints).toEqual([
-      { x: 300, y: 260 },
-      { x: 350, y: 290 },
-    ]);
-  });
-
-  it('keeps connection identity when neither endpoint moved', () => {
-    const input = connected([
-      { id: 'a', yPosition: 100 },
-      { id: 'partner', yPosition: 140 },
-      {
-        id: 'far',
-        yPosition: 500,
-        connections: [{ targetId: 'far2', confidence: 75, waypoints: [{ x: 300, y: 250 }] }],
-      },
-      { id: 'far2', yPosition: 700 },
-    ]);
-    const result = computeAlignedSections(input, {});
-    // far/far2 are singleton groups: untouched, identity preserved.
-    expect(result[0].columns[2].nodes[0]).toBe(input[0].columns[2].nodes[0]);
-  });
-
-  it('does not mutate the input when translating waypoints', () => {
-    const input = connected([
-      {
-        id: 'a',
-        yPosition: 100,
-        connections: [{ targetId: 'far', confidence: 75, waypoints: [{ x: 300, y: 250 }] }],
-      },
+      { id: 'a', yPosition: 100, connections: [{ targetId: 'far', confidence: 75, waypoints }] },
       { id: 'partner', yPosition: 140 },
       { id: 'far', yPosition: 500 },
     ]);

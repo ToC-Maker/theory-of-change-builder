@@ -1,26 +1,33 @@
+/**
+ * A custom bend point, stored as a pixel offset from the midpoint of
+ * the straight line between a connection's source and target anchors.
+ * Relative to the nodes, so it follows them through any layout change.
+ */
+export interface WaypointOffset {
+  dx: number;
+  dy: number;
+}
+
 export interface Connection {
   targetId: string;
   confidence: number; // 0-100 scale
   evidence?: string; // Evidence supporting this connection
   assumptions?: string; // Key assumptions underlying this connection
   /**
-   * Optional bezier waypoints in container-local coordinates (same
-   * coordinate space as `node.yPosition`). When present, the
-   * connection path runs source -> waypoints[0] -> ... -> target as a
-   * single multi-segment cubic bezier (one `<path>` element, see
-   * `src/utils/connectionPath.ts`). When absent or empty, the renderer
-   * falls back to the existing auto-bezier shape (byte-identical for
-   * existing graphs — see `connectionPath.waypoints.test.ts`).
+   * Optional custom bend points as offsets from the connection's line
+   * midpoint (see `WaypointOffset`; the conversion to canvas
+   * coordinates lives in `src/utils/connectionGeometry.ts`). When
+   * present, the connection path runs source -> waypoint -> target as
+   * a multi-segment cubic bezier (one `<path>` element, see
+   * `src/utils/connectionPath.ts`). When absent, empty or not made of
+   * finite `{dx, dy}` entries (including the earlier absolute `{x, y}`
+   * format), the renderer draws the automatic curve.
    *
-   * Single-waypoint model (PR #34 feedback 53): the array shape stays
-   * for backward compatibility, but the UI reads/writes AT MOST ONE
-   * entry. Legacy charts saved by the earlier multi-waypoint build
-   * (N > 1) still render through all N waypoints; the first drag of
-   * any of their handles collapses the array to the single dragged
-   * waypoint, and double-clicking a handle clears it entirely (see
-   * `useWaypointDrag`).
+   * The UI reads and writes AT MOST ONE entry. Dragging replaces the
+   * whole array with the dragged waypoint, and double-clicking a
+   * handle clears it (see `useWaypointDrag`).
    */
-  waypoints?: Array<{ x: number; y: number }>;
+  waypoints?: WaypointOffset[];
 }
 
 export interface Node {

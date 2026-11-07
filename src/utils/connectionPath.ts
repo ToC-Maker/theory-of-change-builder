@@ -337,13 +337,15 @@ function computeSingleWaypointSegments(
 }
 
 // ---------------------------------------------------------------------------
-// N-waypoint multi-segment bezier (legacy charts only)
+// N-waypoint multi-segment bezier
 // ---------------------------------------------------------------------------
 //
-// The UI no longer creates multi-waypoint connections (PR #34 feedback
-// 53); this code path keeps charts saved by the earlier build rendering
-// EXACTLY as they did. The first edit collapses them to a single
-// waypoint, which then renders through `computeSingleWaypointSegments`.
+// The UI only creates single-waypoint connections. This path draws a
+// connection whose `waypoints` array holds several valid offsets, which
+// only an import, an AI edit or a hand-edited chart can produce (old
+// absolute `{x, y}` entries are dropped before this and draw the automatic
+// curve). The first drag collapses such a connection to one waypoint,
+// which then renders through `computeSingleWaypointSegments`.
 //
 // Strategy (rewritten for PR 7 feedback item 17 — small drags must
 // produce small curve deformations, no S-shapes near endpoints):
@@ -379,9 +381,9 @@ function computeSingleWaypointSegments(
 //      direction (source → first waypoint), magnitude = factor *
 //      |source → firstWp|. Symmetric for target side.
 //
-//      NOTE (PR #34 feedback 52): this non-horizontal endpoint-tangent
-//      behavior now applies ONLY to legacy N≥2 charts. The N=1 case —
-//      the only one the UI can produce since feedback 53 — goes
+//      NOTE: this non-horizontal endpoint-tangent behavior applies only
+//      to connections with N≥2 waypoints. The N=1 case, the only one the
+//      UI produces, goes
 //      through `computeSingleWaypointSegments`, which guarantees
 //      horizontal (flow-axis) departure and arrival so the arrowhead
 //      renders horizontal.
