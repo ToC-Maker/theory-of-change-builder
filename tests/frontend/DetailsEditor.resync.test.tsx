@@ -16,6 +16,7 @@ import { createRef, lazy, useEffect, useImperativeHandle, type Ref } from 'react
 import type { MDXEditorMethods } from '@mdxeditor/editor';
 import { DetailsEditor } from '../../src/components/node-editor/DetailsEditor';
 import { MDXEditorComponent } from '../../src/components/MDXEditor';
+import { loggingService } from '../../src/services/loggingService';
 
 afterEach(() => {
   cleanup();
@@ -344,5 +345,59 @@ describe('MDXEditor behaviour the resync relies on (real editor)', () => {
     });
     expect(ref.current!.getMarkdown()).toBe('new text');
     expect(onChange).not.toHaveBeenCalled();
+  }, 20000);
+});
+
+describe('MDXEditor markdown it cannot import (real editor)', () => {
+  // Text with inline HTML: the library cannot turn it into editor content, so
+  // the editor stops reporting edits. Making that visible is all the app does.
+  const unimportable = 'a <b> c';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function mountReal(markdown: string) {
+    const ref = createRef<MDXEditorMethods>();
+    const utils = render(<MDXEditorComponent markdown={markdown} editorRef={ref} />);
+    const content = await waitFor(
+      () => {
+        const el = utils.container.querySelector<HTMLElement>('[contenteditable="true"]');
+        expect(el).not.toBeNull();
+        return el!;
+      },
+      { timeout: 10000 },
+    );
+    return { ref, content };
+  }
+
+  function reportedWithoutContent(reportSpy: ReturnType<typeof vi.spyOn>) {
+    expect(reportSpy).toHaveBeenCalled();
+    for (const [report] of reportSpy.mock.calls) {
+      expect(report.error_name).toBe('MarkdownImportFailed');
+      expect(JSON.stringify(report)).not.toContain('<b>');
+    }
+  }
+
+  it('reports the failure to open text it cannot import, without the text', async () => {
+    const reportSpy = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
+
+    await mountReal(unimportable);
+
+    await waitFor(() => reportedWithoutContent(reportSpy));
+  }, 20000);
+
+  it('reports the failure when text it cannot import arrives through setMarkdown', async () => {
+    const reportSpy = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
+    const { ref, content } = await mountReal('local text');
+    act(() => content.focus());
+    expect(reportSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      ref.current!.setMarkdown(unimportable);
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    await waitFor(() => reportedWithoutContent(reportSpy));
   }, 20000);
 });

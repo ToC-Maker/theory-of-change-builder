@@ -21,6 +21,7 @@ import {
   type Translation,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
+import { loggingService } from '../services/loggingService';
 
 // The library's default "Block type" label reads as jargon in the
 // toolbar, so the select is called "Text style" instead. Only these
@@ -40,6 +41,19 @@ const translation: Translation = (key, defaultValue, interpolations = {}) => {
   }
   return value;
 };
+
+// The library calls this when it cannot turn markdown into editor content
+// (inline HTML such as `a <b> c`, an unhandled construct). The editor then
+// shows truncated or blank text and stops reporting edits, so typing in it
+// is lost without a sign; this makes the failure countable. The library's
+// payload quotes the markdown, which is user content, so none of it is sent.
+function reportMarkdownImportFailure() {
+  loggingService.reportError({
+    error_name: 'MarkdownImportFailed',
+    error_message: 'MDXEditor could not import the markdown it was given',
+    request_metadata: { component: 'MDXEditor' },
+  });
+}
 
 interface MDXEditorComponentProps {
   markdown: string;
@@ -105,6 +119,7 @@ export function MDXEditorComponent({
         ref={libraryRef}
         markdown={markdown}
         onChange={onChange}
+        onError={reportMarkdownImportFailure}
         placeholder={placeholder}
         translation={translation}
         plugins={[
