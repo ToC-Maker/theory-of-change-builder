@@ -1053,7 +1053,7 @@ function ToCViewer() {
   );
 
   const handleLoadGeneratedGraph = useCallback(
-    (chart: ChartInput) => changeAs('none', () => doc.replace(normalizeChart(chart))),
+    (chart: ToCData) => changeAs('none', () => doc.replace(chart)),
     [doc, changeAs],
   );
 
