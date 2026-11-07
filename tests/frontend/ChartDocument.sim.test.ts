@@ -128,10 +128,13 @@ function createIntents(view: () => { held: ToCData; inDoubt: ToCData | null }) {
   const pending = new Map<string, string>();
   // Every `entity|field=value` this tab has set, saved or not.
   const typed = new Set<string>();
-  // Entities that came back through a merge: this tab's edit kept one alive after a delete (by
-  // another tab, or by this tab before an AI edit), or both tabs added it. Its fields then merge
-  // against an empty base, so this tab's older values can replace newer ones.
+  // Entities that an earlier base of this tab held and that came back: this tab's edit kept one
+  // alive after another tab deleted it (or the tab deleted it before an AI edit), and it was
+  // added again. Its fields then merge against an empty base, so this tab's older values can
+  // replace newer ones.
   const reAdded = new Set<string>();
+  // Every entity any base of this tab has held.
+  const everInBase = new Set<string>();
   const splitKey = (key: string) => key.split('|') as [string, (typeof TRACKED_FIELDS)[number]];
 
   return {
@@ -191,8 +194,9 @@ function createIntents(view: () => { held: ToCData; inDoubt: ToCData | null }) {
     baseMoved(before: ToCData, after: ToCData, committed: ToCData) {
       const was = trackedEntities(before);
       const mine = trackedEntities(committed);
+      for (const entity of was.keys()) everInBase.add(entity);
       for (const entity of trackedEntities(after).keys()) {
-        if (!was.has(entity) && mine.has(entity)) reAdded.add(entity);
+        if (!was.has(entity) && mine.has(entity) && everInBase.has(entity)) reAdded.add(entity);
       }
     },
 
