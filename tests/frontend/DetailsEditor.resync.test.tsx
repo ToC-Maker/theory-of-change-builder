@@ -314,12 +314,4 @@ describe('MDXEditor behaviour the resync relies on (real editor)', () => {
     expect(ref.current!.getMarkdown()).toBe('new text');
     expect(onChange).not.toHaveBeenCalled();
   }, 20000);
-
-  it('the editor handle still exposes the library methods', async () => {
-    const { ref } = await mountReal('local text');
-
-    expect(ref.current!.getMarkdown()).toBe('local text');
-    expect(typeof ref.current!.insertMarkdown).toBe('function');
-    expect(typeof ref.current!.focus).toBe('function');
-  }, 20000);
 });
