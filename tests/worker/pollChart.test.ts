@@ -48,6 +48,15 @@ describe('POST /api/pollChart', () => {
     expect('chartData' in (body as object)).toBe(false);
   });
 
+  it('answers 404 when the chart is deleted between the gate and the read', async () => {
+    fake.vanishAfterGate = true;
+
+    const res = await pollChart(pollRequest({ editToken: 'edit-tok-1', knownVersion: 4 }), env);
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'Chart not found or invalid edit token' });
+  });
+
   it('poll_changed_returns_chart', async () => {
     const res = await pollChart(pollRequest({ editToken: 'edit-tok-1', knownVersion: 4 }), env);
 

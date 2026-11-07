@@ -88,6 +88,9 @@ describe('compare-and-swap save', () => {
   });
 
   it('two saves on one base yield one success and one conflict carrying the winner', async () => {
+    // The fake serialises the two saves, so this pins the handler's conflict
+    // branch and 409 body; atomicity under real concurrency is Postgres's
+    // (captured against Postgres 16 outside the repo).
     const [a, b] = await Promise.all([
       updateChart(saveRequest({ baseVersion: 5, chartData: { title: 'A', sections: [] } }), env),
       updateChart(saveRequest({ baseVersion: 5, chartData: { title: 'B', sections: [] } }), env),
