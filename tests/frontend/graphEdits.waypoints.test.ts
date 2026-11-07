@@ -102,7 +102,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
         },
       },
     ];
-    const result = applyEdits<ToCData>(baseGraph(), edits);
+    const result = applyEdits(baseGraph(), edits);
     const conn = firstConnection(result);
 
     expect(conn.confidence).toBe(90); // the intended change landed
@@ -134,7 +134,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
         },
       },
     ];
-    const result = applyEdits<ToCData>(baseGraph(), edits);
+    const result = applyEdits(baseGraph(), edits);
     const node = firstNode(result);
 
     expect(node.title).toBe('Node One'); // intended change landed
@@ -152,7 +152,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
         value: 90,
       },
     ];
-    const result = applyEdits<ToCData>(baseGraph(), edits);
+    const result = applyEdits(baseGraph(), edits);
     const conn = firstConnection(result);
 
     expect(conn.confidence).toBe(90);
@@ -168,7 +168,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
         value: 'Node One',
       },
     ];
-    const result = applyEdits<ToCData>(baseGraph(), edits);
+    const result = applyEdits(baseGraph(), edits);
     const node = firstNode(result);
 
     expect(node.title).toBe('Node One');
@@ -189,7 +189,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
         value: 75,
       },
     ];
-    const result = applyEdits<ToCData>(baseGraph(), edits);
+    const result = applyEdits(baseGraph(), edits);
 
     expect(result.curvature).toBe(0.5);
     expect(result.textSize).toBe(1.2);
