@@ -2447,6 +2447,10 @@ export function ChatInterface({
   // the synchronous source of truth.
   const autosavedEditTokenRef = useRef<string | null>(null);
   const autosavedChartIdRef = useRef<string | null>(null);
+  // The create in flight, if any.
+  const creatingChartRef = useRef<Promise<{ chartId: string; editToken: string } | null> | null>(
+    null,
+  );
 
   /**
    * Ensure the chat has a persisted chart before doing anything that needs a
@@ -2499,67 +2503,77 @@ export function ChatInterface({
         return null;
       }
     }
-    // 3. No chart yet — auto-save.
+    // 3. No chart yet — auto-save. Files added together all arrive here before
+    // the first create returns, and a second create would leave the document, the
+    // URL and the uploads on different charts, so they share one.
     if (!graphData) return null;
-    try {
-      const created = await ChartService.createChart(graphData);
-      ChartService.saveEditToken(created.chartId, created.editToken);
-      autosavedEditTokenRef.current = created.editToken;
-      autosavedChartIdRef.current = created.chartId;
-      // Migrate any chat history already persisted under the pre-navigation
-      // URL's storage key to the new chart's key. Covers the refresh-after-
-      // send case (user sends a message on `/`, we auto-create a chart, the
-      // message gets saved under `chatHistory_root` by the save-effect
-      // before we navigate — without this migration it'd be stranded
-      // there after the URL transitions to `/edit/<token>`).
-      const oldKey = getStorageKey();
-      const newKey = `chatHistory_edit_${created.editToken}`;
-      if (oldKey !== newKey) {
-        const existing = localStorage.getItem(oldKey);
-        if (existing) {
-          localStorage.setItem(newKey, existing);
-          localStorage.removeItem(oldKey);
+    const create = async (
+      chart: ToCData,
+    ): Promise<{ chartId: string; editToken: string } | null> => {
+      try {
+        const created = await ChartService.createChart(chart);
+        ChartService.saveEditToken(created.chartId, created.editToken);
+        autosavedEditTokenRef.current = created.editToken;
+        autosavedChartIdRef.current = created.chartId;
+        // Migrate any chat history already persisted under the pre-navigation
+        // URL's storage key to the new chart's key. Covers the refresh-after-
+        // send case (user sends a message on `/`, we auto-create a chart, the
+        // message gets saved under `chatHistory_root` by the save-effect
+        // before we navigate — without this migration it'd be stranded
+        // there after the URL transitions to `/edit/<token>`).
+        const oldKey = getStorageKey();
+        const newKey = `chatHistory_edit_${created.editToken}`;
+        if (oldKey !== newKey) {
+          const existing = localStorage.getItem(oldKey);
+          if (existing) {
+            localStorage.setItem(newKey, existing);
+            localStorage.removeItem(oldKey);
+          }
         }
+        // Use React Router's navigate instead of window.history.replaceState
+        // so useParams()/useLocation() stay in sync with the URL bar. Raw
+        // replaceState bypasses the router, leaving params.editToken stale,
+        // which caused the save-chat effect to keep writing to
+        // chatHistory_root instead of chatHistory_edit_<token> until the
+        // next full reload — so first-message sessions lost their history.
+        // The flag tells the route-change effect NOT to wipe the in-memory
+        // `messages` state during the transition (messages are mid-flight).
+        // `state.skipChartReload` tells ToCViewer's load effect not to
+        // re-fetch the chart from the server (we just created it, it's
+        // already in memory). Without this, the user sees a brief flash of
+        // the loading state every time auto-create fires — on first
+        // message, on every PDF upload, and after Turnstile if that's the
+        // first send.
+        justAutoCreatedRef.current = true;
+        navigate(`/edit/${created.editToken}`, {
+          replace: true,
+          state: { skipChartReload: true },
+        });
+        onChartCreated?.({
+          editToken: created.editToken,
+          chartId: created.chartId,
+          version: created.version,
+          chart,
+        });
+        return { chartId: created.chartId, editToken: created.editToken };
+      } catch (e) {
+        console.error('[ChatInterface] ensureChartExists failed:', e);
+        // Instead of bailing out of the send without a word: the message would
+        // vanish and the user could not tell why.
+        setComposerBlocker({
+          type: 'advisory',
+          cost_error_type: 'database_unavailable',
+          detail: `Couldn't save your chart, so the message was not sent: ${
+            e instanceof Error ? e.message : 'unknown error'
+          }. Try again in a moment.`,
+        });
+        return null;
       }
-      // Use React Router's navigate instead of window.history.replaceState
-      // so useParams()/useLocation() stay in sync with the URL bar. Raw
-      // replaceState bypasses the router, leaving params.editToken stale,
-      // which caused the save-chat effect to keep writing to
-      // chatHistory_root instead of chatHistory_edit_<token> until the
-      // next full reload — so first-message sessions lost their history.
-      // The flag tells the route-change effect NOT to wipe the in-memory
-      // `messages` state during the transition (messages are mid-flight).
-      // `state.skipChartReload` tells ToCViewer's load effect not to
-      // re-fetch the chart from the server (we just created it, it's
-      // already in memory). Without this, the user sees a brief flash of
-      // the loading state every time auto-create fires — on first
-      // message, on every PDF upload, and after Turnstile if that's the
-      // first send.
-      justAutoCreatedRef.current = true;
-      navigate(`/edit/${created.editToken}`, {
-        replace: true,
-        state: { skipChartReload: true },
-      });
-      onChartCreated?.({
-        editToken: created.editToken,
-        chartId: created.chartId,
-        version: created.version,
-        chart: graphData,
-      });
-      return { chartId: created.chartId, editToken: created.editToken };
-    } catch (e) {
-      console.error('[ChatInterface] ensureChartExists failed:', e);
-      // Instead of bailing out of the send without a word: the message would
-      // vanish and the user could not tell why.
-      setComposerBlocker({
-        type: 'advisory',
-        cost_error_type: 'database_unavailable',
-        detail: `Couldn't save your chart, so the message was not sent: ${
-          e instanceof Error ? e.message : 'unknown error'
-        }. Try again in a moment.`,
-      });
-      return null;
-    }
+    };
+    creatingChartRef.current ??= create(graphData).finally(() => {
+      creatingChartRef.current = null;
+    });
+    return creatingChartRef.current;
   }, [params.chartId, params.editToken, graphData, onChartCreated, navigate, getStorageKey]);
 
   const uploadPdfToFilesApi = useCallback(
