@@ -124,6 +124,156 @@ function assertDeletedContainersStayDeleted(
   }
 }
 
+type Fields = Record<string, unknown>;
+
+interface Records {
+  meta: Fields;
+  sections: Map<string, Fields>;
+  columns: Map<string, Fields>;
+  nodes: Map<string, Fields>;
+  connections: Map<string, Fields>;
+}
+
+const without = (source: object, keys: string[]): Fields =>
+  Object.fromEntries(Object.entries(source).filter(([key]) => !keys.includes(key)));
+
+/**
+ * A chart as records of fields, read straight from its shape: where a node sits (column and
+ * `yPosition`) and which section a column is in count as one field each, and a connection to
+ * a node the chart lacks is left out.
+ */
+function recordsOf(chart: ToCData): Records {
+  const nodeIds = new Set(nodesOf(chart).map((n) => n.id));
+  const records: Records = {
+    meta: without(chart, ['sections']),
+    sections: new Map(),
+    columns: new Map(),
+    nodes: new Map(),
+    connections: new Map(),
+  };
+  for (const section of chart.sections) {
+    records.sections.set(idOf(section), without(section, ['id', 'columns']));
+    for (const column of section.columns) {
+      records.columns.set(idOf(column), {
+        ...without(column, ['id', 'nodes']),
+        section: idOf(section),
+      });
+      for (const n of column.nodes) {
+        records.nodes.set(n.id, {
+          ...without(n, ['id', 'connections', 'connectionIds', 'yPosition']),
+          position: [idOf(column), n.yPosition],
+        });
+        for (const c of n.connections ?? []) {
+          if (nodeIds.has(c.targetId)) {
+            records.connections.set(`${n.id}>${c.targetId}`, without(c, ['targetId']));
+          }
+        }
+      }
+    }
+  }
+  return records;
+}
+
+/**
+ * Every field of every record in the result is what the field rule gives: a side that left a
+ * field as it was in the base takes the other side's value, otherwise a value both sides
+ * agree on, otherwise the `onConflict` side's. A record only one side has comes through as
+ * that side has it; one both sides added is merged against an empty base.
+ */
+function assertFieldsFollowFieldRule(
+  base: ToCData,
+  mine: ToCData,
+  theirs: ToCData,
+  out: ToCData,
+  onConflict: ConflictWinner,
+): void {
+  const [b, m, t, o] = [base, mine, theirs, out].map(recordsOf);
+  const ruled = (inBase: unknown, inMine: unknown, inTheirs: unknown): unknown => {
+    if (deepEqual(inMine, inBase)) return inTheirs;
+    if (deepEqual(inTheirs, inBase) || deepEqual(inMine, inTheirs)) return inMine;
+    return onConflict === 'mine' ? inMine : inTheirs;
+  };
+  const merged = (inBase: Fields, inMine: Fields, inTheirs: Fields): Fields =>
+    Object.fromEntries(
+      [...new Set([...Object.keys(inMine), ...Object.keys(inTheirs)])].map((key) => [
+        key,
+        ruled(inBase[key], inMine[key], inTheirs[key]),
+      ]),
+    );
+  const check = (what: string, actual: Fields, expected: Fields) => {
+    for (const key of new Set([...Object.keys(actual), ...Object.keys(expected)])) {
+      if (!deepEqual(actual[key], expected[key])) {
+        throw new Error(
+          `${what}, field ${key}: merged ${JSON.stringify(actual[key])}, rules give ${JSON.stringify(expected[key])}`,
+        );
+      }
+    }
+  };
+  check('chart', o.meta, merged(b.meta, m.meta, t.meta));
+  for (const kind of ['sections', 'columns', 'nodes', 'connections'] as const) {
+    for (const [id, actual] of o[kind]) {
+      const inMine = m[kind].get(id);
+      const inTheirs = t[kind].get(id);
+      const survivor = inMine ?? inTheirs;
+      if (!survivor) throw new Error(`${kind} ${id} is in the result but in neither input`);
+      const expected =
+        inMine && inTheirs ? merged(b[kind].get(id) ?? {}, inMine, inTheirs) : survivor;
+      check(`${kind} ${id}`, actual, expected);
+    }
+  }
+}
+
+/** Each parent's children in order: sections, a section's columns, a column's nodes, a node's targets. */
+function childLists(chart: ToCData): Map<string, string[]> {
+  const nodeIds = new Set(nodesOf(chart).map((n) => n.id));
+  const lists = new Map([['sections', chart.sections.map(idOf)]]);
+  for (const section of chart.sections) {
+    lists.set(`columns of ${section.id}`, section.columns.map(idOf));
+    for (const column of section.columns) {
+      lists.set(
+        `nodes of ${column.id}`,
+        column.nodes.map((n) => n.id),
+      );
+      for (const n of column.nodes) {
+        const targets = (n.connections ?? [])
+          .map((c) => c.targetId)
+          .filter((id) => nodeIds.has(id));
+        lists.set(`connections of ${n.id}`, targets);
+      }
+    }
+  }
+  return lists;
+}
+
+/**
+ * In every list of the result, what theirs lists keeps theirs' order, and an item theirs does
+ * not list (mine's) follows its nearest left neighbour in mine's list that is also in the
+ * result, or comes first when it has none.
+ */
+function assertOrder(mine: ToCData, theirs: ToCData, out: ToCData): void {
+  const [m, t, o] = [mine, theirs, out].map(childLists);
+  for (const [parent, outList] of o) {
+    const theirList = t.get(parent) ?? [];
+    const mineList = m.get(parent) ?? [];
+    const inOut = new Set(outList);
+    const inTheirs = new Set(theirList);
+    const kept = theirList.filter((id) => inOut.has(id));
+    const keptInOut = outList.filter((id) => inTheirs.has(id));
+    if (kept.join() !== keptInOut.join()) throw new Error(`${parent}: theirs' order not kept`);
+    outList.forEach((id, i) => {
+      if (inTheirs.has(id)) return;
+      const at = mineList.indexOf(id);
+      if (at < 0) throw new Error(`${parent}: ${id} is in neither input's list`);
+      const left = mineList
+        .slice(0, at)
+        .reverse()
+        .find((other) => inOut.has(other));
+      const expected = left === undefined ? 0 : outList.indexOf(left) + 1;
+      if (i !== expected) throw new Error(`${parent}: ${id} at ${i}, expected at ${expected}`);
+    });
+  }
+}
+
 /**
  * One of the edits the editor makes, applied to a draft. Column and section deletes leave
  * connections to the removed nodes behind, as the app's deletes do today.
@@ -133,7 +283,7 @@ function randomEdit(draft: ToCData, r: Rng, next: () => number): void {
   const nodes = nodesOf(draft);
   const connections = connectionsOf(draft);
   const pick = <T>(items: T[]): T | undefined => items[r(items.length)];
-  switch (r(18)) {
+  switch (r(22)) {
     case 0: {
       const n = pick(nodes);
       if (n) n.title = `title ${next()}`;
@@ -233,6 +383,24 @@ function randomEdit(draft: ToCData, r: Rng, next: () => number): void {
       if (section) section.title = `section ${next()}`;
       break;
     }
+    case 18: {
+      const n = pick(nodes);
+      if (n) n.width = 100 + r(200);
+      break;
+    }
+    case 19: {
+      const n = pick(nodes);
+      if (n) n.yPosition = r(500);
+      break;
+    }
+    case 20:
+      draft.curvature = r(100) / 100;
+      break;
+    case 21: {
+      const n = pick(nodes);
+      if (n) Object.assign(n, { tag: `tag ${next()}` });
+      break;
+    }
   }
 }
 
@@ -275,17 +443,20 @@ function simulate(seed: number): void {
     where: string,
   ): ToCData => {
     const out = mergeCharts(base, mine, theirs, { onConflict });
-    stats.merges++;
-    if (hasDanglingConnection(mine) || hasDanglingConnection(theirs)) {
-      stats.mergesWithDanglingInput++;
-    }
     assertUniqueIds(out, where);
     assertNothingDropped(base, mine, theirs, out);
     assertDeletedContainersStayDeleted(base, mine, theirs, out);
     // A merge that returns an input unchanged is a fast path; every other result is rebuilt.
     if (out !== mine && out !== theirs) {
+      stats.merges++;
+      if (where === 'undo' || where === 'redo') stats.undoMerges++;
+      if (hasDanglingConnection(mine) || hasDanglingConnection(theirs)) {
+        stats.mergesWithDanglingInput++;
+      }
       if (hasDanglingConnection(out)) throw new Error(`${where}: connection to a missing node`);
       if (!deepEqual(normalizeChart(out), out)) throw new Error(`${where}: output not normalised`);
+      assertFieldsFollowFieldRule(base, mine, theirs, out, onConflict);
+      assertOrder(mine, theirs, out);
       // Merging again, now that the result already holds both sides, must change nothing.
       if (!deepEqual(mergeCharts(base, out, theirs, { onConflict }), out)) {
         throw new Error(`${where}: merging the result again changed it`);
@@ -367,14 +538,12 @@ function simulate(seed: number): void {
     } else if (action < 18) {
       const entry = client.undo.pop();
       if (entry) {
-        stats.undoMerges++;
         client.local = merge(entry.after, entry.before, client.local, 'theirs', 'undo');
         client.redo.push(entry);
       }
     } else {
       const entry = client.redo.pop();
       if (entry) {
-        stats.undoMerges++;
         client.local = merge(entry.before, entry.after, client.local, 'theirs', 'redo');
         client.undo.push(entry);
       }

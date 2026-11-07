@@ -332,6 +332,26 @@ describe('mergeCharts: undo and redo, more cases', () => {
     expect(hasNode(redone, 'a')).toBe(false);
     expect(hasNode(redone, 'd')).toBe(true);
   });
+
+  it('does not bring back, by undo, a connection the collaborator deleted', () => {
+    const before = edit(B, (c) => (nodeIn(c, 'a').connections![0].evidence = 'first'));
+    const after = edit(before, (c) => (nodeIn(c, 'a').connections![0].evidence = 'second'));
+    const current = edit(after, (c) => (nodeIn(c, 'a').connections = []));
+    expect(connectionOf(merge(after, before, current, 'theirs'), 'a', 'c')).toBeUndefined();
+    // Saving the same change as an ordinary edit instead keeps the connection with its text.
+    expect(connectionOf(merge(after, before, current, 'mine'), 'a', 'c')?.evidence).toBe('first');
+  });
+
+  it("keeps a collaborator's evidence edit, and the node it hangs on, when undoing the creation of both", () => {
+    const after = edit(B, (c) => {
+      columnIn(c, 'c4').nodes.push(node('x', 40));
+      addConnection(c, 'd', 'x', { confidence: 60, evidence: 'mine' });
+    });
+    const current = edit(after, (c) => (nodeIn(c, 'd').connections![0].evidence = 'collaborator'));
+    const undone = merge(after, B, current, 'theirs');
+    expect(hasNode(undone, 'x')).toBe(true);
+    expect(connectionOf(undone, 'd', 'x')?.evidence).toBe('collaborator');
+  });
 });
 
 describe('mergeCharts: connections', () => {
