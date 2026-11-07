@@ -201,9 +201,9 @@ describe('FileMenu', () => {
 // through `onImportJson` (with a confirm gate when the existing
 // graph has nodes).
 
-import type { ToCData } from '../../src/types';
+import { normalizeChart, type ChartInput } from '../../src/types';
 
-const sampleData: ToCData = {
+const sampleData: ChartInput = {
   title: 'Sample Theory',
   sections: [
     {
@@ -233,7 +233,7 @@ describe('FileMenu — Export (PR 6 Task 6.2)', () => {
     });
 
     const user = userEvent.setup();
-    renderMenu({ data: sampleData });
+    renderMenu({ data: normalizeChart(sampleData) });
     await user.click(screen.getByRole('button', { name: /file/i }));
     await user.click(screen.getByText(/^export$/i));
     await user.click(screen.getByTestId('file-menu-export-json'));
@@ -284,14 +284,15 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
 
     // Microtask boundary so the .text() promise + setState settle.
     await Promise.resolve();
-    expect(onImportJson).toHaveBeenCalledWith(sampleData);
+    // The app is handed the normalised chart: section and column ids included.
+    expect(onImportJson).toHaveBeenCalledWith(normalizeChart(sampleData));
   });
 
   it('shows a confirm modal when the existing graph has nodes, and only commits on confirm', async () => {
     const user = userEvent.setup();
     const onImportJson = vi.fn();
     renderMenu({
-      data: sampleData, // 1 node — non-empty
+      data: normalizeChart(sampleData), // 1 node — non-empty
       onImportJson,
     });
 
@@ -476,7 +477,7 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
     // Symmetric with the delete-cancel test.
     const user = userEvent.setup();
     const onImportJson = vi.fn();
-    renderMenu({ data: sampleData, onImportJson });
+    renderMenu({ data: normalizeChart(sampleData), onImportJson });
 
     await user.click(screen.getByRole('button', { name: /file/i }));
     await user.click(screen.getByTestId('file-menu-import-json'));

@@ -344,40 +344,5 @@ describe('useEdgeProperties', () => {
       expect(api.mutateDebounced).toHaveBeenCalledTimes(3);
       expect(api.dataRef.current).toBe(data);
     });
-
-    it('does not recreate a legacy connection that was removed from connectionIds', () => {
-      const data: ToCData = deepFreeze({
-        sections: [
-          {
-            title: 'S',
-            columns: [
-              {
-                nodes: [
-                  { id: 'a', title: 'A', text: '', connectionIds: [] },
-                  { id: 'b', title: 'B', text: '', connectionIds: [] },
-                ],
-              },
-            ],
-          },
-        ],
-      });
-      const api = makeMutationApi(data);
-      const { result } = renderHook(() =>
-        useEdgeProperties({
-          sourceId: 'a',
-          targetId: 'b',
-          data,
-          mutate: api.mutate,
-          mutateDebounced: api.mutateDebounced,
-          commit: api.commit,
-        }),
-      );
-
-      act(() => {
-        result.current.setEvidence('late');
-      });
-
-      expect(api.dataRef.current).toBe(data);
-    });
   });
 });

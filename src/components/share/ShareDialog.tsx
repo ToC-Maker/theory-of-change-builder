@@ -40,7 +40,11 @@ import { createPortal } from 'react-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import { ChartService, type CreateChartResponse } from '../../services/chartService';
+import {
+  ChartService,
+  type ChartCreated,
+  type CreateChartResponse,
+} from '../../services/chartService';
 import type { Permission, LinkSharingLevel } from '../../../shared/permissions';
 import type { ToCData } from '../../types';
 import { CopyButton } from './CopyButton';
@@ -55,7 +59,7 @@ export interface ShareDialogProps {
   currentEditToken: string | null;
   /** Width/height for the embed iframe aspect ratio. */
   containerSize?: { width: number; height: number };
-  onChartCreated?: (token: string, chartId: string) => void;
+  onChartCreated?: (created: ChartCreated) => void;
   /** App-owned permissions array (single source of truth). */
   permissions: Permission[];
   /** App-owned current link-sharing level (single source of truth). */
@@ -184,7 +188,12 @@ export function ShareDialog({
         replace: true,
         state: { skipChartReload: true },
       });
-      if (onChartCreated) onChartCreated(response.editToken, response.chartId);
+      onChartCreated?.({
+        editToken: response.editToken,
+        chartId: response.chartId,
+        version: response.version,
+        chart: data,
+      });
     } catch (err) {
       setShareError(err instanceof Error ? err.message : 'Failed to share chart');
     } finally {

@@ -34,8 +34,7 @@ function hasConnection(data: ToCData, { sourceId, targetId }: SelectedEdge): boo
   const nodes = data.sections.flatMap((section) => section.columns.flatMap((c) => c.nodes));
   const source = nodes.find((n) => n.id === sourceId);
   if (!source || !nodes.some((n) => n.id === targetId)) return false;
-  const targetIds = source.connections?.map((c) => c.targetId) ?? source.connectionIds;
-  return targetIds.includes(targetId);
+  return source.connections?.some((c) => c.targetId === targetId) ?? false;
 }
 
 interface ConnectionsComponentProps {
@@ -388,48 +387,27 @@ export function ConnectionsComponent({
       .flatMap((section, sectionIndex) =>
         section.columns.flatMap((column, columnIndex) =>
           column.nodes.flatMap((node) => {
-            // Handle both old connectionIds and new connections format
-            if (node.connections) {
-              return node.connections.map((conn) => {
-                const targetLocation = findNodeLocation(conn.targetId);
-                return {
-                  start: nodeRefs[node.id],
-                  end: nodeRefs[conn.targetId],
-                  sourceSectionIndex: sectionIndex,
-                  sourceColumnIndex: columnIndex,
-                  targetSectionIndex: targetLocation?.sectionIndex ?? -1,
-                  targetColumnIndex: targetLocation?.columnIndex ?? -1,
-                  sourceId: node.id,
-                  targetId: conn.targetId,
-                  confidence: conn.confidence,
-                  evidence: conn.evidence,
-                  assumptions: conn.assumptions,
-                  // PR 7: forward optional waypoints. Empty/undefined =
-                  // falls back to auto-bezier (byte-identical to
-                  // pre-PR-7 rendering, see
-                  // `tests/frontend/connectionPath.waypoints.test.ts`).
-                  waypoints: conn.waypoints,
-                };
-              });
-            } else {
-              return node.connectionIds.map((connectionId) => {
-                const targetLocation = findNodeLocation(connectionId);
-                return {
-                  start: nodeRefs[node.id],
-                  end: nodeRefs[connectionId],
-                  sourceSectionIndex: sectionIndex,
-                  sourceColumnIndex: columnIndex,
-                  targetSectionIndex: targetLocation?.sectionIndex ?? -1,
-                  targetColumnIndex: targetLocation?.columnIndex ?? -1,
-                  sourceId: node.id,
-                  targetId: connectionId,
-                  confidence: 50, // default confidence (medium)
-                  evidence: undefined,
-                  assumptions: undefined,
-                  waypoints: undefined,
-                };
-              });
-            }
+            return (node.connections ?? []).map((conn) => {
+              const targetLocation = findNodeLocation(conn.targetId);
+              return {
+                start: nodeRefs[node.id],
+                end: nodeRefs[conn.targetId],
+                sourceSectionIndex: sectionIndex,
+                sourceColumnIndex: columnIndex,
+                targetSectionIndex: targetLocation?.sectionIndex ?? -1,
+                targetColumnIndex: targetLocation?.columnIndex ?? -1,
+                sourceId: node.id,
+                targetId: conn.targetId,
+                confidence: conn.confidence,
+                evidence: conn.evidence,
+                assumptions: conn.assumptions,
+                // PR 7: forward optional waypoints. Empty/undefined =
+                // falls back to auto-bezier (byte-identical to
+                // pre-PR-7 rendering, see
+                // `tests/frontend/connectionPath.waypoints.test.ts`).
+                waypoints: conn.waypoints,
+              };
+            });
           }),
         ),
       )

@@ -45,8 +45,8 @@ export interface TopBarProps {
   showEditButton: boolean;
 
   // Undo / redo.
-  undoHistory: ToCData[];
-  redoHistory: ToCData[];
+  canUndo: boolean;
+  canRedo: boolean;
   handleUndo: () => void;
   handleRedo: () => void;
 
@@ -217,7 +217,7 @@ export function TopBar(props: TopBarProps) {
         // isTextEntryFocused() check sees the truth.
         onMouseDown={(e) => e.preventDefault()}
         onClick={props.handleUndo}
-        disabled={props.undoHistory.length === 0}
+        disabled={!props.canUndo}
         // p-1.5 at every breakpoint: with the sm:w-5 icon
         // that's a 32px button, 4px clear above and below
         // in the 40px row.
@@ -243,7 +243,7 @@ export function TopBar(props: TopBarProps) {
         type="button"
         onMouseDown={(e) => e.preventDefault()}
         onClick={props.handleRedo}
-        disabled={props.redoHistory.length === 0}
+        disabled={!props.canRedo}
         className="p-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-800 rounded disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         title={`Redo (${shortcuts.redoDisplay()})`}
         aria-label="Redo"

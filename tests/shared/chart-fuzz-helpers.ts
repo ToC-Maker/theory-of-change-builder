@@ -4,7 +4,6 @@
 import type { ConflictWinner } from '../../shared/chart-merge';
 import {
   deepEqual,
-  idOf,
   normalizeChart,
   type Connection,
   type Node,
@@ -81,8 +80,8 @@ export function assertNothingDropped(
   out: ToCData,
 ): void {
   const idLists = (chart: ToCData) => ({
-    section: new Set(chart.sections.map(idOf)),
-    column: new Set(columnsOf(chart).map(idOf)),
+    section: new Set(chart.sections.map((s) => s.id)),
+    column: new Set(columnsOf(chart).map((c) => c.id)),
     node: new Set(nodesOf(chart).map((n) => n.id)),
   });
   const [b, m, t, o] = [base, mine, theirs, out].map(idLists);
@@ -106,15 +105,17 @@ export function assertDeletedContainersStayDeleted(
 ): void {
   const deletedBySomeone = (kind: 'section' | 'column', id: string) => {
     const ids = (chart: ToCData) =>
-      new Set(kind === 'section' ? chart.sections.map(idOf) : columnsOf(chart).map(idOf));
+      new Set(
+        kind === 'section' ? chart.sections.map((s) => s.id) : columnsOf(chart).map((c) => c.id),
+      );
     return ids(base).has(id) && !(ids(mine).has(id) && ids(theirs).has(id));
   };
   for (const section of out.sections) {
-    if (deletedBySomeone('section', idOf(section)) && section.columns.length === 0) {
+    if (deletedBySomeone('section', section.id) && section.columns.length === 0) {
       throw new Error(`merge kept deleted section ${section.id} with nothing in it`);
     }
     for (const column of section.columns) {
-      if (deletedBySomeone('column', idOf(column)) && column.nodes.length === 0) {
+      if (deletedBySomeone('column', column.id) && column.nodes.length === 0) {
         throw new Error(`merge kept deleted column ${column.id} with nothing in it`);
       }
     }
@@ -149,16 +150,16 @@ function recordsOf(chart: ToCData): Records {
     connections: new Map(),
   };
   for (const section of chart.sections) {
-    records.sections.set(idOf(section), without(section, ['id', 'columns']));
+    records.sections.set(section.id, without(section, ['id', 'columns']));
     for (const column of section.columns) {
-      records.columns.set(idOf(column), {
+      records.columns.set(column.id, {
         ...without(column, ['id', 'nodes']),
-        section: idOf(section),
+        section: section.id,
       });
       for (const n of column.nodes) {
         records.nodes.set(n.id, {
           ...without(n, ['id', 'connections', 'connectionIds', 'yPosition']),
-          position: [idOf(column), n.yPosition],
+          position: [column.id, n.yPosition],
         });
         for (const c of n.connections ?? []) {
           if (nodeIds.has(c.targetId)) {
@@ -223,9 +224,12 @@ export function assertFieldsFollowFieldRule(
 /** Each parent's children in order: sections, a section's columns, a column's nodes, a node's targets. */
 function childLists(chart: ToCData): Map<string, string[]> {
   const nodeIds = new Set(nodesOf(chart).map((n) => n.id));
-  const lists = new Map([['sections', chart.sections.map(idOf)]]);
+  const lists = new Map([['sections', chart.sections.map((s) => s.id)]]);
   for (const section of chart.sections) {
-    lists.set(`columns of ${section.id}`, section.columns.map(idOf));
+    lists.set(
+      `columns of ${section.id}`,
+      section.columns.map((c) => c.id),
+    );
     for (const column of section.columns) {
       lists.set(
         `nodes of ${column.id}`,
@@ -320,7 +324,7 @@ export function randomEdit(draft: ToCData, r: Rng, next: () => number, kind = r(
     case 5: {
       const n = pick(nodes);
       const column = pick(columns);
-      if (n && column) moveNode(draft, n.id, idOf(column), r(500));
+      if (n && column) moveNode(draft, n.id, column.id, r(500));
       break;
     }
     case 6: {
@@ -330,7 +334,7 @@ export function randomEdit(draft: ToCData, r: Rng, next: () => number, kind = r(
     }
     case 7: {
       const column = pick(columns);
-      if (column && columns.length > 1) removeColumn(draft, idOf(column));
+      if (column && columns.length > 1) removeColumn(draft, column.id);
       break;
     }
     case 8: {
@@ -346,7 +350,7 @@ export function randomEdit(draft: ToCData, r: Rng, next: () => number, kind = r(
     }
     case 9: {
       const section = pick(draft.sections);
-      if (section && draft.sections.length > 1) removeSection(draft, idOf(section));
+      if (section && draft.sections.length > 1) removeSection(draft, section.id);
       break;
     }
     case 10:

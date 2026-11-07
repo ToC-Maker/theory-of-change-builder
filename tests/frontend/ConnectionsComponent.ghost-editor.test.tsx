@@ -109,25 +109,4 @@ describe('ConnectionsComponent with an open EdgeEditor', () => {
 
     expect(document.querySelector('.edge-editor')).toBe(editor);
   });
-
-  it('closes on a legacy chart whose connectionIds lose the target', () => {
-    const legacy = (ids: string[]): ToCData => ({
-      sections: [
-        {
-          title: 'Activities',
-          columns: [{ nodes: [{ id: 'a', title: 'A', text: '', connectionIds: ids }] }],
-        },
-        {
-          title: 'Outcomes',
-          columns: [{ nodes: [{ id: 'b', title: 'B', text: '', connectionIds: [] }] }],
-        },
-      ],
-    });
-    const { utils, props } = setup(legacy(['b']));
-    openEdgeEditor();
-
-    utils.rerender(<ConnectionsComponent {...props} data={legacy([])} />);
-
-    expect(document.querySelector('.edge-editor')).toBeNull();
-  });
 });

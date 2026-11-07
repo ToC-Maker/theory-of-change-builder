@@ -57,17 +57,9 @@
  *    base it is `theirs` itself (same object, no rebuild).
  *
  * Pure: never mutates its inputs. It throws only on a section, column or node
- * id that repeats within a chart, which `normalizeChart` rules out, and, while
- * the types still allow it, on a section or column without an id (`idOf`).
+ * id that repeats within a chart, which `normalizeChart` rules out.
  */
-import {
-  deepEqual,
-  idOf,
-  type Connection,
-  type Node,
-  type Section,
-  type ToCData,
-} from './chart-model';
+import { deepEqual, type Connection, type Node, type Section, type ToCData } from './chart-model';
 
 export type ConflictWinner = 'mine' | 'theirs';
 
@@ -133,14 +125,14 @@ function flatten(chart: ToCData): Flat {
   };
   const nodes: Node[] = [];
   for (const section of chart.sections) {
-    const sectionId = idOf(section);
+    const sectionId = section.id;
     flat.sectionOrder.push(sectionId);
     register(flat.sections, 'section', sectionId, {
       fields: omit(section, ['id', 'columns']),
-      kids: section.columns.map(idOf),
+      kids: section.columns.map((c) => c.id),
     });
     for (const column of section.columns) {
-      const columnId = idOf(column);
+      const columnId = column.id;
       register(flat.columns, 'column', columnId, {
         fields: { ...omit(column, ['id', 'nodes']), [SECTION]: sectionId },
         kids: column.nodes.map((n) => n.id),
