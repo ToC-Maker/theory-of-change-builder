@@ -26,11 +26,15 @@
 //     outside. Hover scales the node up 5%, carrying the dot about 5px
 //     outward under a pointer aimed at it, and this keeps that press on
 //     the handle. The hover test is CSS (`:hover` on the node, this
-//     component's parent), so it holds in the same frame the pointer
-//     enters the node, before React has re-rendered.
+//     component's parent), so it does not wait for a React render: in
+//     Chrome it is live 20ms after the pointer enters the node, though a
+//     press dispatched in the same task as that move can still beat it.
+//     A selected node keeps this reach live, because its dot stays drawn
+//     and is aimed at without hovering first; the connection's first
+//     ~12px are then covered, as they are while hovering the node.
 // A press that arrives from outside the node, aimed at the outer half of
-// the dot on a node not hovered yet, therefore lands on the connection or
-// the canvas instead.
+// the dot on a node not hovered or selected, therefore lands on the
+// connection or the canvas instead.
 //
 // The two buttons are Fragment siblings (no wrapping element) so they
 // don't introduce a hit-test target between them.

@@ -45,8 +45,7 @@ function setup() {
 
 /**
  * One press / optional move / release, then the browser's trailing click
- * (omitted with `click: false`, as when the button is released outside the
- * document and the browser dispatches none).
+ * (omitted with `click: false` for a release that is not followed by one).
  */
 function gesture(
   gutter: HTMLElement,
