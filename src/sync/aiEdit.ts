@@ -9,6 +9,7 @@
  * `ChartDocument.applyRebased(asSent, prepared)`.
  */
 import {
+  assertChartShape,
   newColumnId,
   newNodeId,
   newSectionId,
@@ -23,11 +24,14 @@ import {
  * with the reply's edits applied. Node ids `asSent` did not have, and every
  * repeat of an id within `result`, are replaced by fresh ones, with connection
  * targets following; sections and columns without an id get random ones.
- * Ends in `normalizeChart`: `graphEdits` fills `connections` only for inserted
- * and pushed nodes, so a node the reply rewrote whole may list `connectionIds`
+ * Throws `ChartShapeError` when `result` is not a chart. Ends in
+ * `normalizeChart`: `graphEdits` fills `connections` only for inserted and
+ * pushed nodes, so a node the reply rewrote whole may list `connectionIds`
  * only, which the merge would read as all of its edges deleted.
  */
 export function prepareAIResult(asSent: ToCData, result: ChartInput): ToCData {
+  // Model output: nothing has checked that it is a chart, and it is walked below.
+  assertChartShape(result);
   const known = new Set(
     asSent.sections.flatMap((s) => s.columns.flatMap((c) => c.nodes.map((n) => n.id))),
   );

@@ -7,7 +7,12 @@ import { prepareAIResult } from '../../src/sync/aiEdit';
 import { ChartDocument } from '../../src/sync/ChartDocument';
 import { addNodePaths } from '../../src/utils/addNodePaths';
 import { applyEdits, type EditInstruction } from '../../src/utils/graphEdits';
-import { normalizeChart, type ChartInput, type Node } from '../../shared/chart-model';
+import {
+  ChartShapeError,
+  normalizeChart,
+  type ChartInput,
+  type Node,
+} from '../../shared/chart-model';
 import {
   connectedChart,
   connectionOf,
@@ -162,6 +167,20 @@ describe('prepareAIResult', () => {
 
     expect(findNode(doc.getCommitted(), 'a')?.title).toBe('Retitled by AI');
     expect(doc.getCommitted().sections[0].title).toBe('Inserted');
+  });
+});
+
+describe('prepareAIResult with a result that is not a chart', () => {
+  // Model output is not shape-checked before it gets here.
+  it.each([
+    ['a section whose columns are not an array', { sections: [{ title: 'S', columns: 'x' }] }],
+    ['a column without nodes', { sections: [{ title: 'S', columns: [{}] }] }],
+    ['a node that is not an object', { sections: [{ title: 'S', columns: [{ nodes: ['a'] }] }] }],
+    ['no sections', { title: 'T' }],
+  ])('throws a ChartShapeError for %s', (_label, result) => {
+    expect(() => prepareAIResult(seedChart(), result as unknown as ChartInput)).toThrow(
+      ChartShapeError,
+    );
   });
 });
 

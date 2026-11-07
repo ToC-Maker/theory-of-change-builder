@@ -130,12 +130,8 @@ export class ChartShapeError extends Error {
  * array, or a node's `connections` is present but not an array.
  */
 export function normalizeChart(raw: unknown): ToCData {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new ChartShapeError(raw, 'top-level is not an object');
-  }
-  if (!Array.isArray((raw as ChartInput).sections)) throw new ChartShapeError(raw);
-  const chart = raw as ChartInput;
-  assertNestedShape(chart);
+  assertChartShape(raw);
+  const chart = raw;
 
   const sectionId = idAssigner(chart.sections.map((s) => s.id));
   const columnId = idAssigner(chart.sections.flatMap((s) => s.columns.map((c) => c.id)));
@@ -184,7 +180,17 @@ function idAssigner(stored: unknown[]) {
 const isObject = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
 
-function assertNestedShape(chart: ChartInput): void {
+/**
+ * Throws `ChartShapeError` unless `raw` is shaped like a chart, down to its
+ * connections. For code that has to look inside a chart before it can
+ * normalise it (an AI reply's edits are not shape-checked).
+ */
+export function assertChartShape(raw: unknown): asserts raw is ChartInput {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new ChartShapeError(raw, 'top-level is not an object');
+  }
+  const chart = raw as ChartInput;
+  if (!Array.isArray(chart.sections)) throw new ChartShapeError(raw);
   const sections: unknown[] = chart.sections;
   const fail = (reason: string): never => {
     throw new ChartShapeError(chart, reason);
