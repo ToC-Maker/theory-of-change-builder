@@ -1,4 +1,4 @@
-// PR 5 Task 5.2 regression test for ConnectionHandles.
+// ConnectionHandles: the drag-to-connect handles on a node's edges.
 //
 // Asserts:
 //   - Stays mounted when `visible=false` (nodes that aren't hovered or

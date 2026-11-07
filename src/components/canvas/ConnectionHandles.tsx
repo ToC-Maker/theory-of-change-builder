@@ -1,35 +1,42 @@
-// `ConnectionHandles` — small handle dots on the left and right edges
-// of a node, used to initiate a drag-to-connect gesture.
+// `ConnectionHandles` — drag-to-connect handles on the left and right
+// edges of a node: a 12px indigo dot (2px white outline) centred on the
+// edge, drawn when `visible` (NodeComponent's hover/selection state) and
+// transparent otherwise.
 //
-// Visibility: the dots are shown when the parent passes `visible={true}`,
-// which is driven by NodeComponent's hover/selection state. We avoid
-// a CSS `:hover` selector here so the surrounding NodeComponent's
-// React-tracked `isHovered` / `isSelected` props remain the single
-// source of truth (consistent with the rest of the canvas surface).
-//
-// The handles themselves are always mounted (in edit mode) and only
-// their dots are hidden. That state is set by React a frame after the
-// pointer arrives, so a handle created by it would not exist yet for a
-// press that follows the arrival closely; that press would land on the
-// node (starting a node drag) or on the connection's hit-path beneath
-// (starting a waypoint drag) instead. A permanently mounted target
-// makes the press land on the handle however soon it comes.
+// The handle buttons stay mounted (in edit mode) while the dot is hidden.
+// `visible` changes a frame after the pointer arrives, so a handle created
+// by it would not exist yet for a press that follows closely, and that
+// press would start a node drag, or a waypoint drag where a connection
+// lies underneath, instead. A permanently mounted target catches it
+// however soon it comes.
 //
 // Each handle binds its `pointerdown` via `useConnectionDrag`'s
-// `bindHandle(nodeId, side)` accessor; the hook itself owns the
-// gesture lifecycle.
+// `bindHandle(nodeId, side)`; the hook owns the gesture lifecycle.
 //
-// Geometry: the target is a 24×24 transparent button centered on the
-// node edge, with the 12×12 indigo dot (2px white outline) centered in
-// it. The node scales up 5% on hover, which carries the handle several
-// pixels outward over the transition; a target that is only as big as
-// the dot would drift out from under a pointer aimed at the dot, and
-// at fit-to-screen zoom it measures under 10 screen px. The two targets
-// are rendered as Fragment siblings (no wrapping element) so they
+// Hit area. A connection leaves its node exactly at the dot, and a node's
+// handle outranks the connection's hit path beneath it. A target reaching
+// 12px outside the edge would cover the first 12px of every outgoing
+// connection, all of a short one (the default 24px column gap leaves a
+// line of about 10px): it could not be hovered, clicked, split or
+// dragged. So how far the target reaches outside the node depends on
+// whether a press there is likely to be meant for the dot:
+//   - always live: 12px inside the node edge and 3px outside it. A press
+//     right after the pointer arrives on the node lands here.
+//   - live only while the node is hovered or selected: the next 9px
+//     outside. Hover scales the node up 5%, carrying the dot about 5px
+//     outward under a pointer aimed at it, and this keeps that press on
+//     the handle. The hover test is CSS (`:hover` on the node, this
+//     component's parent), so it holds in the same frame the pointer
+//     enters the node, before React has re-rendered.
+// A press that arrives from outside the node, aimed at the outer half of
+// the dot on a node not hovered yet, therefore lands on the connection or
+// the canvas instead.
+//
+// The two buttons are Fragment siblings (no wrapping element) so they
 // don't introduce a hit-test target between them.
 
 import clsx from 'clsx';
-import type { BindConnectionHandle } from '../../hooks/useConnectionDrag';
+import type { BindConnectionHandle, HandleSide } from '../../hooks/useConnectionDrag';
 
 interface ConnectionHandlesProps {
   nodeId: string;
@@ -37,17 +44,24 @@ interface ConnectionHandlesProps {
   bindHandle: BindConnectionHandle;
 }
 
-export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHandlesProps) {
-  const left = bindHandle(nodeId, 'left');
-  const right = bindHandle(nodeId, 'right');
+// Per side, the offsets that put the always-live box 3px outside the node
+// edge and the dot back onto the edge, plus the side the outer reach
+// extends to.
+const SIDE_CLASSES: Record<HandleSide, { button: string; dot: string; reach: string }> = {
+  left: { button: '-left-[3px] justify-start', dot: '-ml-[3px]', reach: 'before:right-full' },
+  right: { button: '-right-[3px] justify-end', dot: '-mr-[3px]', reach: 'before:left-full' },
+};
 
-  // The targets sit at the node's vertical midpoint via top:50% + translate.
-  // We use absolute positioning relative to the wrapping NodeComponent
-  // div (which is `relative`). `touch-none` blocks mobile scroll-eat.
-  // `tabIndex={-1}`: pointer-only affordance, kept out of the tab order
-  // now that it is always in the DOM.
-  const target =
-    'group touch-none absolute z-20 w-6 h-6 top-1/2 -translate-y-1/2 flex items-center justify-center cursor-crosshair';
+export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHandlesProps) {
+  // The buttons sit at the node's vertical midpoint via top:50% + translate,
+  // absolutely positioned against the node's own box. `touch-none` blocks
+  // mobile scroll-eat. `tabIndex={-1}`: pointer-only affordance, kept out of
+  // the tab order.
+  const button =
+    'group touch-none absolute z-20 w-[15px] h-6 top-1/2 -translate-y-1/2 flex items-center cursor-crosshair before:absolute before:inset-y-0 before:w-[9px]';
+  const reach = visible
+    ? 'before:pointer-events-auto'
+    : 'before:pointer-events-none [:hover>&]:before:pointer-events-auto';
   const dot = clsx(
     'pointer-events-none w-3 h-3 rounded-full bg-indigo-500 border-2 border-white shadow-md transition-[transform,opacity] group-hover:scale-125',
     visible ? 'opacity-100' : 'opacity-0',
@@ -55,31 +69,23 @@ export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHan
 
   return (
     <>
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        data-tocb-connection-handle={`${nodeId}|left`}
-        onPointerDown={left.onPointerDown}
-        // The handle is interactive; suppress the parent node's
-        // click-to-select selection when it is clicked (so a tap on
-        // the handle doesn't also toggle highlight).
-        onClick={(e) => e.stopPropagation()}
-        className={clsx(target, '-left-3')}
-      >
-        <span data-tocb-handle-dot className={dot} />
-      </button>
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        data-tocb-connection-handle={`${nodeId}|right`}
-        onPointerDown={right.onPointerDown}
-        onClick={(e) => e.stopPropagation()}
-        className={clsx(target, '-right-3')}
-      >
-        <span data-tocb-handle-dot className={dot} />
-      </button>
+      {(['left', 'right'] as const).map((side) => (
+        <button
+          key={side}
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          data-tocb-connection-handle={`${nodeId}|${side}`}
+          onPointerDown={bindHandle(nodeId, side).onPointerDown}
+          // The handle is interactive; suppress the parent node's
+          // click-to-select selection when it is clicked (so a tap on
+          // the handle doesn't also toggle highlight).
+          onClick={(e) => e.stopPropagation()}
+          className={clsx(button, reach, SIDE_CLASSES[side].button, SIDE_CLASSES[side].reach)}
+        >
+          <span data-tocb-handle-dot className={clsx(dot, SIDE_CLASSES[side].dot)} />
+        </button>
+      ))}
     </>
   );
 }

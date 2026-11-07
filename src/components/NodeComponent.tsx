@@ -178,12 +178,13 @@ function NodeComponentInner({
             {node.title}
           </div>
         </div>
-        {/* PR 5 Task 5.2: drag-to-connect handle dots on left + right
-          edges. Visible only when hovered or selected (no global
-          pointermove subscription — pure React-tracked state). The
-          dots overhang the node edge by 6px so they're grabbable
-          without covering content. Handles are absolute-positioned
-          relative to this node's flex container. */}
+        {/* Drag-to-connect handles on the left and right edges. Their
+          dots show only while the node is hovered or selected, but the
+          buttons are always mounted so a press right after the pointer
+          arrives still lands on one. The hit area reaches 12px into the
+          node and, outside it, 3px always and 9px more while the node
+          is hovered or selected (see ConnectionHandles), which it tests
+          through this element's `:hover`. */}
         {editMode && bindConnectionHandle && (
           <ConnectionHandles
             nodeId={node.id}
