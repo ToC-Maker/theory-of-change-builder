@@ -137,6 +137,7 @@ export async function run(ctx, kase) {
       [3, true],
     );
     checks.note(`column under the pointer at release: ${under}`);
+    return;
   }
 
   // A changes n1 and B changes something else while the reply streams.
