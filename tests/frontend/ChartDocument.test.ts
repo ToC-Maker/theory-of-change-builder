@@ -213,6 +213,57 @@ describe('ChartDocument undo and redo', () => {
     expect(doc.getStatus().canUndo).toBe(false);
   });
 
+  it('the_grouping_window_slides_with_each_commit', () => {
+    const { doc, clock } = openDoc();
+    for (const [at, title] of [
+      [0, 'x1'],
+      [200, 'x2'],
+      [400, 'x3'],
+    ] as const) {
+      clock.now = at;
+      doc.edit((c) => retitle(c, 'a', title));
+    }
+
+    doc.undo();
+
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('A');
+    expect(doc.getStatus().canUndo).toBe(false);
+  });
+
+  describe('a foreign change closes the open group', () => {
+    // Each case: edit a.title at t=0, a foreign change at t=100, edit b.title at t=150. The
+    // last edit is within 300 ms of the first, but must be an undo step of its own.
+    const editAfter = (foreign: (doc: ChartDocument) => void) => {
+      const { doc, clock } = openDoc();
+      doc.edit((c) => retitle(c, 'a', 'X'));
+      clock.now = 100;
+      foreign(doc);
+      clock.now = 150;
+      doc.edit((c) => retitle(c, 'b', 'Y'));
+      doc.undo();
+      return doc;
+    };
+
+    it('undo', () => {
+      const doc = editAfter((d) => d.undo());
+      expect(titleOf(doc.getCommitted(), 'b')).toBe('B');
+    });
+
+    it('replace', () => {
+      const doc = editAfter((d) => d.replace(retitle(seed(), 'd', 'Imported')));
+      expect(titleOf(doc.getCommitted(), 'b')).toBe('B');
+      expect(titleOf(doc.getCommitted(), 'd')).toBe('Imported');
+    });
+
+    it('applyRebased', () => {
+      const doc = editAfter((d) =>
+        d.applyRebased(d.getCommitted(), retitle(d.getCommitted(), 'd', 'AI')),
+      );
+      expect(titleOf(doc.getCommitted(), 'b')).toBe('B');
+      expect(titleOf(doc.getCommitted(), 'd')).toBe('AI');
+    });
+  });
+
   it('undo_reverts_only_own_fields', () => {
     const { doc } = openDoc();
     doc.edit((c) => recolor(c, 'a', '#f00'));
@@ -311,6 +362,20 @@ describe('ChartDocument undo and redo', () => {
     expect(colorOf(doc.getCommitted(), 'a')).toBe('#00f');
   });
 
+  it('redo_replays_in_the_order_undone', () => {
+    const { doc, clock } = openDoc();
+    doc.edit((c) => retitle(c, 'a', 'X'));
+    clock.now = 1000;
+    doc.edit((c) => retitle(c, 'b', 'Y'));
+    doc.undo();
+    doc.undo();
+
+    doc.redo();
+
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('X');
+    expect(titleOf(doc.getCommitted(), 'b')).toBe('B');
+  });
+
   it('a_remote_landing_does_not_clear_redo', () => {
     const { doc } = openDoc();
     doc.edit((c) => retitle(c, 'a', 'X'));
@@ -375,6 +440,7 @@ describe('ChartDocument AI edits and replacement', () => {
     expect(titleOf(doc.getCommitted(), 'a')).toBe('AI title');
     expect(titleOf(doc.getCommitted(), 'b')).toBe('Remote B');
     expect(doc.getStatus().canRedo).toBe(false);
+    expect(doc.getCommitCount()).toBe(3); // the edit, its undo, the AI edit
 
     doc.undo();
     expect(titleOf(doc.getCommitted(), 'a')).toBe('A');
@@ -470,6 +536,17 @@ describe('ChartDocument AI edits and replacement', () => {
     expect(titleOf(doc.getCommitted(), 'd')).toBe('D');
   });
 
+  it('replace_clears_redo', () => {
+    const { doc } = openDoc();
+    doc.edit((c) => retitle(c, 'a', 'X'));
+    doc.undo();
+    expect(doc.getStatus().canRedo).toBe(true);
+
+    doc.replace(retitle(seed(), 'd', 'Imported'));
+
+    expect(doc.getStatus().canRedo).toBe(false);
+  });
+
   it('replace_on_unsaved_new_chart_counts_as_unsaved', () => {
     const doc = new ChartDocument({ chart: seed(), editToken: null, server: null });
     expect(doc.getStatus().unsaved).toBe(false);
@@ -541,6 +618,17 @@ describe('ChartDocument saving', () => {
 
     expect(doc.getStatus()).toMatchObject({ serverVersion: 4, unsaved: false, saving: false });
     expect(doc.takeSave()).toBeNull();
+  });
+
+  it('a_save_in_flight_keeps_the_document_unsaved_even_if_undo_returns_to_the_server_chart', () => {
+    const { doc, chart } = openDoc(3);
+    doc.edit((c) => retitle(c, 'a', 'X'));
+    doc.takeSave();
+
+    doc.undo();
+
+    expect(doc.getCommitted()).toBe(chart);
+    expect(doc.getStatus()).toMatchObject({ saving: true, unsaved: true });
   });
 
   it('an_edit_made_during_a_save_goes_out_on_the_acknowledged_version', () => {
@@ -787,6 +875,17 @@ describe('ChartDocument server attachment', () => {
     expect(doc.getStatus()).toMatchObject({ serverVersion: 1, editToken: 'first' });
   });
 
+  it('attachServer_wakes_subscribers_so_a_save_can_start', () => {
+    const created = seed();
+    const doc = new ChartDocument({ chart: created, editToken: null, server: null });
+    const listener = vi.fn();
+    doc.subscribe(listener);
+
+    doc.attachServer('tok', { version: 1, chart: created });
+
+    expect(listener).toHaveBeenCalled();
+  });
+
   it('edits_made_before_the_server_is_attached_go_out_on_its_version', () => {
     const created = seed();
     const doc = new ChartDocument({ chart: created, editToken: null, server: null });
@@ -869,6 +968,18 @@ describe('ChartDocument as an external store', () => {
     const after = heard();
     doc.edit((c) => retitle(c, 'a', 'Z'));
     expect(heard()).toBe(after);
+  });
+
+  it('a_preview_that_changes_nothing_notifies_nobody', () => {
+    const { doc } = openDoc();
+    doc.preview((c) => retitle(c, 'a', 'X'));
+    const listener = vi.fn();
+    doc.subscribe(listener);
+
+    doc.preview((c) => c);
+    doc.preview(doc.getLive());
+
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it('a_subscriber_reads_the_new_state_when_it_is_told', () => {

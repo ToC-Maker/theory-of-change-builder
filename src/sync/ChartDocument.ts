@@ -21,9 +21,14 @@
  * relation between versions: a response that arrives out of order is ignored
  * or merged, and saving never stops because of it.
  *
- * Methods that change state notify subscribers once, after the state is
- * complete. A merge that throws (a chart with repeated ids) leaves the
- * document as it was.
+ * A method notifies subscribers after its state is complete (`edit` is a
+ * preview then a commit, so it notifies twice). A merge that throws (a chart
+ * with repeated ids) changes no chart and no history; the call has only
+ * committed a pending preview or ended the save in flight beforehand.
+ *
+ * Limit: a save whose acknowledgement was lost looks like someone else's
+ * write. If it did land and the user then returns that field to its old value
+ * before the next poll, the landed value comes back.
  */
 import { mergeCharts } from '../../shared/chart-merge';
 import { deepEqual } from '../../shared/chart-model';
@@ -155,8 +160,7 @@ export class ChartDocument implements ChartStore {
   }
 
   undo(): void {
-    this.settle();
-    this.openEntry = null;
+    this.beginForeignChange();
     const entry = this.undoStack.at(-1);
     if (entry) {
       this.adopt(mergeCharts(entry.after, entry.before, this.committed, { onConflict: 'theirs' }));
@@ -168,8 +172,7 @@ export class ChartDocument implements ChartStore {
   }
 
   redo(): void {
-    this.settle();
-    this.openEntry = null;
+    this.beginForeignChange();
     const entry = this.redoStack.at(-1);
     if (entry) {
       this.adopt(mergeCharts(entry.before, entry.after, this.committed, { onConflict: 'theirs' }));
@@ -182,8 +185,7 @@ export class ChartDocument implements ChartStore {
 
   /** Import or Generate: the local chart becomes exactly `chart`; later remote edits merge into it. */
   replace(chart: ToCData): void {
-    this.settle();
-    this.openEntry = null;
+    this.beginForeignChange();
     this.undoStack.push({ before: this.committed, after: chart });
     this.redoStack = [];
     this.committed = this.live = chart;
@@ -193,8 +195,7 @@ export class ChartDocument implements ChartStore {
 
   /** An AI edit computed against `base`, the chart as it was sent, lands on the current chart. */
   applyRebased(base: ToCData, next: ToCData): void {
-    this.settle();
-    this.openEntry = null;
+    this.beginForeignChange();
     const merged = mergeCharts(base, next, this.committed, { onConflict: 'mine' });
     if (!deepEqual(merged, this.committed)) {
       this.undoStack.push({ before: this.committed, after: merged });
@@ -263,6 +264,16 @@ export class ChartDocument implements ChartStore {
   /** A poll landing. During a save the save's own 200 or 409 brings the newer state. */
   receiveRemote(theirs: ServerState): void {
     if (!this.inFlight && this.absorb(theirs)) this.emit();
+  }
+
+  /**
+   * Starts a change that is not a continuation of the user's typing: a pending preview is
+   * committed first, and no later commit may extend the entry the user was building, so no
+   * entry's diff contains someone else's edit.
+   */
+  private beginForeignChange(): void {
+    this.settle();
+    this.openEntry = null;
   }
 
   /** Promotes the preview layer to committed; false when there was nothing to promote. */
