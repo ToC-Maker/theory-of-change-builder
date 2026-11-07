@@ -7,11 +7,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChartDocument, staticStore, type ServerState } from '../../src/sync/ChartDocument';
 import type { ToCData } from '../../src/types';
 import {
+  columnIn,
   connectedChart,
   connectionOf,
   edit,
   findNode,
   hasNode,
+  node,
   nodeIn,
   removeColumn,
   removeNode,
@@ -312,6 +314,48 @@ describe('ChartDocument undo and redo', () => {
     doc.undo();
 
     expect(hasNode(doc.getCommitted(), 'a')).toBe(false);
+  });
+
+  describe('a node someone else edited is not deleted by my undo, redo or AI edit', () => {
+    const withText = (chart: ToCData, id: string, text: string) =>
+      change(chart, (d) => {
+        nodeIn(d, id).text = text;
+      });
+
+    it('undo of the node I added', () => {
+      const { doc } = openDoc();
+      doc.edit((c) => change(c, (d) => columnIn(d, 'c1').nodes.push(node('z'))));
+      saveAt(doc, 2);
+      doc.receiveRemote({ version: 3, chart: withText(doc.getCommitted(), 'z', 'their text') });
+
+      doc.undo();
+
+      expect(findNode(doc.getCommitted(), 'z')?.text).toBe('their text');
+    });
+
+    it('redo of the node I deleted', () => {
+      const { doc } = openDoc();
+      doc.edit((c) => change(c, (d) => removeNode(d, 'd')));
+      doc.undo();
+      doc.receiveRemote({ version: 2, chart: withText(seed(), 'd', 'their text') });
+
+      doc.redo();
+
+      expect(findNode(doc.getCommitted(), 'd')?.text).toBe('their text');
+    });
+
+    it('an AI edit that deletes the node', () => {
+      const { doc } = openDoc();
+      const asSent = doc.getCommitted();
+      doc.receiveRemote({ version: 2, chart: withText(asSent, 'a', 'their text') });
+
+      doc.applyRebased(
+        asSent,
+        change(asSent, (d) => removeNode(d, 'a')),
+      );
+
+      expect(findNode(doc.getCommitted(), 'a')?.text).toBe('their text');
+    });
   });
 
   it('undo_commits_pending_preview_first', () => {
@@ -723,6 +767,32 @@ describe('ChartDocument saving', () => {
       doc.saveConflicted(remote(4));
       expect(titleOf(doc.getCommitted(), 'b')).toBe('Remote B');
       expect(doc.takeSave()?.baseVersion).toBe(4);
+    });
+
+    it('a poll answer newer than the save acknowledgement, delivered first, changes nothing until the acknowledgement', () => {
+      const { doc } = openDoc(3);
+      doc.edit((c) => retitle(c, 'a', 'mine'));
+      doc.takeSave();
+      const committedBefore = doc.getCommitted();
+      // Served after my save landed (version 4) and someone else's write followed (5), so it
+      // holds both, and it overtakes the acknowledgement of version 4.
+      const poll: ServerState = {
+        version: 5,
+        chart: retitle(retitle(seed(), 'a', 'mine'), 'b', 'Remote B'),
+      };
+
+      doc.receiveRemote(poll);
+      expect(doc.getCommitted()).toBe(committedBefore);
+      doc.saveSucceeded(4);
+
+      expect(doc.getStatus()).toMatchObject({ serverVersion: 4, unsaved: false });
+      doc.edit((c) => recolor(c, 'c', '#abc'));
+      doc.receiveRemote(poll);
+      const save = doc.takeSave();
+      expect(save?.baseVersion).toBe(5);
+      expect(titleOf(save!.chart, 'a')).toBe('mine');
+      expect(titleOf(save!.chart, 'b')).toBe('Remote B');
+      expect(colorOf(save!.chart, 'c')).toBe('#abc');
     });
 
     it('a conflict carrying the version already known is stale and the save is retried', () => {

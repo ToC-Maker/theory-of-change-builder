@@ -208,6 +208,30 @@ function createIntents(view: () => { held: ToCData; inDoubt: ToCData | null }) {
       }
     },
 
+    /**
+     * An undo changes a field only if its value was one this tab set: what someone else wrote
+     * since, and this tab has not overwritten, stays. (Not asked of redo, which re-applies this
+     * tab's own edit over a value that predates it.)
+     */
+    assertUndoKeptOthers(before: ToCData, after: ToCData) {
+      const was = trackedEntities(before);
+      for (const [entity, current] of trackedEntities(after)) {
+        const previous = was.get(entity);
+        if (previous === undefined) continue;
+        for (const field of TRACKED_FIELDS) {
+          const old = fieldOf(previous, field);
+          // An absent field is nobody's value: a record added without it takes the other
+          // side's.
+          if (old === undefined) continue;
+          if (old !== fieldOf(current, field) && !typed.has(`${entity}|${field}=${String(old)}`)) {
+            throw new Error(
+              `an undo changed ${entity}|${field} from ${String(old)}, which this tab never set`,
+            );
+          }
+        }
+      }
+    },
+
     /** A save changes a field of an entity the server already has only to a value this tab set. */
     assertAuthorised(sent: ToCData) {
       const onServer = trackedEntities(view().held);
@@ -476,7 +500,10 @@ function simulate(seed: number): void {
       }
     } else if (choice < 78) {
       if (doc.getStatus().canUndo) counts.undos++;
-      local(() => doc.undo());
+      const before = doc.getLive();
+      doc.undo();
+      intents.assertUndoKeptOthers(before, doc.getLive());
+      intents.note(before, doc.getLive());
     } else if (choice < 88) {
       if (doc.getStatus().canRedo) counts.redos++;
       local(() => doc.redo());
