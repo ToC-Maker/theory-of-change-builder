@@ -1,15 +1,15 @@
-// useChartSave — the one path that persists the chart: edits, JSON
-// imports, AI replacements, undo and redo all call `saveChart(data)`.
+// useChartSave — sends the chart document's saves to the server.
 //
-// Three rules keep a save from losing or reordering work:
+// The document decides what is sent and what each answer means (`takeSave`,
+// then one of `saveSucceeded`, `saveConflicted`, `saveFailed`); this hook owns
+// the timing. Three rules keep a save from losing or reordering work:
 //
-//   1. At most one save is in flight. An edit made meanwhile waits and goes
-//      out when the running save lands, so an older save can never land
-//      after a newer one and overwrite it.
-//   2. A landing save clears the pending edits only if nothing changed
-//      since it was sent. An edit made during the request has to stay
-//      pending: clearing it would show "Saved" over data the server never
-//      received.
+//   1. At most one save is in flight (the document hands out one at a time).
+//      An edit made meanwhile waits and goes out when the running save lands,
+//      so an older save can never land after a newer one and overwrite it.
+//   2. A landing save clears the unsaved state only if nothing changed since
+//      it was sent: the document compares, so "Saved" never covers data the
+//      server did not receive.
 //   3. A failed save keeps the edits pending and the failure visible, and
 //      retries for as long as they stay pending: three quick retries with
 //      growing delays, then one every RETRY_CAP_MS, for network errors and
@@ -20,16 +20,16 @@
 //      other 4xx gets no retry, since the server will answer the same
 //      again; the next edit starts a fresh attempt.
 //
-// `pendingChangesRef` is the latest data the server is not known to hold.
-// It is also what the chart sync (`useChartSync`) and the beforeunload
-// warning read, so it is written synchronously and stays set from the
-// edit until a save of that exact data succeeds. With no edit token (the
-// chart does not exist yet) edits are marked pending and sent once the
-// token arrives.
+// A save the server answers with a newer chart (409) is merged by the document
+// and sent again at once. A chart the merge cannot handle, or a server that
+// went back to an older version, ends saving for this editor: the pill shows
+// why and one report goes out with versions only, never chart content.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MutableRefObject } from 'react';
 import type { SaveError } from '../components/top-bar/SaveIndicator';
 import { ChartApiError, ChartService } from '../services/chartService';
+import { loggingService } from '../services/loggingService';
+import type { ChartDocument } from '../sync/ChartDocument';
+import { ChartShapeError } from '../../shared/chart-model';
 import type { ToCData } from '../types';
 
 const SAVE_DEBOUNCE_MS = 300;
@@ -47,6 +47,24 @@ export function asSaveError(err: unknown): SaveError {
   return { message: typeof err === 'string' ? err : 'Save failed' };
 }
 
+/**
+ * Reports a save or poll that cannot continue. Only versions go out: an error
+ * message may name an id, but the chart is deliberately not attached.
+ */
+export function reportSyncFailure(
+  errorName: 'ChartMergeFailed' | 'ChartVersionWentBackwards',
+  error: unknown,
+  baseVersion: number,
+  serverVersion?: number,
+): void {
+  loggingService.reportError({
+    error_name: errorName,
+    error_message: error instanceof Error ? error.message : String(error),
+    chart_id: loggingService.getCurrentChartId() ?? undefined,
+    request_metadata: { baseVersion, serverVersion },
+  });
+}
+
 const isAuthRefusal = (err: unknown): boolean =>
   err instanceof ChartApiError && (err.status === 401 || err.status === 403);
 
@@ -57,9 +75,8 @@ const isRetryable = (err: unknown): boolean =>
   !(err instanceof ChartApiError) || err.status >= 500 || isAuthRefusal(err);
 
 export interface UseChartSaveArgs {
-  /** Edit token of the open chart; null before the chart exists. */
-  editToken: string | null;
-  /** Called with the latest unsaved data after each failed attempt (local backup). */
+  doc: ChartDocument;
+  /** Called with the unsaved chart after each failed attempt (local backup). */
   onSaveFailed?: (data: ToCData) => void;
 }
 
@@ -69,20 +86,12 @@ export interface UseChartSaveResult {
   /** Set by a failed save (or another failing operation); cleared by the next successful save. */
   saveError: SaveError | null;
   setSaveError: (error: SaveError | null) => void;
-  /** State mirror of `pendingChangesRef.current !== null`, for rendering. */
-  hasPendingChanges: boolean;
-  /** Latest data the server is not known to hold; null once it is saved. */
-  pendingChangesRef: MutableRefObject<ToCData | null>;
-  /** Record `data` as the latest local state and schedule it to be saved. */
-  saveChart: (data: ToCData) => void;
 }
 
-export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): UseChartSaveResult {
+export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartSaveResult {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<SaveError | null>(null);
-  const [hasPendingChanges, setHasPendingChanges] = useState(false);
 
-  const pendingChangesRef = useRef<ToCData | null>(null);
   // Debounce timer, or the retry-delay timer after a failure. Null when
   // neither is armed.
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,106 +99,154 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
   // returning to the tab may cut short: not a debounce, and not the slow
   // wait after a 401/403.
   const retryWaitRef = useRef(false);
-  const inFlightRef = useRef(false);
   const retryCountRef = useRef(0);
   // A save that fails after the editor has gone gets no further retries.
   const mountedRef = useRef(true);
+  // Set once saving cannot continue (merge failure, terminal document error).
+  const stoppedRef = useRef(false);
+  // The document notifies synchronously inside the calls this hook makes to
+  // take and settle a save; those notifications are not edits and must not re-arm the debounce.
+  const settlingRef = useRef(false);
+  // The error the last failed save put in the pill, so that nothing left to
+  // save can clear it without also clearing one the app set (a failed delete).
+  const failureRef = useRef<SaveError | null>(null);
 
-  const editTokenRef = useRef(editToken);
   const onSaveFailedRef = useRef(onSaveFailed);
   useEffect(() => {
-    editTokenRef.current = editToken;
     onSaveFailedRef.current = onSaveFailed;
-  }, [editToken, onSaveFailed]);
+  }, [onSaveFailed]);
 
-  // Sends the latest pending data. When a save is already in flight it
-  // does nothing: the landing handler sends the newer data itself.
-  const flush = useCallback(function flush() {
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
     timerRef.current = null;
     retryWaitRef.current = false;
-    const sent = pendingChangesRef.current;
-    const token = editTokenRef.current;
-    if (!sent || !token) {
-      setIsSaving(false);
-      return;
-    }
-    if (inFlightRef.current) return;
-
-    inFlightRef.current = true;
-    setIsSaving(true);
-    console.log('Saving to database');
-    ChartService.updateChart(token, sent).then(
-      () => {
-        inFlightRef.current = false;
-        retryCountRef.current = 0;
-        setSaveError(null);
-        if (pendingChangesRef.current === sent) {
-          console.log('Database save successful');
-          pendingChangesRef.current = null;
-          setHasPendingChanges(false);
-          setIsSaving(false);
-        } else if (timerRef.current === null) {
-          // Edited during the request and its debounce already came due
-          // (and was held back): send it now. With the debounce still
-          // armed, it sends itself.
-          flush();
-        }
-      },
-      (err: unknown) => {
-        inFlightRef.current = false;
-        console.error('Failed to save to database:', err);
-        setSaveError(asSaveError(err));
-        const latest = pendingChangesRef.current;
-        if (latest) onSaveFailedRef.current?.(latest);
-
-        if (!isRetryable(err) || !mountedRef.current) {
-          setIsSaving(false);
-          return;
-        }
-        const refused = isAuthRefusal(err);
-        const delay = refused
-          ? RETRY_CAP_MS
-          : (QUICK_RETRY_DELAYS_MS[retryCountRef.current] ?? RETRY_CAP_MS);
-        retryCountRef.current += 1;
-        // A newer edit's armed debounce retries sooner than the backoff.
-        if (timerRef.current === null) {
-          timerRef.current = setTimeout(flush, delay);
-          retryWaitRef.current = !refused;
-        }
-      },
-    );
   }, []);
 
-  const saveChart = useCallback(
-    (data: ToCData) => {
-      pendingChangesRef.current = data;
-      setHasPendingChanges(true);
-      if (!editTokenRef.current) return;
+  const whileSettling = useCallback(<T>(call: () => T): T => {
+    settlingRef.current = true;
+    try {
+      return call();
+    } finally {
+      settlingRef.current = false;
+    }
+  }, []);
 
-      retryCountRef.current = 0;
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
-      setIsSaving(true);
-      timerRef.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
-      retryWaitRef.current = false;
+  const stopSaving = useCallback(
+    (error: SaveError) => {
+      stoppedRef.current = true;
+      setSaveError(error);
+      onSaveFailedRef.current?.(doc.getCommitted());
+      setIsSaving(false);
     },
-    [flush],
+    [doc],
   );
 
-  // A chart is created on first Share or Generate, so edits can be made
-  // before it has a token (and while it is being created). They were marked
-  // pending with nowhere to go; send them once the token arrives instead of
-  // waiting for another edit, which may never come.
+  // Sends the document's pending save. When one is already in flight there is
+  // nothing to take: the landing handler sends the newer data itself.
+  const flush = useCallback(
+    function flush() {
+      clearTimer();
+      if (stoppedRef.current) return;
+      const save = whileSettling(() => doc.takeSave());
+      if (!save) {
+        const { saving, unsaved } = doc.getStatus();
+        setIsSaving(saving);
+        // A failed save whose data the server turns out to hold (its acknowledgement was
+        // lost, or a poll landed the same chart) leaves nothing to retry: the failure is over.
+        if (!unsaved) setSaveError((current) => (current === failureRef.current ? null : current));
+        return;
+      }
+
+      setIsSaving(true);
+      console.log('Saving to database');
+      ChartService.updateChart(save.editToken, save.chart, save.baseVersion).then(
+        (outcome) => {
+          retryCountRef.current = 0;
+          if (outcome.status === 'conflict') {
+            try {
+              whileSettling(() => doc.saveConflicted(outcome.theirs));
+            } catch (err) {
+              // Instead of retrying: this chart will not merge, and would not next time either.
+              reportSyncFailure('ChartMergeFailed', err, save.baseVersion, outcome.theirs.version);
+              stopSaving(asSaveError(err));
+              return;
+            }
+            const { terminalError } = doc.getStatus();
+            if (terminalError) {
+              reportSyncFailure(
+                'ChartVersionWentBackwards',
+                terminalError,
+                save.baseVersion,
+                outcome.theirs.version,
+              );
+              stopSaving({ message: terminalError });
+              return;
+            }
+            // The merged chart goes out on the server's version with no further wait.
+            flush();
+            return;
+          }
+
+          whileSettling(() => doc.saveSucceeded(outcome.version));
+          console.log('Database save successful');
+          setSaveError(null);
+          if (!doc.getStatus().unsaved) {
+            setIsSaving(false);
+          } else if (timerRef.current === null) {
+            // Edited during the request and its debounce already came due (and was
+            // held back): send it now. With the debounce still armed, it sends itself.
+            flush();
+          }
+        },
+        (err: unknown) => {
+          whileSettling(() => doc.saveFailed());
+          console.error('Failed to save to database:', err);
+          if (err instanceof ChartShapeError) {
+            // Instead of retrying: the server's latest chart is not one the merge can use.
+            reportSyncFailure('ChartMergeFailed', err, save.baseVersion);
+            stopSaving(asSaveError(err));
+            return;
+          }
+          failureRef.current = asSaveError(err);
+          setSaveError(failureRef.current);
+          onSaveFailedRef.current?.(doc.getCommitted());
+
+          if (!isRetryable(err) || !mountedRef.current) {
+            setIsSaving(false);
+            return;
+          }
+          const refused = isAuthRefusal(err);
+          const delay = refused
+            ? RETRY_CAP_MS
+            : (QUICK_RETRY_DELAYS_MS[retryCountRef.current] ?? RETRY_CAP_MS);
+          retryCountRef.current += 1;
+          // A newer edit's armed debounce retries sooner than the backoff.
+          if (timerRef.current === null) {
+            timerRef.current = setTimeout(flush, delay);
+            retryWaitRef.current = !refused;
+          }
+        },
+      );
+    },
+    [doc, clearTimer, whileSettling, stopSaving],
+  );
+
+  // An edit, or the chart getting its server, starts the debounce. A chart with
+  // no server has nowhere to send edits yet: they wait for `attachServer`.
   useEffect(() => {
-    if (
-      editToken &&
-      pendingChangesRef.current &&
-      timerRef.current === null &&
-      !inFlightRef.current
-    ) {
+    const armDebounce = () => {
+      if (settlingRef.current || stoppedRef.current) return;
+      const { unsaved, editToken, serverVersion, terminalError } = doc.getStatus();
+      if (!unsaved || !editToken || serverVersion === null || terminalError) return;
+      retryCountRef.current = 0;
+      clearTimer();
       setIsSaving(true);
       timerRef.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
-    }
-  }, [editToken, flush]);
+    };
+    stoppedRef.current = false;
+    armDebounce();
+    return doc.subscribe(armDebounce);
+  }, [doc, flush, clearTimer]);
 
   // Coming back online or returning to the tab ends a retry wait early:
   // the connection that failed the save may be back.
@@ -197,7 +254,6 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
     mountedRef.current = true;
     const retryNow = () => {
       if (!retryWaitRef.current || timerRef.current === null) return;
-      clearTimeout(timerRef.current);
       flush();
     };
     const onVisibilityChange = () => {
@@ -215,12 +271,9 @@ export function useChartSave({ editToken, onSaveFailed }: UseChartSaveArgs): Use
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-        flush();
-      }
+      if (timerRef.current !== null) flush();
     };
   }, [flush]);
 
-  return { isSaving, saveError, setSaveError, hasPendingChanges, pendingChangesRef, saveChart };
+  return { isSaving, saveError, setSaveError };
 }

@@ -3,7 +3,7 @@
 //   usePointerDrag.dragState (null↔non-null)
 //     → TheoryOfChangeGraph's useEffect notifies via prop
 //     → App's onDragActiveChange handler writes isDragInFlightRef.current
-//     → App's syncData() short-circuits on the ref
+//     → useChartSync's version check is skipped while the ref is set
 //
 // The unit suite covers each link in isolation. This test stitches the
 // chain end-to-end with a small harness so a refactor that breaks the
@@ -13,15 +13,19 @@
 //
 // What we DON'T do: render the full TheoryOfChangeGraph (too much
 // scaffolding for a single seam). Instead we model the
-// onDragActiveChange contract directly: the consumer must
+// onDragActiveChange contract directly, with the real useChartSync as its
+// consumer: the consumer must
 //   (a) receive a `true` when drag starts,
-//   (b) cause syncData() to no-op while the flag is true,
+//   (b) make no pollChart request while the flag is true,
 //   (c) receive a `false` when drag ends (or when ToC unmounts mid-drag),
-//   (d) re-allow syncData() after the flag clears.
-import { describe, it, expect, vi, afterEach } from 'vitest';
+//   (d) poll again after the flag clears.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
 import { useEffect, useRef as useReactRef } from 'react';
 import { usePointerDrag } from '../../src/hooks/usePointerDrag';
+import { POLL_MS, useChartSync } from '../../src/hooks/useChartSync';
+import { ChartService } from '../../src/services/chartService';
+import { ChartDocument } from '../../src/sync/ChartDocument';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import type { LayoutSnapshot } from '../../src/hooks/useGraphLayout';
 import type { ToCData } from '../../src/types';
@@ -31,8 +35,21 @@ vi.mock('../../src/services/loggingService', () => ({
   loggingService: { reportError: vi.fn() },
 }));
 
+vi.mock('../../src/services/chartService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/services/chartService')>();
+  return { ...actual, ChartService: { pollChart: vi.fn() } };
+});
+
+const mockPollChart = vi.mocked(ChartService.pollChart);
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  mockPollChart.mockImplementation(async (_token, knownVersion) => ({ version: knownVersion }));
+});
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   _resetCanvasGestureStateForTest();
   vi.clearAllMocks();
 });
@@ -129,10 +146,10 @@ function pointerEvent(
 
 /**
  * `setupChain` returns the same shape that App.tsx + ToC produce:
- *   - `isDragInFlight()`: reads the ref the polling effect reads
- *   - `trySync()`: returns 'ran' if syncData would have run, 'skipped'
- *      if it short-circuited on the ref. Mirrors App.tsx:310-313 /
- *      :1412-1415 exactly.
+ *   - `isDragInFlight()`: reads the ref the sync hook reads
+ *   - `trySync()`: waits one poll interval and returns 'ran' if the real
+ *      `useChartSync` asked the server for the version meanwhile, 'skipped'
+ *      if it did not.
  *   - `result`: the renderHook handle for the inner hook(s).
  * The inner hook composes usePointerDrag with the ToC-side useEffect
  * notifier (TheoryOfChangeGraph.tsx:806-816) so the propagation chain
@@ -141,9 +158,20 @@ function pointerEvent(
 function setupChain() {
   const isDragInFlightRef = { current: false };
 
-  const trySync = (): 'ran' | 'skipped' => {
-    if (isDragInFlightRef.current) return 'skipped';
-    return 'ran';
+  const chart = sampleData();
+  const doc = new ChartDocument({
+    chart,
+    editToken: 'tok',
+    server: { version: 1, chart },
+  });
+  renderHook(() => useChartSync({ doc, authTokenReady: true, isDragInFlightRef }));
+
+  const trySync = async (): Promise<'ran' | 'skipped'> => {
+    const before = mockPollChart.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    return mockPollChart.mock.calls.length > before ? 'ran' : 'skipped';
   };
 
   let containerEl: HTMLDivElement;
@@ -201,13 +229,13 @@ function setupChain() {
 // ---------------------------------------------------------------------------
 
 describe('polling-pause propagation chain (App ↔ ToC ↔ usePointerDrag)', () => {
-  it('syncData runs when no drag is active', () => {
+  it('the version check runs when no drag is active', async () => {
     const { trySync, isDragInFlight } = setupChain();
     expect(isDragInFlight()).toBe(false);
-    expect(trySync()).toBe('ran');
+    expect(await trySync()).toBe('ran');
   });
 
-  it('syncData skips while a pointer-drag is in flight', () => {
+  it('the version check is skipped while a pointer-drag is in flight', async () => {
     const { result, isDragInFlight, trySync } = setupChain();
 
     const nodeEl = makeMockElement();
@@ -217,10 +245,10 @@ describe('polling-pause propagation chain (App ↔ ToC ↔ usePointerDrag)', () 
     });
 
     expect(isDragInFlight()).toBe(true);
-    expect(trySync()).toBe('skipped');
+    expect(await trySync()).toBe('skipped');
   });
 
-  it('syncData resumes after pointerup (drag completes)', () => {
+  it('the version check resumes after pointerup (drag completes)', async () => {
     const { result, isDragInFlight, trySync } = setupChain();
 
     const nodeEl = makeMockElement();
@@ -229,7 +257,7 @@ describe('polling-pause propagation chain (App ↔ ToC ↔ usePointerDrag)', () 
       result.current.bindNode('n-1').onPointerDown(down);
     });
 
-    expect(trySync()).toBe('skipped');
+    expect(await trySync()).toBe('skipped');
 
     const up = pointerEvent('pointerup', { clientX: 350, clientY: 400 });
     act(() => {
@@ -237,10 +265,10 @@ describe('polling-pause propagation chain (App ↔ ToC ↔ usePointerDrag)', () 
     });
 
     expect(isDragInFlight()).toBe(false);
-    expect(trySync()).toBe('ran');
+    expect(await trySync()).toBe('ran');
   });
 
-  it('syncData resumes after Escape cancel', () => {
+  it('the version check resumes after Escape cancel', async () => {
     const { result, trySync } = setupChain();
 
     const nodeEl = makeMockElement();
@@ -249,22 +277,22 @@ describe('polling-pause propagation chain (App ↔ ToC ↔ usePointerDrag)', () 
         .bindNode('n-1')
         .onPointerDown(pointerDownEvent({ clientX: 100, clientY: 200, nodeEl }));
     });
-    expect(trySync()).toBe('skipped');
+    expect(await trySync()).toBe('skipped');
 
     const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
     act(() => {
       document.dispatchEvent(esc);
     });
 
-    expect(trySync()).toBe('ran');
+    expect(await trySync()).toBe('ran');
   });
 
-  it('unmount mid-drag clears isDragInFlight (so polling does not stay paused)', () => {
+  it('unmount mid-drag clears isDragInFlight (so polling does not stay paused)', async () => {
     // This is the type-analyzer I2 contract: if the ToC unmounts
     // while a drag is in flight (route change, App swap-out), the
     // onDragActiveChange cleanup must fire `false` — otherwise App's
     // ref stays `true` for the rest of the App's lifetime and the
-    // polling effect silently skips every sync tick.
+    // poll loop silently skips every check.
     const { result, unmount, isDragInFlight, trySync } = setupChain();
 
     const nodeEl = makeMockElement();
@@ -278,6 +306,6 @@ describe('polling-pause propagation chain (App ↔ ToC ↔ usePointerDrag)', () 
     unmount();
 
     expect(isDragInFlight()).toBe(false);
-    expect(trySync()).toBe('ran');
+    expect(await trySync()).toBe('ran');
   });
 });
