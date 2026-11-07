@@ -123,10 +123,12 @@ export interface UseGraphMutationResult {
   /**
    * Drop the buffered updater for `key` WITHOUT scheduling a parent
    * notify. Cancels the per-key idle timer that would otherwise
-   * auto-commit ~200ms after the last `mutateDebounced` call. Used by
-   * gesture hooks (waypoint Escape / pointercancel / second-pointer) to
-   * make cancel semantics true: the live-preview state remains in
-   * memory but no undo entry lands. No-op for unknown keys.
+   * auto-commit ~200ms after the last `mutateDebounced` call. Leaves the
+   * live preview already written to local state as it is, so a caller
+   * cancelling a gesture (waypoint Escape / pointercancel /
+   * second-pointer) first writes the pre-gesture value back through
+   * `mutateDebounced` and then discards: the cancel leaves neither a
+   * changed preview nor an undo entry. No-op for unknown keys.
    */
   discardBuffered: (key: string) => void;
 }
@@ -291,9 +293,9 @@ export function useGraphMutation(
   );
 
   // Drop the buffered updater for `key` without scheduling a parent
-  // notify. Pairs with `mutateDebounced` for true-cancel semantics:
-  // live preview stays as-is (writeLocal was synchronous), but neither
-  // the explicit commit path nor the 200ms idle timer fires.
+  // notify: neither the explicit commit path nor the 200ms idle timer
+  // fires. The live preview stays as-is (writeLocal was synchronous), so
+  // a canceller restores it first.
   const discardBuffered = useCallback((key: string) => {
     const timer = idleTimersRef.current.get(key);
     if (timer !== undefined) {
