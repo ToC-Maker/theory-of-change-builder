@@ -56,10 +56,11 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     }
 
-    await sql`
+    const inserted = (await sql`
       INSERT INTO charts (id, edit_token, chart_data, user_id, chart_title)
       VALUES (${chartId}, ${editToken}, ${JSON.stringify(chartData)}, ${userId}, ${chartTitle})
-    `;
+      RETURNING version
+    `) as { version: number }[];
 
     if (userId && userEmail) {
       await sql`
@@ -72,6 +73,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({
       chartId,
       editToken,
+      version: inserted[0].version,
       viewUrl: `${siteUrl}/chart/${chartId}`,
       editUrl: `${siteUrl}/edit/${editToken}`,
       message: 'Chart created successfully',

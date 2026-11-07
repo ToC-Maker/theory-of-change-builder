@@ -23,7 +23,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     let result;
     if (editToken) {
       result = await sql`
-        SELECT id, chart_data, user_id, link_sharing_level FROM charts
+        SELECT id, chart_data, user_id, link_sharing_level, version FROM charts
         WHERE edit_token = ${editToken}
       `;
 
@@ -154,7 +154,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     } else if (chartId) {
       result = await sql`
-        SELECT id, chart_data, user_id, link_sharing_level FROM charts
+        SELECT id, chart_data, user_id, link_sharing_level, version FROM charts
         WHERE id = ${chartId}
       `;
       if (!result || result.length === 0) {
@@ -240,6 +240,7 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     return Response.json({
       chartData: result[0].chart_data,
       chartId: result[0].id,
+      version: result[0].version,
       canEdit: !!editToken,
       isOwner,
     });

@@ -40,6 +40,7 @@ let chartRow: { userId: string | null; level: string | null };
 
 // Postgres type OIDs the driver uses to parse raw text values.
 const TEXT = 25;
+const INT4 = 23;
 const JSONB = 3802;
 
 const originalFetch = globalThis.fetch;
@@ -54,6 +55,8 @@ beforeAll(() => {
       const body = (await req.json()) as CapturedQuery;
       dbQueries.push(body);
       if (/^\s*SELECT .* FROM charts/is.test(body.query)) {
+        // The row carries `version` only when the statement selects it.
+        const selectsVersion = /\bversion\b/i.test(body.query);
         return Response.json({
           command: 'SELECT',
           rowCount: 1,
@@ -62,8 +65,17 @@ beforeAll(() => {
             { name: 'chart_data', dataTypeID: JSONB },
             { name: 'user_id', dataTypeID: TEXT },
             { name: 'link_sharing_level', dataTypeID: TEXT },
+            ...(selectsVersion ? [{ name: 'version', dataTypeID: INT4 }] : []),
           ],
-          rows: [['chart-1', '{"sections":[]}', chartRow.userId, chartRow.level]],
+          rows: [
+            [
+              'chart-1',
+              '{"sections":[]}',
+              chartRow.userId,
+              chartRow.level,
+              ...(selectsVersion ? ['7'] : []),
+            ],
+          ],
         });
       }
       // The view_count UPDATE.
@@ -124,5 +136,22 @@ describe('GET /api/getChart?chartId= view gate (no auth token)', () => {
     chartRow = { userId: null, level: 'restricted' };
     const res = await getChart(viewRequest(), env);
     expect(res.status).toBe(200);
+  });
+});
+
+describe('GET /api/getChart returns the chart version', () => {
+  it('on a view by chart id', async () => {
+    chartRow = { userId: null, level: null };
+    const res = await getChart(viewRequest(), env);
+    expect(await res.json()).toMatchObject({ chartId: 'chart-1', version: 7 });
+  });
+
+  it('on an edit-token load', async () => {
+    chartRow = { userId: null, level: null };
+    const res = await getChart(
+      new Request('https://example.com/api/getChart?editToken=edit-tok-1'),
+      env,
+    );
+    expect(await res.json()).toMatchObject({ chartId: 'chart-1', canEdit: true, version: 7 });
   });
 });
