@@ -19,8 +19,8 @@
 // evidence, assumptions}>`. Charts from outside the tab are normalised on the
 // way in (`normalizeChart` builds `connections` from the legacy
 // `connectionIds`), so this reads `connections` only. `connectionIds` is
-// rewritten from `connections` on read and on merge and nothing else reads it;
-// `deleteConnection` still drops the target from it too.
+// rewritten from `connections` on read and on merge; the delete paths here and
+// elsewhere keep it in step, and nothing draws or edits from it.
 import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
 import { useFieldBuffer } from '../../hooks/useFieldBuffer';

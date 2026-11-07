@@ -958,9 +958,12 @@ function ToCViewer() {
   // what the page follows, and every creator is told which chart that is.
   const handleChartCreated = useCallback(
     (created: ChartCreated): OpenChart => {
-      doc.attachServer(created.editToken, { version: created.version, chart: created.chart });
+      const attached = doc.attachServer(created.editToken, {
+        version: created.version,
+        chart: created.chart,
+      });
       const { editToken } = doc.getStatus();
-      if (editToken === created.editToken) {
+      if (attached) {
         rememberChartId(created.chartId);
         initializeLogging(created.chartId, doc.getCommitted());
       }
