@@ -39,10 +39,13 @@ export interface ServerState {
   chart: ToCData;
 }
 
-/** What the canvas needs; the view route and tests use `staticStore`. */
-// Property signatures, not methods: callers hand these to
-// useSyncExternalStore and effects unbound, so an implementation must not
-// depend on `this` (the class uses arrow properties).
+/**
+ * What the canvas needs; the view route and tests use `staticStore`.
+ *
+ * Property signatures, not methods: callers hand these to
+ * useSyncExternalStore and effects unbound, so an implementation must not
+ * depend on `this` (the class uses arrow properties).
+ */
 export interface ChartStore {
   subscribe: (listener: () => void) => () => void;
   getLive: () => ToCData;
