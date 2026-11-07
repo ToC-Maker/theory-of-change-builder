@@ -14,7 +14,7 @@ afterEach(() => {
 const sections: ToCData['sections'] = [
   {
     title: 'S1',
-    columns: [{ nodes: [] }],
+    columns: [{ nodes: [] }, { nodes: [] }],
   },
   {
     title: 'S2',
@@ -33,6 +33,8 @@ const configured: ToCData = {
 
 const unset: ToCData = { title: 'Settings fixture', sections };
 
+// The add-control zones lie over the gaps, so a zone is as wide as its gap:
+// `columnPadding` between the columns of S1, `sectionPadding` between S1 and S2.
 const width = (testId: string) =>
   (document.querySelector(`[data-testid="${testId}"]`) as HTMLElement).style.width;
 const title = () => document.querySelector('h1') as HTMLElement;
@@ -40,16 +42,16 @@ const title = () => document.querySelector('h1') as HTMLElement;
 describe('layout settings follow the data prop, including when a setting is unset', () => {
   it('renders the configured values', () => {
     render(<ToC data={configured} showEditButton={true} />);
-    expect(width('add-column-after-0-0')).toBe('48px');
-    expect(width('add-section-after-last')).toBe('64px');
+    expect(width('add-zone-column-gap-0-0')).toBe('48px');
+    expect(width('add-zone-section-gap-0')).toBe('64px');
     expect(title().style.fontSize).toBe('3.375rem');
     expect(title().style.fontFamily).toContain('Roboto');
   });
 
   it('renders the defaults when the settings are not set', () => {
     render(<ToC data={unset} showEditButton={true} />);
-    expect(width('add-column-after-0-0')).toBe('24px');
-    expect(width('add-section-after-last')).toBe('32px');
+    expect(width('add-zone-column-gap-0-0')).toBe('24px');
+    expect(width('add-zone-section-gap-0')).toBe('32px');
     expect(title().style.fontSize).toBe('2.25rem');
     expect(title().style.fontFamily).toContain('Ubuntu');
   });
@@ -57,8 +59,8 @@ describe('layout settings follow the data prop, including when a setting is unse
   it('returns to the defaults when the data changes from configured to unset', () => {
     const { rerender } = render(<ToC data={configured} showEditButton={true} />);
     rerender(<ToC data={unset} showEditButton={true} />);
-    expect(width('add-column-after-0-0')).toBe('24px');
-    expect(width('add-section-after-last')).toBe('32px');
+    expect(width('add-zone-column-gap-0-0')).toBe('24px');
+    expect(width('add-zone-section-gap-0')).toBe('32px');
     expect(title().style.fontSize).toBe('2.25rem');
     expect(title().style.fontFamily).toContain('Ubuntu');
   });
