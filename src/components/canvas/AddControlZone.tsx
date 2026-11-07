@@ -26,6 +26,13 @@
 // are above the connection layer (a press on a control is never taken by
 // a connection).
 //
+// The resting badge is the opposite: it sits below the connection layer.
+// It is 24px (44px for touch) on screen, wider than a short connection
+// between adjacent columns, so a badge above the connections would take
+// that connection's hover, press, tap and drag. Below them, a connection
+// that crosses a badge keeps all four and the rest of the badge (and the
+// gap strip) still opens the controls.
+//
 // A control is not a <button>: a press on a button never starts a canvas
 // pan, and pressing on a control and dragging must still pan the canvas.
 
@@ -347,7 +354,7 @@ export function AddControlZone({
       />
       <div
         data-add-badge=""
-        className="absolute z-[5] flex items-center justify-center cursor-pointer transition-opacity duration-150"
+        className="absolute flex items-center justify-center cursor-pointer transition-opacity duration-150"
         style={{
           left: '50%',
           top: '50%',
@@ -355,9 +362,10 @@ export function AddControlZone({
           height: triggerPx,
           transform: `translate(-50%, -50%) scale(${scale})`,
           // It fades out while the controls are open but keeps catching
-          // the pointer: with a connection beneath it, a badge that let
-          // go would hand the pointer to the connection, which ends the
-          // hover and closes the controls under the pointer.
+          // the pointer: a badge that let go would hand it to whatever
+          // lies beneath, which ends the hover and closes the controls
+          // under the pointer, and the badge would come back and reopen
+          // them.
           opacity: open ? 0 : 1,
         }}
       >
