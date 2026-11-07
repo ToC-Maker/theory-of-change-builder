@@ -17,9 +17,10 @@
 //
 // A failed check waits FAILURE_WAIT_MS and carries on. A chart that cannot be
 // used (it is not a chart, or the merge refuses it) is reported once, with
-// versions only: the document is left as it was, so every later check returns
-// the same chart.
-import { useEffect } from 'react';
+// versions only, and `onSyncFailed` tells the user: an idle tab has no save to
+// fail, so this is the only sign that others' edits have stopped arriving. The
+// document is left as it was, so every later check returns the same chart.
+import { useEffect, useRef } from 'react';
 import type { MutableRefObject } from 'react';
 import { ChartService } from '../services/chartService';
 import { ChartShapeError } from '../../shared/chart-model';
@@ -36,9 +37,21 @@ export interface UseChartSyncArgs {
   authTokenReady: boolean;
   /** True while a canvas pointer-drag is in flight. */
   isDragInFlightRef: MutableRefObject<boolean>;
+  /** Called, once per unusable chart, with why others' changes cannot be shown. */
+  onSyncFailed?: (message: string) => void;
 }
 
-export function useChartSync({ doc, authTokenReady, isDragInFlightRef }: UseChartSyncArgs): void {
+export function useChartSync({
+  doc,
+  authTokenReady,
+  isDragInFlightRef,
+  onSyncFailed,
+}: UseChartSyncArgs): void {
+  const onSyncFailedRef = useRef(onSyncFailed);
+  useEffect(() => {
+    onSyncFailedRef.current = onSyncFailed;
+  }, [onSyncFailed]);
+
   useEffect(() => {
     if (!authTokenReady) return;
 
@@ -51,6 +64,7 @@ export function useChartSync({ doc, authTokenReady, isDragInFlightRef }: UseChar
       if (reported.has(key)) return;
       reported.add(key);
       reportSyncFailure('ChartMergeFailed', err, baseVersion, serverVersion);
+      onSyncFailedRef.current?.(err instanceof Error ? err.message : String(err));
     };
 
     /** One check; resolves to how long to wait before the next. */

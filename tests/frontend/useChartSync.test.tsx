@@ -96,13 +96,14 @@ function openDoc(version = 3) {
 
 function setup(doc = openDoc(), authTokenReady = true) {
   const isDragInFlightRef = { current: false };
+  const onSyncFailed = vi.fn<(message: string) => void>();
   const receiveRemote = vi.spyOn(doc, 'receiveRemote');
   const rendered = renderHook(
     ({ ready }: { ready: boolean }) =>
-      useChartSync({ doc, authTokenReady: ready, isDragInFlightRef }),
+      useChartSync({ doc, authTokenReady: ready, isDragInFlightRef, onSyncFailed }),
     { initialProps: { ready: authTokenReady } },
   );
-  return { ...rendered, doc, isDragInFlightRef, receiveRemote };
+  return { ...rendered, doc, isDragInFlightRef, receiveRemote, onSyncFailed };
 }
 
 let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -376,12 +377,30 @@ describe('useChartSync: failures', () => {
     expect(mockPollChart).toHaveBeenCalledTimes(3);
   });
 
-  it('survives a network failure with no status', async () => {
+  it('survives a network failure with no status, without telling the app', async () => {
     mockPollChart.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    setup();
+    const { onSyncFailed } = setup();
 
     await advance(2500 + 30_000);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
+    expect(onSyncFailed).not.toHaveBeenCalled();
+  });
+
+  it('tells the app, once, when a polled chart is not a chart', async () => {
+    // An idle tab has no save to fail, so this is the only way the user learns the
+    // other person's edits are no longer arriving.
+    mockPollChart.mockRejectedValue(
+      new ChartShapeError({ title: 'x' }, 'sections is not an array'),
+    );
+    const { onSyncFailed } = setup();
+
+    await advance(2500);
+    expect(onSyncFailed).toHaveBeenCalledTimes(1);
+    expect(onSyncFailed.mock.calls[0][0]).toContain('sections is not an array');
+
+    await advance(30_000);
+    expect(mockPollChart).toHaveBeenCalledTimes(2);
+    expect(onSyncFailed).toHaveBeenCalledTimes(1);
   });
 
   it('reports a polled chart that is not a chart once, without its content, and keeps polling', async () => {
@@ -429,6 +448,22 @@ describe('useChartSync: failures', () => {
       expect(JSON.stringify(report)).not.toContain('A private title');
       expect(doc.getCommitted()).toBe(typed);
       expect(doc.getStatus().serverVersion).toBe(3);
+    });
+
+    it('is shown to the user through the failure callback, once per server version', async () => {
+      mockPollChart.mockResolvedValue({ version: 5, chartData: chartWithRepeatedSectionId() });
+      const { onSyncFailed } = setupWithLocalEdit();
+
+      await advance(2500);
+      expect(onSyncFailed).toHaveBeenCalledTimes(1);
+      expect(onSyncFailed.mock.calls[0][0]).toMatch(/section/i);
+      expect(onSyncFailed.mock.calls[0][0]).not.toContain('A private title');
+
+      await advance(30_000);
+      expect(onSyncFailed).toHaveBeenCalledTimes(1);
+      mockPollChart.mockResolvedValue({ version: 6, chartData: chartWithRepeatedSectionId() });
+      await advance(30_000);
+      expect(onSyncFailed).toHaveBeenCalledTimes(2);
     });
 
     it('waits 30 s, keeps polling, and reports the same server version only once', async () => {
