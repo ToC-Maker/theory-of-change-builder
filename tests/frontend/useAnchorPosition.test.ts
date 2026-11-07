@@ -11,7 +11,7 @@
 //   - No anchor → returns null (caller can skip rendering).
 //   - Once the overlay is measured, it stays inside the visible area.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, cleanup } from '@testing-library/react';
 import { useAnchorPosition } from '../../src/components/node-editor/useAnchorPosition';
 
 // Minimal ResizeObserver shim so the hook's `observe`/`disconnect` calls
@@ -49,6 +49,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount every rendered hook: a hook left mounted keeps its resize
+  // listener and follow loop, which can schedule a React update after the
+  // file's environment is torn down ("window is not defined").
+  cleanup();
   capturedResizeCallbacks = [];
 });
 
