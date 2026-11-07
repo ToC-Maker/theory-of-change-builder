@@ -4,7 +4,6 @@
 // `tick-*`: a poll tick falls inside the hold (polls are skipped during a drag).
 // `mid-*`: a slow poll is already in flight when the drag starts, and its answer, which carries B's
 // change, arrives mid-drag (the answer is dropped and fetched again after the release).
-import { Checks } from '../lib/checks.mjs';
 import { holdNodeDrag, snap } from '../lib/editors.mjs';
 import { connections, places, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -42,7 +41,7 @@ export async function run(ctx, { timing, change }) {
   const duringHold = await endHold(ctx, timing, armed, snap);
   await A.up();
 
-  const checks = new Checks();
+  const { checks } = ctx;
   const { server } = await settleAndCheck({ mock, token, pages: [A, B], checks });
   const expectedTitles = { ...SEED_TITLES };
   const expectedConnections = ['n1->n3', 'n2->n4', 'n3->n5'];
@@ -67,5 +66,4 @@ export async function run(ctx, { timing, change }) {
   checks.note(
     `during the hold A showed ${JSON.stringify(duringHold.titles.n6)} for n6 (B's change: ${change})`,
   );
-  return { checks };
 }

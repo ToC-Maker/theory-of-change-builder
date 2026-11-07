@@ -7,9 +7,9 @@
 //   --out         where event logs, screenshots and results.json go (outside the repo)
 //   --only        comma-separated scenario names (default: all)
 //   --runs        runs per case, overriding each scenario's own count
-//   --leg         names this process's browsers and ports when several run side by side
 //   --web-port / --mock-port / --old-port   free ports (never 5173 or 8787: those serve the real app)
-//   --session     browser session prefix (default: the agent-browser session of the caller + -acc)
+//   --session     browser session prefix; give each process running side by side its own
+//                 (default: the caller's agent-browser session + -acc)
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,7 +28,6 @@ const { values: args } = parseArgs({
     out: { type: 'string' },
     only: { type: 'string' },
     runs: { type: 'string' },
-    leg: { type: 'string', default: '' },
     'web-port': { type: 'string', default: '5311' },
     'mock-port': { type: 'string', default: '8911' },
     'old-port': { type: 'string', default: '5312' },
@@ -46,8 +45,11 @@ for (const port of [args['web-port'], args['mock-port'], args['old-port']]) {
 }
 const root = path.resolve(args.root);
 const out = path.resolve(args.out);
-const suffix = args.leg ? `-${args.leg}` : '';
-const sessionPrefix = args.session ?? `${process.env.AGENT_BROWSER_SESSION ?? 'tocb'}-acc${suffix}`;
+const sessionPrefix = args.session ?? `${process.env.AGENT_BROWSER_SESSION ?? 'tocb'}-acc`;
+const runsOverride = args.runs === undefined ? undefined : Number(args.runs);
+if (runsOverride !== undefined && !(Number.isInteger(runsOverride) && runsOverride > 0)) {
+  throw new Error(`--runs must be a positive integer, got ${args.runs}`);
+}
 fs.mkdirSync(path.join(out, 'shots'), { recursive: true });
 
 const spawned = [];
@@ -84,14 +86,20 @@ const wanted = args.only?.split(',');
 const scenarios = [];
 for (const file of scenarioFiles) {
   const scenario = await import(path.join(here, 'scenarios', file));
-  if (!wanted || wanted.includes(scenario.name)) scenarios.push(scenario);
+  if (wanted && !wanted.includes(scenario.name)) continue;
+  if (scenario.needs?.includes('old') && !args['old-root']) {
+    // Asked for by name, a scenario that cannot run is an error; in "all of them" it is left out.
+    if (wanted) throw new Error(`${scenario.name} needs --old-root`);
+    console.log(`skipping ${scenario.name}: it needs --old-root`);
+    continue;
+  }
+  scenarios.push(scenario);
 }
 if (wanted) {
   const unknown = wanted.filter((n) => !scenarios.some((s) => s.name === n));
   if (unknown.length) throw new Error(`unknown scenarios: ${unknown.join(', ')}`);
 }
 const needsOld = scenarios.some((s) => s.needs?.includes('old'));
-if (needsOld && !args['old-root']) throw new Error('a selected scenario needs --old-root');
 
 const mock = startMock({
   port: Number(args['mock-port']),
@@ -117,6 +125,9 @@ function context(scenario, kase, index) {
     index,
     kase,
     out,
+    // What the run got wrong, kept here rather than returned so that a scenario that throws
+    // part-way still reports the losses it had already found.
+    checks: new Checks(),
     // Odd runs start from a chart whose sections and columns already have stored ids, even runs from
     // one that has none (every chart saved before versions).
     ids: index % 2 === 1,
@@ -155,8 +166,8 @@ function context(scenario, kase, index) {
 
 const results = [];
 const RUN_TIMEOUT_MS = 5 * 60_000;
-// After a run that threw, the browsers are replaced: a scenario that timed out is still running in
-// the background and would otherwise keep acting on the pages of the next run.
+// After a run that threw, the browsers are reopened: that rejects the call a timed-out scenario is
+// still waiting on, which stops it, and gives the next run clean pages.
 let freshBrowsers = false;
 try {
   const kinds = new Set(scenarios.flatMap((s) => s.needs ?? ['A', 'B']));
@@ -182,7 +193,7 @@ try {
         errors: 0,
         details: [],
       };
-      const count = Number(args.runs ?? kase.runs ?? scenario.runs ?? 3);
+      const count = runsOverride ?? scenario.runs ?? 3;
       for (let i = 0; i < count; i++) {
         await Promise.all(
           Object.values(browsers).map((b) => (freshBrowsers ? b.reopen() : b.ensureAlive())),
@@ -191,22 +202,23 @@ try {
         const ctx = context(scenario, kase, i);
         ctx.mark('begin');
         const started = Date.now();
-        let verdict;
+        let verdict = {};
         try {
-          verdict = await Promise.race([
-            scenario.run(ctx, kase),
-            sleep(RUN_TIMEOUT_MS).then(() => {
-              throw new Error(`run exceeded ${RUN_TIMEOUT_MS} ms`);
-            }),
-          ]);
+          verdict =
+            (await Promise.race([
+              scenario.run(ctx, kase),
+              sleep(RUN_TIMEOUT_MS).then(() => {
+                throw new Error(`run exceeded ${RUN_TIMEOUT_MS} ms`);
+              }),
+            ])) ?? {};
         } catch (error) {
           verdict = { error: String(error?.stack ?? error) };
         }
         ctx.mark('end');
         row.runs++;
-        const checks = verdict.checks ?? new Checks();
+        const { checks } = ctx;
         const lost = checks.lost;
-        const caretJumps = verdict.caretJumps ?? 0;
+        const { caretJumps } = checks;
         if (verdict.error) {
           row.errors++;
           freshBrowsers = true;
@@ -232,6 +244,7 @@ try {
         );
         if (lost.length || verdict.error) {
           for (const name of ['A', 'B']) {
+            // A page that failed may not answer; the events log is the evidence then.
             if (browsers[name]) await ctx.shot(browsers[name], `${name}-failure`).catch(() => {});
           }
         }

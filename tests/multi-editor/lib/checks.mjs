@@ -5,6 +5,7 @@ export class Checks {
   constructor() {
     this.lost = [];
     this.notes = [];
+    this.caretJumps = 0;
   }
 
   /** Records `label` as a loss unless `actual` deep-equals `expected`. */

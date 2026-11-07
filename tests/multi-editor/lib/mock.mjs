@@ -59,12 +59,6 @@ const whoOf = (req) => {
   }
 };
 
-/** The AI reply used when a scenario does not queue one: retitle Foxtrot after 12 s. */
-const DEFAULT_AI = {
-  ms: 12_000,
-  edits: [{ type: 'update', path: 'sections.1.columns.1.nodes.1.title', value: 'Foxtrot +AI' }],
-};
-
 export function startMock({ port, logFile }) {
   const events = [];
   const log = (event) => {
@@ -73,27 +67,21 @@ export function startMock({ port, logFile }) {
     fs.appendFileSync(logFile, JSON.stringify(entry) + '\n');
   };
 
-  /** token -> { id, data, version, writes } */
+  /** token -> { id, data, version } */
   const charts = new Map();
   const config = {
     latency: { getChart: 150, updateChart: 250, pollChart: 60, createChart: 200, upload: 150 },
-    /** per[who][kind] overrides latency for one editor */
-    per: {},
   };
-  /** One-shot behaviours for the next request of a kind by an editor: { delay?, status? } */
+  /** One-shot behaviours for the next request of a kind by an editor: { delay?, readAt? } */
   const queued = {};
   const aiQueue = [];
-  const counters = { createChart: 0, uploadFile: 0 };
   let requestId = 0;
   let createdCount = 0;
+  let uploadCount = 0;
 
   const latencyOf = (who, kind) => {
     const one = queued[`${who}:${kind}`]?.shift();
-    return {
-      delay: one?.delay ?? config.per[who]?.[kind] ?? config.latency[kind],
-      status: one?.status,
-      readAt: one?.readAt,
-    };
+    return { delay: one?.delay ?? config.latency[kind], readAt: one?.readAt };
   };
 
   const handlers = {
@@ -125,12 +113,11 @@ export function startMock({ port, logFile }) {
     async createChart(req, res, url, who) {
       const { chartData } = JSON.parse((await readBody(req)).toString());
       const id = ++requestId;
-      counters.createChart++;
       log({ kind: 'CREATE-start', id, who });
       await sleep(latencyOf(who, 'createChart').delay);
       createdCount++;
       const token = `mk-${createdCount}-${Math.random().toString(36).slice(2, 8)}`;
-      const chart = { id: `cid-${createdCount}`, data: store(chartData), version: 1, writes: 0 };
+      const chart = { id: `cid-${createdCount}`, data: store(chartData), version: 1 };
       charts.set(token, chart);
       const origin = `http://${req.headers.host}`;
       log({ kind: 'CREATE-end', id, who, token, chartId: chart.id, chart: chart.data });
@@ -156,16 +143,11 @@ export function startMock({ port, logFile }) {
       }
       const id = ++requestId;
       log({ kind: 'POST-start', id, who, baseVersion, sent: summary(chartData) });
-      const { delay, status } = latencyOf(who, 'updateChart');
+      const { delay } = latencyOf(who, 'updateChart');
       // The UPDATE commits late in the handler.
       await sleep(delay * 0.8);
       const chart = charts.get(editToken);
       if (!chart) return sendJson(res, 404, { error: 'Chart not found or invalid edit token' });
-      if (status >= 400) {
-        await sleep(delay * 0.2);
-        log({ kind: 'POST-end', id, who, status });
-        return sendJson(res, status, { error: 'Failed to update chart' });
-      }
       // From here to the write there is no await: the check and the write are one atomic step,
       // as the single UPDATE ... WHERE version = $n is in Postgres.
       if (baseVersion !== undefined && baseVersion !== chart.version) {
@@ -185,7 +167,6 @@ export function startMock({ port, logFile }) {
         chart.data = next;
         chart.version++;
       }
-      chart.writes++;
       log({
         kind: 'POST-commit',
         id,
@@ -202,12 +183,11 @@ export function startMock({ port, logFile }) {
 
     async pollChart(req, res, url, who) {
       const { editToken, knownVersion } = JSON.parse((await readBody(req)).toString());
-      const { delay, status, readAt = delay / 2 } = latencyOf(who, 'pollChart');
+      const { delay, readAt = delay / 2 } = latencyOf(who, 'pollChart');
       log({ kind: 'POLL-start', who, knownVersion });
       await sleep(readAt);
       const chart = charts.get(editToken);
       if (!chart) return sendJson(res, 404, { error: 'Chart not found or invalid edit token' });
-      if (status >= 400) return sendJson(res, status, { error: 'Failed to poll chart' });
       const changed = chart.version !== knownVersion;
       const payload = changed
         ? { version: chart.version, chartData: chart.data }
@@ -221,7 +201,7 @@ export function startMock({ port, logFile }) {
       const raw = (await readBody(req)).toString('latin1');
       const chartId = /name="chart_id"\r\n\r\n([^\r]*)\r\n/.exec(raw)?.[1];
       const filename = /filename="([^"]*)"/.exec(raw)?.[1] ?? 'upload.pdf';
-      const n = ++counters.uploadFile;
+      const n = ++uploadCount;
       log({ kind: 'UPLOAD', who, chartId, filename, editToken: req.headers['x-edit-token'] });
       await sleep(config.latency.upload);
       sendJson(res, 200, {
@@ -234,7 +214,9 @@ export function startMock({ port, logFile }) {
 
     async 'anthropic-stream'(req, res, url, who) {
       await readBody(req);
-      const { ms, edits, text } = aiQueue.shift() ?? DEFAULT_AI;
+      const next = aiQueue.shift();
+      if (!next) throw new Error('an AI reply was asked for and none was queued');
+      const { ms, edits, text } = next;
       log({ kind: 'AI-start', who, ms });
       const reply =
         '[EDIT_INSTRUCTIONS]\n' +
@@ -327,11 +309,8 @@ export function startMock({ port, logFile }) {
 
   return {
     ready,
-    port,
     events,
     config,
-    counters,
-    log,
     mark: (label) => log({ kind: 'mark', label }),
     /** Creates a chart with the given edit token, replacing any chart already there. */
     newChart(token, { ids }) {
@@ -339,13 +318,12 @@ export function startMock({ port, logFile }) {
         id: `c-${token}`,
         data: store(seedChart({ ids })),
         version: 1,
-        writes: 0,
       });
     },
-    /** `{ version, writes, chart }` of a chart as stored (a copy). */
+    /** `{ version, chart }` of a chart as stored (a copy). */
     state(token) {
       const chart = stateOf(token);
-      return chart && { version: chart.version, writes: chart.writes, chart: store(chart.data) };
+      return chart && { version: chart.version, chart: store(chart.data) };
     },
     /** Writes a chart as a third party would (no request, no latency): bumps the version if it changed. */
     writeDirect(token, chart) {
@@ -355,11 +333,10 @@ export function startMock({ port, logFile }) {
         stored.data = next;
         stored.version++;
       }
-      stored.writes++;
       log({ kind: 'direct-write', token, version: stored.version, chart: stored.data });
     },
     /**
-     * The next request of `kind` by `who` takes `delay` ms and/or answers `status`. A poll reads the
+     * The next request of `kind` by `who` takes `delay` ms. A poll reads the
      * chart `readAt` ms in (default: half way), so a slow poll can be made to carry a change made
      * while it is in flight.
      */

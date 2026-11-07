@@ -3,7 +3,6 @@
 //
 // `tick`: a poll tick falls inside a hold. `mid`: a slow answer carrying B's change arrives mid-drag.
 // `sweep`: the pointer never rests (an event every ~20 ms, so no idle commit) across the answer.
-import { Checks } from '../lib/checks.mjs';
 import { midpointHandle, pathPoint, snap } from '../lib/editors.mjs';
 import { connection, connections, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -68,7 +67,7 @@ export async function run(ctx, { timing, change }) {
   await A.up();
   await sleep(500);
 
-  const checks = new Checks();
+  const { checks } = ctx;
   const { server } = await settleAndCheck({ mock, token, pages: [A, B], checks });
   const chart = server.chart;
   if (change === 'other') {
@@ -97,5 +96,4 @@ export async function run(ctx, { timing, change }) {
     mock.since(armed.from, (e) => e.kind === 'POST-409' && e.who === 'A').length > 0,
   );
   checks.note(`during the hold A showed n6=${JSON.stringify(duringHold.titles.n6)}`);
-  return { checks };
 }

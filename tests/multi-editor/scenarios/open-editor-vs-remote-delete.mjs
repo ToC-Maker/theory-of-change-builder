@@ -7,7 +7,6 @@
 //   n1's title, so A's save is answered 409 and merged against the delete.
 // node-editor-typed-across-landing: A types into n1's title while the answer carrying B's delete of
 //   n1 arrives.
-import { Checks } from '../lib/checks.mjs';
 import {
   edgeEditorOpen,
   focusTitle,
@@ -34,16 +33,16 @@ export const cases = [
 export async function run(ctx, kase) {
   const { mock, token, A, B } = ctx;
   await ctx.open({ A: 'new', B: 'new' });
-  const checks = new Checks();
+  const { checks } = ctx;
   const from = mock.events.length;
 
   if (kase.name === 'edge-editor') {
     await openEdgeEditor(A);
     await deleteConnection(ctx, B);
     await landed(ctx, A);
-    await A.waitFor(`!document.querySelector('button[aria-label="Delete connection"]')`, {
+    // `until`, not `waitFor`: an editor that stays open is the failure to report.
+    await A.until(`!document.querySelector('button[aria-label="Delete connection"]')`, {
       timeout: 5000,
-      what: "A's edge editor to close",
     });
     checks.eq("A's edge editor is closed", await edgeEditorOpen(A), false);
     await sleep(4000);
@@ -63,10 +62,7 @@ export async function run(ctx, kase) {
     await selectNode(A, 'n1');
     await remove(ctx, B, 'n1');
     await landed(ctx, A);
-    await A.waitFor(`!document.querySelector('.node-editor')`, {
-      timeout: 5000,
-      what: "A's node editor to close",
-    });
+    await A.until(`!document.querySelector('.node-editor')`, { timeout: 5000 });
     checks.eq("A's node editor is closed", await nodeEditorOpen(A), false);
     await sleep(4000);
     const settled = await settleAndCheck({ mock, token, pages: [A, B], checks });
@@ -84,20 +80,29 @@ export async function run(ctx, kase) {
     if (kase.name === 'node-editor-typed-before-landing') {
       await hide(A);
       await remove(ctx, B, 'n1');
+      const sent = mock.events.length;
       await A.type('XY');
       typed = 'AlphaXY';
+      // A's save must leave before the tab polls again, or the poll's landing would pre-empt the 409.
+      await mock.waitFor(
+        () => mock.since(sent, (e) => e.kind === 'POST-start' && e.who === 'A').length,
+        { what: "A's save" },
+      );
       await show(A);
+      await mock.waitFor(
+        () => mock.since(sent, (e) => e.kind === 'POST-409' && e.who === 'A').length,
+        { what: "A's save to be answered 409" },
+      );
     } else {
       // The answer that carries B's delete is held back, and A types while it is out.
       await hide(A);
       await remove(ctx, B, 'n1');
       mock.next('A', 'pollChart', { delay: 2500 });
+      const held = mock.events.length;
       await show(A);
       await mock.waitFor(
-        () => mock.since(from, (e) => e.kind === 'POLL-start' && e.who === 'A').length,
-        {
-          what: 'the held-back poll',
-        },
+        () => mock.since(held, (e) => e.kind === 'POLL-start' && e.who === 'A').length,
+        { what: 'the held-back poll' },
       );
       await A.type('XY');
       typed = 'AlphaXY';
@@ -123,5 +128,4 @@ export async function run(ctx, kase) {
       },
     );
   }
-  return { checks };
 }

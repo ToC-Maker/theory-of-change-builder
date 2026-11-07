@@ -13,7 +13,10 @@ const PROBE = fs.readFileSync(path.join(here, 'probe.js'), 'utf8');
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const agentBrowser = (session, ...args) =>
-  execFileSync('agent-browser', ['--session', session, ...args], { encoding: 'utf8' });
+  execFileSync('agent-browser', ['--session', session, ...args], {
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
 
 // Keys the scenarios press. `text` makes a key insert a character.
 const KEYS = {
@@ -28,6 +31,8 @@ const KEYS = {
 };
 const MODIFIERS = { Control: 2, Shift: 8 };
 
+const VIEWPORT = { width: 1500, height: 950 };
+
 // A call the browser does not answer within this long has failed: under memory pressure a tab can be
 // swapped out or replaced, and a call on a gone tab is never answered.
 const CALL_TIMEOUT_MS = 60_000;
@@ -41,12 +46,9 @@ export class Browser {
     return browser;
   }
 
-  constructor({ session, width = 1500, height = 950, shots, probe = true }) {
+  constructor({ session, shots }) {
     this.session = session;
-    this.width = width;
-    this.height = height;
     this.shots = shots;
-    this.probe = probe;
     this.nextId = 0;
     this.pending = new Map();
     this.listeners = [];
@@ -103,8 +105,8 @@ export class Browser {
       urls: ['*simpleanalyticscdn*', '*fonts.googleapis.com*', '*fonts.gstatic.com*'],
     });
     await this.send('Emulation.setDeviceMetricsOverride', {
-      width: this.width,
-      height: this.height,
+      width: VIEWPORT.width,
+      height: VIEWPORT.height,
       deviceScaleFactor: 1,
       mobile: false,
     });
@@ -112,7 +114,7 @@ export class Browser {
       source:
         "localStorage.setItem('privacyPolicyAccepted','true');" +
         "localStorage.setItem('usageLoggingOptOut','true');" +
-        (this.probe ? PROBE : ''),
+        PROBE,
     });
   }
 
@@ -178,13 +180,11 @@ export class Browser {
 
   async goto(url) {
     let listener;
+    let timer;
     const loaded = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${url} did not finish loading`)), 90_000);
+      timer = setTimeout(() => reject(new Error(`${url} did not finish loading`)), 90_000);
       listener = (event) => {
-        if (event.method === 'Page.loadEventFired') {
-          clearTimeout(timer);
-          resolve();
-        }
+        if (event.method === 'Page.loadEventFired') resolve();
       };
       this.on(listener);
     });
@@ -192,7 +192,10 @@ export class Browser {
       await this.send('Page.navigate', { url });
       await loaded;
     } finally {
+      clearTimeout(timer);
       this.listeners = this.listeners.filter((l) => l !== listener);
+      // A navigation that failed leaves `loaded` pending or rejected with nobody to hear it.
+      loaded.catch(() => {});
     }
   }
 
@@ -211,15 +214,20 @@ export class Browser {
     return result.value;
   }
 
-  /** Polls `expression` in the page until it is truthy. */
-  async waitFor(expression, { timeout = 20_000, every = 50, what = expression } = {}) {
+  /** Polls `expression` in the page until it is truthy; false if it is not within `timeout`. */
+  async until(expression, { timeout = 20_000, every = 50 } = {}) {
     const t0 = Date.now();
     for (;;) {
-      const value = await this.eval(`Boolean(${expression})`);
-      if (value) return true;
-      if (Date.now() - t0 > timeout)
-        throw new Error(`timed out after ${timeout} ms waiting for ${what}`);
+      if (await this.eval(`Boolean(${expression})`)) return true;
+      if (Date.now() - t0 > timeout) return false;
       await sleep(every);
+    }
+  }
+
+  /** Like `until`, but a timeout is an error: the scenario cannot go on without it. */
+  async waitFor(expression, { what = expression, ...options } = {}) {
+    if (!(await this.until(expression, options))) {
+      throw new Error(`timed out after ${options.timeout ?? 20_000} ms waiting for ${what}`);
     }
   }
 

@@ -4,8 +4,7 @@
 // text reaches the server along with the remote change.
 //
 // other-node: B retitles n6. same-node-other-fields: a collaborator's save changes n1's details,
-// width and colour (not its title), as in the earlier capture of this boundary.
-import { Checks } from '../lib/checks.mjs';
+// width and colour but not its title.
 import { focusTitle, selectNode, titleInput } from '../lib/editors.mjs';
 import { nodeById, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -52,7 +51,7 @@ export async function run(ctx, kase) {
   await A.insertText('你好');
   await sleep(600);
 
-  const checks = new Checks();
+  const { checks } = ctx;
   const state = await A.eval(`(() => ({
     sameInput: window.__ime.input === document.querySelector('${TITLE}'),
     events: window.__ime.events,
@@ -89,5 +88,4 @@ export async function run(ctx, kase) {
       ['Remote details.', 272, '#fde68a'],
     );
   }
-  return { checks };
 }

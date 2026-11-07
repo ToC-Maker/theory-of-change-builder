@@ -1,12 +1,13 @@
 // Two things on the start page need a chart on the server at the same moment. They must end on one
-// chart: one create, the URL and the document pointing at it, and everything attached to it.
+// chart: the URL, the document and everything attached to it point at the same chart.
 //
 // two-pdfs-one-pick: two PDFs chosen in one file dialog. two-pdfs-two-picks: the same two files
-// chosen in two dialogs back to back. chat-and-share-at-once: a chat message is sent and the Share
-// dialog opened in the same instant; the loser of the race must follow the winner.
+// chosen in two dialogs back to back. Both must create exactly one chart and upload to it.
+// chat-and-share-at-once: a chat message is sent and the Share dialog opened in the same instant.
+// Each starts its own create; the document keeps the first chart that arrives and the loser follows
+// it (the other chart is left unused, which is noted, not counted as a loss).
 import fs from 'node:fs';
 import path from 'node:path';
-import { Checks } from '../lib/checks.mjs';
 import { sleep } from '../lib/browser.mjs';
 
 export const name = 'create-chart-races';
@@ -40,11 +41,12 @@ function pdfs(out) {
 export async function run(ctx, kase) {
   const { mock, A } = ctx;
   // A slow create keeps both requests in flight at once.
+  const normalLatency = mock.config.latency.createChart;
   mock.config.latency.createChart = 1200;
   try {
     await ctx.openRoot('A');
     const from = mock.events.length;
-    const checks = new Checks();
+    const { checks } = ctx;
     const isPdfCase = kase.name.startsWith('two-pdfs');
 
     if (kase.name === 'two-pdfs-one-pick') {
@@ -124,8 +126,7 @@ export async function run(ctx, kase) {
       );
     }
     checks.eq('the document is not stuck', [doc.terminalError, doc.unsaved], [null, false]);
-    return { checks };
   } finally {
-    mock.config.latency.createChart = 200;
+    mock.config.latency.createChart = normalLatency;
   }
 }

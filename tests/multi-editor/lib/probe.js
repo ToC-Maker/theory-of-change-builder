@@ -4,7 +4,6 @@
 // touches app state.
 (() => {
   const who = new URLSearchParams(location.search).get('who') || '?';
-  window.__who = who;
   const send = (kind, detail) => {
     try {
       navigator.sendBeacon(
@@ -17,7 +16,6 @@
       // The beacon is best effort: a page that is unloading has nowhere to report to.
     }
   };
-  window.__send = send;
 
   for (const level of ['warn', 'error']) {
     const original = console[level].bind(console);

@@ -2,7 +2,6 @@
 // B's text; the caret's position (by design it moves to the start) is recorded. Pressing the
 // toolbar's Undo or Ctrl+Z afterwards must not bring the old text back, and nothing may be saved
 // by A because of it.
-import { Checks } from '../lib/checks.mjs';
 import {
   centerOfSelector,
   closeEditor,
@@ -56,7 +55,7 @@ export async function run(ctx) {
   );
   const landedAt = Date.now();
 
-  const checks = new Checks();
+  const { checks } = ctx;
   checks.ok("A's editor shows B's text", afterLanding?.includes('REMOTE'), String(afterLanding));
   checks.note(
     `caret before the landing: after ${JSON.stringify(caretBefore)}; after it: ${JSON.stringify(caretAfter)}; editor focused: ${focused}`,
@@ -94,5 +93,4 @@ export async function run(ctx) {
     mock.since(from, (e) => e.kind === 'POST-start' && e.who === 'A' && e.ts > landedAt).length,
     0,
   );
-  return { checks };
 }

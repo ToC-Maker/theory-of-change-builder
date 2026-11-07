@@ -6,7 +6,6 @@
 // idle-poll: A is idle in the input; its poll lands B's change to another node.
 // idle-poll-same-field: B rewrites the very title A has focused; the input follows B's text, keeps
 //   focus, and the caret's new position is recorded.
-import { Checks } from '../lib/checks.mjs';
 import { focusTitle, hide, selectNode, show, titleInput } from '../lib/editors.mjs';
 import { titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -35,7 +34,7 @@ export async function run(ctx, kase) {
   await selectNode(A, 'n1');
   await focusTitle(A);
   await placeCaret(A, 3);
-  const checks = new Checks();
+  const { checks } = ctx;
   let expectedValue;
   let expectedCaret;
 
@@ -66,13 +65,13 @@ export async function run(ctx, kase) {
   if (expectedCaret !== null) {
     checks.eq('caret', [after?.start, after?.end], [expectedCaret, expectedCaret]);
   } else {
-    checks.note(`caret after B rewrote the focused title: ${after?.start}/${after?.value.length}`);
+    checks.note(`caret after B rewrote the focused title: ${after?.start}/${after?.value?.length}`);
   }
 
   // The next keystroke goes where the caret is.
   await A.type('Z');
   const next = await titleInput(A);
-  const at = expectedCaret ?? after.start;
+  const at = expectedCaret ?? after?.start ?? 0;
   const wantText = expectedValue.slice(0, at) + 'Z' + expectedValue.slice(at);
   checks.eq('input text after one more key', next?.value, wantText);
   checks.eq('caret after one more key', [next?.start, next?.end], [at + 1, at + 1]);
@@ -84,5 +83,4 @@ export async function run(ctx, kase) {
     titles(settled.server.chart).n6,
     kase.name === 'idle-poll-same-field' ? 'Foxtrot' : 'Foxtrot-B1',
   );
-  return { checks };
 }

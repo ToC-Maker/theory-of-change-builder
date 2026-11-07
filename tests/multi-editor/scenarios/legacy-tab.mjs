@@ -9,7 +9,6 @@
 //   chart over it. This is the accepted behaviour of the transition (an old tab can overwrite a
 //   collaborator, as before versions); the check is that it happens as documented and that the
 //   current tab then follows the server instead of getting stuck.
-import { Checks } from '../lib/checks.mjs';
 import {
   closeEditor,
   editTitle,
@@ -17,6 +16,7 @@ import {
   hide,
   selectNode,
   show,
+  serverReaches,
   snap,
   untilServer,
 } from '../lib/editors.mjs';
@@ -46,7 +46,7 @@ export async function run(ctx, kase) {
   const { mock, token, A, old } = ctx;
   await ctx.open({ A: 'new', old: 'old' });
   const from = mock.events.length;
-  const checks = new Checks();
+  const { checks } = ctx;
   let want;
 
   if (kase.name === 'old-saves-while-new-is-stale') {
@@ -64,13 +64,13 @@ export async function run(ctx, kase) {
     );
     await show(A);
     want = { n1: 'Alpha-A', n2: 'Bravo-O' };
-    await untilServer(
-      mock,
-      token,
-      (c) => titles(c).n1 === 'Alpha-A' && titles(c).n2 === 'Bravo-O',
-      {
-        what: 'both edits on the server',
-      },
+    checks.ok(
+      'both edits reached the server',
+      await serverReaches(
+        mock,
+        token,
+        (c) => titles(c).n1 === 'Alpha-A' && titles(c).n2 === 'Bravo-O',
+      ),
     );
     checks.ok(
       'the current tab was answered 409 and merged',
@@ -85,13 +85,13 @@ export async function run(ctx, kase) {
     await show(A);
     await A.type('XYZ');
     want = { n1: 'AlphaXYZ', n2: 'Bravo-O' };
-    await untilServer(
-      mock,
-      token,
-      (c) => titles(c).n1 === 'AlphaXYZ' && titles(c).n2 === 'Bravo-O',
-      {
-        what: 'both edits on the server',
-      },
+    checks.ok(
+      'both edits reached the server',
+      await serverReaches(
+        mock,
+        token,
+        (c) => titles(c).n1 === 'AlphaXYZ' && titles(c).n2 === 'Bravo-O',
+      ),
     );
   } else {
     await editTitle(A, 'n1', '-A');
@@ -100,6 +100,11 @@ export async function run(ctx, kase) {
       what: "the current tab's save",
     });
     await oldRetitles(ctx);
+    // The old tab polls on its own timer: if it did so after A's save, its chart already held A's
+    // edit and its save would not revert it, which would say nothing about the legacy overwrite.
+    if (titles(mock.state(token).chart).n1 !== 'Alpha') {
+      throw new Error("the old tab polled A's edit before saving, so it did not overwrite it");
+    }
     want = { n1: 'Alpha', n2: 'Bravo-O' };
     checks.note("the old tab's whole-chart save reverted n1 to Alpha: accepted legacy behaviour");
   }
@@ -136,5 +141,4 @@ export async function run(ctx, kase) {
   checks.note(
     `the old tab showed the server's titles after ${Math.round((Date.now() - t0) / 1000)} s: ${isDeepStrictEqual(oldTitles, titles(chart))}`,
   );
-  return { checks };
 }

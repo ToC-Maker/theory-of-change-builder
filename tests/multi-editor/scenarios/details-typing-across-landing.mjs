@@ -3,7 +3,6 @@
 //
 // The keystroke is made inside the response handler of A's held-back poll: the closest a keystroke
 // can come before the app processes the answer.
-import { Checks } from '../lib/checks.mjs';
 import { centerOfSelector, detailsText, hide, selectNode } from '../lib/editors.mjs';
 import { nodeById, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -63,7 +62,7 @@ export async function run(ctx) {
   await sleep(DELAY + 3200);
   const trace = await A.eval('window.__trace');
 
-  const checks = new Checks();
+  const { checks } = ctx;
   const key = trace.find((e) => e.kind.startsWith('KEY'));
   checks.ok('the keystroke was typed (execCommand accepted it)', key?.ok === true);
   const samples = trace.filter((e) => e.kind === 'S');
@@ -71,15 +70,14 @@ export async function run(ctx) {
   checks.ok("B's retitle reached A's canvas", !!landing);
   checks.ok(
     'the editor kept focus through the landing',
-    samples.filter((e) => e.t >= key.t).every((e) => e.focused),
+    samples.filter((e) => e.t >= (key?.t ?? 0)).every((e) => e.focused),
   );
   const final = await detailsText(A);
-  checks.ok("typed text is in A's editor", final.includes('XYZ'), `${before} -> ${final}`);
+  checks.ok("typed text is in A's editor", final?.includes('XYZ'), `${before} -> ${final}`);
 
   const settled = await settleAndCheck({ mock, token, pages: [A, B], checks });
-  const text = nodeById(settled.server.chart, 'n1').node.text;
+  const text = nodeById(settled.server.chart, 'n1')?.node.text ?? '';
   checks.ok('typed text reached the server', text.includes('XYZ'), JSON.stringify(text));
   checks.eq('n2 on the server', titles(settled.server.chart).n2, 'Bravo-B');
   checks.note(`n1.text on the server: ${JSON.stringify(text)}`);
-  return { checks };
 }

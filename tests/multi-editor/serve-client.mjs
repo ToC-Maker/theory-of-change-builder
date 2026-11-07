@@ -3,8 +3,9 @@
 // and without that the page renders unstyled):
 //   node serve-client.mjs <checkout> <port> <mock-port> <work-dir>
 //
-// Nothing is written into the checkout: Vite's cache and the stub env live in <work-dir>, and no
-// config file of the checkout is read, so its dev proxy to the real Worker is never in play.
+// Nothing is written into the checkout: Vite's cache and the stub env live in <work-dir>. The
+// checkout's vite.config.ts is not read, so its dev proxy to the real Worker is never in play (its
+// PostCSS and Tailwind configs are, from the working directory, as in a normal dev server).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +53,8 @@ const server = await createServer({
     host: '127.0.0.1',
     port: Number(port),
     strictPort: true,
-    fs: { allow: [root, here] },
+    // A checkout whose node_modules is a symlink to another worktree's still serves its dependencies.
+    fs: { allow: [root, here, fs.realpathSync(path.join(root, 'node_modules'))] },
     watch: null,
     hmr: false,
     proxy: { '/api': { target: `http://127.0.0.1:${mockPort}`, changeOrigin: true } },

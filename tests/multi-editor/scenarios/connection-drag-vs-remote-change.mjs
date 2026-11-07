@@ -1,6 +1,5 @@
 // A drags a new connection from n1 to n4 and holds over n4 while B changes the chart. On the release
 // the connection must exist exactly when both ends survive; a deleted end stays deleted.
-import { Checks } from '../lib/checks.mjs';
 import { centerOf, handleCenter, snap } from '../lib/editors.mjs';
 import { connection, connections, nodeById, places, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -44,7 +43,7 @@ export async function run(ctx, { timing, change }) {
   await A.up();
   await sleep(500);
 
-  const checks = new Checks();
+  const { checks } = ctx;
   const { server } = await settleAndCheck({ mock, token, pages: [A, B], checks });
   const chart = server.chart;
   const expected = {
@@ -74,5 +73,4 @@ export async function run(ctx, { timing, change }) {
     false,
   );
   checks.note(`during the hold A showed n6=${JSON.stringify(duringHold.titles.n6)}`);
-  return { checks };
 }

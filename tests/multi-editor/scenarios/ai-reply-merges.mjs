@@ -7,7 +7,6 @@
 // edit-of-deleted-node: the reply retitles n4; B deletes n4 meanwhile, so n4 stays deleted.
 // column-insert-during-drag: the reply inserts a column at the front of the second section while A
 //   holds a node drag over a column; on release the node lands in the column under the pointer.
-import { Checks } from '../lib/checks.mjs';
 import {
   closeEditor,
   columnAt,
@@ -18,7 +17,7 @@ import {
 } from '../lib/editors.mjs';
 import { connections, nodeById, places, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
-import { dropPoint, remove, retitle } from '../lib/remote.mjs';
+import { dropPoint, landed, remove, retitle } from '../lib/remote.mjs';
 import { sleep } from '../lib/browser.mjs';
 
 export const name = 'ai-reply-merges';
@@ -72,7 +71,7 @@ async function replyApplied(ctx, from) {
 export async function run(ctx, kase) {
   const { mock, token, A, B } = ctx;
   await ctx.open({ A: 'new', B: 'new' });
-  const checks = new Checks();
+  const { checks } = ctx;
   const from = mock.events.length;
 
   const edits = {
@@ -138,7 +137,6 @@ export async function run(ctx, kase) {
       [3, true],
     );
     checks.note(`column under the pointer at release: ${under}`);
-    return { checks };
   }
 
   // A changes n1 and B changes something else while the reply streams.
@@ -146,6 +144,13 @@ export async function run(ctx, kase) {
   await closeEditor(A);
   if (kase.name === 'edit-of-deleted-node') await remove(ctx, B, 'n4');
   else await retitle(ctx, B, 'n2', '-B');
+  // Both people's edits must be on the server and in A's chart before the reply arrives, or the
+  // reply would not be merged against anything and the outcome would say nothing about merging.
+  await landed(ctx, A);
+  await A.waitFor(`window.__doc().getStatus().unsaved === false`, { what: "A's own edit saved" });
+  if (mock.since(from, (e) => e.kind === 'AI-end').length) {
+    throw new Error('the reply finished before the edits it must be merged with were made');
+  }
   await replyApplied(ctx, from);
 
   const settled = await settleAndCheck({ mock, token, pages: [A, B], checks });
@@ -179,5 +184,4 @@ export async function run(ctx, kase) {
   if (kase.name === 'edit-of-deleted-node')
     checks.eq('connections', connections(chart), ['n1->n3', 'n3->n5']);
   checks.eq("the reply reached B's page", settled.models[1].titles, want);
-  return { checks };
 }

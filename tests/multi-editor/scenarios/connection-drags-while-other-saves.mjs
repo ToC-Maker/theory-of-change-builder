@@ -1,14 +1,13 @@
 // A draws fifteen new connections, one drag after another, while B saves every couple of seconds
 // (it keeps typing and deleting a character in n6's title). Every connection A made must be on the
 // server at the end, none overwritten by one of B's saves, and B's own typing must settle.
-import { Checks } from '../lib/checks.mjs';
 import { centerOf, docState, focusTitle, handleCenter, selectNode } from '../lib/editors.mjs';
 import { connections, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
 import { sleep } from '../lib/browser.mjs';
 
 export const name = 'connection-drags-while-other-saves';
-export const runs = 2;
+export const runs = 3;
 
 const PAIRS = [
   ['n1', 'n4'],
@@ -59,6 +58,7 @@ export async function run(ctx) {
 
   let stop = false;
   let toggles = 0;
+  let bError;
   const bSaves = (async () => {
     // Type then delete one character, about every 1.5 s: a save from B every ~2 s.
     while (!stop) {
@@ -68,34 +68,36 @@ export async function run(ctx) {
       toggles++;
       await sleep(1500);
     }
-  })();
-  await sleep(3000);
+  })().catch((error) => {
+    bError = error;
+  });
 
-  const checks = new Checks();
+  const { checks } = ctx;
   const made = [];
-  for (const [source, target] of PAIRS) {
-    ctx.mark(`A draws ${source}->${target}`);
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      await drawConnection(A, source, target);
-      await sleep(700);
-      if (await localHas(A, source, target)) {
-        made.push(`${source}->${target}`);
-        break;
+  try {
+    await sleep(3000);
+    for (const [source, target] of PAIRS) {
+      ctx.mark(`A draws ${source}->${target}`);
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await drawConnection(A, source, target);
+        await sleep(700);
+        if (await localHas(A, source, target)) {
+          made.push(`${source}->${target}`);
+          break;
+        }
+        if (attempt === 2)
+          throw new Error(
+            `the drag ${source}->${target} made no connection locally: harness gesture`,
+          );
       }
-      if (attempt === 2)
-        throw new Error(
-          `the drag ${source}->${target} made no connection locally: harness gesture`,
-        );
+      await sleep(600);
     }
-    await sleep(600);
+  } finally {
+    // B's loop always finishes its type-and-delete pair, so n6 ends as it began.
+    stop = true;
+    await bSaves;
   }
-  stop = true;
-  await bSaves;
-  // B's last typed character may be waiting to be deleted: finish the pair so n6 ends as it began.
-  const expectedN6 =
-    (await B.eval(
-      `document.querySelector('.node-editor input[aria-label="Node title"]')?.value`,
-    )) ?? 'Foxtrot';
+  if (bError) throw bError;
 
   const settled = await settleAndCheck({ mock, token, pages: [A, B], checks, timeout: 45_000 });
   const onServer = connections(settled.server.chart);
@@ -106,13 +108,8 @@ export async function run(ctx) {
     onServer.filter((c) => !SEED.includes(c)).length,
     PAIRS.length,
   );
-  checks.eq(
-    "n6 on the server is what B's input shows",
-    titles(settled.server.chart).n6,
-    expectedN6,
-  );
+  checks.eq('n6 on the server', titles(settled.server.chart).n6, 'Foxtrot');
   checks.note(
     `${made.length} drags made locally; B toggled its title ${toggles} times; conflicts answered: ${mock.since(from, (e) => e.kind === 'POST-409' && e.who === 'A').length} for A, ${mock.since(from, (e) => e.kind === 'POST-409' && e.who === 'B').length} for B`,
   );
-  return { checks };
 }

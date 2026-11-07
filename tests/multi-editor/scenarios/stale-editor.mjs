@@ -23,7 +23,8 @@ export async function run(ctx) {
   await untilServer(mock, token, (c) => titles(c).n2 === 'Bravo-B', { what: 'B saved n2' });
   await show(B);
 
-  const { checks, server } = await settleAndCheck({ mock, token, pages: [A, B] });
+  const { checks } = ctx;
+  const { server } = await settleAndCheck({ mock, token, pages: [A, B], checks });
   checks.eq('titles on the server', titles(server.chart), {
     n1: 'Alpha-A',
     n2: 'Bravo-B',
@@ -40,7 +41,6 @@ export async function run(ctx) {
   checks.note(
     `final server version ${server.version}; pages ${JSON.stringify((await snap(A)).pill)}`,
   );
-  return { checks };
 }
 
 export const cases = [{ name: 'default' }];

@@ -36,7 +36,9 @@ export async function centerOfSelector(b, selector) {
 }
 
 /** Resolves once the nodes have stopped moving (the layout shifts for a moment after the first paint). */
-export async function layoutStable(b, { every = 250, rounds = 3 } = {}) {
+export async function layoutStable(b) {
+  const every = 250;
+  const rounds = 3;
   let previous = '';
   let same = 0;
   for (let i = 0; i < 40 && same < rounds; i++) {
@@ -146,37 +148,6 @@ export const docState = (b) =>
     return d && JSON.parse(JSON.stringify({ committed: d.getCommitted(), live: d.getLive(), status: d.getStatus() }));
   })()`);
 
-// The page's connections, read from the drawn paths: each hit path's two ends are matched to the
-// nearest node. This is what a person sees, independent of the chart object behind it.
-const CONNECTIONS_JS = `(() => {
-  const nodes = [...document.querySelectorAll('[data-tocb-node]')].map((n) => ({ id: n.dataset.tocbNode, r: n.getBoundingClientRect() }));
-  const near = (x, y, except) => {
-    let best = null, bestDistance = Infinity;
-    for (const n of nodes) {
-      if (n.id === except) continue;
-      const dx = Math.max(n.r.left - x, 0, x - n.r.right);
-      const dy = Math.max(n.r.top - y, 0, y - n.r.bottom);
-      const d = Math.hypot(dx, dy);
-      if (d < bestDistance) { bestDistance = d; best = n.id; }
-    }
-    return best;
-  };
-  const out = [];
-  document.querySelectorAll('[data-tocb-connection-hitpath]').forEach((p) => {
-    const m = p.getScreenCTM();
-    const length = p.getTotalLength();
-    const a = p.getPointAtLength(0);
-    const z = p.getPointAtLength(length);
-    // A connection never joins a node to itself, so the end is the nearest node other than the start's:
-    // a short bent edge can end nearer its own source than its target.
-    const source = near(a.x * m.a + m.e, a.y * m.d + m.f);
-    out.push(source + '->' + near(z.x * m.a + m.e, z.y * m.d + m.f, source));
-  });
-  return out.sort();
-})()`;
-
-export const pageConnections = (b) => b.eval(CONNECTIONS_JS);
-
 /** Node centres by id, rounded: the page's layout. */
 export const pageLayout = (b) =>
   b.eval(`(() => {
@@ -247,13 +218,30 @@ export async function deleteNode(b, id) {
   await b.eval(`document.querySelector('button[aria-label="Delete node"]').click()`);
 }
 
-/** The first server write that satisfies `predicate(chart)` after event index `from`. */
+/** Resolves once the server's chart satisfies `predicate`; throws after `timeout`. */
 export async function untilServer(mock, token, predicate, { timeout = 20_000, what } = {}) {
   await mock.waitFor(() => predicate(mock.state(token).chart), {
     timeout,
     what: what ?? 'the server chart',
   });
 }
+
+/**
+ * Whether the server's chart satisfies `predicate` within `timeout`. For an outcome the scenario is
+ * judging: a chart that never gets there is a loss to report, where `untilServer` (a step the scenario
+ * needs in order to go on) throws. A predicate that throws on a chart lacking the part it looks at
+ * counts as not satisfied.
+ */
+export const serverReaches = (mock, token, predicate, { timeout = 20_000 } = {}) =>
+  mock
+    .waitFor(() => predicate(mock.state(token).chart), { timeout })
+    .then(
+      () => true,
+      () => false,
+    );
+
+// How long the server's version must stay put before the pages and the server count as settled.
+const QUIET_MS = 3500;
 
 // A chart the server holds without section and column ids (saved by a tab on the previous client)
 // is read by the app with ids added, and stored with them on its next save. Until then the two
@@ -274,11 +262,11 @@ const sameChart = (page, server) =>
 
 /**
  * Waits until the pages and the server agree and nothing is unsaved: each page shows the saved pill,
- * the server version has not moved for `quietMs`, and every page's titles and connections equal the
+ * the server version has not moved for `QUIET_MS`, and every page's chart document and titles equal the
  * server chart's. Resolves `{ converged, why, server, models }`; a run that never converges has
  * lost or mis-shown something, which is the scenario's finding to report, so it is not thrown.
  */
-export async function settle({ mock, token, pages, quietMs = 3500, timeout = 30_000 }) {
+export async function settle({ mock, token, pages, timeout = 30_000 }) {
   const t0 = Date.now();
   let lastVersion = mock.state(token).version;
   let since = Date.now();
@@ -307,7 +295,7 @@ export async function settle({ mock, token, pages, quietMs = 3500, timeout = 30_
         );
       }
     });
-    if (!problems.length && Date.now() - since >= quietMs) {
+    if (!problems.length && Date.now() - since >= QUIET_MS) {
       return { converged: true, why: '', server, models };
     }
     if (Date.now() - t0 > timeout)

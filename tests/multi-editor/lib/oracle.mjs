@@ -14,18 +14,21 @@ export async function settleAndCheck({ mock, token, pages, checks = new Checks()
   if (settled.models.length > 1) {
     const [first, ...rest] = settled.models;
     rest.forEach((m, i) => {
-      checks.eq(
+      checks.ok(
         `layout of page ${i + 1} equals page 0`,
-        normaliseLayout(m.layout),
-        normaliseLayout(first.layout),
+        sameLayout(m.layout, first.layout),
+        `${JSON.stringify(m.layout)} vs ${JSON.stringify(first.layout)}`,
       );
     });
   }
   return { checks, ...settled };
 }
 
-// Pages may differ by a pixel or two from sub-pixel rounding; compare in 4 px cells.
-const normaliseLayout = (layout) =>
-  Object.fromEntries(
-    Object.entries(layout).map(([id, [x, y]]) => [id, [Math.round(x / 4), Math.round(y / 4)]]),
+// Pages may differ by a pixel or two from sub-pixel rounding.
+function sameLayout(a, b, tolerance = 3) {
+  const ids = Object.keys(a);
+  return (
+    ids.length === Object.keys(b).length &&
+    ids.every((id) => b[id] && a[id].every((v, i) => Math.abs(v - b[id][i]) <= tolerance))
   );
+}
