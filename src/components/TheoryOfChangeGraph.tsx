@@ -1695,6 +1695,7 @@ export function ToC({
               return (
                 <div
                   className="absolute z-50 p-3 pointer-events-none"
+                  data-export-exclude=""
                   style={{
                     left: `${position.x}px`,
                     top: `${position.y}px`,

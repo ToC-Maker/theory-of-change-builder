@@ -862,7 +862,7 @@ export function ConnectionsComponent({
             const ghostStrokeStyle = getConfidenceStrokeStyle(75);
 
             return (
-              <g>
+              <g data-export-exclude="">
                 {/* Ghost connection path - looks like real connection but more transparent */}
                 <path
                   d={ghostPathD}
