@@ -4,7 +4,7 @@ import { centerOf, handleCenter, snap } from '../lib/editors.mjs';
 import { connection, connections, nodeById, places, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
 import { armHold, endHold } from '../lib/holds.mjs';
-import { moveBetween, remove, retitle, savedBy } from '../lib/remote.mjs';
+import { moveBetween, remove, retitle } from '../lib/remote.mjs';
 import { sleep } from '../lib/browser.mjs';
 
 export const name = 'connection-drag-vs-remote-change';
@@ -40,6 +40,11 @@ export async function run(ctx, { timing, change }) {
   if (change === 'delete-target') await remove(ctx, B, 'n4');
   if (change === 'move-target') await moveBetween(ctx, B, 'n4', 'n5', 'n6');
   const duringHold = await endHold(ctx, timing, armed, snap);
+  // The ghost line is on screen for as long as the connection is being drawn. Without it the drag
+  // never started.
+  if (!(await A.eval(`!!document.querySelector('[data-testid=connection-drag-ghost]')`))) {
+    throw new Error('no connection is being drawn in A');
+  }
   await A.up();
   await sleep(500);
 
@@ -62,10 +67,6 @@ export async function run(ctx, { timing, change }) {
       typeof connection(chart, 'n1', 'n4').confidence === 'number',
     );
   }
-  checks.ok(
-    "A's drag made the connection locally (a save carried it)",
-    savedBy(ctx, 'A', armed.from, (c) => c.connections.includes('n1->n4')),
-  );
   // After the release the connection ghost and handles must be gone: nothing stuck mid-gesture.
   checks.eq(
     'no connection drag left on A',

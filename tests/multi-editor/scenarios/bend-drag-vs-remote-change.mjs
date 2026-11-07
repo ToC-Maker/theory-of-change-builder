@@ -3,11 +3,11 @@
 //
 // `tick`: a poll tick falls inside a hold. `mid`: a slow answer carrying B's change arrives mid-drag.
 // `sweep`: the pointer never rests (an event every ~20 ms, so no idle commit) across the answer.
-import { midpointHandle, pathPoint, snap } from '../lib/editors.mjs';
+import { docState, midpointHandle, pathPoint, snap } from '../lib/editors.mjs';
 import { connection, connections, titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
-import { armHold, endHold } from '../lib/holds.mjs';
-import { deleteConnection, retitle, savedBy } from '../lib/remote.mjs';
+import { armHold, assertHoldingBack, endHold } from '../lib/holds.mjs';
+import { deleteConnection, retitle } from '../lib/remote.mjs';
 import { sleep } from '../lib/browser.mjs';
 
 export const name = 'bend-drag-vs-remote-change';
@@ -59,11 +59,15 @@ export async function run(ctx, { timing, change }) {
     if (!answered || answered.version !== mock.state(token).version) {
       throw new Error("the slow poll did not carry B's change");
     }
+    await assertHoldingBack(ctx);
     duringHold = await snap(A);
   } else {
     await bChange;
     duringHold = await endHold(ctx, timing, armed, snap, slow);
   }
+  // The bend is a preview in A's chart until the release. Without it the drag never started.
+  const preview = connection((await docState(A)).live, 'n1', 'n3');
+  if (preview?.waypoints?.length !== 1) throw new Error('the bend drag left no preview in A');
   await A.up();
   await sleep(500);
 
@@ -87,13 +91,12 @@ export async function run(ctx, { timing, change }) {
       ['Alpha', 'Charlie'],
     );
   }
-  checks.ok(
-    "A's drag bent the connection locally (a save carried it)",
-    savedBy(ctx, 'A', armed.from, (c) => c.waypoints['n1->n3']?.length === 1),
-  );
-  checks.ok(
-    'A saved against the old version and merged around B (a 409)',
-    mock.since(armed.from, (e) => e.kind === 'POST-409' && e.who === 'A').length > 0,
+  // Two routes are both right: the release is saved against the old version and answered 409, or
+  // the next poll's landing merges into the released chart before the save leaves.
+  checks.note(
+    mock.since(armed.from, (e) => e.kind === 'POST-409' && e.who === 'A').length > 0
+      ? "A's release was answered 409 and merged"
+      : "the landing merged before A's save left",
   );
   checks.note(`during the hold A showed n6=${JSON.stringify(duringHold.titles.n6)}`);
 }

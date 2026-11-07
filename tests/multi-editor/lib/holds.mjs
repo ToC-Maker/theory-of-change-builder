@@ -5,6 +5,7 @@
 //   mid:  a slow poll is already in flight when the drag starts; its answer carries B's change and
 //         arrives mid-drag. The answer is dropped and fetched again after the release.
 import { sleep } from './browser.mjs';
+import { docState } from './editors.mjs';
 
 export const SLOW_POLL = { delay: 26_000, readAt: 16_000 };
 
@@ -55,5 +56,20 @@ export async function endHold(ctx, timing, armed, snap, slow = SLOW_POLL) {
   } else {
     await sleep(7000);
   }
+  await assertHoldingBack(ctx);
   return snap(A);
+}
+
+/**
+ * A drag in flight holds landings back: a tick is skipped, an answer is dropped. If A's document has
+ * already taken B's version, the drag was not in flight and the run tests something else.
+ */
+export async function assertHoldingBack({ mock, token, A }) {
+  const held = (await docState(A)).status.serverVersion;
+  const server = mock.state(token).version;
+  if (held >= server) {
+    throw new Error(
+      `A took version ${server} during the drag: the drag did not hold landings back`,
+    );
+  }
 }

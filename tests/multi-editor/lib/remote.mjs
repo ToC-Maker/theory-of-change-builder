@@ -50,14 +50,6 @@ export async function remove(ctx, b, id) {
   await untilServer(ctx.mock, ctx.token, (c) => !nodeById(c, id), { what: `${id} deleted` });
 }
 
-/** Whether a save by `who` after event index `from` carried a chart for which `predicate(summary)` holds. */
-export function savedBy(ctx, who, from, predicate) {
-  return (
-    ctx.mock.since(from, (e) => e.kind === 'POST-start' && e.who === who && predicate(e.sent))
-      .length > 0
-  );
-}
-
 /** Resolves once page `b`'s document holds the server's current version (a landing or a save has reached it). */
 export async function landed(ctx, b, { timeout = 20_000 } = {}) {
   const want = ctx.mock.state(ctx.token).version;
