@@ -128,6 +128,9 @@ describe('creating the chart on the first message', () => {
   });
 });
 
+// The first render of the chat is slow on a loaded machine.
+const SLOW = 30_000;
+
 const createdChart = (n: number) => ({
   chartId: `chart-${n}`,
   editToken: `tok-${n}`,
@@ -153,51 +156,96 @@ const uploadRequests = () =>
     }));
 
 describe('two files added at once on a chart that does not exist yet', () => {
-  it('create one chart between them, and the URL, the app and both uploads follow it', async () => {
-    let finishCreate!: (value: ReturnType<typeof createdChart>) => void;
-    const createChart = vi.spyOn(ChartService, 'createChart').mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finishCreate = resolve;
-        }),
-    );
-    vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
-    const onChartCreated = vi.fn();
-    const { container } = render(
-      <MemoryRouter initialEntries={['/']}>
-        <ApiKeyContext.Provider value={apiKeyStub}>
-          <ChatInterface
-            isCollapsed={false}
-            onToggle={() => {}}
-            graphData={chart}
-            onChartCreated={onChartCreated}
-          />
-          <Pathname />
-        </ApiKeyContext.Provider>
-      </MemoryRouter>,
-    );
+  it(
+    'create one chart between them, and the URL, the app and both uploads follow it',
+    async () => {
+      let finishCreate!: (value: ReturnType<typeof createdChart>) => void;
+      const createChart = vi.spyOn(ChartService, 'createChart').mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishCreate = resolve;
+          }),
+      );
+      vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
+      const onChartCreated = vi.fn();
+      const { container } = render(
+        <MemoryRouter initialEntries={['/']}>
+          <ApiKeyContext.Provider value={apiKeyStub}>
+            <ChatInterface
+              isCollapsed={false}
+              onToggle={() => {}}
+              graphData={chart}
+              onChartCreated={onChartCreated}
+            />
+            <Pathname />
+          </ApiKeyContext.Provider>
+        </MemoryRouter>,
+      );
 
-    fireEvent.change(container.querySelector('input[type="file"][multiple]')!, {
-      target: { files: [pdf('a.pdf'), pdf('b.pdf')] },
-    });
-    // Both files are uploading (and have asked for the chart) before the first create returns.
-    await screen.findByText('a.pdf', undefined, { timeout: 15_000 });
-    await screen.findByText('b.pdf', undefined, { timeout: 15_000 });
-    expect(createChart).toHaveBeenCalledTimes(1);
+      fireEvent.change(container.querySelector('input[type="file"][multiple]')!, {
+        target: { files: [pdf('a.pdf'), pdf('b.pdf')] },
+      });
+      // Both files are uploading (and have asked for the chart) before the first create returns.
+      await screen.findByText('a.pdf', undefined, { timeout: 15_000 });
+      await screen.findByText('b.pdf', undefined, { timeout: 15_000 });
+      expect(createChart).toHaveBeenCalledTimes(1);
 
-    finishCreate(createdChart(1));
+      finishCreate(createdChart(1));
 
-    await waitFor(() => expect(uploadRequests()).toHaveLength(2), { timeout: 15_000 });
-    // The router applies a navigation as a transition, which a loaded machine delays.
-    await waitFor(() => expect(screen.getByTestId('pathname').textContent).toBe('/edit/tok-1'), {
-      timeout: 15_000,
-    });
-    expect(createChart).toHaveBeenCalledTimes(1);
-    expect(onChartCreated).toHaveBeenCalledTimes(1);
-    expect(onChartCreated.mock.calls[0][0].editToken).toBe('tok-1');
-    expect(uploadRequests()).toEqual([
-      { chartId: 'chart-1', editToken: 'tok-1' },
-      { chartId: 'chart-1', editToken: 'tok-1' },
-    ]);
-  });
+      await waitFor(() => expect(uploadRequests()).toHaveLength(2), { timeout: 15_000 });
+      // The router applies a navigation as a transition, which a loaded machine delays.
+      await waitFor(() => expect(screen.getByTestId('pathname').textContent).toBe('/edit/tok-1'), {
+        timeout: 15_000,
+      });
+      expect(createChart).toHaveBeenCalledTimes(1);
+      expect(onChartCreated).toHaveBeenCalledTimes(1);
+      expect(onChartCreated.mock.calls[0][0].editToken).toBe('tok-1');
+      expect(uploadRequests()).toEqual([
+        { chartId: 'chart-1', editToken: 'tok-1' },
+        { chartId: 'chart-1', editToken: 'tok-1' },
+      ]);
+    },
+    SLOW,
+  );
+});
+
+describe('a chart created while the document already holds another', () => {
+  it(
+    'follows the chart the app kept: the URL and the upload use its token and id',
+    async () => {
+      // Chat and Share created a chart at once; the app attached the first.
+      vi.spyOn(ChartService, 'createChart').mockResolvedValue(createdChart(2));
+      vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
+      const onChartCreated = vi
+        .fn()
+        .mockReturnValue({ editToken: 'tok-doc', chartId: 'chart-doc' });
+      const { container } = render(
+        <MemoryRouter initialEntries={['/']}>
+          <ApiKeyContext.Provider value={apiKeyStub}>
+            <ChatInterface
+              isCollapsed={false}
+              onToggle={() => {}}
+              graphData={chart}
+              onChartCreated={onChartCreated}
+            />
+            <Pathname />
+          </ApiKeyContext.Provider>
+        </MemoryRouter>,
+      );
+
+      fireEvent.change(container.querySelector('input[type="file"][multiple]')!, {
+        target: { files: [pdf('a.pdf')] },
+      });
+
+      await waitFor(() => expect(uploadRequests()).toHaveLength(1), { timeout: 15_000 });
+      await waitFor(
+        () => expect(screen.getByTestId('pathname').textContent).toBe('/edit/tok-doc'),
+        {
+          timeout: 15_000,
+        },
+      );
+      expect(uploadRequests()).toEqual([{ chartId: 'chart-doc', editToken: 'tok-doc' }]);
+    },
+    SLOW,
+  );
 });

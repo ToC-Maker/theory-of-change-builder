@@ -441,6 +441,34 @@ describe('a chart that does not exist on the server yet', () => {
   );
 
   it(
+    'keeps the chart that attached first when a second create finishes, and tells the creator which',
+    async () => {
+      await openEditor('/');
+      const asCreated = committed();
+      const create = (n: number) => ({
+        editToken: `tok-${n}`,
+        chartId: `chart-${n}`,
+        version: 1,
+        chart: asCreated,
+      });
+
+      let first!: { editToken: string; chartId: string };
+      let second!: { editToken: string; chartId: string };
+      act(() => {
+        first = chat().onChartCreated(create(1));
+        second = latest.share!.onChartCreated(create(2));
+      });
+
+      // Both creators are told to follow the chart the document saves to.
+      expect(first).toEqual({ editToken: 'tok-1', chartId: 'chart-1' });
+      expect(second).toEqual({ editToken: 'tok-1', chartId: 'chart-1' });
+      expect(top().currentEditToken).toBe('tok-1');
+      expect(top().currentChartId).toBe('chart-1');
+    },
+    SLOW,
+  );
+
+  it(
     'keeps a local copy of the chart that has no server yet',
     async () => {
       await openEditor('/');
