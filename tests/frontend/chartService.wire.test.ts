@@ -2,8 +2,11 @@
 // client loads or creates, and every chart arriving from the server is
 // normalised here, once, so nothing downstream sees a section without an id.
 // A poll names the version it holds and gets the chart back only when the
-// server's differs. Bodies are the shapes worker/api/getChart.ts,
-// createChart.ts and pollChart.ts answer with.
+// server's differs, and a poll nobody answers fails after a timeout so the
+// poll loop cannot hang on it. A body without a version (a Worker that
+// predates versions) is an error: a document without one could never save.
+// Every other non-2xx answer logs its raw body too. Bodies are the shapes
+// worker/api/getChart.ts, createChart.ts and pollChart.ts answer with.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChartApiError, ChartService } from '../../src/services/chartService';
 
@@ -166,4 +169,142 @@ describe('ChartService.createChart', () => {
     });
     expect(JSON.stringify(errorSpy.mock.calls)).toContain('/api/createChart');
   });
+});
+
+describe('a Worker that predates versions', () => {
+  it.each([
+    [
+      'getChartByEditToken',
+      () => ChartService.getChartByEditToken('tok'),
+      { chartData: STORED_IDLESS, chartId: 'abc123', canEdit: true },
+    ],
+    [
+      'createChart',
+      () => ChartService.createChart({ title: 'T', sections: [] }),
+      { chartId: 'abc123', editToken: 'tok', viewUrl: 'https://x', editUrl: 'https://y' },
+    ],
+    ['pollChart', () => ChartService.pollChart('tok', 4), {}],
+  ])('%s rejects a body with no integer version', async (_name, call, body) => {
+    fetchSpy.mockResolvedValue(json(body));
+
+    const failure = call();
+
+    await expect(failure).rejects.toBeInstanceOf(ChartApiError);
+    await expect(failure).rejects.toMatchObject({ status: 200 });
+  });
+});
+
+describe('ChartService.pollChart when the server never answers', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('aborts after 30 seconds and rejects with a status-less timeout', async () => {
+    fetchSpy.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+
+    const failure = ChartService.pollChart('tok', 4);
+    const settled = vi.fn();
+    failure.catch(settled);
+
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(failure).rejects.toMatchObject({ name: 'TimeoutError' });
+    await expect(failure).rejects.not.toBeInstanceOf(ChartApiError);
+  });
+});
+
+describe('the other chart API calls', () => {
+  // Each fails the way it always did (the Worker's own message, else a fixed one) and now
+  // also leaves the raw answer in the console.
+  const calls: [string, () => Promise<unknown>, string, string][] = [
+    [
+      'getUserCharts',
+      () => ChartService.getUserCharts('u'),
+      '/api/getUserCharts',
+      'Failed to fetch user charts',
+    ],
+    [
+      'getChartPermissions',
+      () => ChartService.getChartPermissions('c'),
+      '/api/managePermissions',
+      'Failed to fetch chart permissions',
+    ],
+    [
+      'removePermission',
+      () => ChartService.removePermission('c', 'u'),
+      '/api/managePermissions',
+      'Failed to remove permission',
+    ],
+    [
+      'updatePermissionLevel',
+      () => ChartService.updatePermissionLevel('c', 'u', 'edit'),
+      '/api/managePermissions',
+      'Failed to update permission',
+    ],
+    [
+      'updateLinkSharing',
+      () => ChartService.updateLinkSharing('c', 'viewer'),
+      '/api/managePermissions',
+      'Failed to update link sharing',
+    ],
+    [
+      'approveAccessRequest',
+      () => ChartService.approveAccessRequest('c', 'u'),
+      '/api/managePermissions',
+      'Failed to approve access',
+    ],
+    [
+      'rejectAccessRequest',
+      () => ChartService.rejectAccessRequest('c', 'u'),
+      '/api/managePermissions',
+      'Failed to reject access',
+    ],
+    [
+      'deleteChart',
+      () => ChartService.deleteChart('c'),
+      '/api/deleteChart',
+      'Failed to delete chart',
+    ],
+  ];
+
+  beforeEach(() => {
+    ChartService.setAuthToken('some-token');
+  });
+  afterEach(() => {
+    ChartService.setAuthToken(null);
+  });
+
+  it.each(calls)(
+    "%s rejects with the Worker's message and logs the raw body",
+    async (_name, call, path) => {
+      fetchSpy.mockImplementation(async () => json({ error: 'Not allowed' }, 403));
+
+      await expect(call()).rejects.toMatchObject({ message: 'Not allowed', status: 403 });
+
+      const logged = JSON.stringify(errorSpy.mock.calls);
+      expect(logged).toContain(path);
+      expect(logged).toContain('403');
+      expect(logged).toContain('Not allowed');
+    },
+  );
+
+  it.each(calls)(
+    '%s keeps its fixed message when the body is not JSON',
+    async (_name, call, _path, fallback) => {
+      fetchSpy.mockImplementation(async () => new Response('<html>oops</html>', { status: 502 }));
+
+      await expect(call()).rejects.toMatchObject({ message: fallback, status: 502 });
+      expect(JSON.stringify(errorSpy.mock.calls)).toContain('oops');
+    },
+  );
 });

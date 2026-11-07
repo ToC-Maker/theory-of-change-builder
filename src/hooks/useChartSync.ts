@@ -10,16 +10,19 @@
 // skipped, not stopped, while the tab is hidden, after IDLE_MS without
 // activity, during a canvas pointer drag (a landing could move the dragged
 // node under the pointer), while a save is in flight (its own answer brings
-// the newer chart) and while the document has nowhere to poll. A response
-// that arrives after a drag began is dropped; the next check fetches the same
-// chart again.
+// the newer chart), while the document has nowhere to poll and once it has
+// gone terminal (every check would fetch the whole chart again for nothing). A
+// response that arrives after a drag began is dropped; the next check fetches
+// the same chart again.
 //
-// A failed check waits FAILURE_WAIT_MS and carries on. A chart the merge
-// cannot use is reported once per server version, with versions only: the
-// document is left as it was, so every later check returns the same chart.
+// A failed check waits FAILURE_WAIT_MS and carries on. A chart that cannot be
+// used (it is not a chart, or the merge refuses it) is reported once, with
+// versions only: the document is left as it was, so every later check returns
+// the same chart.
 import { useEffect } from 'react';
 import type { MutableRefObject } from 'react';
 import { ChartService } from '../services/chartService';
+import { ChartShapeError } from '../../shared/chart-model';
 import type { ChartDocument } from '../sync/ChartDocument';
 import { reportSyncFailure } from './useChartSave';
 
@@ -43,7 +46,12 @@ export function useChartSync({ doc, authTokenReady, isDragInFlightRef }: UseChar
     let polling = false;
     let stopped = false;
     let lastActivity = Date.now();
-    let lastReportedVersion: number | null = null;
+    const reported = new Set<string>();
+    const reportOnce = (key: string, err: unknown, baseVersion: number, serverVersion?: number) => {
+      if (reported.has(key)) return;
+      reported.add(key);
+      reportSyncFailure('ChartMergeFailed', err, baseVersion, serverVersion);
+    };
 
     /** One check; resolves to how long to wait before the next. */
     async function check(): Promise<number> {
@@ -55,7 +63,6 @@ export function useChartSync({ doc, authTokenReady, isDragInFlightRef }: UseChar
         saving ||
         editToken === null ||
         serverVersion === null ||
-        // Only a reload ends this, and every check would fetch the whole chart again.
         terminalError !== null
       ) {
         return POLL_MS;
@@ -65,8 +72,9 @@ export function useChartSync({ doc, authTokenReady, isDragInFlightRef }: UseChar
       try {
         polled = await ChartService.pollChart(editToken, serverVersion);
       } catch (err) {
-        // The service has logged the raw body; this adds the status.
+        // The service has logged the raw body of a refused answer; this adds the status.
         console.error('[useChartSync] poll failed:', err);
+        if (err instanceof ChartShapeError) reportOnce('not a chart', err, serverVersion);
         return FAILURE_WAIT_MS;
       }
       if (stopped || polled.chartData === undefined || isDragInFlightRef.current) return POLL_MS;
@@ -75,10 +83,7 @@ export function useChartSync({ doc, authTokenReady, isDragInFlightRef }: UseChar
         doc.receiveRemote({ version: polled.version, chart: polled.chartData });
       } catch (err) {
         console.error('[useChartSync] merging the polled chart failed:', err);
-        if (lastReportedVersion !== polled.version) {
-          lastReportedVersion = polled.version;
-          reportSyncFailure('ChartMergeFailed', err, serverVersion, polled.version);
-        }
+        reportOnce(`merge ${polled.version}`, err, serverVersion, polled.version);
         return FAILURE_WAIT_MS;
       }
       return POLL_MS;

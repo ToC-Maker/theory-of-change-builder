@@ -117,6 +117,14 @@ describe('ChartService.updateChart outcomes', () => {
     });
   });
 
+  it('treats a conflict that names no version as an ordinary failure', async () => {
+    fetchSpy.mockResolvedValue(json({ error: 'conflict', chartData }, 409));
+
+    await expect(ChartService.updateChart('tok', chartData, 3)).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
   it('rejects with a shape error when the conflict carries something that is not a chart', async () => {
     fetchSpy.mockResolvedValue(json({ error: 'conflict', version: 7, chartData: {} }, 409));
 

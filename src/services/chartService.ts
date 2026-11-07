@@ -26,12 +26,29 @@ export class ChartApiError extends Error {
   }
 }
 
-// A save the server has not answered by now is treated as failed so the
-// caller can retry: one stalled request must not hold up every later save.
-const UPDATE_CHART_TIMEOUT_MS = 30_000;
+// A save or poll the server has not answered by now is treated as failed so
+// the caller can retry: one stalled request must not hold up every later save
+// or stop the poll loop.
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+/**
+ * A Worker that predates versions answered. A document without a version could
+ * never be saved or polled, and retrying would repeat the answer.
+ */
+function versionOf(body: unknown, status: number): number {
+  if (!isRecord(body) || !isChartVersion(body.version)) {
+    throw new ChartApiError('The server did not return a chart version', status);
+  }
+  return body.version;
+}
+
+interface ErrorBody {
+  text: string;
+  json: unknown;
+}
 
 /** The share links of a chart; the share dialog also builds one for a chart that already exists. */
 export interface CreateChartResponse {
@@ -139,7 +156,7 @@ export class ChartService {
   }
 
   /** The body of a non-2xx answer: its text, and its parse when it is JSON. */
-  private static async readBody(response: Response): Promise<{ text: string; json: unknown }> {
+  private static async readBody(response: Response): Promise<ErrorBody> {
     const text = await response.text();
     try {
       return { text, json: JSON.parse(text) };
@@ -154,18 +171,44 @@ export class ChartService {
    * gave one. The raw body is logged because it is the only trace of why the
    * Worker refused.
    */
-  private static failure(
+  private static async failure(
     method: string,
     path: string,
     response: Response,
-    body: { text: string; json: unknown },
     fallbackMessage: string,
-  ): ChartApiError {
-    console.error(`[ChartService] ${method} ${API_BASE}${path} -> ${response.status}`, body.text);
-    const { json } = body;
+    body?: ErrorBody,
+  ): Promise<ChartApiError> {
+    const { text, json } = body ?? (await this.readBody(response));
+    console.error(`[ChartService] ${method} ${API_BASE}${path} -> ${response.status}`, text);
     const message =
       isRecord(json) && typeof json.error === 'string' && json.error ? json.error : undefined;
     return new ChartApiError(message ?? fallbackMessage, response.status);
+  }
+
+  /**
+   * Runs `request` with a signal that aborts after REQUEST_TIMEOUT_MS. The
+   * timer also covers reading the body, which is where a stalled answer hangs.
+   */
+  private static async withTimeout<T>(
+    what: string,
+    request: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const timeout = new AbortController();
+    const timer = setTimeout(
+      () =>
+        timeout.abort(
+          new DOMException(
+            `${what} got no answer within ${REQUEST_TIMEOUT_MS / 1000}s`,
+            'TimeoutError',
+          ),
+        ),
+      REQUEST_TIMEOUT_MS,
+    );
+    try {
+      return await request(timeout.signal);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   static async createChart(chartData: ToCData): Promise<CreatedChart> {
@@ -183,16 +226,11 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      throw this.failure(
-        'POST',
-        '/createChart',
-        response,
-        await this.readBody(response),
-        'Failed to create chart',
-      );
+      throw await this.failure('POST', '/createChart', response, 'Failed to create chart');
     }
 
-    return response.json();
+    const created = await response.json();
+    return { ...created, version: versionOf(created, response.status) };
   }
 
   /** The chart of the view-only route; it has no version because it is never saved. */
@@ -203,13 +241,7 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/getChart?${params}`);
 
     if (!response.ok) {
-      throw this.failure(
-        'GET',
-        '/getChart',
-        response,
-        await this.readBody(response),
-        'Failed to fetch chart',
-      );
+      throw await this.failure('GET', '/getChart', response, 'Failed to fetch chart');
     }
 
     const result = await response.json();
@@ -233,11 +265,15 @@ export class ChartService {
       } else if (response.status === 404) {
         fallback = 'Chart not found. It may have been deleted.';
       }
-      throw this.failure('GET', '/getChart', response, await this.readBody(response), fallback);
+      throw await this.failure('GET', '/getChart', response, fallback);
     }
 
     const result = await response.json();
-    return { ...result, chartData: normalizeChart(result.chartData) };
+    return {
+      ...result,
+      version: versionOf(result, response.status),
+      chartData: normalizeChart(result.chartData),
+    };
   }
 
   /**
@@ -265,23 +301,12 @@ export class ChartService {
     // means every autosave 403s silently.
     const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
 
-    const timeout = new AbortController();
-    const timer = setTimeout(
-      () =>
-        timeout.abort(
-          new DOMException(
-            `The save request got no answer within ${UPDATE_CHART_TIMEOUT_MS / 1000}s`,
-            'TimeoutError',
-          ),
-        ),
-      UPDATE_CHART_TIMEOUT_MS,
-    );
-    try {
+    return this.withTimeout('The save request', async (signal) => {
       const response = await fetch(`${API_BASE}/updateChart`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ editToken, chartData, baseVersion }),
-        signal: timeout.signal,
+        signal,
       });
 
       if (!response.ok) {
@@ -298,7 +323,7 @@ export class ChartService {
             `[ChartService] updateChart conflict: saved on version ${baseVersion}, server is at ${json.version}`,
           );
           return {
-            status: 'conflict',
+            status: 'conflict' as const,
             theirs: { version: json.version, chart: normalizeChart(json.chartData) },
           };
         }
@@ -306,21 +331,12 @@ export class ChartService {
         // authentication. Please log in again.") — it feeds the
         // SaveIndicator tooltip, where "Failed to update chart" gives the
         // user nothing to act on.
-        throw this.failure('POST', '/updateChart', response, body, 'Failed to update chart');
+        throw await this.failure('POST', '/updateChart', response, 'Failed to update chart', body);
       }
 
       const saved = await response.json();
-      if (!isChartVersion(saved?.version)) {
-        // A Worker that predates versions answered: retrying would repeat it forever.
-        throw new ChartApiError(
-          'The server did not return a version for the save',
-          response.status,
-        );
-      }
-      return { status: 'saved', version: saved.version };
-    } finally {
-      clearTimeout(timer);
-    }
+      return { status: 'saved' as const, version: versionOf(saved, response.status) };
+    });
   }
 
   /**
@@ -330,26 +346,24 @@ export class ChartService {
   static async pollChart(editToken: string, knownVersion: number): Promise<PollChartResult> {
     const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
 
-    const response = await fetch(`${API_BASE}/pollChart`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ editToken, knownVersion }),
+    return this.withTimeout('The version check', async (signal) => {
+      const response = await fetch(`${API_BASE}/pollChart`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ editToken, knownVersion }),
+        signal,
+      });
+
+      if (!response.ok) {
+        throw await this.failure('POST', '/pollChart', response, 'Failed to poll chart');
+      }
+
+      const result = await response.json();
+      const version = versionOf(result, response.status);
+      return result.chartData === undefined
+        ? { version }
+        : { version, chartData: normalizeChart(result.chartData) };
     });
-
-    if (!response.ok) {
-      throw this.failure(
-        'POST',
-        '/pollChart',
-        response,
-        await this.readBody(response),
-        'Failed to poll chart',
-      );
-    }
-
-    const result = await response.json();
-    return result.chartData === undefined
-      ? { version: result.version }
-      : { version: result.version, chartData: normalizeChart(result.chartData) };
   }
 
   // Helper to extract edit token from URL
@@ -400,7 +414,7 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/getUserCharts?${params}`, { headers });
 
     if (!response.ok) {
-      throw new Error('Failed to fetch user charts');
+      throw await this.failure('GET', '/getUserCharts', response, 'Failed to fetch user charts');
     }
 
     const result = await response.json();
@@ -425,8 +439,12 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch chart permissions');
+      throw await this.failure(
+        'GET',
+        '/managePermissions',
+        response,
+        'Failed to fetch chart permissions',
+      );
     }
 
     const result = await response.json();
@@ -443,8 +461,12 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to remove permission');
+      throw await this.failure(
+        'DELETE',
+        '/managePermissions',
+        response,
+        'Failed to remove permission',
+      );
     }
   }
 
@@ -461,8 +483,12 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to update permission');
+      throw await this.failure(
+        'PATCH',
+        '/managePermissions',
+        response,
+        'Failed to update permission',
+      );
     }
   }
 
@@ -478,8 +504,12 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to update link sharing');
+      throw await this.failure(
+        'PUT',
+        '/managePermissions',
+        response,
+        'Failed to update link sharing',
+      );
     }
   }
 
@@ -492,8 +522,7 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to approve access');
+      throw await this.failure('PATCH', '/managePermissions', response, 'Failed to approve access');
     }
   }
 
@@ -506,8 +535,7 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to reject access');
+      throw await this.failure('PATCH', '/managePermissions', response, 'Failed to reject access');
     }
   }
 
@@ -535,8 +563,7 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to delete chart');
+      throw await this.failure('DELETE', '/deleteChart', response, 'Failed to delete chart');
     }
   }
 }

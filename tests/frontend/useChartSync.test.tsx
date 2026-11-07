@@ -21,6 +21,7 @@ import { useChartSync } from '../../src/hooks/useChartSync';
 import { ChartApiError, ChartService } from '../../src/services/chartService';
 import { loggingService } from '../../src/services/loggingService';
 import { ChartDocument } from '../../src/sync/ChartDocument';
+import { ChartShapeError } from '../../shared/chart-model';
 import type { ToCData } from '../../src/types';
 import { edit as editChart, findNode, nodeIn, seedChart } from '../shared/chart-fixtures';
 import { deepFreeze } from './helpers/deepFreeze';
@@ -381,6 +382,26 @@ describe('useChartSync: failures', () => {
 
     await advance(2500 + 30_000);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a polled chart that is not a chart once, without its content, and keeps polling', async () => {
+    mockPollChart.mockRejectedValue(new ChartShapeError({ title: 'A private title' }));
+    setup();
+
+    await advance(2500);
+
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+    const report = mockReportError.mock.calls[0][0];
+    expect(report).toMatchObject({
+      error_name: 'ChartMergeFailed',
+      chart_id: 'chart-1',
+      request_metadata: { baseVersion: 3 },
+    });
+    expect(JSON.stringify(report)).not.toContain('A private title');
+
+    await advance(30_000);
+    expect(mockPollChart).toHaveBeenCalledTimes(2);
+    expect(mockReportError).toHaveBeenCalledTimes(1);
   });
 
   describe('a chart the merge cannot use', () => {
