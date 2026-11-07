@@ -49,8 +49,8 @@
 //
 // Between selection changes the buffer adopts any value of the node in
 // `data` that the user did not write, which is how a collaborator's change
-// reaches the open editor (see `useFieldBuffer`). While a multi-selection's
-// values differ it follows nothing.
+// reaches the open editor (see `useFieldBuffer`). When a multi-selection's
+// values come to differ, the field empties to show "Multiple values".
 //
 // ---------------------------------------------------------------------------
 // Cleanup
@@ -150,8 +150,8 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
   const sourceTitle = isTitleMixed ? '' : (titleValues[0] ?? '');
   const sourceDetails = isDetailsMixed ? '' : (detailsValues[0] ?? '');
 
-  const [titleBuffer, setTitleBuffer] = useFieldBuffer(sourceTitle, selKey, isTitleMixed);
-  const [detailsBuffer, setDetailsBuffer] = useFieldBuffer(sourceDetails, selKey, isDetailsMixed);
+  const [titleBuffer, setTitleBuffer] = useFieldBuffer(sourceTitle, selKey);
+  const [detailsBuffer, setDetailsBuffer] = useFieldBuffer(sourceDetails, selKey);
 
   // Width/color: read the first selected node's value (or default if no
   // selection / property unset).

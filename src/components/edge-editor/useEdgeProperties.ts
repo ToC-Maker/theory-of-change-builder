@@ -104,12 +104,8 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   // targetId) pair changes (user clicks a different connection) and adopt
   // any value of the connection the user did not write, which is how a
   // collaborator's change reaches the open editor (see `useFieldBuffer`).
-  const [evidenceBuffer, setEvidenceBuffer] = useFieldBuffer(sourceEvidence, edgeKey, false);
-  const [assumptionsBuffer, setAssumptionsBuffer] = useFieldBuffer(
-    sourceAssumptions,
-    edgeKey,
-    false,
-  );
+  const [evidenceBuffer, setEvidenceBuffer] = useFieldBuffer(sourceEvidence, edgeKey);
+  const [assumptionsBuffer, setAssumptionsBuffer] = useFieldBuffer(sourceAssumptions, edgeKey);
 
   /**
    * Map an updater over the source node's connections array, patching the

@@ -8,7 +8,6 @@ import { useFieldBuffer } from '../../src/hooks/useFieldBuffer';
 interface Props {
   source: string;
   resetKey: string;
-  mixed: boolean;
 }
 
 function setup(initial: Partial<Props> = {}) {
@@ -16,9 +15,9 @@ function setup(initial: Partial<Props> = {}) {
   const hook = renderHook(
     (props: Props) => {
       renders++;
-      return useFieldBuffer(props.source, props.resetKey, props.mixed);
+      return useFieldBuffer(props.source, props.resetKey);
     },
-    { initialProps: { source: 'A', resetKey: 'n1', mixed: false, ...initial } },
+    { initialProps: { source: 'A', resetKey: 'n1', ...initial } },
   );
   return { ...hook, renders: () => renders };
 }
@@ -28,7 +27,7 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup();
     expect(result.current[0]).toBe('A');
 
-    rerender({ source: 'B', resetKey: 'n1', mixed: false });
+    rerender({ source: 'B', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('B');
   });
@@ -42,7 +41,7 @@ describe('useFieldBuffer', () => {
 
     // The typed text reaches the source: the one render for the new prop,
     // and no extra render from the buffer.
-    rerender({ source: 'Ab', resetKey: 'n1', mixed: false });
+    rerender({ source: 'Ab', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('Ab');
     expect(renders()).toBe(rendersBeforeEcho + 1);
@@ -52,7 +51,7 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup();
 
     act(() => result.current[1]('Ab'));
-    rerender({ source: 'A', resetKey: 'n1', mixed: false });
+    rerender({ source: 'A', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('Ab');
   });
@@ -61,8 +60,8 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup();
 
     act(() => result.current[1]('Ab'));
-    rerender({ source: 'Ab', resetKey: 'n1', mixed: false });
-    rerender({ source: 'Other', resetKey: 'n1', mixed: false });
+    rerender({ source: 'Ab', resetKey: 'n1' });
+    rerender({ source: 'Other', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('Other');
   });
@@ -71,10 +70,10 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup();
 
     act(() => result.current[1]('Ab'));
-    rerender({ source: 'Ab', resetKey: 'n1', mixed: false });
-    rerender({ source: 'Remote', resetKey: 'n1', mixed: false });
+    rerender({ source: 'Ab', resetKey: 'n1' });
+    rerender({ source: 'Remote', resetKey: 'n1' });
     // Someone sets the field back to what this user typed before.
-    rerender({ source: 'Ab', resetKey: 'n1', mixed: false });
+    rerender({ source: 'Ab', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('Ab');
   });
@@ -83,7 +82,7 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup();
 
     act(() => result.current[1]('typed on n1'));
-    rerender({ source: 'B text', resetKey: 'n2', mixed: false });
+    rerender({ source: 'B text', resetKey: 'n2' });
 
     expect(result.current[0]).toBe('B text');
   });
@@ -94,7 +93,7 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup({ source: '' });
 
     act(() => result.current[1]('typed on n1'));
-    rerender({ source: '', resetKey: 'n2', mixed: false });
+    rerender({ source: '', resetKey: 'n2' });
 
     expect(result.current[0]).toBe('');
   });
@@ -103,40 +102,42 @@ describe('useFieldBuffer', () => {
     const { result, rerender } = setup();
 
     act(() => result.current[1]('same'));
-    rerender({ source: 'same', resetKey: 'n1', mixed: false });
-    rerender({ source: 'other', resetKey: 'n2', mixed: false });
-    rerender({ source: 'same', resetKey: 'n1', mixed: false });
+    rerender({ source: 'same', resetKey: 'n1' });
+    rerender({ source: 'other', resetKey: 'n2' });
+    rerender({ source: 'same', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('same');
   });
 
-  it('mixed_selection_never_resyncs', () => {
-    const { result, rerender } = setup({ source: '', mixed: true });
+  it('adopts_the_empty_placeholder_when_a_shared_value_becomes_mixed', () => {
+    // A multi-selection passes '' once its values differ; the field empties
+    // so the editor shows its "Multiple values" placeholder.
+    const { result, rerender } = setup({ source: 'Same' });
 
-    rerender({ source: 'changed elsewhere', resetKey: 'n1', mixed: true });
+    rerender({ source: '', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('');
   });
 
   it('resumes_following_the_source_once_the_values_no_longer_differ', () => {
-    const { result, rerender } = setup({ source: '', mixed: true });
+    const { result, rerender } = setup({ source: '' });
 
-    rerender({ source: 'now shared', resetKey: 'n1', mixed: false });
+    rerender({ source: 'now shared', resetKey: 'n1' });
 
     expect(result.current[0]).toBe('now shared');
   });
 
   it('behaves the same under StrictMode double-invoked effects', () => {
     const { result, rerender } = renderHook(
-      (props: Props) => useFieldBuffer(props.source, props.resetKey, props.mixed),
-      { initialProps: { source: 'A', resetKey: 'n1', mixed: false }, wrapper: StrictMode },
+      (props: Props) => useFieldBuffer(props.source, props.resetKey),
+      { initialProps: { source: 'A', resetKey: 'n1' }, wrapper: StrictMode },
     );
 
     act(() => result.current[1]('Ab'));
-    rerender({ source: 'Ab', resetKey: 'n1', mixed: false });
+    rerender({ source: 'Ab', resetKey: 'n1' });
     expect(result.current[0]).toBe('Ab');
 
-    rerender({ source: 'Remote', resetKey: 'n1', mixed: false });
+    rerender({ source: 'Remote', resetKey: 'n1' });
     expect(result.current[0]).toBe('Remote');
   });
 });

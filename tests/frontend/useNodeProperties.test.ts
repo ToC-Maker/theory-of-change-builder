@@ -518,6 +518,30 @@ describe('useNodeProperties', () => {
       expect(result.current.isTitleMixed).toBe(true);
       expect(result.current.title).toBe('');
     });
+
+    it('shows the mixed placeholder when a remote edit makes a shared value differ', () => {
+      const before = makeData([
+        { id: 'a', title: 'Same', text: 'same details' },
+        { id: 'b', title: 'Same', text: 'same details' },
+      ]);
+      const { result, rerender } = renderWithData(before, ['a', 'b']);
+      expect(result.current.title).toBe('Same');
+
+      rerender({
+        data: makeData([
+          { id: 'a', title: 'Renamed', text: 'edited details' },
+          { id: 'b', title: 'Same', text: 'same details' },
+        ]),
+        selectedNodeIds: ['a', 'b'],
+      });
+
+      // The field empties, so the editor shows "Multiple values" as it does
+      // when a mixed selection is opened, instead of a stale shared value.
+      expect(result.current.isTitleMixed).toBe(true);
+      expect(result.current.title).toBe('');
+      expect(result.current.isDetailsMixed).toBe(true);
+      expect(result.current.details).toBe('');
+    });
   });
 
   describe('selection change preserves local buffer correctness', () => {
