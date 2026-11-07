@@ -93,14 +93,21 @@ export interface ChartInput extends Omit<ToCData, 'sections'> {
   }[];
 }
 
-/** `normalizeChart` was given something that is not a chart; `raw` is that value. */
+/**
+ * `normalizeChart` was given something that is not a chart. `raw` is that
+ * value; `reason` names the first malformed part by its index path
+ * (`sections[0].columns is not an array`), for callers that frame it
+ * themselves, such as the import dialog.
+ */
 export class ChartShapeError extends Error {
   readonly raw: unknown;
+  readonly reason: string;
 
-  constructor(raw: unknown, message = 'Chart data has no sections array') {
-    super(message);
+  constructor(raw: unknown, reason = 'sections is not an array') {
+    super(`Chart data is malformed: ${reason}`);
     this.name = 'ChartShapeError';
     this.raw = raw;
+    this.reason = reason;
   }
 }
 
@@ -117,14 +124,16 @@ export class ChartShapeError extends Error {
  * reserved before any id is minted, so a positional id that collides with one
  * gets a `~k` suffix, and so does a later repeat of a stored id.
  *
- * Throws `ChartShapeError` when the chart is not an object with a `sections`
- * array, or a section, column, node or connection is not an object, or a
- * section lacks its `columns` array or a column its `nodes` array.
+ * Throws `ChartShapeError` (its `reason` an index path) when the chart is not
+ * an object with a `sections` array, a section, column, node or connection is
+ * not an object, a section lacks its `columns` array, a column its `nodes`
+ * array, or a node's `connections` is present but not an array.
  */
 export function normalizeChart(raw: unknown): ToCData {
-  if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as ChartInput).sections)) {
-    throw new ChartShapeError(raw);
+  if (typeof raw !== 'object' || raw === null) {
+    throw new ChartShapeError(raw, 'top-level is not an object');
   }
+  if (!Array.isArray((raw as ChartInput).sections)) throw new ChartShapeError(raw);
   const chart = raw as ChartInput;
   assertNestedShape(chart);
 
@@ -176,20 +185,34 @@ const isObject = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
 
 function assertNestedShape(chart: ChartInput): void {
-  const fail = (what: string) => {
-    throw new ChartShapeError(chart, `Chart data has a malformed ${what}`);
+  const sections: unknown[] = chart.sections;
+  const fail = (reason: string): never => {
+    throw new ChartShapeError(chart, reason);
   };
-  for (const section of chart.sections as unknown[]) {
-    if (!isObject(section) || !Array.isArray(section.columns)) fail('section');
-    for (const column of (section as { columns: unknown[] }).columns) {
-      if (!isObject(column) || !Array.isArray(column.nodes)) fail('column');
-      for (const node of (column as { nodes: unknown[] }).nodes) {
-        if (!isObject(node)) fail('node');
-        const connections = (node as { connections?: unknown }).connections;
-        if (Array.isArray(connections) && !connections.every(isObject)) fail('connection');
-      }
+  sections.forEach((section, i) => {
+    const at = `sections[${i}]`;
+    if (!isObject(section)) fail(`${at} is not an object`);
+    if (!Array.isArray((section as { columns?: unknown }).columns)) {
+      fail(`${at}.columns is not an array`);
     }
-  }
+    (section as { columns: unknown[] }).columns.forEach((column, j) => {
+      const inColumn = `${at}.columns[${j}]`;
+      if (!isObject(column)) fail(`${inColumn} is not an object`);
+      if (!Array.isArray((column as { nodes?: unknown }).nodes)) {
+        fail(`${inColumn}.nodes is not an array`);
+      }
+      (column as { nodes: unknown[] }).nodes.forEach((node, k) => {
+        const inNode = `${inColumn}.nodes[${k}]`;
+        if (!isObject(node)) fail(`${inNode} is not an object`);
+        const { connections } = node as { connections?: unknown };
+        if (connections === undefined) return;
+        if (!Array.isArray(connections)) fail(`${inNode}.connections is not an array`);
+        (connections as unknown[]).forEach((connection, m) => {
+          if (!isObject(connection)) fail(`${inNode}.connections[${m}] is not an object`);
+        });
+      });
+    });
+  });
 }
 
 function normalizeNode(node: Node, id: string): Node {

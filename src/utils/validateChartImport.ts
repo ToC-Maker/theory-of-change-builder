@@ -1,105 +1,63 @@
-// Deep shape validation for imported / programmatically supplied ToC
-// JSON. Walks sections → columns → nodes → connections → waypoints,
-// returning `{ ok: false, reason }` with a specific path on the first
-// malformation. The shallow `Array.isArray(parsed.sections)` check
-// passes file shapes that would silently render as empty charts (e.g.
-// `columns: "not an array"`); we walk deeper before letting the
-// import overwrite the user's graph.
+// Validation of an imported (or otherwise programmatically supplied) chart.
+// The structure checks are `normalizeChart`'s: a chart that normalises is
+// shaped well enough to render, and the result comes back normalised so every
+// section and column has an id. What this adds is the waypoint check:
+// `connections[].waypoints` must be `{dx: number, dy: number}` entries with
+// finite numbers so garbage never reaches the SVG path builder. Entries in the
+// earlier absolute `{x, y}` format are accepted too and kept as they are: the
+// renderer ignores them (automatic curve) and the next drag on that connection
+// replaces them.
 //
 // Single canonical validator: callers (FileMenu.handleFileChosen,
-// App.handleUploadJSON) all route through this. Waypoints are
-// `connections[].waypoints: {dx: number, dy: number}[]`, checked for
-// finite numbers so garbage never reaches the SVG path builder. Entries
-// in the earlier absolute `{x, y}` format are accepted too and kept
-// as they are: the renderer ignores them (automatic curve) and the
-// next drag on that connection replaces them.
-import type { ToCData } from '../types';
+// App.handleUploadJSON) all route through this. A `reason` names the first
+// malformed part by its index path in the file.
+import { ChartShapeError, normalizeChart, type ToCData } from '../types';
 
 function hasFiniteNumbers(value: object, a: string, b: string): boolean {
   const entry = value as Record<string, unknown>;
   return Number.isFinite(entry[a]) && Number.isFinite(entry[b]);
 }
 
+// The first bad waypoint, by its position in `parsed`, which `normalizeChart`
+// has already shown to be a well-shaped chart. Walked on the file's own
+// structure because normalising drops repeated connections and would shift
+// the indices.
+function waypointProblem(parsed: unknown): string | null {
+  const sections = (parsed as { sections: { columns: { nodes: unknown[] }[] }[] }).sections;
+  for (const [i, section] of sections.entries()) {
+    for (const [j, column] of section.columns.entries()) {
+      for (const [k, node] of column.nodes.entries()) {
+        const connections = (node as { connections?: { waypoints?: unknown }[] }).connections ?? [];
+        for (const [m, connection] of connections.entries()) {
+          const { waypoints } = connection;
+          if (waypoints === undefined) continue;
+          const at = `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints`;
+          if (!Array.isArray(waypoints)) return `${at} is not an array`;
+          for (const [w, waypoint] of waypoints.entries()) {
+            if (!waypoint || typeof waypoint !== 'object') return `${at}[${w}] is not an object`;
+            if (!hasFiniteNumbers(waypoint, 'dx', 'dy') && !hasFiniteNumbers(waypoint, 'x', 'y')) {
+              return `${at}[${w}] has invalid offsets (expected finite numeric {dx, dy})`;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function validateChartImport(
   parsed: unknown,
 ): { ok: true; data: ToCData } | { ok: false; reason: string } {
-  if (!parsed || typeof parsed !== 'object') {
-    return { ok: false, reason: 'top-level is not an object' };
+  let data: ToCData;
+  try {
+    data = normalizeChart(parsed);
+  } catch (err) {
+    // Instead of throwing: a file that is not a chart is the user's mistake, and
+    // the import dialog shows the reason.
+    if (err instanceof ChartShapeError) return { ok: false, reason: err.reason };
+    throw err;
   }
-  const top = parsed as { sections?: unknown };
-  if (!Array.isArray(top.sections)) {
-    return { ok: false, reason: 'sections is not an array' };
-  }
-  for (let i = 0; i < top.sections.length; i++) {
-    const s = top.sections[i] as { columns?: unknown } | null;
-    if (!s || typeof s !== 'object') {
-      return { ok: false, reason: `sections[${i}] is not an object` };
-    }
-    if (!Array.isArray(s.columns)) {
-      return { ok: false, reason: `sections[${i}].columns is not an array` };
-    }
-    for (let j = 0; j < s.columns.length; j++) {
-      const c = s.columns[j] as { nodes?: unknown } | null;
-      if (!c || typeof c !== 'object') {
-        return { ok: false, reason: `sections[${i}].columns[${j}] is not an object` };
-      }
-      if (!Array.isArray(c.nodes)) {
-        return { ok: false, reason: `sections[${i}].columns[${j}].nodes is not an array` };
-      }
-      for (let k = 0; k < c.nodes.length; k++) {
-        const n = c.nodes[k] as { connections?: unknown } | null;
-        if (!n || typeof n !== 'object') {
-          return {
-            ok: false,
-            reason: `sections[${i}].columns[${j}].nodes[${k}] is not an object`,
-          };
-        }
-        // `connections` is optional (older charts use `connectionIds`).
-        // When present it must be an array of objects; waypoints (when
-        // present) must be `{dx, dy}` (or the old `{x, y}`) with finite
-        // numbers.
-        if (n.connections !== undefined) {
-          if (!Array.isArray(n.connections)) {
-            return {
-              ok: false,
-              reason: `sections[${i}].columns[${j}].nodes[${k}].connections is not an array`,
-            };
-          }
-          for (let m = 0; m < n.connections.length; m++) {
-            const conn = n.connections[m] as { waypoints?: unknown } | null;
-            if (!conn || typeof conn !== 'object') {
-              return {
-                ok: false,
-                reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}] is not an object`,
-              };
-            }
-            if (conn.waypoints !== undefined) {
-              if (!Array.isArray(conn.waypoints)) {
-                return {
-                  ok: false,
-                  reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints is not an array`,
-                };
-              }
-              for (let w = 0; w < conn.waypoints.length; w++) {
-                const wp = conn.waypoints[w] as object | null;
-                if (!wp || typeof wp !== 'object') {
-                  return {
-                    ok: false,
-                    reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints[${w}] is not an object`,
-                  };
-                }
-                if (!hasFiniteNumbers(wp, 'dx', 'dy') && !hasFiniteNumbers(wp, 'x', 'y')) {
-                  return {
-                    ok: false,
-                    reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints[${w}] has invalid offsets (expected finite numeric {dx, dy})`,
-                  };
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return { ok: true, data: parsed as ToCData };
+  const problem = waypointProblem(parsed);
+  return problem === null ? { ok: true, data } : { ok: false, reason: problem };
 }

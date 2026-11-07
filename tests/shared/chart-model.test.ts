@@ -248,6 +248,47 @@ describe('normalizeChart shape and purity', () => {
     }
   });
 
+  it('names_the_path_of_the_malformed_part', () => {
+    // `reason` is what an importing user is told, so it carries the index path.
+    const reasonFor = (bad: unknown): string => {
+      try {
+        normalizeChart(bad);
+      } catch (e) {
+        return (e as ChartShapeError).reason;
+      }
+      throw new Error('did not throw');
+    };
+    const ok = { title: 'S', columns: [{ nodes: [] }] };
+    expect(reasonFor(null)).toBe('top-level is not an object');
+    expect(reasonFor('chart')).toBe('top-level is not an object');
+    expect(reasonFor({ wrongShape: true })).toBe('sections is not an array');
+    expect(reasonFor({ sections: [null] })).toBe('sections[0] is not an object');
+    expect(reasonFor({ sections: [ok, { columns: 'x' }] })).toBe(
+      'sections[1].columns is not an array',
+    );
+    expect(reasonFor({ sections: [{ columns: [ok.columns[0], null] }] })).toBe(
+      'sections[0].columns[1] is not an object',
+    );
+    expect(reasonFor({ sections: [{ columns: [{ nodes: null }] }] })).toBe(
+      'sections[0].columns[0].nodes is not an array',
+    );
+    expect(reasonFor({ sections: [{ columns: [{ nodes: [{}, 'a'] }] }] })).toBe(
+      'sections[0].columns[0].nodes[1] is not an object',
+    );
+    expect(reasonFor({ sections: [{ columns: [{ nodes: [{ connections: 'x' }] }] }] })).toBe(
+      'sections[0].columns[0].nodes[0].connections is not an array',
+    );
+    expect(reasonFor({ sections: [{ columns: [{ nodes: [{ connections: [{}, null] }] }] }] })).toBe(
+      'sections[0].columns[0].nodes[0].connections[1] is not an object',
+    );
+  });
+
+  it('puts_the_reason_in_the_message_for_whoever_shows_the_error', () => {
+    expect(() => normalizeChart({ sections: [{ columns: 'x' }] })).toThrow(
+      'sections[0].columns is not an array',
+    );
+  });
+
   it('does_not_mutate_its_input', () => {
     // A frozen input makes any write throw; the result must still be complete.
     const out = normalizeChart(deepFreeze(messy()));
