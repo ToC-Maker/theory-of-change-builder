@@ -84,6 +84,7 @@ function setup(waypoints: unknown, b: Geometry = { x: 300, y: 0, width: 100, hei
     hoveredConnections: new Set<string>(),
     curvature: 0.5,
     editMode: true,
+    titleBlockShown: true,
     sectionWidths: [200, 200],
     columnPadding: 24,
     sectionPadding: 32,
