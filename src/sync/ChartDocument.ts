@@ -212,12 +212,17 @@ export class ChartDocument implements ChartStore {
     this.emit();
   }
 
-  /** After createChart. The first server wins when two creators race; edits made meanwhile go out on its version. */
-  attachServer(editToken: string, server: ServerState): void {
-    if (this.server) return;
+  /**
+   * After createChart. The first server wins when two creators race: a later call changes
+   * nothing and returns false, so its caller knows the document is on another chart. Edits made
+   * before the attach go out on the attached version.
+   */
+  attachServer(editToken: string, server: ServerState): boolean {
+    if (this.server) return false;
     this.editToken = editToken;
     this.server = server;
     this.emit();
+    return true;
   }
 
   takeSave(): { editToken: string; baseVersion: number; chart: ToCData } | null {

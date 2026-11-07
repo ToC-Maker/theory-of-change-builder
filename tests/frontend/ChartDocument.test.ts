@@ -867,12 +867,23 @@ describe('ChartDocument server attachment', () => {
   it('attachServer_first_wins', () => {
     const doc = new ChartDocument({ chart: seed(), editToken: null, server: null });
 
-    doc.attachServer('first', { version: 1, chart: seed() });
-    expect(() =>
-      doc.attachServer('second', { version: 7, chart: retitle(seed(), 'a', 'other') }),
-    ).not.toThrow();
+    expect(doc.attachServer('first', { version: 1, chart: seed() })).toBe(true);
+    expect(doc.attachServer('second', { version: 7, chart: retitle(seed(), 'a', 'other') })).toBe(
+      false,
+    );
 
     expect(doc.getStatus()).toMatchObject({ serverVersion: 1, editToken: 'first' });
+  });
+
+  it('a_refused_attachServer_notifies_nobody', () => {
+    const doc = new ChartDocument({ chart: seed(), editToken: null, server: null });
+    doc.attachServer('first', { version: 1, chart: seed() });
+    const listener = vi.fn();
+    doc.subscribe(listener);
+
+    doc.attachServer('second', { version: 7, chart: seed() });
+
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it('attachServer_wakes_subscribers_so_a_save_can_start', () => {
