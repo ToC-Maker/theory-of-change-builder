@@ -10,7 +10,7 @@
 //     (this is the seam PR 4 uses to dismiss the editor when a node
 //     drag starts somewhere else on the canvas).
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { NodeEditor } from '../../src/components/node-editor/NodeEditor';
 import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
@@ -156,6 +156,78 @@ describe('NodeEditor', () => {
     const commitKeys = api.commit.mock.calls.map((c) => c[0]);
     expect(commitKeys.some((k) => typeof k === 'string' && k.startsWith('title-'))).toBe(true);
     expect(commitKeys.some((k) => typeof k === 'string' && k.startsWith('details-'))).toBe(true);
+  });
+
+  describe('following changes made by someone else', () => {
+    function renderOpenEditor(initial: ToCData) {
+      const api = makeMutationApi(initial);
+      const anchor = document.createElement('div');
+      anchor.id = 'anchor';
+      document.body.appendChild(anchor);
+      const element = (data: ToCData) => (
+        <NodeEditor
+          selectedNodeIds={['a']}
+          data={data}
+          mutate={api.mutate}
+          mutateDebounced={api.mutateDebounced}
+          commit={api.commit}
+          anchorRef={{ current: anchor } as React.RefObject<HTMLElement>}
+          camera={{ x: 0, y: 0, z: 1 }}
+          onRequestClose={() => {}}
+        />
+      );
+      const utils = render(element(initial));
+      return { api, rerenderWith: (data: ToCData) => utils.rerender(element(data)) };
+    }
+
+    const titleInput = () =>
+      screen.getByRole('textbox', { name: /node title/i }) as HTMLInputElement;
+    const detailsContent = () =>
+      waitFor(() => {
+        const el = document.querySelector<HTMLElement>('.node-editor [contenteditable="true"]');
+        expect(el).not.toBeNull();
+        return el!;
+      });
+
+    it('shows a title a collaborator saved while the editor was open', () => {
+      const { rerenderWith } = renderOpenEditor(makeData([{ id: 'a', title: 'Old' }]));
+
+      rerenderWith(makeData([{ id: 'a', title: 'Renamed' }]));
+
+      expect(titleInput().value).toBe('Renamed');
+    });
+
+    it('keeps the title being typed when a collaborator changes the details', () => {
+      const { rerenderWith } = renderOpenEditor(makeData([{ id: 'a', title: 'Old', text: 'x' }]));
+
+      fireEvent.change(titleInput(), { target: { value: 'Old plus mine' } });
+      rerenderWith(makeData([{ id: 'a', title: 'Old plus mine', text: 'their details' }]));
+
+      expect(titleInput().value).toBe('Old plus mine');
+    });
+
+    it('shows details a collaborator saved while the editor was open', async () => {
+      const { rerenderWith } = renderOpenEditor(makeData([{ id: 'a', text: 'old details' }]));
+      const before = await detailsContent();
+      expect(before.textContent).toBe('old details');
+
+      rerenderWith(makeData([{ id: 'a', text: 'their details' }]));
+
+      await waitFor(async () => expect((await detailsContent()).textContent).toBe('their details'));
+    }, 20000);
+
+    it('opening a node whose details are not in the editor normal form writes nothing', async () => {
+      const { api } = renderOpenEditor(makeData([{ id: 'a', text: '- a\n- b  ' }]));
+      await detailsContent();
+      // MDXEditor reports its normalised text shortly after opening.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 300));
+      });
+
+      expect(api.mutateDebounced).not.toHaveBeenCalled();
+      expect(api.mutate).not.toHaveBeenCalled();
+      expect(api.commit).not.toHaveBeenCalled();
+    }, 20000);
   });
 
   describe('keeping inside the window', () => {

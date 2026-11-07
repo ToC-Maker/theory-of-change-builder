@@ -1,3 +1,5 @@
+import { useImperativeHandle, useMemo, useRef } from 'react';
+import type { Ref } from 'react';
 import {
   MDXEditor,
   headingsPlugin,
@@ -12,6 +14,10 @@ import {
   ListsToggle,
   BlockTypeSelect,
   Separator,
+  lexical,
+  realmPlugin,
+  rootEditor$,
+  type MDXEditorMethods,
   type Translation,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
@@ -37,7 +43,20 @@ const translation: Translation = (key, defaultValue, interpolations = {}) => {
 
 interface MDXEditorComponentProps {
   markdown: string;
-  onChange?: (markdown: string) => void;
+  /**
+   * `initialMarkdownNormalize` is true when the call only reports the
+   * editor's normal form of the `markdown` it was opened with (nothing
+   * was typed). Callers that persist the text must ignore those calls.
+   */
+  onChange?: (markdown: string, initialMarkdownNormalize: boolean) => void;
+  /**
+   * The library's imperative methods, except that `setMarkdown` also
+   * empties the editor's undo history. The library records a
+   * `setMarkdown` as an undoable step, and undoing it fires `onChange`
+   * with the text from before, which a caller that saves on `onChange`
+   * would save over the change it just applied.
+   */
+  editorRef?: Ref<MDXEditorMethods>;
   placeholder?: string;
   fontFamily?: string;
 }
@@ -45,9 +64,36 @@ interface MDXEditorComponentProps {
 export function MDXEditorComponent({
   markdown,
   onChange,
+  editorRef,
   placeholder = 'Enter text...',
   fontFamily,
 }: MDXEditorComponentProps) {
+  const libraryRef = useRef<MDXEditorMethods>(null);
+  const clearHistoryRef = useRef<() => void>(() => {});
+  // The ref gives no way to reach the history, so a plugin reads the
+  // root Lexical editor from the editor's realm.
+  const historyPlugin = useMemo(
+    () =>
+      realmPlugin({
+        init(realm) {
+          clearHistoryRef.current = () => {
+            realm.getValue(rootEditor$)?.dispatchCommand(lexical.CLEAR_HISTORY_COMMAND, undefined);
+          };
+        },
+      })(),
+    [],
+  );
+  useImperativeHandle(editorRef, () => {
+    const library = libraryRef.current!;
+    return {
+      ...library,
+      setMarkdown(next: string) {
+        library.setMarkdown(next);
+        clearHistoryRef.current();
+      },
+    };
+  }, []);
+
   return (
     <div
       className="mdx-editor-wrapper"
@@ -56,11 +102,13 @@ export function MDXEditorComponent({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <MDXEditor
+        ref={libraryRef}
         markdown={markdown}
         onChange={onChange}
         placeholder={placeholder}
         translation={translation}
         plugins={[
+          historyPlugin,
           headingsPlugin(),
           listsPlugin(),
           quotePlugin(),
