@@ -6,11 +6,10 @@
 // the capture filter).
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { cleanup, fireEvent, act } from '@testing-library/react';
+import type { ChartInput } from '../../src/types';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import { deepFreeze } from './helpers/deepFreeze';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
@@ -18,7 +17,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-const makeData = (connected: boolean): ToCData => ({
+const makeData = (connected: boolean): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -45,7 +44,7 @@ const makeData = (connected: boolean): ToCData => ({
 });
 
 async function renderWithBothSelected(connected: boolean) {
-  const view = render(<ToC data={deepFreeze(makeData(connected))} showEditButton={true} />);
+  const view = renderToC(makeData(connected));
   await act(async () => {
     await Promise.resolve();
   });

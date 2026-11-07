@@ -6,27 +6,26 @@
 // then assigned `newData.sections[i].columns[j].nodes[k] = {...}`. The
 // nested `sections`/`columns`/`nodes` arrays were the SAME objects as
 // `prevData`'s, so the assignment mutated the previous state in place.
-// App.tsx's undo machinery (`handleDataChange` → `saveToHistory(
-// dataRef.current)`) deep-clones the PREVIOUS data object to build the
-// undo entry — but by the time the clone runs, that object already
-// carries the aligned yPositions. The history entry equals the
-// post-alignment state, and Ctrl+Z is a visual no-op (live evidence:
-// "Undo performed, undo history length: 0" with positions unchanged).
+// The document's undo history keeps the PREVIOUS chart object as the undo
+// entry — but by the time it is read, that object already carried the
+// aligned yPositions. The history entry equalled the post-alignment state,
+// and Ctrl+Z was a visual no-op (live evidence: positions unchanged after
+// undo).
 //
 // The fix routes alignment through `computeAlignedSections` (pure,
 // immutable — `src/utils/alignNodes.ts`). These tests pin the contract
-// the App-level undo machinery depends on:
+// the document's undo history depends on:
 //
-//   1. The data object passed as a prop is NEVER mutated by the
-//      "Align nodes" action (undo snapshot integrity).
-//   2. Alignment emits exactly ONE parent notification (one undo
-//      boundary — a single Ctrl+Z must restore the pre-alignment
-//      state, not an increment of it).
+//   1. The chart the document held before the "Align nodes" action is
+//      NEVER mutated (undo snapshot integrity; the helper deep-freezes it,
+//      so an in-place write throws).
+//   2. Alignment emits exactly ONE commit (one undo boundary — a single
+//      undo must restore the pre-alignment state, not an increment of it).
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { describe, it, expect, afterEach } from 'vitest';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import type { ChartInput, ToCData } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
@@ -37,7 +36,7 @@ afterEach(() => {
 // average 120). jsdom reports offsetHeight 0 for all nodes, so the
 // component's `nodeHeights[id] || 76` fallback makes the math
 // deterministic.
-const makeMisalignedData = (): ToCData => ({
+const makeMisalignedData = (): ChartInput => ({
   title: 'Alignment fixture',
   sections: [
     {
@@ -69,59 +68,51 @@ const makeMisalignedData = (): ToCData => ({
 });
 
 describe('TheoryOfChangeGraph alignment undo contract (feedback 67)', () => {
-  it('Align nodes never mutates the data object passed as prop', async () => {
-    const data = makeMisalignedData();
-    const preClickSnapshot = JSON.parse(JSON.stringify(data));
-    const onDataChange = vi.fn();
-
-    render(<ToC data={data} showEditButton={true} onDataChange={onDataChange} />);
+  it('Align nodes never mutates the chart the document held before it', async () => {
+    const { doc, onCommit } = renderToC(makeMisalignedData());
+    const before = doc.getCommitted();
+    const preClickSnapshot = JSON.parse(JSON.stringify(before));
 
     fireEvent.click(screen.getByRole('button', { name: 'Align nodes' }));
-    await waitFor(() => expect(onDataChange).toHaveBeenCalled());
+    await waitFor(() => expect(onCommit).toHaveBeenCalled());
 
-    // The object App holds in state (and clones into the undo history)
-    // must still describe the PRE-alignment chart.
-    expect(data).toEqual(preClickSnapshot);
+    // The object the undo history holds must still describe the
+    // PRE-alignment chart.
+    expect(before).toEqual(preClickSnapshot);
+    expect(doc.getCommitted()).not.toBe(before);
   });
 
-  it('alignment emits exactly one parent notification carrying the aligned positions', async () => {
-    const data = makeMisalignedData();
-    const onDataChange = vi.fn();
-
-    render(<ToC data={data} showEditButton={true} onDataChange={onDataChange} />);
+  it('alignment emits exactly one commit carrying the aligned positions', async () => {
+    const { doc, onCommit } = renderToC(makeMisalignedData());
+    const before = doc.getCommitted();
 
     fireEvent.click(screen.getByRole('button', { name: 'Align nodes' }));
-    await waitFor(() => expect(onDataChange).toHaveBeenCalled());
+    await waitFor(() => expect(onCommit).toHaveBeenCalled());
 
-    // ONE notification → ONE saveToHistory call → ONE undo boundary.
-    expect(onDataChange).toHaveBeenCalledTimes(1);
+    // ONE commit → ONE undo boundary.
+    expect(onCommit).toHaveBeenCalledTimes(1);
 
-    const next: ToCData = onDataChange.mock.calls[0][0];
+    const next: ToCData = onCommit.mock.calls[0][0];
     expect(next.sections[0].columns[0].nodes[0].yPosition).toBe(120);
     expect(next.sections[1].columns[0].nodes[0].yPosition).toBe(120);
-    // The notified object is a different object graph, not the prop
-    // (sharing the mutated arrays is exactly the bug under test).
-    expect(next.sections[0].columns[0].nodes[0]).not.toBe(data.sections[0].columns[0].nodes[0]);
+    // The committed chart is a different object graph, not the previous
+    // one (sharing the mutated arrays is exactly the bug under test).
+    expect(next.sections[0].columns[0].nodes[0]).not.toBe(before.sections[0].columns[0].nodes[0]);
   });
 
-  it('one simulated undo (App contract) restores the exact pre-alignment positions', async () => {
-    // Mirrors App.tsx's actual sequence: saveToHistory deep-clones
-    // dataRef.current (the object passed as prop) when the change
-    // notification arrives; undo then restores that clone. If
-    // alignment mutated the prop in place, the clone would already be
-    // aligned and undo would restore the wrong state.
-    const data = makeMisalignedData();
-    const onDataChange = vi.fn();
+  it('one undo restores the exact pre-alignment positions', async () => {
+    // If alignment mutated the previous chart in place, the history entry
+    // would already be aligned and undo would restore the wrong state.
+    const { doc, onCommit } = renderToC(makeMisalignedData());
 
-    render(<ToC data={data} showEditButton={true} onDataChange={onDataChange} />);
     fireEvent.click(screen.getByRole('button', { name: 'Align nodes' }));
-    await waitFor(() => expect(onDataChange).toHaveBeenCalled());
+    await waitFor(() => expect(onCommit).toHaveBeenCalled());
+    expect(doc.getCommitted().sections[0].columns[0].nodes[0].yPosition).toBe(120);
 
-    // App.tsx:1050 — saveToHistory(dataRef.current) clones the prop
-    // object at notify time.
-    const undoEntry: ToCData = JSON.parse(JSON.stringify(data));
+    doc.undo();
 
-    expect(undoEntry.sections[0].columns[0].nodes[0].yPosition).toBe(100);
-    expect(undoEntry.sections[1].columns[0].nodes[0].yPosition).toBe(140);
+    const undone = doc.getCommitted();
+    expect(undone.sections[0].columns[0].nodes[0].yPosition).toBe(100);
+    expect(undone.sections[1].columns[0].nodes[0].yPosition).toBe(140);
   });
 });

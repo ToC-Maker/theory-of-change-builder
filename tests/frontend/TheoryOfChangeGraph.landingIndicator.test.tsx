@@ -6,13 +6,12 @@
 // stubbed; everything else (layout snapshot, drag hook, placement maths)
 // is the real thing.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
+import { cleanup, fireEvent, act } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import type { ToCData } from '../../src/types';
-import { deepFreeze } from './helpers/deepFreeze';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -79,8 +78,8 @@ function pointer(type: string, x: number, y: number) {
   return event;
 }
 
-async function startDrag(onDataChange?: (data: ToCData) => void) {
-  render(<ToC data={deepFreeze(makeData())} showEditButton={true} onDataChange={onDataChange} />);
+async function startDrag() {
+  const rendered = renderToC(makeData());
   // Let the layout hook's rAF-coalesced rect refresh read the stubbed rects.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -88,6 +87,7 @@ async function startDrag(onDataChange?: (data: ToCData) => void) {
   const node = document.getElementById('node-n-1')!;
   // Grab 30px below the node's top edge.
   fireEvent.pointerDown(node, { clientX: 100, clientY: NODE_TOP + 30, button: 0, pointerId: 1 });
+  return rendered;
 }
 
 const move = (x: number, y: number) =>
@@ -159,16 +159,18 @@ describe('TheoryOfChangeGraph drag landing indicator', { timeout: 20_000 }, () =
     expect(indicator()).toBeNull();
   });
 
-  it('dropping on another column moves the node there and leaves the previous state intact', async () => {
-    const onDataChange = vi.fn();
-    await startDrag(onDataChange);
+  it('dropping on another column commits once, moves the node there and leaves the previous chart intact', async () => {
+    const { doc, onCommit } = await startDrag();
+    const before = doc.getCommitted();
     move(300, 400);
     await act(async () => {
       document.dispatchEvent(pointer('pointerup', 300, 400));
     });
-    expect(onDataChange).toHaveBeenCalledTimes(1);
-    const next = onDataChange.mock.calls[0][0] as ToCData;
-    expect(next.sections[0].columns.map((c) => c.nodes.map((n) => n.id))).toEqual([[], ['n-1']]);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const columnNodeIds = (chart: typeof before) =>
+      chart.sections[0].columns.map((c) => c.nodes.map((n) => n.id));
+    expect(columnNodeIds(onCommit.mock.calls[0][0])).toEqual([[], ['n-1']]);
+    expect(columnNodeIds(before)).toEqual([['n-1'], []]);
   });
 
   it('is gone when the canvas unmounts mid-drag', async () => {
