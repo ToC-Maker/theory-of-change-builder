@@ -1960,7 +1960,7 @@ export function ChatInterface({
     // so the stream headers downstream use the 12-char id and not the
     // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
     const resolvedChart = await ensureChartExists();
-    // Q1: explicit null-check. ensureChartExists returns null when the chart
+    // Explicit null-check. ensureChartExists returns null when the chart
     // could not be loaded or created (it already set an advisory composer
     // blocker in those branches). Bail cleanly — without the
     // check, we'd proceed with undefined chartId, optimistically commit

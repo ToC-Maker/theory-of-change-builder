@@ -18,11 +18,9 @@
 // A node's edges are its `connections: Array<{targetId, confidence,
 // evidence, assumptions}>`. Charts from outside the tab are normalised on the
 // way in (`normalizeChart` builds `connections` from the legacy
-// `connectionIds`), so this reads `connections` only; `connectionIds` is kept
-// listing the same targets for the code that still reads it.
-//
-// `deleteConnection` removes the target from BOTH arrays atomically, so
-// subsequent reads through either see the connection as gone.
+// `connectionIds`), so this reads `connections` only. `connectionIds` is
+// rewritten from `connections` on read and on merge and nothing else reads it;
+// `deleteConnection` still drops the target from it too.
 import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
 import { useFieldBuffer } from '../../hooks/useFieldBuffer';
