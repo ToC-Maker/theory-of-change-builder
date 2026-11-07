@@ -1,5 +1,6 @@
 // `useFieldBuffer` keeps the text an editor shows while the user types, and
 // follows changes to the underlying value that someone else made.
+import { StrictMode } from 'react';
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useFieldBuffer } from '../../src/hooks/useFieldBuffer';
@@ -112,5 +113,19 @@ describe('useFieldBuffer', () => {
     rerender({ source: 'now shared', resetKey: 'n1', mixed: false });
 
     expect(result.current[0]).toBe('now shared');
+  });
+
+  it('behaves the same under StrictMode double-invoked effects', () => {
+    const { result, rerender } = renderHook(
+      (props: Props) => useFieldBuffer(props.source, props.resetKey, props.mixed),
+      { initialProps: { source: 'A', resetKey: 'n1', mixed: false }, wrapper: StrictMode },
+    );
+
+    act(() => result.current[1]('Ab'));
+    rerender({ source: 'Ab', resetKey: 'n1', mixed: false });
+    expect(result.current[0]).toBe('Ab');
+
+    rerender({ source: 'Remote', resetKey: 'n1', mixed: false });
+    expect(result.current[0]).toBe('Remote');
   });
 });

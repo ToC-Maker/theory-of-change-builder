@@ -31,13 +31,14 @@
 //
 // MDXEditor reads `markdown` only when it mounts. A `markdown` that
 // differs from what the editor last showed or reported (someone else's
-// change, or another selection) is pushed in without the user's undo
-// history ever holding the old text, since undoing into it would fire
-// `onChange` and save the old text over the change:
-//   - Focus is outside the editor: it is remounted with the new text.
-//     Remounting a focused editor would drop focus and the caret.
-//   - Focus is inside it: `setMarkdown` (which also empties the undo
-//     history, see MDXEditor.tsx). The caret moves to the start of the
+// change, or another selection) is pushed in so that Undo can never
+// return to the old text: undoing into it would fire `onChange` and save
+// the old text over the change.
+//   - Focus is outside the editor: it is remounted with the new text,
+//     which starts with an empty undo history. Remounting a focused
+//     editor would drop focus and the caret.
+//   - Focus is inside it: `setMarkdown`, which also empties the undo
+//     history (see MDXEditor.tsx). The caret moves to the start of the
 //     document; no position is right in text someone else rewrote.
 // Neither fires `onChange`, so the text is not saved back.
 //

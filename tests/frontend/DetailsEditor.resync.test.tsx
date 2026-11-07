@@ -5,9 +5,11 @@
 //   - `DetailsEditor` against a stand-in editor injected through the
 //     `lazyFactory` seam, to see which path a remote change takes.
 //   - The real `@mdxeditor/editor` (jsdom) for the library behaviour the
-//     resync relies on. Those tests guard `^4.0.0` floating to a release
-//     that changes it; the browser capture behind them is
-//     plans/simultaneous-edit-merge/captures/mdxeditor-browser.md.
+//     resync relies on, which a real browser showed too: `setMarkdown`
+//     keeps focus, fires no `onChange`, does nothing for text equal after
+//     trimming, and is undoable (undo fires `onChange` with the old text)
+//     unless the history is cleared. Those tests guard `^4.0.0` floating
+//     to a release that changes any of it.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { createRef, lazy, useEffect, useImperativeHandle, type Ref } from 'react';
@@ -144,6 +146,43 @@ describe('DetailsEditor following remote changes', () => {
 
     expect(t.seen.setMarkdown).toHaveBeenCalledTimes(1);
   });
+
+  it('a remote change while a toolbar button holds focus updates the real editor in place', async () => {
+    const onChange = vi.fn<(markdown: string) => void>();
+    const { container, rerender } = render(
+      <DetailsEditor markdown="local text" onChange={onChange} />,
+    );
+    const content = await waitFor(
+      () => {
+        const el = container.querySelector<HTMLElement>('[contenteditable="true"]');
+        expect(el).not.toBeNull();
+        return el!;
+      },
+      { timeout: 10000 },
+    );
+    const bold = await waitFor(() => {
+      const el = container.querySelector<HTMLButtonElement>('button[aria-label^="Bold"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    act(() => bold.focus());
+    expect(document.activeElement).toBe(bold);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    rerender(<DetailsEditor markdown="text from someone else" onChange={onChange} />);
+
+    // Focus is inside the editor (on its toolbar), so the same editor is
+    // updated and keeps that focus; a remount would drop it.
+    await waitFor(() => expect(content.textContent).toBe('text from someone else'));
+    expect(container.querySelector('[contenteditable="true"]')).toBe(content);
+    expect(document.activeElement).toBe(bold);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label^="Undo"]')!.disabled).toBe(
+      true,
+    );
+  }, 20000);
 
   it('opening_a_node_does_not_write_text', async () => {
     const t = await renderWithStandIn('- a\n- b  ');
