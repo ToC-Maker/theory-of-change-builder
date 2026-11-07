@@ -143,6 +143,8 @@ afterEach(() => {
   // listeners and would answer the next test's online/visibility events.
   cleanup();
   vi.useRealTimers();
+  // Puts back the spies a test made (the visibility state), even if it failed before its own cleanup.
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -675,7 +677,6 @@ describe('useChartSave: failures', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     expect(requests).toHaveLength(2);
-    visibility.mockRestore();
   });
 
   it('does not send early on online or visibility events when no save has failed', async () => {
