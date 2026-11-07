@@ -7,7 +7,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../../src/App';
 import { ChartService } from '../../src/services/chartService';
-import type { ToCData } from '../../src/types';
+import { normalizeChart, type ChartInput } from '../../src/types';
 
 vi.mock('@auth0/auth0-react', () => {
   const auth = {
@@ -22,7 +22,8 @@ vi.mock('@auth0/auth0-react', () => {
   return { useAuth0: () => auth, Auth0Provider: ({ children }: { children: unknown }) => children };
 });
 
-const chart: ToCData = {
+// What the service hands the viewer: ChartService normalises every chart it reads.
+const chart: ChartInput = {
   title: 'Viewer chart',
   sections: [
     {
@@ -54,7 +55,7 @@ const renderViewer = () =>
 
 beforeEach(() => {
   localStorage.clear();
-  vi.spyOn(ChartService, 'getChart').mockResolvedValue(chart as never);
+  vi.spyOn(ChartService, 'getChart').mockResolvedValue(normalizeChart(chart));
 });
 
 afterEach(() => {

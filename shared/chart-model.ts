@@ -60,12 +60,12 @@ export interface Node {
 }
 
 export interface Column {
-  id?: string;
+  id: string;
   nodes: Node[];
 }
 
 export interface Section {
-  id?: string;
+  id: string;
   title: string;
   columns: Column[];
 }
@@ -284,13 +284,4 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     leftKeys.length === defined(right).length &&
     leftKeys.every((key) => deepEqual(left[key], right[key]))
   );
-}
-
-/**
- * The id of a section or column, for code that needs one while the types
- * still make it optional; throws when it is missing.
- */
-export function idOf(x: { id?: string }): string {
-  if (x.id === undefined) throw new Error('Section or column has no id');
-  return x.id;
 }

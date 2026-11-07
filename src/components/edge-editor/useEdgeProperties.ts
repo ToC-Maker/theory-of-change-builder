@@ -15,17 +15,14 @@
 //
 // `edgeKey` = `${sourceId}->${targetId}` (directed: a->b ≠ b->a).
 //
-// The graph data format has TWO shapes:
-//   - New: `connections: Array<{targetId, confidence, evidence, assumptions}>`
-//   - Old: `connectionIds: string[]` (legacy, no per-edge metadata)
+// A node's edges are its `connections: Array<{targetId, confidence,
+// evidence, assumptions}>`. Charts from outside the tab are normalised on the
+// way in (`normalizeChart` builds `connections` from the legacy
+// `connectionIds`), so this reads `connections` only; `connectionIds` is kept
+// listing the same targets for the code that still reads it.
 //
-// All writers below produce a `connections` array (creating one from the
-// legacy `connectionIds` if necessary). All readers prefer `connections`
-// and fall back to a `connectionIds` view with zeroed metadata.
-//
-// `deleteConnection` removes the target from BOTH the new and legacy
-// arrays atomically, so subsequent reads through either format see the
-// connection as gone.
+// `deleteConnection` removes the target from BOTH arrays atomically, so
+// subsequent reads through either see the connection as gone.
 import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
 import { useFieldBuffer } from '../../hooks/useFieldBuffer';
@@ -69,18 +66,8 @@ function findAllNodes(data: ToCData): GraphNode[] {
   return data.sections.flatMap((s) => s.columns.flatMap((c) => c.nodes));
 }
 
-/**
- * Normalize a node's outgoing connections to the new shape. If the node
- * uses the legacy `connectionIds` array we synthesize the metadata at
- * default values so write paths can patch a single record.
- */
-function readConnections(node: GraphNode): Connection[] {
-  if (node.connections) return node.connections;
-  return node.connectionIds.map((id) => ({ targetId: id, confidence: DEFAULT_CONFIDENCE }));
-}
-
 function readConnection(node: GraphNode, targetId: string): Connection | undefined {
-  return readConnections(node).find((c) => c.targetId === targetId);
+  return node.connections?.find((c) => c.targetId === targetId);
 }
 
 export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertiesResult {
@@ -109,8 +96,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
 
   /**
    * Map an updater over the source node's connections array, patching the
-   * record for `targetId`. Handles the legacy `connectionIds` → new-shape
-   * upgrade in a single pass. A connection that is not in the chart (the
+   * record for `targetId`. A connection that is not in the chart (the
    * editor stayed open after someone deleted it) is left absent, not
    * created from the patch, and the chart comes back as it was.
    */
@@ -129,7 +115,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
                 node.id === sourceId
                   ? {
                       ...node,
-                      connections: readConnections(node).map((c) =>
+                      connections: node.connections?.map((c) =>
                         c.targetId === targetId ? { ...c, ...patch } : c,
                       ),
                     }

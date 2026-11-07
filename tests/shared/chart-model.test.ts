@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   ChartShapeError,
   deepEqual,
-  idOf,
   newColumnId,
   newNodeId,
   newSectionId,
@@ -328,10 +327,5 @@ describe('ids', () => {
   it('mints_node_ids_in_the_established_format', () => {
     expect(newNodeId()).toMatch(/^node-\d+-[0-9a-z]{1,9}$/);
     expect(newNodeId()).not.toBe(newNodeId());
-  });
-
-  it('idOf_returns_the_id_and_throws_when_it_is_missing', () => {
-    expect(idOf({ id: 'sec-1' })).toBe('sec-1');
-    expect(() => idOf({})).toThrow(/id/);
   });
 });

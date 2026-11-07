@@ -10,7 +10,7 @@ import React, {
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import type { ChartStore } from '../sync/ChartDocument';
-import { idOf, newColumnId, newNodeId, newSectionId } from '../../shared/chart-model';
+import { newColumnId, newNodeId, newSectionId } from '../../shared/chart-model';
 import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
@@ -1305,7 +1305,7 @@ export function ToC({
                             0,
                           )}
                           scope="section"
-                          onDelete={() => deleteSection(idOf(section))}
+                          onDelete={() => deleteSection(section.id)}
                           testIdSuffix={`${sectionIndex}`}
                         />
                       )}
@@ -1380,7 +1380,7 @@ export function ToC({
                             if (!editMode) return;
                             const bar = e.currentTarget.parentElement!;
                             setEditingBarWidth(bar.getBoundingClientRect().width / zoomScale);
-                            setEditingSectionId(idOf(section));
+                            setEditingSectionId(section.id);
                           }}
                           title={editMode ? 'Click to edit section label' : ''}
                         >
@@ -1523,7 +1523,7 @@ export function ToC({
                               <ColumnDeleteAffordance
                                 nodeCount={column.nodes.length}
                                 scope="column"
-                                onDelete={() => deleteColumn(idOf(section), idOf(column))}
+                                onDelete={() => deleteColumn(section.id, column.id)}
                                 testIdSuffix={`${sectionIndex}-${colIndex}`}
                               />
                             )}
