@@ -75,13 +75,13 @@
 // ---------------------------------------------------------------------------
 //
 // During the drag we use `mutateDebounced` with `idleCommit: false` so the
-// UI updates synchronously without notifying the parent, however long the
-// pointer rests. On pointerup we `commit(key)` once, producing exactly one
-// parent notify and one undo entry.
+// UI updates synchronously without committing, however long the pointer
+// rests. On pointerup we `commit(key)` once, producing exactly one commit
+// and one undo entry.
 //
 // **Invariant: one gesture = one undo entry.** All writes during a drag
 // must go through `mutateDebounced` with the same `key`; the final
-// `commit(key)` is what makes the parent visible to undo/redo.
+// `commit(key)` is what makes the bend visible to undo/redo.
 //
 // **Invariant: sub-threshold gestures write nothing.** The first write
 // only happens once the pointer has moved ≥ DRAG_THRESHOLD_PX from the
@@ -89,22 +89,24 @@
 // double-click) from committing collapse/no-op edits or leaving
 // uncommitted preview state behind.
 //
-// On Escape / pointercancel / second-pointer we DO NOT commit, and the
-// connection goes back to the waypoints it had when the press landed: the
-// preview is overwritten through `mutateDebounced` (a local write; the
-// hook-level `setData` would ignore a state it already notified), and then
-// `discardBuffered(key)` drops that buffered write so a later `commit()`
-// cannot turn the cancel into a save. No parent notify and no undo entry
-// land, and a later unrelated edit saves the connection as it was.
+// A chart landing from the server or an AI reply mid-drag merges into the
+// store, and the bend preview wins on the bend itself. Every write names the
+// connection by its node ids and replaces its `waypoints`, so it applies to
+// whatever chart the store holds at that move.
 //
-// The one way the parent can hold the preview anyway is an unrelated
-// notify during the drag (another buffered edit's idle timer, a keyboard
-// edit), which hands over the whole local state. `notifyCount` tells the
-// cancel whether that happened since the drag armed; if so the restored
-// state is committed too, so the parent, the saved chart and the screen
-// agree. That notify is an ordinary edit to the parent: it adds an undo
-// step, and a cancel more than the grouping window after the unrelated
-// notify leaves a step that undoes back to the cancelled preview.
+// On Escape / pointercancel / second-pointer we DO NOT commit. The connection
+// goes back to the waypoints the store has committed (which include a change to
+// its bend that landed during the drag): the preview is overwritten through
+// `mutateDebounced`, and then `discardBuffered(key)` drops that buffered key so
+// a later `commit()` cannot turn the cancel into a save. No commit and no undo
+// entry land, and a later unrelated edit saves the connection as it was.
+//
+// The one way the preview can be committed anyway is another commit during the
+// drag (another key's idle timer, a keyboard edit, an AI edit or an undo, each of
+// which commits the store's whole preview layer). `notifyCount` tells the cancel
+// whether that happened since the drag armed; if so the committed state holds
+// the preview, so the cancel restores the waypoints the press found and commits
+// them. That is an ordinary edit: it adds an undo step.
 //
 // ---------------------------------------------------------------------------
 // Coordinate translation
@@ -120,8 +122,9 @@
 // Waypoints are STORED as offsets from the midpoint of the straight
 // line between the connection's anchors (see `connectionGeometry.ts`),
 // so the hook subtracts that midpoint from the container-local pointer
-// position. The caller supplies it via `getLineMidpoint`; it is read
-// once when the gesture starts, since nodes don't move during a drag.
+// position. The caller supplies it via `getLineMidpoint`, which the hook
+// reads on every move: a landing can move a node or change a column
+// mid-drag, and `null` means an end node is gone.
 //
 // ---------------------------------------------------------------------------
 // Mutual exclusion
@@ -182,25 +185,26 @@ export interface UseWaypointDragArgs {
   editMode: boolean;
   /**
    * Streaming mutator. Called on every pointermove during the drag so
-   * the canvas re-renders without a parent notify. Same key is reused
-   * across the gesture so latest-wins semantics produce one buffered
-   * updater at commit time (one undo entry).
+   * the canvas re-renders without a commit. Same key is reused across the
+   * gesture, so the one `commit(key)` at the end is one undo entry.
    */
   mutateDebounced: (
     updater: ToCData | ((prev: ToCData) => ToCData),
     key: string,
     options?: { idleCommit?: boolean },
   ) => void;
-  /** Flush the buffered updater under `key` → one parent notify. */
+  /** Commit the preview under `key` → one commit. */
   commit: (key?: string) => void;
   /**
-   * Drop the buffered updater for `key` WITHOUT a parent notify. Called
-   * on Escape / pointercancel / second-pointer right after the preview is
-   * written back, so the written-back state is not saved as an edit.
+   * Forget `key` WITHOUT committing. Called on Escape / pointercancel /
+   * second-pointer right after the preview is written back, so the
+   * written-back state is not saved as an edit.
    */
   discardBuffered: (key: string) => void;
-  /** Parent notifications sent so far; see "Mutation model". */
+  /** Store commits so far; see "Mutation model". */
   notifyCount: () => number;
+  /** The committed chart, which a cancel restores the connection's bend from. */
+  getCommitted: () => ToCData;
   /**
    * Translate viewport client coords to container-local coords. Pure;
    * the hook calls it on every armed pointermove.
@@ -209,9 +213,10 @@ export interface UseWaypointDragArgs {
   /**
    * Midpoint of the straight line between the connection's source and
    * target anchors, in the same container-local space as
-   * `clientToContainer`.
+   * `clientToContainer`; null when either end node is no longer on the
+   * canvas.
    */
-  getLineMidpoint: (sourceNodeId: string, targetNodeId: string) => { x: number; y: number };
+  getLineMidpoint: (sourceNodeId: string, targetNodeId: string) => { x: number; y: number } | null;
 }
 
 export interface UseWaypointDragResult {
@@ -341,6 +346,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     commit,
     discardBuffered,
     notifyCount,
+    getCommitted,
     clientToContainer,
     getLineMidpoint,
   } = args;
@@ -378,6 +384,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   discardBufferedRef.current = discardBuffered;
   const notifyCountRef = useRef(notifyCount);
   notifyCountRef.current = notifyCount;
+  const getCommittedRef = useRef(getCommitted);
+  getCommittedRef.current = getCommitted;
   const clientToContainerRef = useRef(clientToContainer);
   clientToContainerRef.current = clientToContainer;
   const getLineMidpointRef = useRef(getLineMidpoint);
@@ -397,17 +405,13 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   // cancel can put them back.
   const originalWaypointsRef = useRef<WaypointOffset[] | undefined>(undefined);
 
-  // Line midpoint of the connection being dragged, captured at press
-  // time: the origin the stored offset is measured from.
-  const gestureMidpointRef = useRef<{ x: number; y: number } | null>(null);
-
   // Drag-threshold bookkeeping: where the press landed (client coords)
   // and whether the gesture has crossed DRAG_THRESHOLD_PX. Until armed,
   // NOTHING is written — see "sub-threshold gestures write nothing".
   const gestureStartClientRef = useRef<{ x: number; y: number } | null>(null);
   const gestureArmedRef = useRef(false);
-  // The parent's notification count when the gesture armed: if it has moved
-  // by cancel time, the parent was handed the preview.
+  // The store's commit count when the gesture armed: if it has moved by
+  // cancel time, something else committed the preview.
   const notifyCountAtArmRef = useRef(0);
 
   // The press's `onTap` handler, called when it is released without
@@ -489,7 +493,6 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       captureElRef.current = null;
       activePointerIdRef.current = null;
       gestureKeyRef.current = null;
-      gestureMidpointRef.current = null;
       gestureStartClientRef.current = null;
       gestureArmedRef.current = false;
       setCanvasGestureActive(false);
@@ -511,13 +514,19 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     [],
   );
 
-  /** Pointer position as an offset from the dragged connection's line midpoint. */
-  const offsetAt = useCallback((clientX: number, clientY: number): WaypointOffset => {
-    return offsetFromMidpoint(
-      clientToContainerRef.current(clientX, clientY),
-      gestureMidpointRef.current!,
-    );
-  }, []);
+  /**
+   * Pointer position as an offset from the dragged connection's line midpoint,
+   * which is read now: a landing may have moved its nodes since the press.
+   * Null when an end node is gone.
+   */
+  const offsetAt = useCallback(
+    (state: WaypointDragState, clientX: number, clientY: number): WaypointOffset | null => {
+      const midpoint = getLineMidpointRef.current(state.sourceNodeId, state.targetNodeId);
+      if (!midpoint) return null;
+      return offsetFromMidpoint(clientToContainerRef.current(clientX, clientY), midpoint);
+    },
+    [],
+  );
 
   /**
    * Threshold gate. Returns true once the pointer has traveled ≥
@@ -541,8 +550,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
   // pointermove: write live preview via mutateDebounced once armed.
   // Note: we don't mirror `pos` into dragState because nothing reads
-  // it — the live position lives in `data` via writeLocal. Skipping
-  // the setState here saves one render per pointermove tick.
+  // it: the live position lives in the store's preview. Skipping the
+  // setState here saves one render per pointermove tick.
   const handlePointerMove = useCallback(
     (e: PointerEvent) => {
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
@@ -550,8 +559,11 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       if (!state) return;
       if (!armIfPastThreshold(e.clientX, e.clientY)) return;
 
-      const key = gestureKeyRef.current!;
-      mutateDebouncedRef.current(buildReplayUpdater(state, offsetAt(e.clientX, e.clientY)), key, {
+      // An end node is gone (a landing removed it): nothing to bend. The
+      // release reports the stale drop.
+      const offset = offsetAt(state, e.clientX, e.clientY);
+      if (!offset) return;
+      mutateDebouncedRef.current(buildReplayUpdater(state, offset), gestureKeyRef.current!, {
         idleCommit: false,
       });
     },
@@ -560,7 +572,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
   // pointerup: commit one entry if the gesture armed; otherwise it was
   // a click — clean up without writing anything. If the connection
-  // vanished mid-gesture (cross-tab AI/collab edit) the replay
+  // vanished mid-gesture (a collaborator's or AI edit landed) the replay
   // updater no-ops gracefully; we log one `stale-waypoint-drop` per
   // drop (NOT per pointermove — logging from the pure updater would
   // flood under the same race). Mirrors PR 4 `stale-node-drop` and PR 5
@@ -587,12 +599,14 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
         return;
       }
 
-      // The connection existing is the whole validity story. The press-time
-      // waypoint index is not checked here: the first armed move already
-      // replaced the connection's waypoints with the single dragged one, so
-      // a later waypoint of a legacy multi-waypoint connection would always
-      // look gone and its drop would never commit.
-      if (!findConnection(dataRef.current, state.sourceNodeId, state.targetNodeId)) {
+      // The connection existing, with both end nodes on the canvas, is the
+      // whole validity story. The press-time waypoint index is not checked
+      // here: the first armed move already replaced the connection's waypoints
+      // with the single dragged one, so a later waypoint of a legacy
+      // multi-waypoint connection would always look gone and its drop would
+      // never commit.
+      const offset = offsetAt(state, e.clientX, e.clientY);
+      if (!offset || !findConnection(dataRef.current, state.sourceNodeId, state.targetNodeId)) {
         loggingService.reportError({
           error_name: 'stale-waypoint-drop',
           error_message: `Waypoint drop on ${state.sourceNodeId}->${state.targetNodeId} hit stale state (connection vanished)`,
@@ -603,7 +617,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
             waypointIndex: state.waypointIndex,
           },
         });
-        // Treat as cancel: no commit, drop the buffered updater so a later
+        // Treat as cancel: no commit, forget the key so a later
         // `commit()` can't flush a stale shape.
         cleanup(true);
         return;
@@ -612,7 +626,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       // Both calls are caller code: if either throws, the gesture must
       // still end, or the flag stays set and no later drag can start.
       try {
-        mutateDebouncedRef.current(buildReplayUpdater(state, offsetAt(e.clientX, e.clientY)), key);
+        mutateDebouncedRef.current(buildReplayUpdater(state, offset), key);
         commitRef.current(key);
       } finally {
         cleanup();
@@ -623,21 +637,25 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
   // Escape / pointercancel / second pointer: undo what the preview wrote
   // and end the gesture without committing. A press that never crossed the
-  // drag threshold wrote nothing, so there is nothing to put back. If an
-  // unrelated notify has already handed the parent the preview, the
-  // restored state goes to the parent as well (see "Mutation model").
+  // drag threshold wrote nothing, so there is nothing to put back. If another
+  // commit has already carried the preview, the restored waypoints are
+  // committed as well (see "Mutation model").
   const cancelGesture = useCallback(() => {
     const state = dragStateRef.current;
     const key = gestureKeyRef.current;
     try {
       if (state && key !== null && gestureArmedRef.current) {
-        const original = originalWaypointsRef.current;
+        const carried = notifyCountRef.current() !== notifyCountAtArmRef.current;
+        const original = carried
+          ? originalWaypointsRef.current
+          : findConnection(getCommittedRef.current(), state.sourceNodeId, state.targetNodeId)
+              ?.waypoints;
         mutateDebouncedRef.current(
           (prev) =>
             restoreConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, original),
           key,
         );
-        if (notifyCountRef.current() !== notifyCountAtArmRef.current) commitRef.current(key);
+        if (carried) commitRef.current(key);
       }
     } finally {
       cleanup(true);
@@ -723,9 +741,6 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
         const count = conn.waypoints?.length ?? 0;
         if (waypointIndex < 0 || waypointIndex >= count) return;
       }
-      // Read before the gesture is claimed: if it throws, no mutex is left set.
-      const lineMidpoint = getLineMidpointRef.current(sourceNodeId, targetNodeId);
-
       const target = e.target as HTMLElement | null;
       if (target) {
         try {
@@ -743,7 +758,6 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       tapHandlerRef.current = onTap;
       gestureKeyRef.current = buildKey(sourceNodeId, targetNodeId);
       originalWaypointsRef.current = conn.waypoints;
-      gestureMidpointRef.current = lineMidpoint;
       gestureStartClientRef.current = { x: e.clientX, y: e.clientY };
       gestureArmedRef.current = false;
       // Subscribe NOW, synchronously — see `docListenersRef`.
