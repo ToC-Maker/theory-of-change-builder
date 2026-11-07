@@ -1,7 +1,8 @@
 /**
  * Wire-format shapes for saving and polling a chart (client ↔ Worker).
  *
- * Every change to a stored chart advances its integer `version`. A save names
+ * Every change to a stored chart's content advances its integer `version`
+ * (writing identical content leaves it unchanged). A save names
  * the version it was based on; the Worker applies it only if that is still the
  * current version (compare-and-swap) and otherwise answers 409 with the latest
  * chart, which the client merges before saving again. A poll names the version
@@ -28,7 +29,8 @@ export interface UpdateChartRequest {
   /**
    * The version this save was based on: a positive integer. Absent only from
    * tabs still running the previous client, whose save is applied without the
-   * check (last save wins) and still advances the version.
+   * check (last save wins) and, if it changes the chart, still advances the
+   * version.
    */
   baseVersion?: number;
 }

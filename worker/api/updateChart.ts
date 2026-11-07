@@ -40,13 +40,14 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     if (!access.ok) return access.response;
     const chartId = access.chart.id;
 
-    // The version trigger advances `version` when chart_data changes, so both
-    // branches return the version their write produced.
+    // The version trigger advances `version` when chart_data changes (an
+    // identical resave leaves it as is), so both branches return the version
+    // the row has after their write.
     let saved: { version: number }[];
     if (baseVersion === undefined) {
       // A tab still running the previous client: it never sends a version, so
-      // its save is applied as before (last save wins). The write still
-      // advances the version, so up-to-date tabs merge around it.
+      // its save is applied as before (last save wins). A write that changes
+      // the chart still advances the version, so up-to-date tabs merge around it.
       saved = (await sql`
         UPDATE charts
         SET chart_data = ${JSON.stringify(chartData)},
@@ -59,8 +60,9 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         console.log(JSON.stringify({ event: 'updateChart.legacy', chartId }));
       }
     } else {
-      // Compare-and-swap: a single UPDATE is atomic, so of two saves on the
-      // same base exactly one matches the version and the other gets no row.
+      // Compare-and-swap: a single UPDATE is atomic, so of two different saves
+      // on the same base only the first matches the version; the second, now
+      // behind, gets no row.
       saved = (await sql`
         UPDATE charts
         SET chart_data = ${JSON.stringify(chartData)},
