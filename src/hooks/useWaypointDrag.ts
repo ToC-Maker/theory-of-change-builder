@@ -618,11 +618,11 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
           },
         });
         // Nothing is left to write: the connection or an end node is gone. The
-        // preview the drag already made is not an edit worth keeping, but the
-        // store holds it as a pending preview that differs from the committed
-        // chart only by identity, so the tab would show unsaved changes with
-        // nothing to send. Committing promotes it, which the store then
-        // recognises as equal to the committed chart and collapses.
+        // store still holds the drag's preview, rebased onto the landing, so
+        // the tab would show unsaved changes indefinitely. Committing promotes
+        // it: when it equals the committed chart the store collapses it; when
+        // the rebase also dropped a connection left dangling by a column or
+        // section delete, that cleanup is saved once.
         commitRef.current(key);
         cleanup();
         return;
