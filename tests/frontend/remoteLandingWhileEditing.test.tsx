@@ -197,6 +197,9 @@ describe('typing a title while a remote chart lands', () => {
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     expect(doc.getStatus().serverVersion).toBe(2);
     expect(titleOf(doc.getCommitted(), 'n2')).toBe('Beta!');
+    // The landing came while the typing was still a preview: nothing of it committed yet.
+    expect(titleOf(doc.getCommitted(), 'n1')).toBe('Alpha');
+    expect(titleOf(doc.getLive(), 'n1')).toBe('Alphaabc');
     // The input is the one the user is typing in, with their text, focus and caret.
     expect(titleInput()).toBe(input);
     expect(input.value).toBe('Alphaabc');
@@ -223,7 +226,9 @@ describe('typing a title while a remote chart lands', () => {
     const input = await typeAbc(doc);
     await advance(POLL_TIME - KEY_TIME);
 
-    // Someone deleted the node the user is typing into: it stays, with their text.
+    // Someone deleted the node the user is typing into: it stays, with their text,
+    // though the committed chart (the typing is still a preview) no longer has it.
+    expect(findNode(doc.getCommitted(), 'n1')).toBeUndefined();
     expect(findNode(doc.getLive(), 'n1')?.title).toBe('Alphaabc');
     expect(titleInput()).toBe(input);
     expect(input.value).toBe('Alphaabc');
@@ -270,6 +275,8 @@ describe('typing a title while a remote chart lands', () => {
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(8);
     expect(titleOf(doc.getCommitted(), 'n2')).toBe('Beta!');
+    // The conflict came while the typing was still a preview.
+    expect(titleOf(doc.getCommitted(), 'n1')).toBe('Alpha');
 
     await advance(200 + 300 + 50);
     const final = lastSent();
@@ -532,6 +539,8 @@ describe('the details editor while a remote chart lands', () => {
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     expect(doc.getStatus().serverVersion).toBe(2);
     expect(titleOf(doc.getCommitted(), 'n2')).toBe('Beta!');
+    // The landing came while the typing was still a preview.
+    expect(findNode(doc.getCommitted(), 'n1')?.text).toBe('old details');
     expect(findNode(doc.getLive(), 'n1')?.text).toBe('old details and more');
     expect(content.textContent).toBe('old details and more');
     expect(document.activeElement).toBe(content);

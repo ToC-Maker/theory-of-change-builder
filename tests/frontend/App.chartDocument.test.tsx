@@ -134,7 +134,9 @@ async function openEditor(path = '/edit/tok') {
 
 const committed = (): ToCData => chat().graphData;
 const sentCharts = () => update.mock.calls.map(([, chart, base]) => ({ chart, base }));
-const savedOnce = () => waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 5000 });
+// Generous: on a loaded machine the canvas re-renders and the save debounce come due late.
+const shown = (text: string) => screen.findByText(text, undefined, { timeout: 15_000 });
+const savedOnce = () => waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 15_000 });
 
 describe('the editor route and the chart document', () => {
   it(
@@ -321,7 +323,7 @@ describe('what the chat, import and generate flows hand to the document', () => 
       const applied = chat().onAIEdit(asSent, retitleFirst(asSent, 'Alpha by AI')) as ToCData;
 
       expect(findNode(applied, 'n1')?.title).toBe('Alpha by AI');
-      expect(await screen.findByText('Alpha by AI')).toBeInTheDocument();
+      expect(await shown('Alpha by AI')).toBeInTheDocument();
       expect(findNode(committed(), 'n1')?.title).toBe('Alpha by AI');
       await savedOnce();
       expect(findNode(sentCharts()[0].chart, 'n1')?.title).toBe('Alpha by AI');
@@ -367,12 +369,12 @@ describe('what the chat, import and generate flows hand to the document', () => 
 
       act(() => chat().onLoadGeneratedGraph(generated));
 
-      expect(await screen.findByText('Gen')).toBeInTheDocument();
+      expect(await shown('Gen')).toBeInTheDocument();
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(committed().sections.map((s) => s.id)).toEqual(['s0']);
 
       act(() => top().handleUndo());
-      expect(await screen.findByText('Alpha')).toBeInTheDocument();
+      expect(await shown('Alpha')).toBeInTheDocument();
     },
     SLOW,
   );
@@ -394,7 +396,7 @@ describe('what the chat, import and generate flows hand to the document', () => 
       };
       act(() => top().onImportJson(normalizeChart(file)));
 
-      expect(await screen.findByText('From the file')).toBeInTheDocument();
+      expect(await shown('From the file')).toBeInTheDocument();
       expect(screen.queryByText('Alpha')).toBeNull();
       await savedOnce();
       expect(sentCharts()[0].base).toBe(7);
@@ -477,18 +479,21 @@ describe('a chart from someone else that cannot be used', () => {
     'shows in the save pill, as the poll finds it',
     async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      // Saves fail, so the local edit stays unsaved and a landing needs a real
-      // merge; the chart below has two sections with one id, which the merge refuses.
-      update.mockRejectedValue(new TypeError('offline'));
+      // The save is refused for good (a 400 is not retried), so the local edit
+      // stays unsaved and a landing needs a real merge; the chart below has two
+      // sections with one id, which the merge refuses.
+      update.mockRejectedValue(new ChartApiError('Bad request', 400));
       await openEditor();
       act(() => top().setTextSize(1.5));
-      await waitFor(() => expect(top().saveError?.message).toBe('offline'), { timeout: 5000 });
+      await waitFor(() => expect(top().saveError?.message).toBe('Bad request'), {
+        timeout: 15_000,
+      });
       const broken = structuredClone(CHART);
       broken.sections.push(structuredClone(broken.sections[0]));
       poll.mockResolvedValue({ version: 20, chartData: broken });
 
       await waitFor(() => expect(top().saveError?.message).toMatch(/repeats section id/), {
-        timeout: 8000,
+        timeout: 20_000,
       });
     },
     SLOW,
