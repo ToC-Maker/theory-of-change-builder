@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars -- signatures only; bodies land with the implementation */
 /**
  * Chart data model, id minting and normalisation, shared by the client and
  * the Worker.
@@ -6,7 +5,8 @@
  * Consumed by:
  *  - the client, through `src/types/index.ts` (which re-exports this file),
  *    compiled under `tsconfig.app.json`;
- *  - the Worker and the merge module, compiled under `worker/tsconfig.json`.
+ *  - the Worker and the other `shared/` modules, compiled under
+ *    `worker/tsconfig.json`.
  *
  * It therefore touches neither the DOM nor Workers-only types: only
  * `crypto.getRandomValues`, which both runtimes provide as a global.
@@ -82,9 +82,8 @@ export interface ToCData {
 }
 
 /**
- * A chart from outside the running tab. Section and column ids stay optional
- * here for good; `ToCData` will require them, and `normalizeChart` is the
- * only way across.
+ * A chart from outside the running tab (server, file, AI reply, template).
+ * Section and column ids are optional here; `normalizeChart` supplies them.
  */
 export interface ChartInput extends Omit<ToCData, 'sections'> {
   sections: {
@@ -106,41 +105,142 @@ export class ChartShapeError extends Error {
 }
 
 /**
- * Gives every section and column an id, makes node ids unique and builds
- * `connections` from the legacy `connectionIds`. Pure, deterministic and
- * idempotent; never mutates `raw`.
+ * Gives every section and column an id, makes node ids unique across the
+ * chart (filling missing ones) and makes each node's `connections` canonical:
+ * built from the legacy `connectionIds` at confidence 50 when absent, a
+ * repeated target dropped (the first is kept), and `connectionIds` rewritten
+ * to list the same targets. Pure, deterministic (two tabs reading the same
+ * id-less chart agree on every id) and idempotent. Never mutates `raw`; parts
+ * it does not touch are shared with it, not copied.
+ *
+ * Stored ids are never renamed: all of them are reserved before any id is
+ * minted, so a positional id that collides with one gets a `~k` suffix, as
+ * does a repeat of a stored id.
+ *
+ * Only the `sections` array is validated, with `ChartShapeError`; a section
+ * without `columns`, a column without `nodes` or a null node fails with a
+ * `TypeError`.
  */
-export function normalizeChart(_raw: unknown): ToCData {
-  throw new Error('not implemented');
+export function normalizeChart(raw: unknown): ToCData {
+  if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as ChartInput).sections)) {
+    throw new ChartShapeError(raw);
+  }
+  const chart = raw as ChartInput;
+
+  const sectionId = idAssigner(chart.sections.map((s) => s.id));
+  const columnId = idAssigner(chart.sections.flatMap((s) => s.columns.map((c) => c.id)));
+  const nodeId = idAssigner(
+    chart.sections.flatMap((s) => s.columns.flatMap((c) => c.nodes.map((n) => n.id))),
+  );
+
+  return {
+    ...chart,
+    sections: chart.sections.map((section, i) => ({
+      ...section,
+      id: sectionId(section.id, `s${i}`),
+      columns: section.columns.map((column, j) => ({
+        ...column,
+        id: columnId(column.id, `c${i}.${j}`),
+        nodes: column.nodes.map((node, k) =>
+          normalizeNode(node, nodeId(node.id, `n${i}.${j}.${k}`)),
+        ),
+      })),
+    })),
+  };
+}
+
+/**
+ * Returns a function that settles ids in document order. A stored id's first
+ * occurrence keeps it; a missing id takes `positional`, a repeated one takes
+ * its own value, and either gets `~2`, `~3`, ... until it is neither stored
+ * elsewhere nor already handed out.
+ */
+function idAssigner(stored: unknown[]) {
+  const reserved = new Set(stored.filter((id): id is string => typeof id === 'string'));
+  const handedOut = new Set<string>();
+  return (id: unknown, positional: string): string => {
+    const base = typeof id === 'string' ? id : positional;
+    let candidate = base;
+    if (typeof id !== 'string' || handedOut.has(id)) {
+      for (let k = 2; reserved.has(candidate) || handedOut.has(candidate); k++) {
+        candidate = `${base}~${k}`;
+      }
+    }
+    handedOut.add(candidate);
+    return candidate;
+  };
+}
+
+function normalizeNode(node: Node, id: string): Node {
+  // The renderer draws `connections` whenever it is an array (even an empty
+  // one) and `connectionIds` at confidence 50 otherwise.
+  const listed: Connection[] = Array.isArray(node.connections)
+    ? node.connections
+    : (Array.isArray(node.connectionIds) ? node.connectionIds : []).map((targetId) => ({
+        targetId,
+        confidence: 50,
+      }));
+  const seen = new Set<string>();
+  const connections = listed.filter((c) => {
+    if (seen.has(c.targetId)) return false;
+    seen.add(c.targetId);
+    return true;
+  });
+  return { ...node, id, connections, connectionIds: connections.map((c) => c.targetId) };
+}
+
+function randomBase36(length: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(length)), (byte) =>
+    (byte % 36).toString(36),
+  ).join('');
 }
 
 /** A fresh random section id, e.g. `sec-k3j9x0a1bz`. */
 export function newSectionId(): string {
-  throw new Error('not implemented');
+  return `sec-${randomBase36(10)}`;
 }
 
 /** A fresh random column id, e.g. `col-k3j9x0a1bz`. */
 export function newColumnId(): string {
-  throw new Error('not implemented');
+  return `col-${randomBase36(10)}`;
 }
 
 /** A fresh node id, e.g. `node-1731000000000-k3j9x0a1b`. */
 export function newNodeId(): string {
-  throw new Error('not implemented');
+  return `node-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**
  * Structural equality for chart data: key order does not matter, a missing
  * key equals one holding `undefined`, array order does matter.
  */
-export function deepEqual(_a: unknown, _b: unknown): boolean {
-  throw new Error('not implemented');
+export function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, i) => deepEqual(item, b[i]))
+    );
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const defined = (obj: Record<string, unknown>) =>
+    Object.keys(obj).filter((key) => obj[key] !== undefined);
+  const leftKeys = defined(left);
+  return (
+    leftKeys.length === defined(right).length &&
+    leftKeys.every((key) => deepEqual(left[key], right[key]))
+  );
 }
 
 /**
- * The id of a section or column while ids are still optional in the types;
- * throws when it is missing. Goes away once `ToCData` requires them.
+ * The id of a section or column, for code that needs one while the types
+ * still make it optional; throws when it is missing.
  */
-export function idOf(_x: { id?: string }): string {
-  throw new Error('not implemented');
+export function idOf(x: { id?: string }): string {
+  if (x.id === undefined) throw new Error('Section or column has no id');
+  return x.id;
 }
