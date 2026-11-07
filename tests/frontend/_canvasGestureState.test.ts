@@ -4,7 +4,7 @@
 // other drag silently stops working from then on with no console log to
 // triage by. The contract is dead simple — three exports, one mutable
 // boolean — but "simple" is exactly when regressions land unobserved.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   isCanvasGestureActive,
   setCanvasGestureActive,
@@ -75,6 +75,7 @@ describe('_canvasGestureState selection suppression', () => {
   };
 
   afterEach(() => {
+    vi.restoreAllMocks();
     document.body.innerHTML = '';
     window.getSelection()?.removeAllRanges();
   });
@@ -100,14 +101,23 @@ describe('_canvasGestureState selection suppression', () => {
     expect(window.getSelection()!.toString()).toBe('');
   });
 
-  it('leaves the selection alone while an input is focused', () => {
-    document.body.innerHTML = '<input id="i" value="hello world" />';
-    const input = document.getElementById('i') as HTMLInputElement;
-    input.focus();
-    input.setSelectionRange(0, 5);
+  // jsdom does not tie an input's selection to the document selection, so
+  // clearing the document selection would not show up in `selectionStart`.
+  // Browsers do tie them; the observable here is whether the page's
+  // selection was cleared at all.
+  it.each([
+    ['an input', 'input'],
+    ['a textarea', 'textarea'],
+  ])('does not clear the page selection while %s is focused', (_label, tag) => {
+    document.body.innerHTML = `<${tag} id="f">hello world</${tag}>`;
+    const field = document.getElementById('f') as HTMLInputElement | HTMLTextAreaElement;
+    field.focus();
+    field.setSelectionRange(0, 5);
+    const removeAllRanges = vi.spyOn(window.getSelection()!, 'removeAllRanges');
+
     setCanvasGestureActive(true);
-    expect(input.selectionStart).toBe(0);
-    expect(input.selectionEnd).toBe(5);
+
+    expect(removeAllRanges).not.toHaveBeenCalled();
   });
 
   it('leaves the selection alone while a contenteditable (rich-text editor) is focused', () => {
