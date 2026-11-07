@@ -26,8 +26,9 @@
 // `deleteConnection` removes the target from BOTH the new and legacy
 // arrays atomically, so subsequent reads through either format see the
 // connection as gone.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
+import { useFieldBuffer } from '../../hooks/useFieldBuffer';
 import { validWaypointOffsets } from '../../utils/connectionGeometry';
 import type { Connection, Node as GraphNode, ToCData } from '../../types';
 
@@ -99,52 +100,49 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   const sourceEvidence = conn?.evidence ?? '';
   const sourceAssumptions = conn?.assumptions ?? '';
 
-  // Local buffers for the typing inputs.
-  const [evidenceBuffer, setEvidenceBuffer] = useState(sourceEvidence);
-  const [assumptionsBuffer, setAssumptionsBuffer] = useState(sourceAssumptions);
-
-  // Resync the local buffer when the (sourceId, targetId) pair changes
-  // (e.g. user clicks a different connection).
-  const lastEdgeKeyRef = useRef(edgeKey);
-  useEffect(() => {
-    if (lastEdgeKeyRef.current !== edgeKey) {
-      lastEdgeKeyRef.current = edgeKey;
-      setEvidenceBuffer(sourceEvidence);
-      setAssumptionsBuffer(sourceAssumptions);
-    }
-  }, [edgeKey, sourceEvidence, sourceAssumptions]);
+  // Local buffers for the typing inputs. They reset when the (sourceId,
+  // targetId) pair changes (user clicks a different connection) and follow
+  // a collaborator's change to the connection, except in a field being
+  // typed in (see `useFieldBuffer`).
+  const [evidenceBuffer, setEvidenceBuffer] = useFieldBuffer(sourceEvidence, edgeKey, false);
+  const [assumptionsBuffer, setAssumptionsBuffer] = useFieldBuffer(
+    sourceAssumptions,
+    edgeKey,
+    false,
+  );
 
   /**
    * Map an updater over the source node's connections array, patching the
    * record for `targetId`. Handles the legacy `connectionIds` → new-shape
-   * upgrade in a single pass.
+   * upgrade in a single pass. A connection that is not in the chart (the
+   * editor stayed open after someone deleted it) is left absent, not
+   * created from the patch, and the chart comes back as it was.
    */
   const patchConnection = useCallback(
     (patch: Partial<Connection>) => {
-      return (prev: ToCData): ToCData => ({
-        ...prev,
-        sections: prev.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id !== sourceId) return node;
-              // Upgrade legacy → new format if needed.
-              const baseConnections: Connection[] = node.connections
-                ? node.connections
-                : node.connectionIds.map((cid) => ({
-                    targetId: cid,
-                    confidence: DEFAULT_CONFIDENCE,
-                  }));
-              const found = baseConnections.some((c) => c.targetId === targetId);
-              const nextConnections: Connection[] = found
-                ? baseConnections.map((c) => (c.targetId === targetId ? { ...c, ...patch } : c))
-                : [...baseConnections, { targetId, confidence: DEFAULT_CONFIDENCE, ...patch }];
-              return { ...node, connections: nextConnections };
-            }),
+      return (prev: ToCData): ToCData => {
+        const source = findAllNodes(prev).find((n) => n.id === sourceId);
+        if (!source || !readConnection(source, targetId)) return prev;
+        return {
+          ...prev,
+          sections: prev.sections.map((section) => ({
+            ...section,
+            columns: section.columns.map((column) => ({
+              ...column,
+              nodes: column.nodes.map((node) =>
+                node.id === sourceId
+                  ? {
+                      ...node,
+                      connections: readConnections(node).map((c) =>
+                        c.targetId === targetId ? { ...c, ...patch } : c,
+                      ),
+                    }
+                  : node,
+              ),
+            })),
           })),
-        })),
-      });
+        };
+      };
     },
     [sourceId, targetId],
   );
@@ -163,7 +161,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
       setEvidenceBuffer(next);
       mutateDebounced(patchConnection({ evidence: next }), `evidence-${edgeKey}`);
     },
-    [mutateDebounced, patchConnection, edgeKey],
+    [setEvidenceBuffer, mutateDebounced, patchConnection, edgeKey],
   );
 
   const setAssumptions = useCallback(
@@ -171,7 +169,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
       setAssumptionsBuffer(next);
       mutateDebounced(patchConnection({ assumptions: next }), `assumptions-${edgeKey}`);
     },
-    [mutateDebounced, patchConnection, edgeKey],
+    [setAssumptionsBuffer, mutateDebounced, patchConnection, edgeKey],
   );
 
   // --- commits

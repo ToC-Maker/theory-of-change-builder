@@ -450,6 +450,76 @@ describe('useNodeProperties', () => {
     });
   });
 
+  describe('following changes made by someone else', () => {
+    function renderWithData(initial: ToCData, selectedNodeIds: string[] = ['a']) {
+      const api = makeMutationApi(initial);
+      return {
+        api,
+        ...renderHook(
+          (props: { data: ToCData; selectedNodeIds: string[] }) =>
+            useNodeProperties({
+              selectedNodeIds: props.selectedNodeIds,
+              data: props.data,
+              mutate: api.mutate,
+              mutateDebounced: api.mutateDebounced,
+              commit: api.commit,
+            }),
+          { initialProps: { data: initial, selectedNodeIds } },
+        ),
+      };
+    }
+
+    it('shows a remote title and details change the user is not editing', () => {
+      const before = makeData([{ id: 'a', title: 'A', text: 'old details' }]);
+      const { result, rerender } = renderWithData(before);
+
+      rerender({
+        data: makeData([{ id: 'a', title: 'Renamed', text: 'new details' }]),
+        selectedNodeIds: ['a'],
+      });
+
+      expect(result.current.title).toBe('Renamed');
+      expect(result.current.details).toBe('new details');
+    });
+
+    it('leaves a title being typed alone when a remote change touches another field', () => {
+      const before = makeData([{ id: 'a', title: 'A', text: 'old details' }]);
+      const { result, rerender } = renderWithData(before);
+
+      act(() => {
+        result.current.setTitle('A typed');
+      });
+      // Live data carries the typed title (preview) and the remote details.
+      rerender({
+        data: makeData([{ id: 'a', title: 'A typed', text: 'remote details' }]),
+        selectedNodeIds: ['a'],
+      });
+
+      expect(result.current.title).toBe('A typed');
+      expect(result.current.details).toBe('remote details');
+    });
+
+    it('does not resync a multi-selection whose values differ', () => {
+      const before = makeData([
+        { id: 'a', title: 'A' },
+        { id: 'b', title: 'B' },
+      ]);
+      const { result, rerender } = renderWithData(before, ['a', 'b']);
+      expect(result.current.isTitleMixed).toBe(true);
+
+      rerender({
+        data: makeData([
+          { id: 'a', title: 'A2' },
+          { id: 'b', title: 'B' },
+        ]),
+        selectedNodeIds: ['a', 'b'],
+      });
+
+      expect(result.current.isTitleMixed).toBe(true);
+      expect(result.current.title).toBe('');
+    });
+  });
+
   describe('selection change preserves local buffer correctness', () => {
     it('resets buffered title when the selection changes to a different node', () => {
       let selection = ['a'];

@@ -29,6 +29,15 @@ interface SelectedEdge {
   midY: number;
 }
 
+/** True when `data` has the connection and both of its end nodes. */
+function hasConnection(data: ToCData, { sourceId, targetId }: SelectedEdge): boolean {
+  const nodes = data.sections.flatMap((section) => section.columns.flatMap((c) => c.nodes));
+  const source = nodes.find((n) => n.id === sourceId);
+  if (!source || !nodes.some((n) => n.id === targetId)) return false;
+  const targetIds = source.connections?.map((c) => c.targetId) ?? source.connectionIds;
+  return targetIds.includes(targetId);
+}
+
 interface ConnectionsComponentProps {
   data: ToCData;
   /**
@@ -183,6 +192,17 @@ export function ConnectionsComponent({
   useLayoutEffect(() => {
     if (highlightedNodes.size > 0) setSelectedEdge(null);
   }, [highlightedNodes]);
+
+  // The editor addresses its connection by the two end nodes, so a
+  // connection deleted by someone else (or left dangling by a deleted end
+  // node) closes the editor; otherwise the next keystroke in it would
+  // write against a line that is gone. Dropping the state, not just
+  // hiding the editor, keeps it closed if the connection comes back (an
+  // undo). The updater returns the same state while the connection
+  // exists, so ordinary edits cause no extra render.
+  useLayoutEffect(() => {
+    setSelectedEdge((current) => (current && hasConnection(data, current) ? current : null));
+  }, [data]);
 
   // Stash `onSizeChange` in a ref so `updateSize` doesn't need it as a dep —
   // the parent passes a fresh inline arrow every render, which would otherwise
