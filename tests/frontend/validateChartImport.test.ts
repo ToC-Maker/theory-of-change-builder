@@ -127,6 +127,22 @@ describe('validateChartImport', () => {
     }
   });
 
+  it('rejects a connection that names no node, by its position in the file', () => {
+    const result = validateChartImport({
+      sections: [
+        {
+          columns: [
+            { nodes: [{ id: 'n1', connections: [{ confidence: 50 }], connectionIds: [] }] },
+          ],
+        },
+      ],
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'sections[0].columns[0].nodes[0].connections[0] has no targetId',
+    });
+  });
+
   it('returns the chart normalised, with ids and canonical connections', () => {
     const result = validateChartImport({
       title: 'T',
@@ -203,7 +219,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: 'oops', dy: 10 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: 'oops', dy: 10 }] }],
                   },
                 ],
               },
@@ -221,7 +237,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: NaN, dy: 0 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: NaN, dy: 0 }] }],
                   },
                 ],
               },
@@ -239,7 +255,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ x: NaN, y: 0 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ x: NaN, y: 0 }] }],
                   },
                 ],
               },
@@ -257,7 +273,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: 4 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: 4 }] }],
                   },
                 ],
               },
@@ -275,7 +291,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: Infinity, dy: 1 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: Infinity, dy: 1 }] }],
                   },
                 ],
               },
@@ -293,7 +309,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [null] }],
+                    connections: [{ targetId: 'b', waypoints: [null] }],
                   },
                 ],
               },

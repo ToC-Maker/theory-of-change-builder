@@ -10,7 +10,12 @@ import { ChatInterface } from './components/ChatInterface';
 import { GraphTutorial } from './components/GraphTutorial';
 import { PrivacyPolicyPopup } from './components/PrivacyPolicyPopup';
 import { ApiKeyProvider } from './contexts/ApiKeyContext';
-import { ChartApiError, ChartService, type ChartCreated } from './services/chartService';
+import {
+  ChartApiError,
+  ChartService,
+  type ChartCreated,
+  type OpenChart,
+} from './services/chartService';
 import { chatService } from './services/chatService';
 import {
   LoggingServiceClass,
@@ -700,6 +705,13 @@ function ToCViewer() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
   const [currentChartId, setCurrentChartId] = useState<string | null>(null);
+  // The chart id of the chart the document saves to, readable by a create that
+  // finishes after the render that would have shown it in `currentChartId`.
+  const chartIdRef = useRef<string | null>(null);
+  const rememberChartId = useCallback((chartId: string) => {
+    chartIdRef.current = chartId;
+    setCurrentChartId(chartId);
+  }, []);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
   // Server-verified `isOwner` from the latest getChart response. Reset
   // when the edit token changes. Wired through to FileMenu so the
@@ -941,13 +953,23 @@ function ToCViewer() {
   // A chart on `/` is not on the server until the first message or share
   // creates it. The document attaches the server's version and the chart that
   // was sent; edits made while the request was out go out on that version.
+  // Two creates can race (several files at once, or a message and the Share
+  // dialog): the document keeps the first server, so only that create changes
+  // what the page follows, and every creator is told which chart that is.
   const handleChartCreated = useCallback(
-    (created: ChartCreated) => {
+    (created: ChartCreated): OpenChart => {
       doc.attachServer(created.editToken, { version: created.version, chart: created.chart });
-      setCurrentChartId(created.chartId);
-      initializeLogging(created.chartId, doc.getCommitted());
+      const { editToken } = doc.getStatus();
+      if (editToken === created.editToken) {
+        rememberChartId(created.chartId);
+        initializeLogging(created.chartId, doc.getCommitted());
+      }
+      return {
+        editToken: editToken ?? created.editToken,
+        chartId: chartIdRef.current ?? created.chartId,
+      };
     },
-    [doc, initializeLogging],
+    [doc, initializeLogging, rememberChartId],
   );
 
   // The unsaved copy of a chart that has no server yet (and of any chart whose
@@ -1288,7 +1310,7 @@ function ToCViewer() {
             ChartService.hasAuthToken(),
           );
           const result = await ChartService.getChartByEditToken(editToken);
-          setCurrentChartId(result.chartId);
+          rememberChartId(result.chartId);
           setIsOwner(Boolean(result.isOwner));
           if (!alreadyOpen) {
             // `result.chartData` is normalised by the service, and `version` is the one it was read at.
@@ -1344,6 +1366,7 @@ function ToCViewer() {
     isAuthenticated,
     location.state,
     initializeLogging,
+    rememberChartId,
   ]);
 
   // Update document title when data changes

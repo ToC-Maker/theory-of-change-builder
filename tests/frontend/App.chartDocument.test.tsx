@@ -334,6 +334,27 @@ describe('what the chat, import and generate flows hand to the document', () => 
   );
 
   it(
+    'gives a node the reply created an id of its own, so two replies cannot share one',
+    async () => {
+      await openEditor();
+      const asSent = committed();
+      const result = structuredClone(asSent) as ChartInput;
+      result.sections[0].columns[0].nodes.push(node('new-node-id', 500, { title: 'Added by AI' }));
+
+      let applied!: ToCData;
+      act(() => {
+        applied = chat().onAIEdit(asSent, result) as ToCData;
+      });
+
+      const added = nodesOf(applied).find((n) => n.title === 'Added by AI');
+      expect(added?.id).toMatch(/^node-/);
+      expect(findNode(committed(), 'new-node-id')).toBeUndefined();
+      expect(nodesOf(committed()).filter((n) => n.title === 'Added by AI')).toHaveLength(1);
+    },
+    SLOW,
+  );
+
+  it(
     'keeps an edit made while the reply was streaming',
     async () => {
       await openEditor();
@@ -436,6 +457,34 @@ describe('a chart that does not exist on the server yet', () => {
       expect(update.mock.calls[0][0]).toBe('new-token');
       expect(update.mock.calls[0][2]).toBe(1);
       expect(update.mock.calls[0][1].textSize).toBe(1.2);
+    },
+    SLOW,
+  );
+
+  it(
+    'keeps the chart that attached first when a second create finishes, and tells the creator which',
+    async () => {
+      await openEditor('/');
+      const asCreated = committed();
+      const create = (n: number) => ({
+        editToken: `tok-${n}`,
+        chartId: `chart-${n}`,
+        version: 1,
+        chart: asCreated,
+      });
+
+      let first!: { editToken: string; chartId: string };
+      let second!: { editToken: string; chartId: string };
+      act(() => {
+        first = chat().onChartCreated(create(1));
+        second = latest.share!.onChartCreated(create(2));
+      });
+
+      // Both creators are told to follow the chart the document saves to.
+      expect(first).toEqual({ editToken: 'tok-1', chartId: 'chart-1' });
+      expect(second).toEqual({ editToken: 'tok-1', chartId: 'chart-1' });
+      expect(top().currentEditToken).toBe('tok-1');
+      expect(top().currentChartId).toBe('chart-1');
     },
     SLOW,
   );

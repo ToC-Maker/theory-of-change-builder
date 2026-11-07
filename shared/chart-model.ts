@@ -126,8 +126,8 @@ export class ChartShapeError extends Error {
  *
  * Throws `ChartShapeError` (its `reason` an index path) when the chart is not
  * an object with a `sections` array, a section, column, node or connection
- * entry is not an object, or a section lacks its `columns` array or a column
- * its `nodes` array.
+ * entry is not an object, a connection entry has no string `targetId`, or a
+ * section lacks its `columns` array or a column its `nodes` array.
  */
 export function normalizeChart(raw: unknown): ToCData {
   assertChartShape(raw);
@@ -215,7 +215,11 @@ export function assertChartShape(raw: unknown): asserts raw is ChartInput {
         const { connections } = node as { connections?: unknown };
         if (!Array.isArray(connections)) return;
         connections.forEach((connection, m) => {
-          if (!isObject(connection)) fail(`${inNode}.connections[${m}] is not an object`);
+          const at = `${inNode}.connections[${m}]`;
+          if (!isObject(connection)) fail(`${at} is not an object`);
+          if (typeof (connection as { targetId?: unknown }).targetId !== 'string') {
+            fail(`${at} has no targetId`);
+          }
         });
       });
     });

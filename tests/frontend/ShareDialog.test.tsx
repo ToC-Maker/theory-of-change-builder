@@ -25,7 +25,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { ChartApiError, ChartService } from '../../src/services/chartService';
 import { ShareDialog, type ShareDialogProps } from '../../src/components/share/ShareDialog';
 import type { Permission, LinkSharingLevel } from '../../shared/permissions';
@@ -186,6 +186,34 @@ describe('ShareDialog', () => {
         chart: createChart.mock.calls[0][0],
       });
       expect(createChart.mock.calls[0][0]).toBe(baseProps.data);
+    });
+
+    it('follows the chart the document holds when another create attached first', async () => {
+      // Chat and Share created a chart at once: the app keeps the first, so the
+      // URL and the links shown must be that chart's, not the one just created.
+      vi.spyOn(ChartService, 'createChart').mockResolvedValue(created);
+      vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
+      const onChartCreated = vi
+        .fn()
+        .mockReturnValue({ editToken: 'tok-doc', chartId: 'chart-doc' });
+      function Pathname() {
+        return <output data-testid="pathname">{useLocation().pathname}</output>;
+      }
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <ShareDialog {...baseProps} currentEditToken={null} onChartCreated={onChartCreated} />
+          <Pathname />
+        </MemoryRouter>,
+      );
+
+      expect(
+        await screen.findByDisplayValue(`${window.location.origin}/edit/tok-doc`),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByDisplayValue(`${window.location.origin}/chart/chart-doc`),
+      ).toBeInTheDocument();
+      expect(screen.queryByDisplayValue(/tok-new/)).toBeNull();
+      await waitFor(() => expect(screen.getByTestId('pathname').textContent).toBe('/edit/tok-doc'));
     });
 
     it('shows the failure when the server answers without a chart version', async () => {

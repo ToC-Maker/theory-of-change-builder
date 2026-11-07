@@ -14,14 +14,13 @@ import {
   newNodeId,
   newSectionId,
   normalizeChart,
-  type ChartInput,
   type Node,
   type ToCData,
 } from '../../shared/chart-model';
 
 /**
  * `asSent` is the chart the reply was computed from; `result` is that chart
- * with the reply's edits applied. Node ids `asSent` did not have, and every
+ * with the reply's edits applied, which is model output and so unchecked. Node ids `asSent` did not have, and every
  * repeat of an id within `result`, are replaced by fresh ones, with connection
  * targets following; sections and columns without an id get random ones.
  * Throws `ChartShapeError` when `result` is not a chart. Ends in
@@ -29,7 +28,7 @@ import {
  * pushed nodes, so a node the reply rewrote whole may list `connectionIds`
  * only, which the merge would read as all of its edges deleted.
  */
-export function prepareAIResult(asSent: ToCData, result: ChartInput): ToCData {
+export function prepareAIResult(asSent: ToCData, result: unknown): ToCData {
   // Model output: nothing has checked that it is a chart, and it is walked below.
   assertChartShape(result);
   const known = new Set(

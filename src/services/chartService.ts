@@ -75,6 +75,16 @@ export interface ChartCreated {
   chart: ToCData;
 }
 
+/**
+ * The chart the app is saving to, handed back to a create flow: the chart it
+ * just created, or the one that attached first when two creates raced. The
+ * creator follows it (URL, links, uploads) rather than its own.
+ */
+export interface OpenChart {
+  editToken: string;
+  chartId: string;
+}
+
 export interface GetChartResponse {
   /** Normalised: every section and column has an id. */
   chartData: ToCData;

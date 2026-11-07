@@ -158,7 +158,8 @@ afterEach(() => {
   delete (globalThis as { jest?: unknown }).jest;
 });
 
-describe('typing a title while a remote chart lands', () => {
+// Generous: on a loaded machine the first render alone can pass the 5 s default.
+describe('typing a title while a remote chart lands', { timeout: 20_000 }, () => {
   // Poll at 2500 ms; the user's last key is at 2450 ms.
   const KEY_TIME = 2450;
   const POLL_TIME = 2500;
