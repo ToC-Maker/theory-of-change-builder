@@ -128,8 +128,10 @@ async function openEditor(path = '/edit/tok') {
       <App />
     </MemoryRouter>,
   );
-  // The toolbar mounts once the chart has loaded.
+  // The toolbar mounts once the chart has loaded. Its store subscriptions are
+  // made by effects after that commit, so let them run before a test edits.
   await waitFor(() => expect(latest.top).not.toBeNull(), { timeout: SLOW });
+  await act(async () => {});
 }
 
 const committed = (): ToCData => chat().graphData;
