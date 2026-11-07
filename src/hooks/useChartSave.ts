@@ -105,8 +105,11 @@ export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartS
   // Set once saving cannot continue (merge failure, terminal document error).
   const stoppedRef = useRef(false);
   // The document notifies synchronously inside the calls this hook makes to
-  // settle a save; those notifications are not edits and must not re-arm the debounce.
+  // take and settle a save; those notifications are not edits and must not re-arm the debounce.
   const settlingRef = useRef(false);
+  // The error the last failed save put in the pill, so that nothing left to
+  // save can clear it without also clearing one the app set (a failed delete).
+  const failureRef = useRef<SaveError | null>(null);
 
   const onSaveFailedRef = useRef(onSaveFailed);
   useEffect(() => {
@@ -146,7 +149,11 @@ export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartS
       if (stoppedRef.current) return;
       const save = whileSettling(() => doc.takeSave());
       if (!save) {
-        setIsSaving(doc.getStatus().saving);
+        const { saving, unsaved } = doc.getStatus();
+        setIsSaving(saving);
+        // A failed save whose data the server turns out to hold (its acknowledgement was
+        // lost, or a poll landed the same chart) leaves nothing to retry: the failure is over.
+        if (!unsaved) setSaveError((current) => (current === failureRef.current ? null : current));
         return;
       }
 
@@ -200,7 +207,8 @@ export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartS
             stopSaving(asSaveError(err));
             return;
           }
-          setSaveError(asSaveError(err));
+          failureRef.current = asSaveError(err);
+          setSaveError(failureRef.current);
           onSaveFailedRef.current?.(doc.getCommitted());
 
           if (!isRetryable(err) || !mountedRef.current) {
@@ -231,15 +239,14 @@ export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartS
       const { unsaved, editToken, serverVersion, terminalError } = doc.getStatus();
       if (!unsaved || !editToken || serverVersion === null || terminalError) return;
       retryCountRef.current = 0;
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      clearTimer();
       setIsSaving(true);
       timerRef.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
-      retryWaitRef.current = false;
     };
     stoppedRef.current = false;
     armDebounce();
     return doc.subscribe(armDebounce);
-  }, [doc, flush]);
+  }, [doc, flush, clearTimer]);
 
   // Coming back online or returning to the tab ends a retry wait early:
   // the connection that failed the save may be back.

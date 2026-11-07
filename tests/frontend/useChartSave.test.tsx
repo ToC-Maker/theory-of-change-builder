@@ -178,7 +178,10 @@ describe('useChartSave: the normal save', () => {
     edit(V2);
     await advance(100);
     edit(V3);
-    await advance(300);
+    // Each edit pushes the send back: 300 ms after the last one, not after the first.
+    await advance(299);
+    expect(requests).toHaveLength(0);
+    await advance(1);
 
     expect(requests).toHaveLength(1);
     expect(requests[0].chart).toBe(V3);
@@ -371,6 +374,46 @@ describe('useChartSave: a save that cannot continue', () => {
     expect(JSON.stringify(mockReportError.mock.calls[0][0])).not.toContain('not a chart');
     await advance(300_000);
     expect(requests).toHaveLength(1);
+  });
+
+  it('does not send an edit that was waiting behind the save when the merge failed', async () => {
+    const { edit } = setup(seed);
+
+    edit(edited);
+    await advance(300);
+    edit(
+      deepFreeze(
+        editChart(edited, (draft) => {
+          nodeIn(draft, 'a').title = 'Typed meanwhile';
+        }),
+      ),
+    );
+    await requests[0].conflict({ version: 5, chart: repeatedSectionId() });
+    await advance(300_000);
+
+    expect(requests).toHaveLength(1);
+    expect(mockReportError).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves a different document normally after the previous one stopped', async () => {
+    const open = () =>
+      new ChartDocument({ chart: seed, editToken: 'tok', server: { version: 3, chart: seed } });
+    const first = open();
+    const second = open();
+    const { rerender } = renderHook(({ doc }) => useChartSave({ doc }), {
+      initialProps: { doc: first },
+    });
+
+    act(() => first.edit(() => edited));
+    await advance(300);
+    await requests[0].conflict({ version: 5, chart: repeatedSectionId() });
+    await advance(300_000);
+    expect(requests).toHaveLength(1);
+
+    rerender({ doc: second });
+    act(() => second.edit(() => edited));
+    await advance(300);
+    expect(requests).toHaveLength(2);
   });
 
   it('shows and reports a server that went back to an older version, once, and stops saving', async () => {
@@ -738,6 +781,62 @@ describe('useChartSave: failures', () => {
       expect(result.current.isSaving).toBe(false);
     },
   );
+
+  describe('a failed save whose data the server turns out to hold', () => {
+    // A save lands but its acknowledgement is lost: the retry sends the old base and is answered
+    // with a conflict carrying exactly what was sent.
+    it('stops showing the failure when the retry finds the server already holds the chart', async () => {
+      const { result, doc, edit } = setup();
+
+      edit(V1);
+      await advance(300);
+      await requests[0].fail(
+        Object.assign(new Error('No answer within 30s'), { name: 'TimeoutError' }),
+      );
+      expect(result.current.saveError).not.toBeNull();
+
+      await advance(1000);
+      expect(requests).toHaveLength(2);
+      expect(requests[1].baseVersion).toBe(3);
+      await requests[1].conflict({ version: 4, chart: V1 });
+
+      expect(doc.getStatus().unsaved).toBe(false);
+      expect(result.current.saveError).toBeNull();
+      expect(result.current.isSaving).toBe(false);
+      expect(requests).toHaveLength(2);
+    });
+
+    it('stops showing the failure when a poll lands the same chart during the wait', async () => {
+      const { result, doc, edit } = setup();
+
+      edit(V1);
+      await advance(300);
+      await requests[0].fail(networkError());
+      expect(result.current.saveError).not.toBeNull();
+
+      act(() => doc.receiveRemote({ version: 4, chart: V1 }));
+      await advance(300);
+
+      expect(doc.getStatus().unsaved).toBe(false);
+      expect(result.current.saveError).toBeNull();
+      expect(result.current.isSaving).toBe(false);
+      expect(requests).toHaveLength(1);
+    });
+
+    it('leaves an error the app set itself, such as a failed delete', async () => {
+      const { result, doc, edit } = setup();
+
+      edit(V1);
+      await advance(300);
+      await requests[0].fail(networkError());
+      act(() => result.current.setSaveError({ message: 'Delete failed' }));
+
+      act(() => doc.receiveRemote({ version: 4, chart: V1 }));
+      await advance(300);
+
+      expect(result.current.saveError).toEqual({ message: 'Delete failed' });
+    });
+  });
 
   it('does not retry a 404, which no retry can fix', async () => {
     const { edit } = setup();
