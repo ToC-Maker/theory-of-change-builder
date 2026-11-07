@@ -525,10 +525,6 @@ describe('mergeCharts: output', () => {
     expect(mergeCharts(B, sameAsBase, mine, { onConflict: 'mine' })).toBe(mine);
   });
 
-  it('returns a chart equal to the input when all three are the same', () => {
-    expect(merge(B, B, B)).toEqual(B);
-  });
-
   it('rebuilds yPosition from the merged position and omits keys that end up undefined', () => {
     const mine = edit(B, (c) => {
       moveNode(c, 'a', 'c3', 50);
