@@ -59,8 +59,8 @@
 //
 // Keys MUST be property-scoped (`'width-${nodeId}'`, `'title-${nodeId}'`,
 // `'curvature'`, `'section-title-${sectionId}'`). Two properties sharing a key
-// share one idle timer and one `commit(key)`, so a commit of that key reports
-// them as one gesture.
+// share one idle timer, so a write to either postpones the idle commit of the
+// other, and `discardBuffered(key)` forgets both.
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import type { SetStateAction } from 'react';
 import type { ChartStore } from '../sync/ChartDocument';

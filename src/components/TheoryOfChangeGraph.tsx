@@ -109,17 +109,17 @@ export function ToC({
   onHighlightedNodesChange,
   onDragActiveChange,
 }: ToCProps) {
-  // Graph mutation seam: see `src/hooks/useGraphMutation.ts` for the
-  // queueMicrotask-deferral rationale (replaces the previous
-  // `setTimeout(0)` hack with a precise documented primitive). Three
-  // entry points:
+  // Graph mutation seam (`src/hooks/useGraphMutation.ts`). Three entry
+  // points:
   //
   //   mutate(updater)              — discrete user actions
   //                                   (drop, delete, add-node, add-column,
-  //                                   add-section, etc.)
+  //                                   add-section, etc.): previewed at once,
+  //                                   committed on the next microtask.
   //   mutateDebounced(updater,key) — streaming inputs
-  //                                   (slider drags, color, title typing).
-  //                                   No commit until commit().
+  //                                   (slider drags, color, title typing):
+  //                                   previewed at once, committed after a
+  //                                   200 ms idle pause or by commit(key).
   //   commit(key?)                 — commit the preview; produces ONE
   //                                   undo entry per gesture.
   //
@@ -839,7 +839,7 @@ export function ToC({
     onConnect: addConnection,
   });
 
-  // PR 7: waypoint drag is hoisted up to `TheoryOfChangeGraph` (parity
+  // Waypoint drag is hoisted up to `TheoryOfChangeGraph` (parity
   // with `useConnectionDrag` placement) so its `isActive` flag can OR
   // into `isAnyDragActive` below — that is the polling-pause signal the
   // sync poll consumes via App.tsx's `isDragInFlightRef`. Bind accessors
