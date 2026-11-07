@@ -33,10 +33,10 @@ export function rng(seed: number): Rng {
   };
 }
 
-export const connectionsOf = (chart: ToCData) =>
+const connectionsOf = (chart: ToCData) =>
   nodesOf(chart).flatMap((n) => (n.connections ?? []).map((c) => ({ source: n, connection: c })));
 
-export function hasDanglingConnection(chart: ToCData): boolean {
+function hasDanglingConnection(chart: ToCData): boolean {
   const ids = new Set(nodesOf(chart).map((n) => n.id));
   return connectionsOf(chart).some(({ connection }) => !ids.has(connection.targetId));
 }
@@ -73,12 +73,7 @@ export function assertUniqueIds(chart: ToCData, where: string): void {
  * Sections, columns and nodes that both sides have, or that one side added, are never
  * deleted by the merge: no delete rule applies to them.
  */
-export function assertNothingDropped(
-  base: ToCData,
-  mine: ToCData,
-  theirs: ToCData,
-  out: ToCData,
-): void {
+function assertNothingDropped(base: ToCData, mine: ToCData, theirs: ToCData, out: ToCData): void {
   const idLists = (chart: ToCData) => ({
     section: new Set(chart.sections.map((s) => s.id)),
     column: new Set(columnsOf(chart).map((c) => c.id)),
@@ -97,7 +92,7 @@ export function assertNothingDropped(
  * A section or column that either side no longer has, though the base did, survives only as
  * the home of something that survives: a column of a node, a section of a column.
  */
-export function assertDeletedContainersStayDeleted(
+function assertDeletedContainersStayDeleted(
   base: ToCData,
   mine: ToCData,
   theirs: ToCData,
@@ -178,7 +173,7 @@ function recordsOf(chart: ToCData): Records {
  * agree on, otherwise the `onConflict` side's. A record only one side has comes through as
  * that side has it; one both sides added is merged against an empty base.
  */
-export function assertFieldsFollowFieldRule(
+function assertFieldsFollowFieldRule(
   base: ToCData,
   mine: ToCData,
   theirs: ToCData,
@@ -251,7 +246,7 @@ function childLists(chart: ToCData): Map<string, string[]> {
  * not list (mine's) follows its nearest left neighbour in mine's list that is also in the
  * result, or comes first when it has none.
  */
-export function assertOrder(mine: ToCData, theirs: ToCData, out: ToCData): void {
+function assertOrder(mine: ToCData, theirs: ToCData, out: ToCData): void {
   const [m, t, o] = [mine, theirs, out].map(childLists);
   for (const [parent, outList] of o) {
     const theirList = t.get(parent) ?? [];
