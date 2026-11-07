@@ -114,34 +114,35 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   /**
    * Map an updater over the source node's connections array, patching the
    * record for `targetId`. Handles the legacy `connectionIds` → new-shape
-   * upgrade in a single pass.
+   * upgrade in a single pass. A connection that is not in the chart (the
+   * editor stayed open after someone deleted it) is left absent, not
+   * created from the patch, and the chart comes back as it was.
    */
   const patchConnection = useCallback(
     (patch: Partial<Connection>) => {
-      return (prev: ToCData): ToCData => ({
-        ...prev,
-        sections: prev.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id !== sourceId) return node;
-              // Upgrade legacy → new format if needed.
-              const baseConnections: Connection[] = node.connections
-                ? node.connections
-                : node.connectionIds.map((cid) => ({
-                    targetId: cid,
-                    confidence: DEFAULT_CONFIDENCE,
-                  }));
-              const found = baseConnections.some((c) => c.targetId === targetId);
-              const nextConnections: Connection[] = found
-                ? baseConnections.map((c) => (c.targetId === targetId ? { ...c, ...patch } : c))
-                : [...baseConnections, { targetId, confidence: DEFAULT_CONFIDENCE, ...patch }];
-              return { ...node, connections: nextConnections };
-            }),
+      return (prev: ToCData): ToCData => {
+        const source = findAllNodes(prev).find((n) => n.id === sourceId);
+        if (!source || !readConnection(source, targetId)) return prev;
+        return {
+          ...prev,
+          sections: prev.sections.map((section) => ({
+            ...section,
+            columns: section.columns.map((column) => ({
+              ...column,
+              nodes: column.nodes.map((node) =>
+                node.id === sourceId
+                  ? {
+                      ...node,
+                      connections: readConnections(node).map((c) =>
+                        c.targetId === targetId ? { ...c, ...patch } : c,
+                      ),
+                    }
+                  : node,
+              ),
+            })),
           })),
-        })),
-      });
+        };
+      };
     },
     [sourceId, targetId],
   );

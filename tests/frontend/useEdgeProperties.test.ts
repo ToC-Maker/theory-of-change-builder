@@ -301,4 +301,83 @@ describe('useEdgeProperties', () => {
       expect(result.current.confidence).toBe(90);
     });
   });
+
+  describe('a connection that no longer exists', () => {
+    function withoutConnection(): ToCData {
+      return deepFreeze({
+        sections: [
+          {
+            title: 'S',
+            columns: [
+              {
+                nodes: [
+                  { id: 'a', title: 'A', text: '', connectionIds: [], connections: [] },
+                  { id: 'b', title: 'B', text: '', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    it('patchConnection_does_not_recreate_missing_connection', () => {
+      const data = withoutConnection();
+      const api = makeMutationApi(data);
+      const { result } = renderHook(() =>
+        useEdgeProperties({
+          sourceId: 'a',
+          targetId: 'b',
+          data,
+          mutate: api.mutate,
+          mutateDebounced: api.mutateDebounced,
+          commit: api.commit,
+        }),
+      );
+
+      act(() => {
+        result.current.setEvidence('typed after it was deleted');
+        result.current.setAssumptions('typed after it was deleted');
+        result.current.setConfidence(90);
+      });
+
+      expect(api.mutateDebounced).toHaveBeenCalledTimes(3);
+      expect(api.dataRef.current).toBe(data);
+    });
+
+    it('does not recreate a legacy connection that was removed from connectionIds', () => {
+      const data: ToCData = deepFreeze({
+        sections: [
+          {
+            title: 'S',
+            columns: [
+              {
+                nodes: [
+                  { id: 'a', title: 'A', text: '', connectionIds: [] },
+                  { id: 'b', title: 'B', text: '', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const api = makeMutationApi(data);
+      const { result } = renderHook(() =>
+        useEdgeProperties({
+          sourceId: 'a',
+          targetId: 'b',
+          data,
+          mutate: api.mutate,
+          mutateDebounced: api.mutateDebounced,
+          commit: api.commit,
+        }),
+      );
+
+      act(() => {
+        result.current.setEvidence('late');
+      });
+
+      expect(api.dataRef.current).toBe(data);
+    });
+  });
 });
