@@ -22,12 +22,11 @@
 //   8. click a connection while editing a node → EdgeEditor opens
 //      (connection hit paths are switch targets, not canvas actions)
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { cleanup, fireEvent, act } from '@testing-library/react';
+import type { ChartInput, ToCData } from '../../src/types';
 import { _resetSwallowNextClickGuardForTest } from '../../src/hooks/useDismissOnOutsideEvent';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import { deepFreeze } from './helpers/deepFreeze';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
@@ -36,9 +35,9 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-// A fresh object per test, deep-frozen where it is rendered: an updater
-// that writes into the state it receives throws.
-const makeData = (): ToCData => ({
+// A fresh object per test; the helper deep-freezes the normalised chart, so
+// an updater that writes into the state it receives throws.
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -95,7 +94,7 @@ function gestureDblClick(el: Element, coords: { clientX: number; clientY: number
 }
 
 /**
- * `setDataAndNotify` (useGraphMutation) flushes via queueMicrotask, so
+ * The canvas commits a gesture's change to the store on a microtask, so
  * data-driven DOM changes (added columns/sections/nodes) land one
  * microtask after the click. Every count assertion — including the
  * "nothing changed" ones, which would otherwise false-pass on a stale
@@ -120,13 +119,17 @@ function openNodeEditor(nodeId: string) {
   expect(document.querySelector('.node-editor')).not.toBeNull();
 }
 
+function nodeCount(chart: ToCData): number {
+  return chart.sections.flatMap((s) => s.columns.flatMap((c) => c.nodes)).length;
+}
+
 function columnCount(): number {
   return document.querySelectorAll('[data-column]').length;
 }
 
 describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   it('1. dismissing over a column gutter closes the editor without adding a column', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
     const before = columnCount();
 
@@ -138,7 +141,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('1b. dismissing over a section gutter closes the editor without adding a section', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
     const before = document.querySelectorAll('[data-testid="add-section-before"]').length;
 
@@ -150,7 +153,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('2. dismissing over empty canvas (column body) only closes the editor', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
     const nodesBefore = document.querySelectorAll('[data-tocb-node]').length;
     const colsBefore = columnCount();
@@ -164,7 +167,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('3. clicking node B while editing node A switches the editor (not swallowed)', () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
 
     gestureClick(q('[data-tocb-node="n-2"]'), at(400, 100));
@@ -177,7 +180,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('4. Cmd/Ctrl+click node B extends the selection (not dismissed, not swallowed)', () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
 
     const nodeB = q('[data-tocb-node="n-2"]');
@@ -191,7 +194,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('5. a second, separate gutter click after the dismissal adds the column', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
     const before = columnCount();
 
@@ -206,26 +209,14 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
     expect(columnCount()).toBe(before + 1);
   });
 
-  // Node-creation can't be asserted via DOM node counts here: with a
-  // frozen `data` prop, the absorb-initialData effect in
-  // TheoryOfChangeGraph re-runs when the new node's ref mounts (its
-  // `recalculateAllNodeHeights` dep changes identity) and resets the
-  // graph state before RTL yields — a pre-existing jsdom-harness
-  // artifact, not app behavior (live-browser create works; App keeps
-  // `data` in sync via onDataChange, and the rodney matrix confirms the
-  // real-browser behavior). The same reset also clobbers `dataRef`
-  // before the coalesced mutation notify fires, so the `onDataChange`
-  // node count is unreliable too. The faithful, reset-immune observable
-  // is `createNewNode`'s OTHER atomic side effect: it auto-selects the
-  // new node (`setHighlightedNodes([newNode.id])`), which mounts the
-  // NodeEditor. So for the double-click-create path specifically,
-  // editor-mounted ⟺ a node was created; no other gesture here opens an
-  // editor. (Note: dismissing also fires one benign `onDataChange` —
-  // the unmount commit-flush notifies even with nothing buffered — so
-  // "onDataChange not called" would be the wrong assertion.)
+  // Node creation is observable in the committed chart, and in its other
+  // atomic side effect: `createNewNode` auto-selects the new node, which
+  // mounts the NodeEditor. No other gesture here opens an editor, so
+  // editor-mounted <=> a node was created.
   it('6. double-click-to-create while an editor is open is consumed (no node)', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    const { doc } = renderToC(makeData());
     openNodeEditor('n-1');
+    const nodesBefore = nodeCount(doc.getCommitted());
 
     gestureDblClick(q('[data-column="0-0"]'), at(150, 300));
     await flushMutations();
@@ -234,11 +225,13 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
     // swallowed: no new node was created+auto-selected, so the editor
     // stays closed.
     expect(document.querySelector('.node-editor')).toBeNull();
+    expect(nodeCount(doc.getCommitted())).toBe(nodesBefore);
   });
 
   it('6b. control: the same double-click gesture with no editor open creates a node', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    const { doc } = renderToC(makeData());
     expect(document.querySelector('.node-editor')).toBeNull();
+    const nodesBefore = nodeCount(doc.getCommitted());
 
     gestureDblClick(q('[data-column="0-0"]'), at(150, 300));
     await flushMutations();
@@ -247,10 +240,11 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
     // node was auto-selected, mounting its NodeEditor. Pin the contrast
     // with scenario 6 — same gesture, opposite outcome.
     expect(document.querySelector('.node-editor')).not.toBeNull();
+    expect(nodeCount(doc.getCommitted())).toBe(nodesBefore + 1);
   });
 
   it('7. EdgeEditor: dismissing over a column gutter closes it without adding a column', async () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     // Open the EdgeEditor by clicking the connection's invisible hit
     // path (no recorded pointerdown → opens unconditionally).
     fireEvent.click(q('[data-tocb-connection-hitpath]'));
@@ -265,7 +259,7 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
   });
 
   it('8. clicking a connection while editing a node opens the EdgeEditor (switch flow)', () => {
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+    renderToC(makeData());
     openNodeEditor('n-1');
 
     gestureClick(q('[data-tocb-connection-hitpath]'), at(250, 150));

@@ -1,11 +1,21 @@
 import clsx from 'clsx';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
+import type { ChartStore } from '../sync/ChartDocument';
+import { idOf, newColumnId, newNodeId, newSectionId } from '../../shared/chart-model';
 import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
 import { computeAlignedSections } from '../utils/alignNodes';
+import { nodeExistsInData } from '../utils/findNode';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
@@ -29,14 +39,14 @@ import { AddControlZone, CANVAS_EDGE_PX, ColumnSlot } from './canvas/AddControlZ
 import type { AddControl } from './canvas/AddControlZone';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
-// The data an updater receives is the object App keeps as the undo
-// snapshot, so insertions copy every array they extend instead of
+// The chart an updater receives can be the object the store keeps as an
+// undo entry, so insertions copy every array they extend instead of
 // splicing it.
 const insertSection = (data: ToCData, index: number): ToCData => ({
   ...data,
   sections: [
     ...data.sections.slice(0, index),
-    { title: 'New Section', columns: [{ nodes: [] }] },
+    { id: newSectionId(), title: 'New Section', columns: [{ id: newColumnId(), nodes: [] }] },
     ...data.sections.slice(index),
   ],
 });
@@ -49,7 +59,7 @@ const insertColumn = (data: ToCData, sectionIndex: number, index: number): ToCDa
           ...section,
           columns: [
             ...section.columns.slice(0, index),
-            { nodes: [] },
+            { id: newColumnId(), nodes: [] },
             ...section.columns.slice(index),
           ],
         }
@@ -67,36 +77,38 @@ const insertColumn = (data: ToCData, sectionIndex: number, index: number): ToCDa
 // `currentEditToken` and `onChartCreated` are no longer threaded
 // through. The remaining props are the canvas-layer hooks (camera,
 // viewport, container-size callbacks) + highlight notifier.
-export function ToC({
-  data: initialData,
-  onSizeChange,
-  onDataChange,
-  showEditButton = true,
-  zoomScale = 1,
-  camera,
-  onHighlightedNodesChange,
-  onDragActiveChange,
-}: {
-  data: ToCData;
+export interface ToCProps {
+  /**
+   * The chart the canvas shows and edits. The canvas keeps no copy: it renders
+   * the store's live chart and writes through its previews and commits.
+   */
+  store: ChartStore;
   onSizeChange?: (size: { width: number; height: number }) => void;
-  onDataChange?: (data: ToCData) => void;
   showEditButton?: boolean;
   zoomScale?: number;
   camera?: { x: number; y: number; z: number };
   onHighlightedNodesChange?: (highlightedNodes: Set<string>) => void;
   /**
-   * PR 4: fired when a pointer-drag starts or ends. App.tsx uses this
-   * to pause its 30s sync poll so the in-flight gesture isn't fighting
-   * a stale server snapshot for control of the canvas state
-   * (red-team Important "PR 4 pointer-capture during cross-tab delete
-   * race"). Best-effort: a missed `false` after unmount is fine — the
-   * polling effect re-snapshots `data` next tick.
+   * Fired when a pointer-drag starts or ends. App.tsx uses this to pause
+   * its poll so a chart landing from the server doesn't re-lay-out the
+   * canvas under an in-flight gesture. Best-effort: a missed `false`
+   * after unmount is fine — the poll re-checks on its next tick.
    */
   onDragActiveChange?: (isActive: boolean) => void;
   // PR 3: `viewportOffset` was used by the NodePopup / EdgePopup modal
   // sizing math; both modals retired, so the prop is gone. The
   // anchored editors are positioned by `useAnchorPosition` directly.
-}) {
+}
+
+export function ToC({
+  store,
+  onSizeChange,
+  showEditButton = true,
+  zoomScale = 1,
+  camera,
+  onHighlightedNodesChange,
+  onDragActiveChange,
+}: ToCProps) {
   // Graph mutation seam: see `src/hooks/useGraphMutation.ts` for the
   // queueMicrotask-deferral rationale (replaces the previous
   // `setTimeout(0)` hack with a precise documented primitive). Three
@@ -107,22 +119,21 @@ export function ToC({
   //                                   add-section, etc.)
   //   mutateDebounced(updater,key) — streaming inputs
   //                                   (slider drags, color, title typing).
-  //                                   No parent notify until commit().
-  //   commit(key?)                 — flush buffered key(s); produces ONE
+  //                                   No commit until commit().
+  //   commit(key?)                 — commit the preview; produces ONE
   //                                   undo entry per gesture.
   //
-  // `setData` from the hook is exposed for direct AI-edit / external
-  // state-replace paths (the `useEffect` that resets `data` when
-  // `initialData` changes).
+  // A chart landing from the server or an AI reply goes to the store, not
+  // through this component: `data` below is whatever the store's live chart
+  // is at this render.
   const {
     data,
-    setData,
     mutate: setDataAndNotify,
     mutateDebounced,
     commit: commitMutation,
     discardBuffered: discardBufferedMutation,
     notifyCount,
-  } = useGraphMutation(initialData, onDataChange);
+  } = useGraphMutation(store);
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null;
   }>({});
@@ -141,6 +152,17 @@ export function ToC({
   useEffect(() => {
     onHighlightedNodesChange?.(highlightedNodes);
   }, [highlightedNodes, onHighlightedNodesChange]);
+
+  // A node deleted by a collaborator, an undo or an AI edit leaves the
+  // selection, which closes the editor that would otherwise stay open on
+  // nothing. The same set is kept when nothing was pruned: the parent hears
+  // every new set, and this runs on every keystroke of a preview.
+  useEffect(() => {
+    setHighlightedNodes((prev) => {
+      const kept = [...prev].filter((id) => nodeExistsInData(data, id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [data]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   // PR 4: legacy `draggedNode`, `dragOffset`, `dragOverLocation` state
   // retired — `usePointerDrag` now owns drag state internally and
@@ -155,18 +177,18 @@ export function ToC({
   // ever flips `showEditButton`, this component re-renders with the
   // new value rather than freezing the mount-time value.
   const editMode = showEditButton;
-  // The Format menu writes these into the data, so they follow the prop.
+  // The Format menu writes these into the chart, so they follow it.
   // A setting that is not set renders its default: undo can restore a
   // chart that never had it.
-  const curvature = initialData.curvature ?? 0.5;
-  const textSize = initialData.textSize ?? 1; // 0.5 to 2.0 scale
-  const fontFamily = initialData.fontFamily ?? "'Ubuntu', sans-serif";
-  const columnPadding = initialData.columnPadding ?? 24; // pixels
-  const sectionPadding = initialData.sectionPadding ?? 32; // pixels
+  const curvature = data.curvature ?? 0.5;
+  const textSize = data.textSize ?? 1; // 0.5 to 2.0 scale
+  const fontFamily = data.fontFamily ?? "'Ubuntu', sans-serif";
+  const columnPadding = data.columnPadding ?? 24; // pixels
+  const sectionPadding = data.sectionPadding ?? 32; // pixels
   const [nodeWidth, setNodeWidth] = useState(192); // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff'); // Default white background
   const [editingTitle, setEditingTitle] = useState(false);
-  const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
   // Width (content px) the edited section's title bar had when its
   // editor opened. The bar keeps it while typing so the section doesn't
   // resize under the cursor.
@@ -198,10 +220,10 @@ export function ToC({
 
   // Pending height-recalc timer. Tracked so unmount can clear it: the
   // bare setTimeout used to outlive the component (it fires on every
-  // mount via the initialData effect below), and a mount→unmount inside
-  // the 50ms window made the callback setState against a dead tree —
-  // observed as a flaky "window is not defined" unhandled error when a
-  // jsdom test environment tore down first.
+  // mount via the committed-chart effect below), and a mount→unmount
+  // inside the 50ms window made the callback setState against a dead
+  // tree — observed as a flaky "window is not defined" unhandled error
+  // when a jsdom test environment tore down first.
   const heightRecalcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     return () => {
@@ -225,25 +247,13 @@ export function ToC({
     }, 50); // Slightly longer delay to ensure DOM updates
   }, [nodeRefs]);
 
-  // Update internal data state when prop changes. Separate from the
-  // height recalculation below: that callback changes whenever nodes
-  // remount (a node moved to another column), and re-running this effect
-  // then would replace an edit not yet reported to the parent with the
-  // unchanged prop.
-  useEffect(() => {
-    console.log('ToC component received new initialData:', initialData);
-    setData(initialData);
-  }, [initialData, setData]);
-
-  // Recalculate node heights when data changes (e.g., from AI edits)
+  // Recalculate node heights when the committed chart changes (a gesture
+  // ended, or a remote or AI edit landed), not on every keystroke of a
+  // preview: the editors resize their own nodes as they type.
+  const committed = useSyncExternalStore(store.subscribe, store.getCommitted);
   useEffect(() => {
     recalculateAllNodeHeights();
-  }, [initialData, recalculateAllNodeHeights]);
-
-  // Generate unique node ID
-  const generateNodeId = useCallback((): string => {
-    return `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  }, []);
+  }, [committed, recalculateAllNodeHeights]);
 
   // Create new node at specified position
   const createNewNode = useCallback(
@@ -268,7 +278,7 @@ export function ToC({
       // 46). 76px is the typical rendered height of a fresh "New Node"
       // (same default the renderer uses before measurement).
       const newNode: Node = {
-        id: generateNodeId(),
+        id: newNodeId(),
         title: 'New Node',
         text: 'Details of New Node.',
         connectionIds: [],
@@ -302,7 +312,7 @@ export function ToC({
       // mode" state is needed; the editor manages its own focus.
       setHighlightedNodes(new Set([newNode.id]));
     },
-    [editMode, nodeWidth, nodeColor, setDataAndNotify, generateNodeId, data.sections],
+    [editMode, nodeWidth, nodeColor, setDataAndNotify, data.sections],
   );
 
   // findNodeLocation is hoisted above toggleHighlight so the useCallback
@@ -449,14 +459,11 @@ export function ToC({
     [setDataAndNotify, nodeHeights],
   );
 
-  // Feedback 67: the alignment math lives in `computeAlignedSections`
-  // (`src/utils/alignNodes.ts`) — a PURE function. The previous inline
-  // implementation shallow-copied `prevData` and then assigned into the
-  // shared nested `sections[i].columns[j].nodes[k]` arrays, mutating
-  // the previous state in place. App.tsx's undo history deep-clones
-  // exactly that previous object (`saveToHistory(dataRef.current)`),
-  // so the undo entry already carried the aligned positions and Ctrl+Z
-  // after "Align nodes" was a no-op. Regression tests:
+  // The alignment math lives in `computeAlignedSections`
+  // (`src/utils/alignNodes.ts`) — a PURE function. Assigning into the
+  // shared nested `sections[i].columns[j].nodes[k]` arrays would mutate
+  // the previous chart in place, and that object is the undo entry, so
+  // Ctrl+Z after "Align nodes" would be a no-op. Regression tests:
   // `tests/frontend/TheoryOfChangeGraph.alignment.test.tsx`.
   const straightenEdges = useCallback(() => {
     if (!editMode) return;
@@ -735,7 +742,10 @@ export function ToC({
 
         if (isNewColumn) {
           const targetSection = newData.sections[targetSectionIndex];
-          const newColumn = { nodes: [{ ...sourceNode, yPosition: adjustedYPosition }] };
+          const newColumn = {
+            id: newColumnId(),
+            nodes: [{ ...sourceNode, yPosition: adjustedYPosition }],
+          };
           targetSection.columns.splice(targetColumnIndex, 0, newColumn);
         } else {
           const nodeWithPosition = { ...sourceNode, yPosition: adjustedYPosition };
@@ -786,19 +796,22 @@ export function ToC({
   // op is one undo entry. Deleting the last column in a section
   // collapses the section too (consistent with the legacy
   // layoutMode behavior).
+  //
+  // They take ids, not indices: the confirm dialog stays open while a
+  // landing can insert or remove columns, and the id still names what the
+  // user clicked. A target that is already gone changes nothing.
   const deleteColumn = useCallback(
-    (sectionIndex: number, columnIndex: number) => {
+    (sectionId: string, columnId: string) => {
       if (!editMode) return;
       setDataAndNotify((prevData) => {
-        const updatedSection = {
-          ...prevData.sections[sectionIndex],
-          columns: prevData.sections[sectionIndex].columns.filter((_, i) => i !== columnIndex),
-        };
-        const newSections =
-          updatedSection.columns.length === 0
-            ? prevData.sections.filter((_, i) => i !== sectionIndex)
-            : prevData.sections.map((s, i) => (i === sectionIndex ? updatedSection : s));
-        return { ...prevData, sections: newSections };
+        const section = prevData.sections.find((s) => s.id === sectionId);
+        if (!section?.columns.some((c) => c.id === columnId)) return prevData;
+        const columns = section.columns.filter((c) => c.id !== columnId);
+        const sections =
+          columns.length === 0
+            ? prevData.sections.filter((s) => s !== section)
+            : prevData.sections.map((s) => (s === section ? { ...section, columns } : s));
+        return { ...prevData, sections };
       });
       // Clear selection if any deleted nodes were highlighted.
       setHighlightedNodes(new Set());
@@ -807,11 +820,11 @@ export function ToC({
   );
 
   const deleteSection = useCallback(
-    (sectionIndex: number) => {
+    (sectionId: string) => {
       if (!editMode) return;
       setDataAndNotify((prevData) => ({
         ...prevData,
-        sections: prevData.sections.filter((_, i) => i !== sectionIndex),
+        sections: prevData.sections.filter((s) => s.id !== sectionId),
       }));
       setHighlightedNodes(new Set());
     },
@@ -873,11 +886,8 @@ export function ToC({
   // PR 7: waypoint drag is hoisted up to `TheoryOfChangeGraph` (parity
   // with `useConnectionDrag` placement) so its `isActive` flag can OR
   // into `isAnyDragActive` below — that is the polling-pause signal the
-  // 30s sync poll consumes via App.tsx's `isDragInFlightRef`. Previously
-  // this hook lived inside `<ConnectionsComponent>` and the signal
-  // never reached the parent (a poll mid-waypoint-drag could overwrite
-  // the buffered `mutateDebounced` state). Bind accessors and the
-  // current drag state are passed down to `<ConnectionsComponent>`,
+  // sync poll consumes via App.tsx's `isDragInFlightRef`. Bind accessors
+  // and the current drag state are passed down to `<ConnectionsComponent>`,
   // which forwards them to per-connection `<ConnectionWaypointHandles>`.
   const clientToContainer = useCallback(
     (clientX: number, clientY: number) => {
@@ -899,13 +909,18 @@ export function ToC({
   // DOM geometry and anchor rules `ConnectionsComponent` draws with.
   const getLineMidpoint = useCallback(
     (sourceId: string, targetId: string) => {
-      // A press only reaches the hook from a rendered connection, so the
-      // container, both node elements and both locations exist.
-      const container = graphContainerRef.current!;
+      // The drag reads this on every move, and a landing can remove an end
+      // node meanwhile.
+      const container = graphContainerRef.current;
+      const sourceEl = nodeRefsRef.current[sourceId];
+      const targetEl = nodeRefsRef.current[targetId];
+      const sourceLocation = findNodeLocation(sourceId);
+      const targetLocation = findNodeLocation(targetId);
+      if (!container || !sourceEl || !targetEl || !sourceLocation || !targetLocation) return null;
       const { source, target } = computeConnectionAnchors(
-        getLocalPosition(nodeRefsRef.current[sourceId]!, container),
-        getLocalPosition(nodeRefsRef.current[targetId]!, container),
-        getConnectionDirection(findNodeLocation(sourceId)!, findNodeLocation(targetId)!),
+        getLocalPosition(sourceEl, container),
+        getLocalPosition(targetEl, container),
+        getConnectionDirection(sourceLocation, targetLocation),
       );
       return lineMidpoint(source, target);
     },
@@ -919,12 +934,13 @@ export function ToC({
     commit: commitMutation,
     discardBuffered: discardBufferedMutation,
     notifyCount,
+    getCommitted: store.getCommitted,
     clientToContainer,
     getLineMidpoint,
   });
 
-  // Notify parent (App) of drag-active transitions so the 30s sync
-  // poll can pause while a gesture is in flight (red-team Important).
+  // Notify parent (App) of drag-active transitions so the sync poll
+  // can pause while a gesture is in flight.
   // We OR-combine the node-drag, connection-drag, and waypoint-drag
   // flags so any gesture pauses polling.
   //
@@ -1231,7 +1247,7 @@ export function ToC({
 
         {Array.isArray(data.sections) ? (
           data.sections.map((section, sectionIndex) => (
-            <React.Fragment key={sectionIndex}>
+            <React.Fragment key={section.id}>
               <div
                 onClick={(e) => {
                   // Allow deselection by clicking section area in both view and edit mode
@@ -1271,7 +1287,7 @@ export function ToC({
                         // width would otherwise resize the whole section.
                         minWidth: `${sectionWidths[sectionIndex]}px`,
                         width:
-                          editMode && editingSectionIndex === sectionIndex
+                          editMode && editingSectionId === section.id
                             ? `${editingBarWidth}px`
                             : 'max-content',
                       }}
@@ -1289,37 +1305,39 @@ export function ToC({
                             0,
                           )}
                           scope="section"
-                          onDelete={() => deleteSection(sectionIndex)}
+                          onDelete={() => deleteSection(idOf(section))}
                           testIdSuffix={`${sectionIndex}`}
                         />
                       )}
-                      {editMode && editingSectionIndex === sectionIndex ? (
+                      {editMode && editingSectionId === section.id ? (
                         <input
                           type="text"
                           value={section.title}
                           // Streaming input (typing). Buffer under
-                          // 'section-N-title'; commit on blur/Enter so a
-                          // single editing pass = one undo entry.
+                          // 'section-title-<id>'; commit on blur/Enter so a
+                          // single editing pass = one undo entry. The
+                          // section is named by id: a landing can insert
+                          // a section before it while the user types.
                           onChange={(e) => {
                             const value = e.target.value;
                             mutateDebounced(
                               (prev) => ({
                                 ...prev,
-                                sections: prev.sections.map((s, idx) =>
-                                  idx === sectionIndex ? { ...s, title: value } : s,
+                                sections: prev.sections.map((s) =>
+                                  s.id === section.id ? { ...s, title: value } : s,
                                 ),
                               }),
-                              `section-${sectionIndex}-title`,
+                              `section-title-${section.id}`,
                             );
                           }}
                           onBlur={() => {
-                            commitMutation(`section-${sectionIndex}-title`);
-                            setEditingSectionIndex(null);
+                            commitMutation(`section-title-${section.id}`);
+                            setEditingSectionId(null);
                           }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
-                              commitMutation(`section-${sectionIndex}-title`);
-                              setEditingSectionIndex(null);
+                              commitMutation(`section-title-${section.id}`);
+                              setEditingSectionId(null);
                             }
                           }}
                           // PR 7 task 15: keep section dimensions stable
@@ -1362,7 +1380,7 @@ export function ToC({
                             if (!editMode) return;
                             const bar = e.currentTarget.parentElement!;
                             setEditingBarWidth(bar.getBoundingClientRect().width / zoomScale);
-                            setEditingSectionIndex(sectionIndex);
+                            setEditingSectionId(idOf(section));
                           }}
                           title={editMode ? 'Click to edit section label' : ''}
                         >
@@ -1378,7 +1396,7 @@ export function ToC({
                       }}
                     >
                       {section.columns.map((column, colIndex) => (
-                        <ColumnSlot key={`${sectionIndex}-${colIndex}`} editMode={editMode}>
+                        <ColumnSlot key={column.id} editMode={editMode}>
                           {/* PR 5 Task 5.1: column body. No more
                             `layoutMode` red-state for empty columns
                             (delete-column moves to Task 5.3's hover-×
@@ -1505,7 +1523,7 @@ export function ToC({
                               <ColumnDeleteAffordance
                                 nodeCount={column.nodes.length}
                                 scope="column"
-                                onDelete={() => deleteColumn(sectionIndex, colIndex)}
+                                onDelete={() => deleteColumn(idOf(section), idOf(column))}
                                 testIdSuffix={`${sectionIndex}-${colIndex}`}
                               />
                             )}

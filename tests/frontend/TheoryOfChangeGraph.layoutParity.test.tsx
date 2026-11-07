@@ -6,9 +6,9 @@
 // The pixel-level comparison of rendered nodes and connection paths is
 // done in a real browser.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { cleanup, fireEvent, act } from '@testing-library/react';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 // The first graph render in a worker pulls in lazily loaded editor code, and
 // the parity tests render the whole graph twice, so the 5s default is tight.
@@ -28,7 +28,7 @@ const node = (id: string, title: string, yPosition: number, width?: number) => (
   ...(width ? { width } : {}),
 });
 
-const makeData = (overrides: Partial<ToCData> = {}): ToCData => ({
+const makeData = (overrides: Partial<ChartInput> = {}): ChartInput => ({
   title: 'Programme',
   sections: [
     {
@@ -57,17 +57,14 @@ interface Geometry {
   size: { width: number; height: number } | undefined;
 }
 
-async function geometryOf(data: ToCData, editMode: boolean): Promise<Geometry> {
+async function geometryOf(data: ChartInput, editMode: boolean): Promise<Geometry> {
   let size: Geometry['size'];
-  const { container } = render(
-    <ToC
-      data={structuredClone(data)}
-      showEditButton={editMode}
-      onSizeChange={(s) => {
-        size = s;
-      }}
-    />,
-  );
+  const { container } = renderToC(data, {
+    showEditButton: editMode,
+    onSizeChange: (s) => {
+      size = s;
+    },
+  });
   await act(async () => {
     await Promise.resolve();
   });
@@ -119,7 +116,7 @@ describe('edit mode uses view mode geometry', () => {
       title: '',
       sections: [{ title: 'Inputs', columns: [{ nodes: [node('a', 'Funding', 100)] }] }],
     });
-    const { container } = render(<ToC data={data} showEditButton={true} />);
+    const { container } = renderToC(data);
     await act(async () => {
       await Promise.resolve();
     });
@@ -132,7 +129,7 @@ describe('edit mode uses view mode geometry', () => {
 
 describe('view mode markup', () => {
   it('keeps column bodies as direct children of the columns row, as before edit mode shared its layout', async () => {
-    const { container } = render(<ToC data={makeData()} showEditButton={false} />);
+    const { container } = renderToC(makeData(), { showEditButton: false });
     await act(async () => {
       await Promise.resolve();
     });
@@ -150,7 +147,7 @@ describe('section title bar while its label is edited', () => {
     container.querySelector<HTMLElement>('[data-section-index="1"]')!.children[0] as HTMLElement;
 
   it('keeps the width it had before editing, at any zoom, and releases it afterwards', async () => {
-    const { container } = render(<ToC data={makeData()} showEditButton={true} zoomScale={0.5} />);
+    const { container } = renderToC(makeData(), { zoomScale: 0.5 });
     await act(async () => {
       await Promise.resolve();
     });
@@ -172,9 +169,7 @@ describe('section title bar while its label is edited', () => {
 
 describe('untitled chart in edit mode', () => {
   it('offers "Click to add title" as an overlay that exports leave out and that opens the editor', async () => {
-    const { container, getByText } = render(
-      <ToC data={makeData({ title: '' })} showEditButton={true} />,
-    );
+    const { container, getByText } = renderToC(makeData({ title: '' }));
     await act(async () => {
       await Promise.resolve();
     });
@@ -189,9 +184,7 @@ describe('untitled chart in edit mode', () => {
   it('reserves the title block in the chart size once a title is being typed', async () => {
     const sizes: { width: number; height: number }[] = [];
     const data = makeData({ title: '' });
-    const { getByText } = render(
-      <ToC data={data} showEditButton={true} onSizeChange={(size) => sizes.push(size)} />,
-    );
+    const { getByText } = renderToC(data, { onSizeChange: (size) => sizes.push(size) });
     await act(async () => {
       await Promise.resolve();
     });
@@ -207,9 +200,7 @@ describe('untitled chart in edit mode', () => {
 
   it('keeps the prompt at a readable on-screen size when the chart is zoomed out', async () => {
     const promptAt = (zoomScale: number) => {
-      const { getByText } = render(
-        <ToC data={makeData({ title: '' })} showEditButton={true} zoomScale={zoomScale} />,
-      );
+      const { getByText } = renderToC(makeData({ title: '' }), { zoomScale });
       return getByText('Click to add title');
     };
 
@@ -220,7 +211,7 @@ describe('untitled chart in edit mode', () => {
   });
 
   it('shows no placeholder in view mode', async () => {
-    const { queryByText } = render(<ToC data={makeData({ title: '' })} showEditButton={false} />);
+    const { queryByText } = renderToC(makeData({ title: '' }), { showEditButton: false });
     expect(queryByText('Click to add title')).toBeNull();
   });
 });

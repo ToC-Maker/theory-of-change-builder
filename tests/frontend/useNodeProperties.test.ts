@@ -19,6 +19,7 @@ import { useNodeProperties } from '../../src/components/node-editor/useNodePrope
 import { useGraphMutation } from '../../src/hooks/useGraphMutation';
 import type { ToCData } from '../../src/types';
 import { deepFreeze } from './helpers/deepFreeze';
+import { makeDoc } from './helpers/renderToC';
 
 const flushMicrotasks = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 
@@ -391,27 +392,26 @@ describe('useNodeProperties', () => {
     // bumped it to 2000 would silently break "edit then idle" UX while
     // every existing test stayed green.
     //
-    // We integrate against the REAL `useGraphMutation` here (the mock
-    // in the rest of the file skips the timer) so this is the only test
-    // in the file that exercises the actual debounce machinery.
+    // We integrate against the REAL `useGraphMutation` over a chart store
+    // here (the mock in the rest of the file skips the timer) so this is the
+    // only test in the file that exercises the actual debounce machinery.
     afterEach(() => {
       vi.useRealTimers();
     });
 
-    it('buffered setTitle auto-commits after 200ms of idle, firing onDataChange', async () => {
+    it('buffered setTitle auto-commits after 200ms of idle', async () => {
       // Default vitest fake timers don't fake `queueMicrotask`. The
       // setTimeout fires synchronously under `advanceTimersByTime`, and
       // the microtask it schedules drains on the next real tick. We
       // bridge that with `await flushMicrotasks` after each timer-
       // advance step.
       vi.useFakeTimers();
-      const onDataChange = vi.fn<(d: ToCData) => void>();
-      const initial = makeData([{ id: 'a', title: 'old' }]);
+      const { doc, onCommit } = makeDoc(makeData([{ id: 'a', title: 'old' }]));
 
       // Wire useNodeProperties on top of the real useGraphMutation so
       // the per-key idle timer fires.
       const { result } = renderHook(() => {
-        const mutation = useGraphMutation(initial, onDataChange);
+        const mutation = useGraphMutation(doc);
         const properties = useNodeProperties({
           selectedNodeIds: ['a'],
           data: mutation.data,
@@ -428,25 +428,25 @@ describe('useNodeProperties', () => {
       });
 
       // The live state already reflects the typed value (mutateDebounced
-      // writes synchronously), but `onDataChange` should NOT have fired
-      // yet — the parent notify is on the idle edge.
-      expect(onDataChange).not.toHaveBeenCalled();
+      // writes synchronously), but nothing is committed yet: the commit is
+      // on the idle edge.
+      expect(onCommit).not.toHaveBeenCalled();
 
       // Advance just shy of 200ms — still not committed.
       act(() => {
         vi.advanceTimersByTime(199);
       });
       await flushMicrotasks();
-      expect(onDataChange).not.toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
 
-      // Cross the 200ms threshold — timer fires, scheduleNotify queues a
-      // microtask. Drain microtasks so the notify runs.
+      // Cross the 200ms threshold — timer fires, scheduleCommit queues a
+      // microtask. Drain microtasks so the commit runs.
       act(() => {
         vi.advanceTimersByTime(1);
       });
       await flushMicrotasks();
-      expect(onDataChange).toHaveBeenCalledTimes(1);
-      expect(onDataChange.mock.calls[0]?.[0].sections[0].columns[0].nodes[0].title).toBe('new');
+      expect(onCommit).toHaveBeenCalledTimes(1);
+      expect(onCommit.mock.calls[0]?.[0].sections[0].columns[0].nodes[0].title).toBe('new');
     });
   });
 

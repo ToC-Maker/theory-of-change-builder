@@ -10,8 +10,7 @@
 // them.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
+import { cleanup, fireEvent, act } from '@testing-library/react';
 import { MOVE_THRESHOLD_PX } from '../../src/hooks/usePointerDrag';
 import {
   HOVER_GRACE_MS,
@@ -20,14 +19,15 @@ import {
   TOUCH_OPEN_MS,
   TOUCH_TARGET_PX,
 } from '../../src/components/canvas/AddControlZone';
-import type { ToCData } from '../../src/types';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
 });
 
 // A fresh object per call, so no test sees another test's data.
-const makeBaseData = (): ToCData => ({
+const makeBaseData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -60,13 +60,9 @@ const testIdsIn = (zoneTestId: string) =>
     el.getAttribute('data-testid'),
   );
 
-function lastData(onDataChange: ReturnType<typeof vi.fn>): ToCData {
-  return onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
-}
-
 describe('add controls', () => {
   it('lays one zone at each outer edge, one in each section gap and one in each column gap', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     const zones = [...document.querySelectorAll('[data-testid^="add-zone-"]')].map((el) =>
       el.getAttribute('data-testid'),
     );
@@ -79,7 +75,7 @@ describe('add controls', () => {
   });
 
   it('puts three controls in a section gap, in left-to-right order of what they add', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     expect(testIdsIn('add-zone-section-gap-0')).toEqual([
       'add-column-after-0-1',
       'add-section-before',
@@ -88,7 +84,7 @@ describe('add controls', () => {
   });
 
   it('offers section and first-column adds at the start edge, last-column and section adds at the end edge', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     expect(testIdsIn('add-zone-edge-start')).toEqual([
       'add-section-before',
       'add-column-before-0-0',
@@ -100,18 +96,18 @@ describe('add controls', () => {
   });
 
   it('puts a single column control in the gap between two columns', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     expect(testIdsIn('add-zone-column-gap-0-0')).toEqual(['add-column-after-0-0']);
   });
 
   it('renders no controls in view-only mode', () => {
-    render(<ToC data={makeBaseData()} showEditButton={false} />);
+    renderToC(makeBaseData(), { showEditButton: false });
     expect(document.querySelector('[data-testid^="add-"]')).toBeNull();
     expect(document.querySelector('[data-add-cue], [data-add-badge]')).toBeNull();
   });
 
   it('sizes each zone to the gap it covers and attaches it to the side facing that gap', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     const zone = (testId: string) =>
       document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!.style;
 
@@ -125,14 +121,14 @@ describe('add controls', () => {
   });
 
   it('marks every zone for exclusion from exports', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     const zones = document.querySelectorAll('[data-testid^="add-zone-"]');
     expect(zones.length).toBeGreaterThan(0);
     zones.forEach((zone) => expect(zone.hasAttribute('data-export-exclude')).toBe(true));
   });
 
   it('shows a faint cue in every zone at rest, with the controls hidden', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     const zones = document.querySelectorAll('[data-testid^="add-zone-"]');
     expect(zones.length).toBe(4);
     zones.forEach((zone) => {
@@ -163,7 +159,7 @@ describe('add controls', () => {
     const touch = { pointerType: 'touch', clientY: 200 };
 
     it('shows the controls only after the pointer has rested on the zone, and hides them after a grace period', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const zone = zoneOf(GAP);
 
       fireEvent.pointerEnter(zone, mouse);
@@ -180,7 +176,7 @@ describe('add controls', () => {
     });
 
     it('shows nothing when the pointer sweeps through the zone', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const zone = zoneOf(GAP);
 
       fireEvent.pointerEnter(zone, mouse);
@@ -192,7 +188,7 @@ describe('add controls', () => {
     });
 
     it('keeps the controls when the pointer leaves and comes back within the grace period', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const zone = zoneOf(GAP);
       fireEvent.pointerEnter(zone, mouse);
       advance(HOVER_INTENT_MS);
@@ -206,7 +202,7 @@ describe('add controls', () => {
     });
 
     it('does not reveal controls while a mouse button is held (a drag is under way)', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const zone = zoneOf(GAP);
       fireEvent.pointerEnter(zone, { ...mouse, buttons: 1 });
       advance(2 * HOVER_INTENT_MS);
@@ -214,7 +210,7 @@ describe('add controls', () => {
     });
 
     it('reveals after a drag that ends inside the zone once the pointer moves again', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const zone = zoneOf(GAP);
       fireEvent.pointerEnter(zone, { ...mouse, buttons: 1 });
       advance(2 * HOVER_INTENT_MS);
@@ -226,7 +222,7 @@ describe('add controls', () => {
     });
 
     it('opens at once on a click on the cue', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const zone = zoneOf(GAP);
       fireEvent.click(zone.querySelector('[data-add-badge]')!, { clientY: 200 });
       expect(revealed(zone)).toBe(true);
@@ -259,7 +255,7 @@ describe('add controls', () => {
         });
 
       const openAt = (clientY: number) => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf('add-zone-section-gap-0');
         fireEvent.pointerEnter(zone, { pointerType: 'mouse', clientY });
         advance(HOVER_INTENT_MS);
@@ -296,7 +292,7 @@ describe('add controls', () => {
 
       it('does not place the controls again when a click opens them inside the hover-intent window', () => {
         layOut(400, 80);
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf('add-zone-section-gap-0');
         fireEvent.pointerEnter(zone, { pointerType: 'mouse', clientY: 100 });
         advance(HOVER_INTENT_MS / 2);
@@ -321,7 +317,7 @@ describe('add controls', () => {
 
     describe('sizes', () => {
       const sizesAt = (zoomScale: number, pointer: Record<string, unknown>) => {
-        render(<ToC data={makeBaseData()} showEditButton={true} zoomScale={zoomScale} />);
+        renderToC(makeBaseData(), { zoomScale });
         const zone = zoneOf('add-zone-section-gap-0');
         fireEvent.pointerDown(zone, pointer);
         fireEvent.click(zone.querySelector('[data-add-badge]')!, pointer);
@@ -348,7 +344,7 @@ describe('add controls', () => {
       });
 
       it('grow inward from the card edge at the outer edges and centre on the gap elsewhere', () => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const stackStyle = (testId: string) =>
           zoneOf(testId).querySelector<HTMLElement>('[data-revealed]')!.style;
         expect(stackStyle('add-zone-edge-start')).toMatchObject({ left: '0px' });
@@ -366,7 +362,7 @@ describe('add controls', () => {
       };
 
       it('needs a second tap on a control: the first tap on the gap only opens them', async () => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf(ZONE);
         const before = sectionCount();
 
@@ -381,7 +377,7 @@ describe('add controls', () => {
       });
 
       it('opens on a tap on the bare gap too, and adds nothing', async () => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf(ZONE);
         const before = sectionCount();
         tap(zone);
@@ -391,7 +387,7 @@ describe('add controls', () => {
       });
 
       it('closes after a tap elsewhere', () => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf(ZONE);
         tap(zone);
         expect(revealed(zone)).toBe(true);
@@ -402,7 +398,7 @@ describe('add controls', () => {
       });
 
       it('closes on its own when no second tap follows', () => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf(ZONE);
         tap(zone);
         advance(TOUCH_OPEN_MS - 1);
@@ -412,7 +408,7 @@ describe('add controls', () => {
       });
 
       it('ignores the pointer-enter that a touch produces, so a swipe across the chart opens nothing', () => {
-        render(<ToC data={makeBaseData()} showEditButton={true} />);
+        renderToC(makeBaseData());
         const zone = zoneOf(ZONE);
         fireEvent.pointerEnter(zone, touch);
         advance(2 * HOVER_INTENT_MS);
@@ -422,13 +418,12 @@ describe('add controls', () => {
   });
 
   it('a section-gap click on "+ Section" adds one section between the two neighbours', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     const gapZone = document.querySelector('[data-testid="add-zone-section-gap-0"]')!;
     fireEvent.click(gapZone.querySelector('[data-testid="add-section-before"]')!);
 
     return Promise.resolve().then(() => {
-      const sections = lastData(onDataChange).sections;
+      const sections = doc.getCommitted().sections;
       expect(sections.map((section) => section.title)).toEqual([
         'Inputs',
         'New Section',
@@ -438,8 +433,7 @@ describe('add controls', () => {
   });
 
   it('the first "+ Section" at the start edge adds one section before the first', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     fireEvent.click(
       document.querySelector(
         '[data-testid="add-zone-edge-start"] [data-testid="add-section-before"]',
@@ -447,7 +441,7 @@ describe('add controls', () => {
     );
 
     return Promise.resolve().then(() => {
-      const sections = lastData(onDataChange).sections;
+      const sections = doc.getCommitted().sections;
       expect(sections.map((section) => section.title)).toEqual([
         'New Section',
         'Inputs',
@@ -457,12 +451,11 @@ describe('add controls', () => {
   });
 
   it('"+ Section" at the end edge adds one section after the last', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     fireEvent.click(document.querySelector('[data-testid="add-section-after-last"]')!);
 
     return Promise.resolve().then(() => {
-      const sections = lastData(onDataChange).sections;
+      const sections = doc.getCommitted().sections;
       expect(sections.map((section) => section.title)).toEqual([
         'Inputs',
         'Outputs',
@@ -472,59 +465,54 @@ describe('add controls', () => {
   });
 
   it('"+ Column" before the first column of a section adds one column at index 0', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     fireEvent.click(document.querySelector('[data-testid="add-column-before-0-0"]')!);
 
     return Promise.resolve().then(() => {
-      const columns = lastData(onDataChange).sections[0].columns;
+      const columns = doc.getCommitted().sections[0].columns;
       expect(columns.map((column) => column.nodes.length)).toEqual([0, 1, 0]);
     });
   });
 
   it('"+ Column" in a section gap adds one column to the start of the section on its right', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     fireEvent.click(document.querySelector('[data-testid="add-column-before-1-0"]')!);
 
     return Promise.resolve().then(() => {
-      const data = lastData(onDataChange);
+      const data = doc.getCommitted();
       expect(data.sections[0].columns.length).toBe(2);
       expect(data.sections[1].columns.length).toBe(2);
     });
   });
 
   it('"+ Column" in a section gap adds one column to the end of the section on its left', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     fireEvent.click(document.querySelector('[data-testid="add-column-after-0-1"]')!);
 
     return Promise.resolve().then(() => {
-      const columns = lastData(onDataChange).sections[0].columns;
+      const columns = doc.getCommitted().sections[0].columns;
       expect(columns.map((column) => column.nodes.length)).toEqual([1, 0, 0]);
     });
   });
 
   it('"+ Column" between two columns adds one column right after the left one', () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={makeBaseData()} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(makeBaseData());
     fireEvent.click(document.querySelector('[data-testid="add-column-after-0-0"]')!);
 
     return Promise.resolve().then(() => {
-      const columns = lastData(onDataChange).sections[0].columns;
+      const columns = doc.getCommitted().sections[0].columns;
       expect(columns.map((column) => column.nodes.length)).toEqual([1, 0, 0]);
     });
   });
 
   it('a section with no columns can still get its first column', () => {
-    const onDataChange = vi.fn();
     const data = makeBaseData();
     data.sections[1].columns = [];
-    render(<ToC data={data} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc } = renderToC(data);
     fireEvent.click(document.querySelector('[data-testid="add-column-before-1-0"]')!);
 
     return Promise.resolve().then(() => {
-      expect(lastData(onDataChange).sections[1].columns.length).toBe(1);
+      expect(doc.getCommitted().sections[1].columns.length).toBe(1);
     });
   });
 
@@ -533,7 +521,7 @@ describe('add controls', () => {
     const flush = () => act(async () => Promise.resolve());
 
     it('a press that travels past the click threshold adds nothing on release', async () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const control = document.querySelector('[data-testid="add-column-after-0-0"]')!;
       const before = columnCount();
 
@@ -548,7 +536,7 @@ describe('add controls', () => {
     });
 
     it('a press that stays within the click threshold adds exactly one column', async () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const control = document.querySelector('[data-testid="add-column-after-0-0"]')!;
       const before = columnCount();
 
@@ -560,7 +548,7 @@ describe('add controls', () => {
     });
 
     it('a drag leaves no trace: the next plain click still adds one', async () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const control = document.querySelector('[data-testid="add-column-after-0-0"]')!;
       const before = columnCount();
 
@@ -573,7 +561,7 @@ describe('add controls', () => {
     });
 
     it('controls are not <button>s, because a press on a button never starts a canvas pan', () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       const controls = document.querySelectorAll(
         '[data-testid^="add-column-"], [data-testid^="add-section-"]',
       );
@@ -586,7 +574,7 @@ describe('add controls', () => {
   // (the double-click-to-add-node area) must end where the card content does.
   describe('stay inside the canvas bounds', () => {
     it('graph container has no inline height in edit mode (content-driven)', async () => {
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       // updateSize fires in an effect; wait a microtask for the state flush.
       await Promise.resolve();
       const container = document.querySelector('div.min-w-fit') as HTMLElement;
@@ -595,7 +583,7 @@ describe('add controls', () => {
     });
 
     it('graph container keeps its explicit height in view mode', () => {
-      render(<ToC data={makeBaseData()} showEditButton={false} />);
+      renderToC(makeBaseData(), { showEditButton: false });
       const container = document.querySelector('div.min-w-fit') as HTMLElement;
       expect(container).not.toBeNull();
       expect(container.style.height).not.toBe('');
@@ -605,13 +593,13 @@ describe('add controls', () => {
       // With a title: 800px minimum canvas - 62px section header - 80px
       // title block. Without one the block is an overlay and is not in the
       // layout, so the body is 80px taller.
-      render(<ToC data={makeBaseData()} showEditButton={true} />);
+      renderToC(makeBaseData());
       await Promise.resolve();
       expect((document.querySelector('[data-column="0-0"]') as HTMLElement).style.height).toBe(
         '658px',
       );
       cleanup();
-      render(<ToC data={{ ...makeBaseData(), title: '' }} showEditButton={true} />);
+      renderToC({ ...makeBaseData(), title: '' });
       await Promise.resolve();
       expect((document.querySelector('[data-column="0-0"]') as HTMLElement).style.height).toBe(
         '738px',
@@ -620,7 +608,7 @@ describe('add controls', () => {
   });
 
   it('empty column body in edit mode shows the cursor-cell affordance class', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     // Section 1, column 0 is empty → its column div should carry
     // `cursor-cell` via the conditional class.
     const emptyCol = document.querySelector('[data-column="1-0"]') as HTMLElement | null;
@@ -629,7 +617,7 @@ describe('add controls', () => {
   });
 
   it('non-empty column body does NOT carry cursor-cell (only empties do)', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     const nonEmptyCol = document.querySelector('[data-column="0-0"]') as HTMLElement | null;
     expect(nonEmptyCol).not.toBeNull();
     expect(nonEmptyCol!.className).not.toContain('cursor-cell');

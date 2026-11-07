@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Node, ToCData } from '../types';
 import { isInputFocused } from '../utils/isInputFocused';
+import { newColumnId } from '../../shared/chart-model';
 
 interface UseKeyboardShortcutsProps {
   data: ToCData;
@@ -198,7 +199,7 @@ export function useKeyboardShortcuts({
             if (sIndex !== sectionIndex && sIndex !== targetSectionIndex) return section;
             const columns =
               sIndex === targetSectionIndex && !targetHasColumns
-                ? [{ nodes: [] }]
+                ? [{ id: newColumnId(), nodes: [] }]
                 : section.columns;
             return {
               ...section,
