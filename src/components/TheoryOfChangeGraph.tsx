@@ -10,11 +10,12 @@ import React, {
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import type { ChartStore } from '../sync/ChartDocument';
-import { newNodeId } from '../../shared/chart-model';
+import { idOf, newColumnId, newNodeId, newSectionId } from '../../shared/chart-model';
 import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
 import { computeAlignedSections } from '../utils/alignNodes';
+import { nodeExistsInData } from '../utils/findNode';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
@@ -45,7 +46,7 @@ const insertSection = (data: ToCData, index: number): ToCData => ({
   ...data,
   sections: [
     ...data.sections.slice(0, index),
-    { title: 'New Section', columns: [{ nodes: [] }] },
+    { id: newSectionId(), title: 'New Section', columns: [{ id: newColumnId(), nodes: [] }] },
     ...data.sections.slice(index),
   ],
 });
@@ -58,7 +59,7 @@ const insertColumn = (data: ToCData, sectionIndex: number, index: number): ToCDa
           ...section,
           columns: [
             ...section.columns.slice(0, index),
-            { nodes: [] },
+            { id: newColumnId(), nodes: [] },
             ...section.columns.slice(index),
           ],
         }
@@ -151,6 +152,17 @@ export function ToC({
   useEffect(() => {
     onHighlightedNodesChange?.(highlightedNodes);
   }, [highlightedNodes, onHighlightedNodesChange]);
+
+  // A node deleted by a collaborator, an undo or an AI edit leaves the
+  // selection, which closes the editor that would otherwise stay open on
+  // nothing. The same set is kept when nothing was pruned: the parent hears
+  // every new set, and this runs on every keystroke of a preview.
+  useEffect(() => {
+    setHighlightedNodes((prev) => {
+      const kept = [...prev].filter((id) => nodeExistsInData(data, id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [data]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   // PR 4: legacy `draggedNode`, `dragOffset`, `dragOverLocation` state
   // retired — `usePointerDrag` now owns drag state internally and
@@ -176,7 +188,7 @@ export function ToC({
   const [nodeWidth, setNodeWidth] = useState(192); // Default width in pixels (w-48)
   const [nodeColor, setNodeColor] = useState('#ffffff'); // Default white background
   const [editingTitle, setEditingTitle] = useState(false);
-  const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
   // Width (content px) the edited section's title bar had when its
   // editor opened. The bar keeps it while typing so the section doesn't
   // resize under the cursor.
@@ -733,7 +745,10 @@ export function ToC({
 
         if (isNewColumn) {
           const targetSection = newData.sections[targetSectionIndex];
-          const newColumn = { nodes: [{ ...sourceNode, yPosition: adjustedYPosition }] };
+          const newColumn = {
+            id: newColumnId(),
+            nodes: [{ ...sourceNode, yPosition: adjustedYPosition }],
+          };
           targetSection.columns.splice(targetColumnIndex, 0, newColumn);
         } else {
           const nodeWithPosition = { ...sourceNode, yPosition: adjustedYPosition };
@@ -784,19 +799,22 @@ export function ToC({
   // op is one undo entry. Deleting the last column in a section
   // collapses the section too (consistent with the legacy
   // layoutMode behavior).
+  //
+  // They take ids, not indices: the confirm dialog stays open while a
+  // landing can insert or remove columns, and the id still names what the
+  // user clicked. A target that is already gone changes nothing.
   const deleteColumn = useCallback(
-    (sectionIndex: number, columnIndex: number) => {
+    (sectionId: string, columnId: string) => {
       if (!editMode) return;
       setDataAndNotify((prevData) => {
-        const updatedSection = {
-          ...prevData.sections[sectionIndex],
-          columns: prevData.sections[sectionIndex].columns.filter((_, i) => i !== columnIndex),
-        };
-        const newSections =
-          updatedSection.columns.length === 0
-            ? prevData.sections.filter((_, i) => i !== sectionIndex)
-            : prevData.sections.map((s, i) => (i === sectionIndex ? updatedSection : s));
-        return { ...prevData, sections: newSections };
+        const section = prevData.sections.find((s) => s.id === sectionId);
+        if (!section?.columns.some((c) => c.id === columnId)) return prevData;
+        const columns = section.columns.filter((c) => c.id !== columnId);
+        const sections =
+          columns.length === 0
+            ? prevData.sections.filter((s) => s !== section)
+            : prevData.sections.map((s) => (s === section ? { ...section, columns } : s));
+        return { ...prevData, sections };
       });
       // Clear selection if any deleted nodes were highlighted.
       setHighlightedNodes(new Set());
@@ -805,11 +823,11 @@ export function ToC({
   );
 
   const deleteSection = useCallback(
-    (sectionIndex: number) => {
+    (sectionId: string) => {
       if (!editMode) return;
       setDataAndNotify((prevData) => ({
         ...prevData,
-        sections: prevData.sections.filter((_, i) => i !== sectionIndex),
+        sections: prevData.sections.filter((s) => s.id !== sectionId),
       }));
       setHighlightedNodes(new Set());
     },
@@ -1235,7 +1253,7 @@ export function ToC({
 
         {Array.isArray(data.sections) ? (
           data.sections.map((section, sectionIndex) => (
-            <React.Fragment key={sectionIndex}>
+            <React.Fragment key={section.id}>
               <div
                 onClick={(e) => {
                   // Allow deselection by clicking section area in both view and edit mode
@@ -1275,7 +1293,7 @@ export function ToC({
                         // width would otherwise resize the whole section.
                         minWidth: `${sectionWidths[sectionIndex]}px`,
                         width:
-                          editMode && editingSectionIndex === sectionIndex
+                          editMode && editingSectionId === section.id
                             ? `${editingBarWidth}px`
                             : 'max-content',
                       }}
@@ -1293,37 +1311,39 @@ export function ToC({
                             0,
                           )}
                           scope="section"
-                          onDelete={() => deleteSection(sectionIndex)}
+                          onDelete={() => deleteSection(idOf(section))}
                           testIdSuffix={`${sectionIndex}`}
                         />
                       )}
-                      {editMode && editingSectionIndex === sectionIndex ? (
+                      {editMode && editingSectionId === section.id ? (
                         <input
                           type="text"
                           value={section.title}
                           // Streaming input (typing). Buffer under
-                          // 'section-N-title'; commit on blur/Enter so a
-                          // single editing pass = one undo entry.
+                          // 'section-title-<id>'; commit on blur/Enter so a
+                          // single editing pass = one undo entry. The
+                          // section is named by id: a landing can insert
+                          // a section before it while the user types.
                           onChange={(e) => {
                             const value = e.target.value;
                             mutateDebounced(
                               (prev) => ({
                                 ...prev,
-                                sections: prev.sections.map((s, idx) =>
-                                  idx === sectionIndex ? { ...s, title: value } : s,
+                                sections: prev.sections.map((s) =>
+                                  s.id === section.id ? { ...s, title: value } : s,
                                 ),
                               }),
-                              `section-${sectionIndex}-title`,
+                              `section-title-${section.id}`,
                             );
                           }}
                           onBlur={() => {
-                            commitMutation(`section-${sectionIndex}-title`);
-                            setEditingSectionIndex(null);
+                            commitMutation(`section-title-${section.id}`);
+                            setEditingSectionId(null);
                           }}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
-                              commitMutation(`section-${sectionIndex}-title`);
-                              setEditingSectionIndex(null);
+                              commitMutation(`section-title-${section.id}`);
+                              setEditingSectionId(null);
                             }
                           }}
                           // PR 7 task 15: keep section dimensions stable
@@ -1366,7 +1386,7 @@ export function ToC({
                             if (!editMode) return;
                             const bar = e.currentTarget.parentElement!;
                             setEditingBarWidth(bar.getBoundingClientRect().width / zoomScale);
-                            setEditingSectionIndex(sectionIndex);
+                            setEditingSectionId(idOf(section));
                           }}
                           title={editMode ? 'Click to edit section label' : ''}
                         >
@@ -1382,7 +1402,7 @@ export function ToC({
                       }}
                     >
                       {section.columns.map((column, colIndex) => (
-                        <ColumnSlot key={`${sectionIndex}-${colIndex}`} editMode={editMode}>
+                        <ColumnSlot key={column.id} editMode={editMode}>
                           {/* PR 5 Task 5.1: column body. No more
                             `layoutMode` red-state for empty columns
                             (delete-column moves to Task 5.3's hover-×
@@ -1509,7 +1529,7 @@ export function ToC({
                               <ColumnDeleteAffordance
                                 nodeCount={column.nodes.length}
                                 scope="column"
-                                onDelete={() => deleteColumn(sectionIndex, colIndex)}
+                                onDelete={() => deleteColumn(idOf(section), idOf(column))}
                                 testIdSuffix={`${sectionIndex}-${colIndex}`}
                               />
                             )}
