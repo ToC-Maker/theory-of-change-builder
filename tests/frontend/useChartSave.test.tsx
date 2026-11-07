@@ -143,6 +143,8 @@ afterEach(() => {
   // listeners and would answer the next test's online/visibility events.
   cleanup();
   vi.useRealTimers();
+  // Puts back the spies a test made (the visibility state), even if it failed before its own cleanup.
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -334,7 +336,10 @@ describe('useChartSave: a save that cannot continue', () => {
     await advance(300);
     await requests[0].conflict({ version: 5, chart: repeatedSectionId() });
 
-    expect(result.current.saveError).not.toBeNull();
+    // The pill says that saving stopped and what to do, not just the merge's own wording.
+    expect(result.current.saveError?.message).toMatch(
+      /^Saving has stopped \(Chart repeats section id .+\)\. Reload to continue\.$/,
+    );
     expect(result.current.isSaving).toBe(false);
     expect(onSaveFailed).toHaveBeenCalledWith(edited);
     expect(mockReportError).toHaveBeenCalledTimes(1);
@@ -362,9 +367,11 @@ describe('useChartSave: a save that cannot continue', () => {
 
     edit(edited);
     await advance(300);
-    await requests[0].fail(new ChartShapeError({ title: 'not a chart' }));
+    await requests[0].fail(new ChartShapeError({ title: 'not a chart' }, 'The chart is malformed'));
 
-    expect(result.current.saveError).not.toBeNull();
+    expect(result.current.saveError?.message).toMatch(
+      /^Saving has stopped \(.*The chart is malformed.*\)\. Reload to continue\.$/,
+    );
     expect(doc.getStatus().saving).toBe(false);
     expect(mockReportError).toHaveBeenCalledTimes(1);
     expect(mockReportError.mock.calls[0][0]).toMatchObject({
@@ -670,7 +677,6 @@ describe('useChartSave: failures', () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     expect(requests).toHaveLength(2);
-    visibility.mockRestore();
   });
 
   it('does not send early on online or visibility events when no save has failed', async () => {

@@ -65,6 +65,12 @@ export function reportSyncFailure(
   });
 }
 
+// The pill text when a failure ends saving: the cause alone (an index path, a
+// repeated id) tells the user neither that saving stopped nor what to do.
+const stoppedMessage = (err: unknown): SaveError => ({
+  message: `Saving has stopped (${asSaveError(err).message}). Reload to continue.`,
+});
+
 const isAuthRefusal = (err: unknown): boolean =>
   err instanceof ChartApiError && (err.status === 401 || err.status === 403);
 
@@ -76,7 +82,7 @@ const isRetryable = (err: unknown): boolean =>
 
 export interface UseChartSaveArgs {
   doc: ChartDocument;
-  /** Called with the unsaved chart after each failed attempt (local backup). */
+  /** Called with the unsaved chart after each failed attempt and when saving stops; App writes a copy of it to localStorage. */
   onSaveFailed?: (data: ToCData) => void;
 }
 
@@ -168,7 +174,7 @@ export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartS
             } catch (err) {
               // Instead of retrying: this chart will not merge, and would not next time either.
               reportSyncFailure('ChartMergeFailed', err, save.baseVersion, outcome.theirs.version);
-              stopSaving(asSaveError(err));
+              stopSaving(stoppedMessage(err));
               return;
             }
             const { terminalError } = doc.getStatus();
@@ -204,7 +210,7 @@ export function useChartSave({ doc, onSaveFailed }: UseChartSaveArgs): UseChartS
           if (err instanceof ChartShapeError) {
             // Instead of retrying: the server's latest chart is not one the merge can use.
             reportSyncFailure('ChartMergeFailed', err, save.baseVersion);
-            stopSaving(asSaveError(err));
+            stopSaving(stoppedMessage(err));
             return;
           }
           failureRef.current = asSaveError(err);
