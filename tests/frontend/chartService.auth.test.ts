@@ -4,7 +4,7 @@
 // PR 7 round-2 feedback (signed-in 401s + silent save failure): the
 // worker now requires a valid Bearer JWT on getUserCharts (and on
 // updateChart for owned, restricted charts) — see commit 533e6ba and
-// tests/worker/{getUserCharts,updateChart}-auth.test.ts. The client,
+// tests/worker/getUserCharts-auth.test.ts and chart-edit-gate.test.ts. The client,
 // however, attached a token only from `ChartService.authToken`, a
 // static snapshot fetched ONCE per editor mount (src/App.tsx auth
 // effect). Two real-world states broke it:
