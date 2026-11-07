@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import { _resetSwallowNextClickGuardForTest } from '../../src/hooks/useDismissOnOutsideEvent';
+import { loggingService } from '../../src/services/loggingService';
 import type { ChartInput, ToCData } from '../../src/types';
 import { columnsOf, edit, findNode, node, nodeIn, removeNode } from '../shared/chart-fixtures';
 import { renderToC } from './helpers/renderToC';
@@ -187,7 +188,7 @@ describe('the selection never holds a node that is gone', () => {
 
 // jsdom has no layout: the columns' rects come from a table the test swaps to
 // model a landing re-flowing the canvas, keyed by `data-column="section-column"`.
-describe('a drop between columns', () => {
+describe('a node drop re-reads the layout at release', () => {
   const COLUMN_TOP = 100;
   const NODE_TOP = 262;
   let columnRects: Record<string, [number, number]> = {};
@@ -234,6 +235,80 @@ describe('a drop between columns', () => {
     act(() => void document.dispatchEvent(pointer('pointerup', x, y)));
     await flushMicrotasks();
   };
+
+  /** `n-1` sits in the first column; the others are empty columns, one per section. */
+  async function startDrag(columnsAfterFirst: number, rects: Record<string, [number, number]>) {
+    columnRects = rects;
+    const chart: ChartInput = {
+      title: 'T',
+      sections: [
+        { title: 'Source', columns: [{ nodes: [node('n-1', 200)] }] },
+        ...Array.from({ length: columnsAfterFirst }, (_, i) => ({
+          title: `Target ${i}`,
+          columns: [{ nodes: [] }],
+        })),
+      ],
+    };
+    const rendered = renderToC(chart);
+    // The layout hook reads the stubbed rects on its next animation frame.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    fireEvent.pointerDown(document.getElementById('node-n-1')!, {
+      clientX: 100,
+      clientY: NODE_TOP + 30,
+      button: 0,
+      pointerId: 1,
+    });
+    return rendered;
+  }
+
+  const columnOfNode = (chart: ToCData, id: string) =>
+    columnsOf(chart).find((c) => c.nodes.some((n) => n.id === id))?.id;
+
+  it('drop_after_column_inserted_before_target_lands_under_pointer', async () => {
+    const { doc, land } = await startDrag(2, {
+      '0-0': [50, 250],
+      '1-0': [300, 500],
+      '2-0': [550, 750],
+    });
+    move(650, 400); // over the last section's column
+
+    // A landing adds a column at the start of the middle section; the last
+    // section's column slides right and the middle section's old column
+    // takes its place under the pointer.
+    columnRects = {
+      '0-0': [50, 250],
+      '1-0': [300, 428],
+      '1-1': [452, 672],
+      '2-0': [704, 904],
+    };
+    act(() =>
+      land((draft) => {
+        draft.sections[1].columns.unshift({ id: 'col-remote', nodes: [] });
+      }),
+    );
+    await release(650, 400);
+
+    expect(columnOfNode(doc.getCommitted(), 'n-1')).toBe('c1.0');
+  });
+
+  it('drop_into_vanished_column_is_noop', async () => {
+    const { doc, land, onCommit } = await startDrag(1, { '0-0': [50, 250], '1-0': [300, 500] });
+    move(400, 400); // over the second section's column
+
+    columnRects = { '0-0': [50, 250] };
+    act(() =>
+      land((draft) => {
+        draft.sections.pop();
+      }),
+    );
+    await release(400, 400);
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(columnOfNode(doc.getCommitted(), 'n-1')).toBe('c0.0');
+    expect(loggingService.reportError).not.toHaveBeenCalled();
+  });
 
   it('a_drop_between_columns_creates_a_column_with_a_random_id', async () => {
     columnRects = { '0-0': [50, 250], '0-1': [274, 474] };
