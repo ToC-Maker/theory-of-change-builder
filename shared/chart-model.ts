@@ -5,8 +5,8 @@
  * Consumed by:
  *  - the client, through `src/types/index.ts` (which re-exports this file),
  *    compiled under `tsconfig.app.json`;
- *  - the Worker and the other `shared/` modules, compiled under
- *    `worker/tsconfig.json`.
+ *  - the other `shared/` modules (the chart merge), compiled under
+ *    `worker/tsconfig.json` as well, so the Worker can run them later.
  *
  * It therefore touches neither the DOM nor Workers-only types: only
  * `crypto.getRandomValues`, which both runtimes provide as a global.

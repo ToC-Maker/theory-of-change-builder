@@ -223,8 +223,9 @@ describe('normalizeChart shape and purity', () => {
   });
 
   it('throws_shape_error_for_malformed_nested_parts', () => {
-    // Callers surface ChartShapeError through their load, import and AI
-    // error paths; a bare TypeError from deep inside would bypass them.
+    // AI edit values are not shape-checked before normalising, so a primitive
+    // node or connection must fail as a shape error rather than pass through
+    // or surface as an unexplained TypeError.
     const ok = { title: 'S', columns: [{ nodes: [{ id: 'a', title: 'A', text: '' }] }] };
     for (const bad of [
       { sections: [null] },
