@@ -53,18 +53,19 @@ read, `npm run preflight:serial` runs the same gates sequentially.
 
 Theory of Change graphs use nested structure: `sections[] → columns[] → nodes[] → connections[]`
 
+**Ids:** every section, column and node has an `id`, and it is what code refers to, never an index that has to outlive one event (another editor can insert a section while you hold an index). Charts stored before ids existed lack them on sections and columns: `normalizeChart` (`shared/chart-model.ts`) gives them deterministic ones on read (`s0`, `c0.1`, suffixed `~2`, `~3` when taken), so two tabs reading the same chart agree, and they reach storage on the next save. Sections and columns created in the app get random ids (`newSectionId()`, `newColumnId()`: `sec-…`, `col-…`); the AI's model never sees container ids (`addNodePaths` drops them).
+
 **IMPORTANT - Node Positioning:**
 - `node.yPosition` is the CENTER Y coordinate, not top-left
 - Calculate top position: `yPosition - (nodeHeight / 2)`
 - Never treat yPosition as top coordinate or nodes will misalign
 
 **Connections:**
-- New format: `connections: [{ targetId, confidence, evidence, assumptions, waypoints? }]`
-- Old format still supported: `connectionIds: string[]`
-- Always use new format for new code
+- Canonical: `connections: [{ targetId, confidence, evidence, assumptions, waypoints? }]`; `connectionIds` is kept listing the same targets
+- A chart that has only `connectionIds` (stored before `connections`) is converted by `normalizeChart` at confidence 50, which draws identically. Every way a chart enters the tab goes through it (`ChartService` for anything from the server; `validateChartImport`, `parseGeneratedGraph` and `prepareAIResult` for imports, generated charts and AI results; App for files, localStorage and the template), so the canvas and the edge editor read `connections` only
 - Confidence (0-100) determines visual style CONTINUOUSLY: solid at 95+; below that the dash length grows cubically toward the threshold (2px dots at 0 → ~46.6px at 94) while the gap shrinks linearly (8px → ~1.6px), so 94 reads ~97% ink (near-solid, the 95 boundary is imperceptible) and low confidence reads as sparse dots (see `computeConfidenceDash` in `src/utils/index.ts`; no hard style buckets)
 - The connection-strength Legend is view-mode chrome only: `ToCViewerOnly` mounts it as a fixed bottom-left overlay outside the zoom/pan transform; the editor renders no legend (confidence is numeric in the EdgeEditor) and the legend is not draggable
-- `waypoints`: array of `{ dx, dy }` pixel offsets from the midpoint of the straight line between the connection's source and target anchors, so a bend keeps its place relative to its nodes whatever moves them. The conversion to and from canvas coordinates lives in `src/utils/connectionGeometry.ts` (applied when rendering and when dragging). The UI edits at most one waypoint per connection; a drag replaces the whole array and double-clicking the handle clears it (automatic curve). Escape or a cancelled pointer puts the pre-gesture offsets back. A press on the midpoint dot that is released without becoming a drag opens the connection's editor, as a click on the line does. Entries that are not finite `{ dx, dy }`, including the earlier absolute `{ x, y }` format, render as the automatic curve until the next drag replaces them; import accepts them unchanged.
+- `waypoints`: array of `{ dx, dy }` pixel offsets from the midpoint of the straight line between the connection's source and target anchors, so a bend keeps its place relative to its nodes whatever moves them. The conversion to and from canvas coordinates lives in `src/utils/connectionGeometry.ts` (applied when rendering and when dragging). The UI edits at most one waypoint per connection; a drag replaces the whole array and double-clicking the handle clears it (automatic curve). Escape or a cancelled pointer restores the offsets the document has committed (a bend a collaborator changed during the drag stays) and saves nothing. A press on the midpoint dot that is released without becoming a drag opens the connection's editor, as a click on the line does. Entries that are not finite `{ dx, dy }`, including the earlier absolute `{ x, y }` format, render as the automatic curve until the next drag replaces them; import accepts them unchanged.
 
 ### Edit and View Layout
 
@@ -117,6 +118,17 @@ Three access patterns:
 
 If you encounter 401/403 errors, check: token validity, permission status, link sharing level.
 
+### Concurrent editing
+
+Several people can edit one chart at once and nobody's work is lost silently. Four parts:
+
+- **One client document.** The editor route holds the chart in a `ChartDocument` (`src/sync/ChartDocument.ts`), a synchronous store the canvas, the toolbar and the save and poll hooks all read and write: the last chart the server confirmed (with its `version`), the committed chart (what saves send and App renders), the live chart (committed plus the typing, slider and drag previews, what the canvas renders) and the undo history. A chart from the server is merged into the committed chart and the live chart is rebased onto it in the same call, so a landing can neither drop a keystroke nor revert a remote change. Previews go through `useGraphMutation(store)` (`src/hooks/useGraphMutation.ts`); open editors follow remote changes to fields they are not editing through `useFieldBuffer` (`src/hooks/useFieldBuffer.ts`).
+- **Versioned saves.** `charts.version` advances whenever `chart_data` changes. `POST /api/updateChart` carries `baseVersion` and the Worker applies it only if that is still current (`UPDATE ... WHERE version = $n`); otherwise it answers `409 { version, chartData }`, and the client merges that chart into its own and sends again at once (`useChartSave`). A 409 is a normal outcome, not an error. A save without `baseVersion` comes from a tab still running the previous client: it is applied as before (last save wins), still advances the version and is logged as `updateChart.legacy`; delete that branch once the line stops appearing.
+- **Polling.** While the tab is visible and used, `useChartSync` sends `POST /api/pollChart { editToken, knownVersion }` every 2.5 s (`POLL_MS`); the answer carries the chart only when the version differs. It pauses while the tab is hidden, after 5 minutes idle, during a pointer drag and while a save is in flight, and a failure waits 30 s. The check is read-only (it does not go through `getChart`, which writes permission rows). A chart it cannot use shows in the save pill.
+- **The merge** (`shared/chart-merge.ts`, a pure three-way merge by field with undo in revert form) decides every conflict: the last save of a field wins; a delete wins over a move or restyle but not over an edit of a node's title or details, or of a connection's evidence or assumptions. The rules and their reasons are in that file's header. Undo reverses only the user's own change and leaves fields others changed since. AI edits, imports and generated charts reach the document through `src/sync/aiEdit.ts` (`prepareAIResult`: fresh ids, then `doc.applyRebased`) or `doc.replace`.
+
+A chart on `/` has no server until the first message or share creates it; `doc.attachServer` then supplies the created version, and edits made meanwhile are sent on it.
+
 ## Environment Variables
 
 There are three distinct "where it's needed" categories. Some variables are needed in more than one place.
@@ -158,7 +170,7 @@ Production keeps real Turnstile keys: site key in `.env.production` + `wrangler.
 
 See `database/schema.sql` for full schema. Key tables:
 
-- **charts**: Stores graph data (JSONB), edit tokens, view counts. The `total_tokens_used INT` column still exists for backward compatibility but is legacy; authoritative spend lives in `user_api_usage` (micro-USD), not here. Same for `user_token_usage`, which is frozen.
+- **charts**: Stores graph data (JSONB), edit tokens, view counts, and `version INTEGER` (starts at 1), which the `charts_bump_version` trigger advances on every change to `chart_data` (not on view counts, link sharing or an identical resave) so saves can compare-and-swap on it. `updated_at` cannot serve as the version: its own trigger bumps it on any update. The `total_tokens_used INT` column still exists for backward compatibility but is legacy; authoritative spend lives in `user_api_usage` (micro-USD), not here. Same for `user_token_usage`, which is frozen.
 - **chart_permissions**: User access control with approval workflow
 - **user_api_usage**: Per-user cumulative AI spend, in micro-USD (see Cost accounting below). Replaces the legacy `user_token_usage` table.
 - **global_monthly_usage**: Observability-only table tracking aggregate monthly spend. Enforcement is via the Anthropic Console customer-set cap, not this table.
@@ -209,6 +221,9 @@ Connections use `offsetLeft`/`offsetTop` for position calculations (immune to CS
 - Container ref is correctly passed to ConnectionsComponent
 - Node refs are updated when nodes mount/unmount
 - yPosition is CENTER Y, not top Y
+
+### Concurrent Editing: Conflicts and Merge Failures
+A `409` from `updateChart` is the normal answer to a save based on an old version: the client merges the chart in the response and sends again, so seeing them in the logs means two people (or two tabs) edited at once, not a bug. The Worker logs `updateChart.conflict` (chart id, base and current version) for each, and `updateChart.legacy` for each save from a tab still on the previous client. When the merge itself throws (a chart that repeats a section, column or node id, or is not a chart), the client shows the reason in the save pill (a failing save also stops saving; the poll keeps checking) and reports `ChartMergeFailed` to `logging_errors` with versions only, never chart content; a server that goes back to an older version reports `ChartVersionWentBackwards`. A details text MDXEditor cannot parse reports `MarkdownImportFailed`. A save answered without a version (a Worker older than the page) is not retried and the pill shows "The server did not return a chart version"; a chart load that gets none says so on the error page.
 
 ### Auth Token Issues
 Auth0 tokens refresh automatically, but invalid tokens silently fall back to anonymous mode. If permission checks fail unexpectedly, verify:
@@ -275,16 +290,25 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 
 ## Key Files
 
-- `src/App.tsx` - Main app logic, routing, undo/redo
+- `src/App.tsx` - Main app logic and routing; the editor route builds the `ChartDocument` and wires undo, redo, import, AI edits and the create flows to it
+- `shared/chart-model.ts` - Chart types, `normalizeChart` (ids, canonical connections; `ChartShapeError`, `assertChartShape`), id minting, `deepEqual`
+- `shared/chart-merge.ts` - `mergeCharts(base, mine, theirs, { onConflict })`, the three-way merge and the home of its rules
+- `shared/chart-wire.ts` - Wire shapes for `updateChart` and `pollChart`
+- `src/sync/ChartDocument.ts` - The tab's chart store: server base, committed, live, undo history; `takeSave` / `saveSucceeded` / `saveConflicted` / `receiveRemote`
+- `src/sync/aiEdit.ts` - `prepareAIResult`: makes an AI reply's chart safe to merge (fresh ids, normalised)
+- `src/hooks/useFieldBuffer.ts` - The text an open editor shows: what is being typed, else the field's value in the chart
 - `src/components/TheoryOfChangeGraph.tsx` - Graph SVG renderer
 - `src/components/ChatInterface.tsx` - AI assistant UI
 - `src/services/chartService.ts` - API client for CRUD operations
-- `src/hooks/useChartSave.ts` - Every editor save (edit, import, AI replacement, undo, redo) goes through its `saveChart(data)`: one save in flight at a time, pending edits cleared only if unchanged since the save was sent, edits made before the chart has an edit token are sent once it arrives, retries with backoff (capped at 30s) while edits stay pending, for network and 5xx failures (401/403 only at the 30s cap, never cut short; other 4xx none), and at once when the browser comes back online or the tab is shown again
-- `src/hooks/useUndoHistory.ts` - Undo and redo stacks of whole-chart snapshots. A snapshot is the data object as it was before a change, so every graph updater (`mutate`, `mutateDebounced`, the add/delete/move handlers) returns new arrays and objects and never writes into the state it receives (the updater tests deep-freeze their fixtures). Changes closer together than 300 ms share one step, restoring the chart as it was before the first. Undo and redo are suppressed only while a text field has focus (`isTextEntryFocused`), not a slider or colour input.
+- `src/hooks/useChartSave.ts` - Sends the document's saves (`doc.takeSave()`, then one of `saveSucceeded`, `saveConflicted`, `saveFailed`): a 300 ms debounce, one save in flight at a time, a 409 merged and sent again at once, edits made before the chart has a server sent once it has one, retries with backoff (capped at 30s) while edits stay unsaved, for network and 5xx failures (401/403 only at the 30s cap, never cut short; other 4xx none), and at once when the browser comes back online or the tab is shown again. A merge that throws, or a server that went back to an older version, stops saving and shows why in the pill
+- `src/hooks/useChartSync.ts` - The 2.5 s version check (`pollChart`) that lands other people's changes in the document
+- Undo and redo live in the document: entries are `{ before, after }` pairs, replayed in revert form so they never overwrite what someone else changed since, and commits closer together than 300 ms share one entry. Every graph updater (`mutate`, `mutateDebounced`, the add/delete/move handlers) must return new arrays and objects and never write into the state it receives: the document keeps both sides of a change by reference (the updater tests deep-freeze their fixtures). Undo and redo are suppressed only while a text field has focus (`isTextEntryFocused`), not a slider or colour input.
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `src/components/canvas/AddControlZone.tsx` - Zones with the add-column / add-section controls and their resting cue, laid over the gaps of the chart
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)
+- `worker/api/pollChart.ts` - Read-only version check: the chart's version, with the chart only when it differs from `knownVersion`
+- `worker/_shared/chart-edit-access.ts` - `authorizeChartEdit`, the one gate for who may edit a chart, shared by `updateChart` and `pollChart`
 - `worker/api/anthropic-stream.ts` - AI streaming proxy (SSE, usage UPSERT, kill-switch, Turnstile gate). Exports `buildAssistantBlocksForCountTokens` (count_tokens validation rules) and `collectAssistantBlocksForAnalytics` (raw `content_blocks` capture).
 - `worker/api/reconcile-cost.ts` - Client-driven fallback that pushes the running cost figure when the streaming reconcile IIFE was killed by `ctx.waitUntil()` time budget; clamps `GREATEST(existing, client)` so it can only push up. Updates `logging_messages.cost_micro_usd` only — never `user_api_usage`.
 - `worker/api/count-tokens-estimate.ts` - Pre-send cost projection. Strips Files-API `document` blocks (count_tokens 400s on them), splits cached file tokens by draft vs history so the client prices cache-write vs cache-read correctly. Exports `sanitizeMessagesForCountTokens`, which repairs the count_tokens shape rules on the forwarded payload so shape-violating payloads can't 503 the estimate (contract hardening; the current UI doesn't produce these shapes — see the sanitizer's header for verified reachability notes).
@@ -312,6 +336,8 @@ Run everything: `npm test` (watch mode: `npm run test:watch`; one project: `npx 
 - **`workerd`**: `tests/worker/`, `tests/client/`, `tests/shared/` and the top-level `tests/*.test.ts`. They run inside a real Workers runtime via `@cloudflare/vitest-plugin`, with bindings and secrets from `wrangler.jsonc` and `.dev.vars`.
 - **`frontend`**: `tests/frontend/**/*.test.{ts,tsx}`. They run in jsdom with React Testing Library and `@testing-library/jest-dom` for components, hooks and client utilities.
 
+Concurrency has its own suites: `tests/shared/chart-merge.test.ts` and `chart-merge.fuzz.test.ts` (the merge rules, and a seeded fuzz of three clients over a compare-and-swap server), `tests/frontend/ChartDocument.test.ts` and `ChartDocument.sim.test.ts` (the document, and a seeded simulation of three tabs with random latency and lost acknowledgements), `tests/worker/updateChart-cas.test.ts`, `pollChart.test.ts` and `chart-edit-gate.test.ts` (versioned saves, the poll, and the access table both endpoints share), and two integration tests that run the real document, hooks and canvas over a mocked `ChartService`: `tests/frontend/remoteLandingWhileEditing.test.tsx` (a remote chart landing while someone types, drags or has an editor open) and `tests/frontend/App.chartDocument.test.tsx` (App's wiring). `tests/frontend/helpers/renderToC.tsx` mounts the canvas over a document with a way to land a remote chart. jsdom has no layout or real caret, so a landing while typing or dragging in a real browser is checked by hand in two tabs.
+
 Add tests for new Worker helpers alongside the code; especially `anon-id.ts`, the kill-switch logic in `anthropic-stream.ts`, and `reserveCost` race-safety tests. jsdom does not do layout, so geometry (overflow, positions) needs a manual browser check.
 
 Manual testing is still needed for end-to-end flows (graph editing, permissions, AI streaming):
@@ -320,5 +346,7 @@ Manual testing is still needed for end-to-end flows (graph editing, permissions,
 ## Deployment
 
 Manual deploy: `npm run deploy` (builds + deploys to Cloudflare Workers).
+
+**Apply `database/migrations/add-chart-version.sql` to staging, then production, before deploying the Worker** (the Worker reads `version` on every chart read). On each database check that `SELECT version FROM charts LIMIT 1` succeeds and that `SELECT 1 FROM pg_trigger WHERE tgname = 'charts_bump_version'` returns a row; without the trigger every save matches its base forever and polls never see a change, with no error. To undo the migration, roll the Worker back first (the current one fails every chart read without the column), then run the down-step in the migration's header. After a deploy, watch `updateChart.conflict`, `updateChart.legacy` and `ChartMergeFailed` (see Common Issues).
 
 Configuration: `wrangler.jsonc` (entry point, compatibility flags, static assets config).
