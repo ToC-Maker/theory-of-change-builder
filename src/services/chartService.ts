@@ -1,5 +1,8 @@
 import { ToCData } from '../types';
+import { normalizeChart } from '../../shared/chart-model';
+import { isChartVersion } from '../../shared/chart-wire';
 import type { LinkSharingLevel, Permission } from '../../shared/permissions';
+import type { ServerState } from '../sync/ChartDocument';
 import { RequestTokenSource, type AuthTokenProvider } from './requestTokenSource';
 
 export type { LinkSharingLevel, Permission, PermissionStatus } from '../../shared/permissions';
@@ -27,6 +30,10 @@ export class ChartApiError extends Error {
 // caller can retry: one stalled request must not hold up every later save.
 const UPDATE_CHART_TIMEOUT_MS = 30_000;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+/** The share links of a chart; the share dialog also builds one for a chart that already exists. */
 export interface CreateChartResponse {
   chartId: string;
   editToken: string;
@@ -34,15 +41,32 @@ export interface CreateChartResponse {
   editUrl: string;
 }
 
+export interface CreatedChart extends CreateChartResponse {
+  /** The version the server stored the chart at. */
+  version: number;
+}
+
 export interface GetChartResponse {
+  /** Normalised: every section and column has an id. */
   chartData: ToCData;
   chartId: string;
+  version: number;
   canEdit: boolean;
   // true iff the server verified the caller's JWT and their sub matches the
   // chart owner's sub. Used by the client to gate owner-only fetches
   // (managePermissions) so we don't spam 403s for non-owned charts. Missing
   // on older server responses, treat `undefined` as `false`.
   isOwner?: boolean;
+}
+
+export type UpdateChartOutcome =
+  | { status: 'saved'; version: number }
+  | { status: 'conflict'; theirs: ServerState };
+
+export interface PollChartResult {
+  version: number;
+  /** Present only when `version` differs from the one polled with; normalised. */
+  chartData?: ToCData;
 }
 
 export interface UserChart {
@@ -114,7 +138,37 @@ export class ChartService {
     return headers;
   }
 
-  static async createChart(chartData: ToCData): Promise<CreateChartResponse> {
+  /** The body of a non-2xx answer: its text, and its parse when it is JSON. */
+  private static async readBody(response: Response): Promise<{ text: string; json: unknown }> {
+    const text = await response.text();
+    try {
+      return { text, json: JSON.parse(text) };
+    } catch {
+      // A body that is not JSON (a proxy's error page) explains nothing: the generic message stands.
+      return { text, json: undefined };
+    }
+  }
+
+  /**
+   * The error for a non-2xx answer, carrying the Worker's own message when it
+   * gave one. The raw body is logged because it is the only trace of why the
+   * Worker refused.
+   */
+  private static failure(
+    method: string,
+    path: string,
+    response: Response,
+    body: { text: string; json: unknown },
+    fallbackMessage: string,
+  ): ChartApiError {
+    console.error(`[ChartService] ${method} ${API_BASE}${path} -> ${response.status}`, body.text);
+    const { json } = body;
+    const message =
+      isRecord(json) && typeof json.error === 'string' && json.error ? json.error : undefined;
+    return new ChartApiError(message ?? fallbackMessage, response.status);
+  }
+
+  static async createChart(chartData: ToCData): Promise<CreatedChart> {
     const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
     if (headers['Authorization']) {
       console.log('[ChartService] Creating chart with auth token');
@@ -129,12 +183,19 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to create chart');
+      throw this.failure(
+        'POST',
+        '/createChart',
+        response,
+        await this.readBody(response),
+        'Failed to create chart',
+      );
     }
 
     return response.json();
   }
 
+  /** The chart of the view-only route; it has no version because it is never saved. */
   static async getChart(chartId: string): Promise<ToCData> {
     const params = new URLSearchParams();
     params.append('chartId', chartId);
@@ -142,11 +203,17 @@ export class ChartService {
     const response = await fetch(`${API_BASE}/getChart?${params}`);
 
     if (!response.ok) {
-      throw new Error('Failed to fetch chart');
+      throw this.failure(
+        'GET',
+        '/getChart',
+        response,
+        await this.readBody(response),
+        'Failed to fetch chart',
+      );
     }
 
     const result = await response.json();
-    return result.chartData;
+    return normalizeChart(result.chartData);
   }
 
   static async getChartByEditToken(editToken: string): Promise<GetChartResponse> {
@@ -160,26 +227,30 @@ export class ChartService {
     });
 
     if (!response.ok) {
-      // Try to get error message from response
-      let errorMessage = 'Failed to fetch chart';
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.error || errorMessage;
-      } catch {
-        // If JSON parsing fails, use status-based messages
-        if (response.status === 401) {
-          errorMessage = 'Authentication required. Please log in to access this chart.';
-        } else if (response.status === 404) {
-          errorMessage = 'Chart not found. It may have been deleted.';
-        }
+      let fallback = 'Failed to fetch chart';
+      if (response.status === 401) {
+        fallback = 'Authentication required. Please log in to access this chart.';
+      } else if (response.status === 404) {
+        fallback = 'Chart not found. It may have been deleted.';
       }
-      throw new Error(errorMessage);
+      throw this.failure('GET', '/getChart', response, await this.readBody(response), fallback);
     }
 
-    return response.json();
+    const result = await response.json();
+    return { ...result, chartData: normalizeChart(result.chartData) };
   }
 
-  static async updateChart(editToken: string, chartData: ToCData): Promise<void> {
+  /**
+   * Saves `chartData`, which was derived from the server's chart at
+   * `baseVersion`. The Worker applies it only if that is still the current
+   * version; otherwise it answers 409 with the latest chart, returned here as a
+   * conflict for the caller to merge.
+   */
+  static async updateChart(
+    editToken: string,
+    chartData: ToCData,
+    baseVersion: number,
+  ): Promise<UpdateChartOutcome> {
     // Attach the Bearer token when one's available so the server can
     // attribute the edit to the caller — used by worker/api/updateChart.ts
     // to upsert a chart_permissions row (permission_level='edit') so
@@ -209,29 +280,76 @@ export class ChartService {
       const response = await fetch(`${API_BASE}/updateChart`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ editToken, chartData }),
+        body: JSON.stringify({ editToken, chartData, baseVersion }),
         signal: timeout.signal,
       });
 
       if (!response.ok) {
+        const body = await this.readBody(response);
+        const { json } = body;
+        if (
+          response.status === 409 &&
+          isRecord(json) &&
+          json.error === 'conflict' &&
+          isChartVersion(json.version)
+        ) {
+          // The versions only: the body is the whole chart.
+          console.log(
+            `[ChartService] updateChart conflict: saved on version ${baseVersion}, server is at ${json.version}`,
+          );
+          return {
+            status: 'conflict',
+            theirs: { version: json.version, chart: normalizeChart(json.chartData) },
+          };
+        }
         // Prefer the worker's explanation (e.g. "Invalid or expired
         // authentication. Please log in again.") — it feeds the
         // SaveIndicator tooltip, where "Failed to update chart" gives the
         // user nothing to act on.
-        let message = 'Failed to update chart';
-        try {
-          const errorData = (await response.json()) as { error?: string };
-          if (errorData?.error) {
-            message = errorData.error;
-          }
-        } catch {
-          // Non-JSON body (proxy error page etc.) — keep the generic message.
-        }
-        throw new ChartApiError(message, response.status);
+        throw this.failure('POST', '/updateChart', response, body, 'Failed to update chart');
       }
+
+      const saved = await response.json();
+      if (!isChartVersion(saved?.version)) {
+        // A Worker that predates versions answered: retrying would repeat it forever.
+        throw new ChartApiError(
+          'The server did not return a version for the save',
+          response.status,
+        );
+      }
+      return { status: 'saved', version: saved.version };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * The check an open editor makes every few seconds: the server's current
+   * version, with the chart only when it differs from `knownVersion`.
+   */
+  static async pollChart(editToken: string, knownVersion: number): Promise<PollChartResult> {
+    const headers = await this.buildHeaders({ 'Content-Type': 'application/json' });
+
+    const response = await fetch(`${API_BASE}/pollChart`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ editToken, knownVersion }),
+    });
+
+    if (!response.ok) {
+      throw this.failure(
+        'POST',
+        '/pollChart',
+        response,
+        await this.readBody(response),
+        'Failed to poll chart',
+      );
+    }
+
+    const result = await response.json();
+    return result.chartData === undefined
+      ? { version: result.version }
+      : { version: result.version, chartData: normalizeChart(result.chartData) };
   }
 
   // Helper to extract edit token from URL
