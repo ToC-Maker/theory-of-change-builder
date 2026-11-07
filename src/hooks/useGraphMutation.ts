@@ -118,7 +118,9 @@ export interface UseGraphMutationResult {
   // path). Routes through the same `dataRef.current` write that the
   // mutate paths use, so a subsequent `mutate(prev => ...)` derives from
   // the post-replacement state. A state this hook already notified the
-  // parent of (the parent echoing it back) is ignored.
+  // parent of (the parent echoing it back) is ignored. Any other
+  // replacement also drops the buffered `mutateDebounced` edits, which it
+  // has overwritten.
   setData: Dispatch<SetStateAction<ToCData>>;
   mutate: (updater: GraphUpdater) => void;
   mutateDebounced: (updater: GraphUpdater, key: string, options?: { idleCommit?: boolean }) => void;
@@ -194,6 +196,13 @@ export function useGraphMutation(
   // the same key.
   const idleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
+  // Forgets every buffered key and its idle timer without notifying anyone.
+  const dropBuffered = useCallback(() => {
+    for (const timer of idleTimersRef.current.values()) clearTimeout(timer);
+    idleTimersRef.current.clear();
+    bufferedRef.current.clear();
+  }, []);
+
   // Schedules a single coalesced microtask. Safe to call multiple times
   // in the same task: only the first call actually enqueues.
   const scheduleNotify = useCallback(() => {
@@ -233,12 +242,21 @@ export function useGraphMutation(
   // A state this hook itself notified the parent of is not a replacement:
   // it is already here, or superseded by newer local edits, so it is
   // ignored (see `notifiedRef`).
-  const setDataExternal = useCallback<Dispatch<SetStateAction<ToCData>>>((value) => {
-    if (typeof value !== 'function' && notifiedRef.current.has(value)) return;
-    const next = applyUpdater(dataRef.current, value);
-    dataRef.current = next;
-    setData(next);
-  }, []);
+  //
+  // A real replacement also supersedes every buffered edit: the previews
+  // they were made on are gone, so a pending notify would hand the parent
+  // the replacement back as if it were a new edit (clearing the redo
+  // stack and adding an empty undo step after an undo).
+  const setDataExternal = useCallback<Dispatch<SetStateAction<ToCData>>>(
+    (value) => {
+      if (typeof value !== 'function' && notifiedRef.current.has(value)) return;
+      dropBuffered();
+      const next = applyUpdater(dataRef.current, value);
+      dataRef.current = next;
+      setData(next);
+    },
+    [dropBuffered],
+  );
 
   const mutate = useCallback(
     (updater: GraphUpdater) => {
@@ -336,17 +354,11 @@ export function useGraphMutation(
   // StrictMode mount-cleanup-remount cycle" case pins this.
   useEffect(() => {
     isMountedRef.current = true;
-    // Capture refs into locals so the cleanup closure operates on the
-    // same Map instances seen at mount time (react-hooks/exhaustive-deps).
-    const idleTimers = idleTimersRef.current;
-    const buffered = bufferedRef.current;
     return () => {
       isMountedRef.current = false;
-      for (const t of idleTimers.values()) clearTimeout(t);
-      idleTimers.clear();
-      buffered.clear();
+      dropBuffered();
     };
-  }, []);
+  }, [dropBuffered]);
 
   return {
     data,

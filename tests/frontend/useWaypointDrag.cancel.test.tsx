@@ -371,6 +371,46 @@ describe('cancelling after an unrelated edit carried the preview to the parent',
   });
 });
 
+describe('a replacement chart arriving in the middle of a waypoint drag', () => {
+  // A remote snapshot or an AI edit overwrites the preview the drag made.
+  const remoteChart = () => ({ ...makeData([{ x: 100, y: 50 }]), title: 'Remote' });
+
+  it('does not stop the drop from saving, on top of the replacement', async () => {
+    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+
+    dragWaypointAway(result);
+    act(() => {
+      result.current.graph.setData(remoteChart());
+    });
+    act(() => {
+      document.dispatchEvent(pointer('pointerup', 180, 90));
+    });
+    await settle();
+
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    const saved: ToCData = onDataChange.mock.calls[0][0];
+    expect(saved.title).toBe('Remote');
+    expect(connectionOf(saved).waypoints).toEqual([{ x: 180, y: 90 }]);
+  });
+
+  it('leaves a cancel with nothing to send', async () => {
+    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+
+    dragWaypointAway(result);
+    act(() => {
+      result.current.graph.setData(remoteChart());
+    });
+    act(() => {
+      document.dispatchEvent(escape());
+    });
+    await settle();
+
+    expect(onDataChange).not.toHaveBeenCalled();
+    expect(result.current.graph.data.title).toBe('Remote');
+    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ x: 100, y: 50 }]);
+  });
+});
+
 describe('dragging a later waypoint of a legacy multi-waypoint connection', () => {
   it('commits the dragged position once and reports no stale drop', async () => {
     // The first move collapses the array to the dragged waypoint, so the

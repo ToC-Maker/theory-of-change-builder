@@ -106,3 +106,112 @@ describe('useGraphMutation: external setData + subsequent mutate', () => {
     expect(onDataChange.mock.calls[0]?.[0].sections.length).toBe(2);
   });
 });
+
+// A buffered `mutateDebounced` edit has not been reported to the parent. A
+// replacement the hook never notified (an undo, an AI edit, a remote
+// snapshot) overwrites the preview it was made on, so the buffered edit's
+// pending notify would report the replacement back to the parent as a new
+// edit: for App, a wiped redo stack and an empty undo step.
+describe('useGraphMutation: an external replacement while an edit is buffered', () => {
+  const withTitle = (title: string) => (prev: ToCData) => ({ ...prev, title });
+
+  it('is not reported back to the parent when the idle timer would have fired', async () => {
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(baseData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced(withTitle('typed'), 'title');
+      });
+      const replacement = replacementData();
+      act(() => {
+        result.current.setData(replacement);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(onDataChange).not.toHaveBeenCalled();
+      expect(result.current.data).toBe(replacement);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves an explicit commit of the superseded key with nothing to send', async () => {
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(baseData(), onDataChange));
+
+    act(() => {
+      result.current.mutateDebounced(withTitle('typed'), 'title');
+    });
+    act(() => {
+      result.current.setData(replacementData());
+    });
+    act(() => {
+      result.current.commit('title');
+    });
+    await flushMicrotasks();
+
+    expect(onDataChange).not.toHaveBeenCalled();
+  });
+
+  it('does not stop a later edit of the same key from being reported', async () => {
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(baseData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced(withTitle('typed'), 'title');
+      });
+      act(() => {
+        result.current.setData(replacementData());
+      });
+      act(() => {
+        result.current.mutateDebounced(withTitle('typed again'), 'title');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+      expect(onDataChange.mock.calls[0][0].title).toBe('typed again');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the buffered edit when the replacement is the echo of a state the hook notified', async () => {
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(baseData(), onDataChange));
+
+      act(() => {
+        result.current.mutate(withTitle('committed'));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const echoed: ToCData = onDataChange.mock.calls[0][0];
+
+      act(() => {
+        result.current.mutateDebounced(withTitle('typing'), 'title');
+      });
+      act(() => {
+        result.current.setData(echoed);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(result.current.data.title).toBe('typing');
+      expect(onDataChange).toHaveBeenCalledTimes(2);
+      expect(onDataChange.mock.calls[1][0].title).toBe('typing');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
