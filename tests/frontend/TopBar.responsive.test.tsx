@@ -31,8 +31,8 @@ const defaultProps = {
   editMode: true,
   showEditButton: true,
   // Undo / redo.
-  undoHistory: [] as never[],
-  redoHistory: [] as never[],
+  canUndo: false,
+  canRedo: false,
   handleUndo: noop,
   handleRedo: noop,
   // Save status.
@@ -120,14 +120,7 @@ describe('TopBar responsive layout', () => {
     // read document.activeElement via isInputFocused(). Dropping the
     // onMouseDown.preventDefault() handlers regresses this — and the
     // user's typed text gets replaced by an unrelated graph undo.
-    renderWithRouter(
-      <TopBar
-        {...defaultProps}
-        breakpoint="md"
-        undoHistory={[{ sections: [], title: 'x' } as never]}
-        redoHistory={[{ sections: [], title: 'y' } as never]}
-      />,
-    );
+    renderWithRouter(<TopBar {...defaultProps} breakpoint="md" canUndo canRedo />);
     const undoBtn = screen.getByRole('button', { name: /^undo$/i });
     const redoBtn = screen.getByRole('button', { name: /^redo$/i });
 
@@ -138,6 +131,20 @@ describe('TopBar responsive layout', () => {
     const redoEvent = createEvent.mouseDown(redoBtn);
     fireEvent(redoBtn, redoEvent);
     expect(redoEvent.defaultPrevented).toBe(true);
+  });
+
+  it('enables undo and redo only when there is something to undo or redo', () => {
+    const { rerender } = renderWithRouter(<TopBar {...defaultProps} breakpoint="md" />);
+    expect(screen.getByRole('button', { name: /^undo$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^redo$/i })).toBeDisabled();
+
+    rerender(
+      <MemoryRouter>
+        <TopBar {...defaultProps} breakpoint="md" canUndo canRedo={false} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('button', { name: /^undo$/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^redo$/i })).toBeDisabled();
   });
 
   it('switches to the hamburger when window resizes below md', () => {

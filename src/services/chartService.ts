@@ -63,6 +63,18 @@ export interface CreatedChart extends CreateChartResponse {
   version: number;
 }
 
+/**
+ * What a create flow tells the app once the server has the chart: `chart` is
+ * exactly what was sent, so the app can tell what changed while the request was
+ * out and the version it is based on.
+ */
+export interface ChartCreated {
+  editToken: string;
+  chartId: string;
+  version: number;
+  chart: ToCData;
+}
+
 export interface GetChartResponse {
   /** Normalised: every section and column has an id. */
   chartData: ToCData;

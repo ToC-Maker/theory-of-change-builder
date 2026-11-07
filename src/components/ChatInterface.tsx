@@ -13,7 +13,7 @@ import {
 } from '../services/chatService';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
-import { ChartService } from '../services/chartService';
+import { ChartService, type ChartCreated } from '../services/chartService';
 import { buildOutgoingMessages } from '../services/outgoingMessages';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
@@ -43,7 +43,7 @@ import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import { useAuthSessionDegraded } from '../hooks/useAuthSessionDegraded';
 import { useClampedPopoverX } from './chat/useClampedPopoverX';
 import { ConfirmModal } from './ConfirmModal';
-import type { ToCData } from '../types';
+import type { ChartInput, ToCData } from '../types';
 import {
   formatCostUsd,
   estimateCostLowBound,
@@ -150,14 +150,23 @@ interface ChatInterfaceProps {
   height?: number;
   isCollapsed: boolean;
   onToggle: () => void;
+  /** The committed chart, with ids: the reply's edits are computed against it. */
   graphData?: ToCData | null;
-  onGraphUpdate?: (newGraphData: ToCData) => void;
+  /**
+   * An AI reply's edits applied to `asSent`, the chart as it was when the
+   * message went out. The parent merges the result into whatever the chart is
+   * by now and returns what it applied (logged with the edit). Throws when the
+   * result cannot be used; the chat shows that as an edit error.
+   */
+  onAIEdit?: (asSent: ToCData, result: ChartInput) => ToCData;
+  /** The user loads a generated chart: it replaces the whole chart. */
+  onLoadGeneratedGraph?: (chart: ChartInput) => void;
   highlightedNodes?: Set<string>;
   // Called when an action in Chat/Generate (e.g. auto-saving the chart on
   // first file upload) creates a new chart row. The parent uses this to
-  // sync its own state (currentEditToken/currentChartId) without needing
+  // sync its own state (edit token, version, chart id) without needing
   // a full navigation — URL is updated in place via history.replaceState.
-  onChartCreated?: (editToken: string, chartId: string) => void;
+  onChartCreated?: (created: ChartCreated) => void;
 }
 
 const MODELS = {
@@ -642,7 +651,8 @@ export function ChatInterface({
   isCollapsed,
   onToggle,
   graphData,
-  onGraphUpdate,
+  onAIEdit,
+  onLoadGeneratedGraph,
   highlightedNodes = new Set(),
   onChartCreated,
 }: ChatInterfaceProps) {
@@ -874,7 +884,7 @@ export function ChatInterface({
   // Generate mode state
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [additionalInstructions, setAdditionalInstructions] = useState('');
-  const [generatedGraphData, setGeneratedGraphData] = useState<ToCData | null>(null);
+  const [generatedGraphData, setGeneratedGraphData] = useState<ChartInput | null>(null);
   // PDFs uploaded for Generate mode via the Files API. Kept as an ordered
   // list of {id, file_id} chips so the chip area can render them with the
   // same AttachedFilesBar as Chat mode. Text/markdown files continue to be
@@ -2162,15 +2172,14 @@ export function ChatInterface({
             // whole graph-update + snapshot path to run for every reply
             // that parsed to zero edits (leading to a 500 on saveSnapshot
             // when the assistant message wasn't persisted).
-            if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
+            if (editInstructions && editInstructions.length > 0 && onAIEdit && graphData) {
               console.log('Edit instructions detected in ChatInterface:', editInstructions);
               try {
-                const updatedGraph = applyEdits(graphData, editInstructions);
-                onGraphUpdate(updatedGraph);
+                const applied = onAIEdit(graphData, applyEdits(graphData, editInstructions));
 
                 // Log successful AI edit
                 loggingService.logAIEdit({
-                  graphData: updatedGraph,
+                  graphData: applied,
                   messageId: assistantMessageId,
                   editInstructions,
                   success: true,
@@ -2199,7 +2208,7 @@ export function ChatInterface({
             } else {
               console.log('No edit instructions, callback, or graph data:', {
                 hasEditInstructions: !!editInstructions,
-                hasCallback: !!onGraphUpdate,
+                hasCallback: !!onAIEdit,
                 hasGraphData: !!graphData,
               });
             }
@@ -2530,10 +2539,24 @@ export function ChatInterface({
         replace: true,
         state: { skipChartReload: true },
       });
-      onChartCreated?.(created.editToken, created.chartId);
+      onChartCreated?.({
+        editToken: created.editToken,
+        chartId: created.chartId,
+        version: created.version,
+        chart: graphData,
+      });
       return { chartId: created.chartId, editToken: created.editToken };
     } catch (e) {
       console.error('[ChatInterface] ensureChartExists failed:', e);
+      // Instead of bailing out of the send without a word: the message would
+      // vanish and the user could not tell why.
+      setComposerBlocker({
+        type: 'advisory',
+        cost_error_type: 'database_unavailable',
+        detail: `Couldn't save your chart, so the message was not sent: ${
+          e instanceof Error ? e.message : 'unknown error'
+        }. Try again in a moment.`,
+      });
       return null;
     }
   }, [params.chartId, params.editToken, graphData, onChartCreated, navigate, getStorageKey]);
@@ -2936,9 +2959,9 @@ export function ChatInterface({
   );
 
   const loadGeneratedGraph = () => {
-    if (generatedGraphData && onGraphUpdate) {
+    if (generatedGraphData && onLoadGeneratedGraph) {
       console.log('Manually loading generated graph');
-      onGraphUpdate(generatedGraphData);
+      onLoadGeneratedGraph(generatedGraphData);
       setGeneratedGraphData(null); // Clear after loading
 
       const confirmMessage: ChatMessage = {
@@ -3168,7 +3191,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             if (hasGeneratedGraph(finalMessage)) {
               const generatedGraph = parseGeneratedGraph(finalMessage);
               console.log('Generated graph:', generatedGraph);
-              console.log('onGraphUpdate available:', !!onGraphUpdate);
 
               if (generatedGraph) {
                 // Store the generated graph for manual loading
@@ -3200,10 +3222,9 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // Handle edit instructions if present (for regular chat mode).
             // Empty array is truthy; length check avoids triggering the
             // graph-update + snapshot path when Claude returned no edits.
-            if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
+            if (editInstructions && editInstructions.length > 0 && onAIEdit && graphData) {
               try {
-                const updatedGraph = applyEdits(graphData, editInstructions);
-                onGraphUpdate(updatedGraph);
+                onAIEdit(graphData, applyEdits(graphData, editInstructions));
               } catch (error) {
                 console.error('Error applying graph edits:', error);
               }

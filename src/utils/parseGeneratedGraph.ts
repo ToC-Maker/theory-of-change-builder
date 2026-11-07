@@ -1,45 +1,42 @@
-import type { ToCData } from '../types';
+import { ChartShapeError, normalizeChart, type ToCData } from '../types';
 
 /**
  * Parse generated Theory of Change JSON from AI response.
- * Shape is model-generated so we validate before casting to ToCData.
+ * The shape is model-generated, so the chart goes through `normalizeChart`: what
+ * comes back is a chart the app can load (ids on every section and column), or
+ * null, which the chat reports as a parse error.
  */
 export function parseGeneratedGraph(content: string): ToCData | null {
+  // Look for JSON delimited by [GRAPH_JSON] ... [/GRAPH_JSON]
+  const jsonMatch = content.match(/\[GRAPH_JSON\]([\s\S]*?)\[\/GRAPH_JSON\]/);
+
+  if (!jsonMatch) {
+    console.log('No [GRAPH_JSON] delimiters found in response');
+    return null;
+  }
+
+  const jsonString = jsonMatch[1].trim();
+
   try {
-    // Look for JSON delimited by [GRAPH_JSON] ... [/GRAPH_JSON]
-    const jsonMatch = content.match(/\[GRAPH_JSON\]([\s\S]*?)\[\/GRAPH_JSON\]/);
-
-    if (!jsonMatch) {
-      console.log('No [GRAPH_JSON] delimiters found in response');
-      return null;
-    }
-
-    const jsonString = jsonMatch[1].trim();
-
-    // Parse the JSON
-    const graphData: unknown = JSON.parse(jsonString);
-
-    // Validate basic structure
-    if (
-      !graphData ||
-      typeof graphData !== 'object' ||
-      !Array.isArray((graphData as { sections?: unknown }).sections)
-    ) {
-      console.error('Invalid graph structure: missing sections array', graphData);
-      return null;
-    }
-
-    const typed = graphData as ToCData;
+    const chart = normalizeChart(JSON.parse(jsonString));
 
     // Log detailed structure for debugging
     console.log('Successfully parsed generated graph:');
-    console.log('- Title:', typed.title);
-    console.log('- Sections count:', typed.sections.length);
-    console.log('- Full structure:', typed);
+    console.log('- Title:', chart.title);
+    console.log('- Sections count:', chart.sections.length);
+    console.log('- Full structure:', chart);
 
-    return typed;
+    return chart;
   } catch (error) {
-    console.error('Error parsing generated graph JSON:', error);
+    // Instead of throwing: the reply is not a usable chart, and the caller
+    // tells the user so.
+    if (error instanceof ChartShapeError) {
+      console.error('Invalid graph structure:', error.reason);
+    } else if (error instanceof SyntaxError) {
+      console.error('Error parsing generated graph JSON:', error);
+    } else {
+      throw error;
+    }
     return null;
   }
 }
