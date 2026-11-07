@@ -137,8 +137,8 @@ The scenarios were also run against two clients that lose edits, to see that the
 | Client | Scenario | Result |
 | --- | --- | --- |
 | The previous client (`--root` its checkout) | `stale-editor` | A's edit is erased by B's whole-chart save: 3 of 3 runs lost. |
-| A copy of the current client whose `ChartDocument.adopt` drops the preview layer on every landing | `title-typing-across-landing` | Typed text lost in all 12 runs (3 per case). |
-| The same copy | `continuous-typing-across-landings` | 3 of 3 runs lost typed text and moved the caret (4 caret jumps counted). |
+| A copy of the current client whose `ChartDocument.adopt` drops the preview layer on every landing | `title-typing-across-landing` | Typed text lost in 9 of 12 runs (3 per case); a landing does not always meet a pending preview. |
+| The same copy | `continuous-typing-across-landings` | 2 of 3 runs lost typed text and moved the caret (4 caret jumps counted). |
 | The same copy | `details-typing-across-landing` | Not flagged (0 of 3 runs): that scenario's keystroke has not always been pending when the landing arrives. |
 
 ### Results
