@@ -281,9 +281,9 @@ describe('add controls', () => {
       it('moves the controls clear of a node beside the gap', () => {
         layOut(200, 80);
         const stack = openAt(240);
-        // The node, with its margin, spans 194-286: the nearest free spot
-        // above it ends at 194.
-        expect(stack.style.top).toBe('111.5px');
+        // The node and its handles' reach (12px) span 188-292: the nearest
+        // free spot above it ends at 188.
+        expect(stack.style.top).toBe('103.5px');
         expect(stack.className).toContain('z-[5]');
       });
 

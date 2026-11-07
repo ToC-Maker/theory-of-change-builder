@@ -56,6 +56,9 @@ const TOUCH_FONT_PX = 14;
 const CONTROL_GAP_PX = 2;
 const BADGE_PX = 16;
 const AVOID_MARGIN_PX = 6;
+// How far a node's connection handles reach outside its edge while it is
+// hovered or selected (3px always, 9px more then), in content pixels.
+const HANDLE_REACH_PX = 12;
 const AVOID_STEP_PX = 8;
 const CONNECTION_SAMPLE_PX = 10;
 
@@ -168,16 +171,18 @@ function placeControls(
         ? zoneRect.right - size.rowWidth
         : zoneRect.left + (zoneRect.width - size.rowWidth) / 2;
   const right = left + size.rowWidth;
+  // Stay out of a node's connection handles too, so a press on a handle is
+  // never on a control's edge.
+  const margin = Math.max(AVOID_MARGIN_PX, HANDLE_REACH_PX * zoom);
   const nodes = [...document.querySelectorAll('[data-tocb-node]')]
     .map((node) => node.getBoundingClientRect())
-    .filter((box) => box.right + AVOID_MARGIN_PX > left && box.left - AVOID_MARGIN_PX < right);
+    .filter((box) => box.right + margin > left && box.left - margin < right);
   const isClear = (top: number) => {
     const from = zoneRect.top + top;
     const to = from + size.length;
     return (
-      nodes.every(
-        (box) => box.bottom + AVOID_MARGIN_PX <= from || box.top - AVOID_MARGIN_PX >= to,
-      ) && !crossesConnection(left, from, right, to)
+      nodes.every((box) => box.bottom + margin <= from || box.top - margin >= to) &&
+      !crossesConnection(left, from, right, to)
     );
   };
 
