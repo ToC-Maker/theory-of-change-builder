@@ -954,8 +954,10 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       });
 
       expect(ctx.mutateDebounced).toHaveBeenCalledTimes(1);
-      expect(ctx.commit).not.toHaveBeenCalled();
-      expect(ctx.discardBuffered).toHaveBeenCalledWith(`waypoints-${sourceId}->${targetId}`);
+      // The earlier preview is promoted so the store can collapse it (see the
+      // real-store cases in useWaypointDrag.cancel.test.tsx); nothing new is written.
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+      expect(ctx.commit).toHaveBeenCalledWith(`waypoints-${sourceId}->${targetId}`);
       expect(loggingService.reportError).toHaveBeenCalledTimes(1);
       expect(result.current.isActive).toBe(false);
     });
@@ -1085,7 +1087,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(ctx.mutateDebounced).not.toHaveBeenCalled();
     });
 
-    it('cancels (no commit, buffered discard) when the connection vanished mid-gesture', () => {
+    it('writes nothing new and commits the earlier preview when the connection vanished mid-gesture', () => {
       const data = makeData([]);
       const { ctx, result } = setupHook({ data });
 
@@ -1118,7 +1120,9 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
       });
 
-      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+      expect(ctx.commit).toHaveBeenCalledWith(`waypoints-${sourceId}->${targetId}`);
+      expect(ctx.mutateDebounced).toHaveBeenCalledTimes(1);
       expect(loggingService.reportError).toHaveBeenCalledTimes(1);
       expect((loggingService.reportError as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(
         expect.objectContaining({ error_name: 'stale-waypoint-drop' }),

@@ -617,9 +617,14 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
             waypointIndex: state.waypointIndex,
           },
         });
-        // Treat as cancel: no commit, forget the key so a later
-        // `commit()` can't flush a stale shape.
-        cleanup(true);
+        // Nothing is left to write: the connection or an end node is gone. The
+        // preview the drag already made is not an edit worth keeping, but the
+        // store holds it as a pending preview that differs from the committed
+        // chart only by identity, so the tab would show unsaved changes with
+        // nothing to send. Committing promotes it, which the store then
+        // recognises as equal to the committed chart and collapses.
+        commitRef.current(key);
+        cleanup();
         return;
       }
 
