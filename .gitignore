@@ -41,6 +41,8 @@ test-database.js
 
 # Internal planning
 plans/
+.workspace/
+.implementation-log.md
 
 # Code-review subagent reports
 reviews/

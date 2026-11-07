@@ -120,6 +120,13 @@ Each assumption should include:
 
 This prompt is for generating Theory of Change conversations that end with complete implementable JSON graphs. You are NOT making edits to existing graphs - you are creating brand new complete graphs from scratch.
 
+## Schema Notes (UI-managed fields — do NOT hand-author):
+
+The graph JSON supports optional fields the user controls through the visual editor. Do NOT invent values for these in a generated graph — omit them so the app applies its defaults:
+
+- **connection.waypoints** (`Array<{ x, y }>`): bezier routing points the user drags by hand to shape a connection's curve. A freshly generated connection has none; never invent coordinates. Generated connections carry only `targetId`, `confidence` (0-100), `evidence`, and `assumptions`.
+- **Root-level format fields**: `curvature`, `textSize`, `fontFamily`, `columnPadding`, `sectionPadding` are UI-managed appearance/layout settings. Omit them unless the user explicitly requests specific styling.
+
 ## Output Format:
 
 ```markdown

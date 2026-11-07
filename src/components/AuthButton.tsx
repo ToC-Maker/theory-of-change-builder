@@ -173,7 +173,7 @@ function PrivacyModal({
       {/* Close button */}
       <button
         onClick={onClose}
-        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+        className="absolute top-3 right-3 p-1 text-gray-400 hover:text-gray-500 hover:bg-gray-100 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
         aria-label="Close"
       >
         <XMarkIcon className="w-5 h-5" />
@@ -269,7 +269,7 @@ function ApiKeyModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
     >
       <button
         onClick={onClose}
-        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+        className="absolute top-3 right-3 p-1 text-gray-400 hover:text-gray-500 hover:bg-gray-100 rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
         aria-label="Close"
       >
         <XMarkIcon className="w-5 h-5" />
@@ -319,6 +319,15 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
   const [showDropdown, setShowDropdown] = useState(false);
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  // `animate-pulse` on the avatar wrapper acts as a skeleton while the
+  // remote `user.picture` is in-flight. Without `onLoad` to clear it the
+  // wrapper pulses forever, which made the whole badge appear to "loop
+  // opacity on and off" once the image was visible (the pulse keyframe
+  // animates opacity 1→.5→1 on the wrapper, dragging the child img with
+  // it). Flip to `false` on load/error so the skeleton stops as soon as
+  // there's something real to show.
+  const [avatarLoaded, setAvatarLoaded] = useState(false);
+  const [dropdownAvatarLoaded, setDropdownAvatarLoaded] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -346,23 +355,49 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
   }, []);
 
   if (isLoading) {
-    return <div className="w-9 h-9 rounded-full bg-gray-200 animate-pulse" />;
+    return <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />;
   }
 
   if (isAuthenticated && user) {
+    // Auth0 database-connection (email/password) users get `name` defaulted
+    // to the literal email, so rendering `{user.name}` + `{user.email}`
+    // unconditionally showed the same address twice in the dropdown header.
+    // Treat the name as a display name only when it's a real, distinct
+    // value; otherwise the email is the single primary line. Social logins
+    // (e.g. Google) carry a proper display name and keep both lines.
+    const displayName = user.name && user.name !== user.email ? user.name : undefined;
+    const primaryLine = displayName ?? user.email ?? user.name;
+    const secondaryLine = displayName ? user.email : undefined;
+
     return (
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setShowDropdown(!showDropdown)}
-          className="w-9 h-9 rounded-full overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
-          title={user.name || 'Account'}
+          // `flex` (not the button's UA default inline-block) is load-
+          // bearing for vertical centering: an inline-block with
+          // overflow-hidden baselines at its bottom edge, so the plain-
+          // block wrapper div gains the line-box strut descent (~7px)
+          // under the button, mis-centering it against the Share button
+          // in the TopBar's items-center row. Block-level flex keeps the
+          // wrapper exactly button-sized, same as the anonymous variant
+          // below. 32px (`w-8 h-8`) since PR #34 fb4 (70): the bar
+          // shrank to a 40px row, and 32px matches the py-1.5 Share
+          // button with 4px breathing room.
+          className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+          title={primaryLine || 'Account'}
         >
           {user.picture ? (
-            <div className="relative w-full h-full bg-gray-200 animate-pulse overflow-hidden">
+            <div
+              className={`relative w-full h-full bg-gray-200 overflow-hidden ${
+                avatarLoaded ? '' : 'animate-pulse'
+              }`}
+            >
               <img
                 src={user.picture}
                 alt={user.name || 'User'}
                 className="absolute inset-0 w-full h-full object-cover"
+                onLoad={() => setAvatarLoaded(true)}
+                onError={() => setAvatarLoaded(true)}
               />
             </div>
           ) : (
@@ -378,11 +413,17 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
             <div className="p-4 bg-gray-50 border-b border-gray-200">
               <div className="flex items-center gap-3">
                 {user.picture ? (
-                  <div className="relative w-12 h-12 rounded-full overflow-hidden bg-gray-200 animate-pulse">
+                  <div
+                    className={`relative w-12 h-12 rounded-full overflow-hidden bg-gray-200 ${
+                      dropdownAvatarLoaded ? '' : 'animate-pulse'
+                    }`}
+                  >
                     <img
                       src={user.picture}
                       alt={user.name || 'User'}
                       className="absolute inset-0 w-full h-full object-cover"
+                      onLoad={() => setDropdownAvatarLoaded(true)}
+                      onError={() => setDropdownAvatarLoaded(true)}
                     />
                   </div>
                 ) : (
@@ -391,8 +432,28 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-gray-900 truncate">{user.name}</div>
-                  <div className="text-sm text-gray-500 truncate">{user.email}</div>
+                  {primaryLine && (
+                    <div
+                      // When the email is the only line, render it at
+                      // text-sm: at 16px it ellipsizes inside the w-72
+                      // dropdown (hiding which account you're signed in
+                      // to), while the same address fits whole at 14px.
+                      // `title` recovers the full value on hover either way.
+                      className={
+                        displayName
+                          ? 'font-medium text-gray-900 truncate'
+                          : 'text-sm font-medium text-gray-900 truncate'
+                      }
+                      title={primaryLine}
+                    >
+                      {primaryLine}
+                    </div>
+                  )}
+                  {secondaryLine && (
+                    <div className="text-sm text-gray-500 truncate" title={secondaryLine}>
+                      {secondaryLine}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -457,16 +518,21 @@ const AuthButton = ({ onLoggingEnabled }: { onLoggingEnabled?: () => void }) => 
     );
   }
 
-  // Anonymous user - show dropdown with sign in and privacy settings
+  // Anonymous user - show dropdown with sign in and privacy settings.
+  // The badge intentionally mirrors the authenticated variant's
+  // footprint (32×32, items-center) so the TopBar row keeps a single
+  // baseline. The earlier flex-col + "Account" text label made this
+  // chip ~46px tall, which pushed it visibly off-center against the
+  // Share button and the round avatar in the auth state.
   return (
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setShowDropdown(!showDropdown)}
-        className="flex flex-col items-center gap-0.5 text-gray-600 hover:text-gray-900 transition-colors focus:outline-none"
+        className="w-8 h-8 rounded-full flex items-center justify-center text-gray-600 hover:text-gray-900 hover:ring-2 hover:ring-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+        aria-label="Account"
         title="Account"
       >
         <UserCircleIcon className="w-7 h-7" />
-        <span className="text-xs">Account</span>
       </button>
 
       {showDropdown && (

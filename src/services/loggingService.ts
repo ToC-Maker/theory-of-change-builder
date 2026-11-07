@@ -1,5 +1,6 @@
 import { ToCData } from '../types';
 import { EditInstruction } from '../utils/graphEdits';
+import { RequestTokenSource, type AuthTokenProvider } from './requestTokenSource';
 
 const API_BASE = '/api';
 
@@ -37,21 +38,36 @@ class LoggingServiceClass {
   private pendingSnapshot: SaveSnapshotParams | null = null;
   private readonly DEBOUNCE_MS = 2000; // 2 second debounce
 
-  // Static auth token (set from App.tsx, mirrors ChartService pattern)
-  private static authToken: string | null = null;
+  // Request-time token source (shared resolver — see
+  // src/services/requestTokenSource.ts), set from App.tsx, mirrors the
+  // ChartService pattern. Same staleness class as the round-2 401 fix:
+  // the logging session/message/snapshot/preference routes fail closed
+  // on a bad token (401 Token verification failed), and the circuit
+  // breaker counts those as failures — three stale-token 401s used to
+  // silently kill ALL logging for the rest of the session.
+  private static tokenSource = new RequestTokenSource('LoggingService');
 
   /**
    * Set auth token (called from App.tsx, mirrors ChartService pattern)
    */
   static setAuthToken(token: string | null) {
-    LoggingServiceClass.authToken = token;
+    LoggingServiceClass.tokenSource.setToken(token);
   }
 
   /**
-   * Get current auth token
+   * Register (or clear, with `null`) the request-time token provider.
+   * Called from the App auth effect alongside `setAuthToken` — same
+   * pattern as ChartService.setAuthTokenProvider.
+   */
+  static setAuthTokenProvider(provider: AuthTokenProvider | null) {
+    LoggingServiceClass.tokenSource.setProvider(provider);
+  }
+
+  /**
+   * Get current auth token (last-known snapshot; not provider-resolved)
    */
   getAuthToken(): string | null {
-    return LoggingServiceClass.authToken;
+    return LoggingServiceClass.tokenSource.getToken();
   }
 
   /**
@@ -82,11 +98,13 @@ class LoggingServiceClass {
   }
 
   /**
-   * Build headers with auth token for API requests
+   * Build headers with a request-time auth token. Resolves through the
+   * provider (fresh token, refreshed near expiry) with static fallback —
+   * see RequestTokenSource.resolve for the exact semantics.
    */
-  private buildHeaders(): HeadersInit {
+  private async buildHeaders(): Promise<HeadersInit> {
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const token = this.getAuthToken();
+    const token = await LoggingServiceClass.tokenSource.resolve();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -97,15 +115,22 @@ class LoggingServiceClass {
    * Execute a fetch with circuit breaker protection.
    * Records success/failure automatically. Returns the Response on success,
    * or undefined if the circuit breaker is open or the request fails.
+   *
+   * Single chokepoint for the Content-Type + Authorization headers: the
+   * token resolves here, at request time, so every logging write carries
+   * a live token instead of the mount-time snapshot (sendBeacon paths
+   * excepted — beacons cannot carry headers and rely on the server-side
+   * cookie fallback). Callers must NOT pass their own `headers`.
    */
   private async fetchWithCircuitBreaker(
     url: string,
-    options: RequestInit,
+    options: Omit<RequestInit, 'headers'>,
   ): Promise<Response | undefined> {
     if (this.shouldSkipLogging()) return undefined;
 
+    const headers = await this.buildHeaders();
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, { ...options, headers });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -168,7 +193,7 @@ class LoggingServiceClass {
     try {
       const response = await this.fetchWithCircuitBreaker(`${API_BASE}/logging-createSession`, {
         method: 'POST',
-        headers: this.buildHeaders(),
+        // headers injected by fetchWithCircuitBreaker (request-time token).
         body: JSON.stringify({
           session_id: sessionId,
           chart_id: chartId,
@@ -208,7 +233,7 @@ class LoggingServiceClass {
     try {
       await this.fetchWithCircuitBreaker(`${API_BASE}/logging-endSession`, {
         method: 'POST',
-        headers: this.buildHeaders(),
+        // headers injected by fetchWithCircuitBreaker (request-time token).
         body: JSON.stringify({ session_id: this.currentSessionId }),
       });
       this.clearSession();
@@ -312,13 +337,15 @@ class LoggingServiceClass {
    * Server sync is best-effort; local preference takes effect immediately.
    */
   private async syncPreferenceToServer(optOut: boolean): Promise<void> {
-    const token = this.getAuthToken();
+    // Request-time resolution: the provider can yield a token even when
+    // the mount-time static is null (recovered session) and vice versa.
+    const token = await LoggingServiceClass.tokenSource.resolve();
     if (!token) return; // Anonymous users: local-only
 
     try {
       const response = await fetch(`${API_BASE}/logging-preference`, {
         method: 'POST',
-        headers: this.buildHeaders(),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ opted_out: optOut }),
       });
       if (!response.ok) {
@@ -335,13 +362,13 @@ class LoggingServiceClass {
    * Server is source of truth for authenticated users: overwrites local preference.
    */
   async syncPreferenceFromServer(): Promise<void> {
-    const token = this.getAuthToken();
+    const token = await LoggingServiceClass.tokenSource.resolve();
     if (!token) return;
 
     try {
       const response = await fetch(`${API_BASE}/logging-preference`, {
         method: 'GET',
-        headers: this.buildHeaders(),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
         console.warn(
@@ -420,7 +447,7 @@ class LoggingServiceClass {
     // which uses a different browser transport mechanism.
     this.fetchWithCircuitBreaker(url, {
       method: 'POST',
-      headers: this.buildHeaders(),
+      // headers injected by fetchWithCircuitBreaker (request-time token).
       body: JSON.stringify(payload),
     }).catch((err) => {
       console.error('[LoggingService] Failed to report error via fetch, trying sendBeacon:', err);
@@ -468,7 +495,7 @@ class LoggingServiceClass {
     try {
       await this.fetchWithCircuitBreaker(`${API_BASE}/logging-saveSnapshot`, {
         method: 'POST',
-        headers: this.buildHeaders(),
+        // headers injected by fetchWithCircuitBreaker (request-time token).
         body: JSON.stringify(params),
       });
     } catch (error) {
@@ -563,7 +590,7 @@ class LoggingServiceClass {
     try {
       await this.fetchWithCircuitBreaker(`${API_BASE}/logging-saveMessage`, {
         method: 'POST',
-        headers: this.buildHeaders(),
+        // headers injected by fetchWithCircuitBreaker (request-time token).
         body: JSON.stringify({
           session_id: this.currentSessionId,
           ...data,

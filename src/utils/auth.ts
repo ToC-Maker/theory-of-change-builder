@@ -21,10 +21,18 @@ const ID_TOKEN_REFRESH_LEEWAY_MS = 60_000;
  * Returns null on silent-auth failure (refresh token revoked, session
  * expired, network error). Callers should treat null as "not authenticated
  * right now" — do not send API calls that require auth.
+ *
+ * `onRefreshError` (optional) receives the raw SDK error when the silent
+ * refresh throws, BEFORE the null return. The null-return contract erases
+ * the error class, but the App-level token provider needs it to tell
+ * "transient network blip" from "invalid_grant — the grant is dead, only a
+ * re-login fixes it" (see authSessionHealth.ts). Existing callers without
+ * the callback are unchanged.
  */
 export async function getFreshIdToken(
   getAccessTokenSilently: Auth0ContextInterface['getAccessTokenSilently'],
   getIdTokenClaims: Auth0ContextInterface['getIdTokenClaims'],
+  onRefreshError?: (err: unknown) => void,
 ): Promise<string | null> {
   const cached = await getIdTokenClaims();
   const expMs = typeof cached?.exp === 'number' ? cached.exp * 1000 : 0;
@@ -40,6 +48,7 @@ export async function getFreshIdToken(
     // login_required, consent_required, refresh_token_expired, network — all
     // reduce to "we can't refresh the token right now".
     console.warn('[auth] silent token refresh failed:', err);
+    onRefreshError?.(err);
     return null;
   }
   const refreshed = await getIdTokenClaims();

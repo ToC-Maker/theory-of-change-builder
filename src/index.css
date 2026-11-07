@@ -51,3 +51,21 @@ body {
   content: attr(data-placeholder);
   color: currentColor;
 }
+
+/* While a canvas gesture (node, connection or waypoint drag) is in flight
+   the page must neither start nor extend a text selection.
+   `_canvasGestureState` sets the class for the gesture's duration;
+   editable fields keep theirs. */
+html.tocb-canvas-gesture,
+html.tocb-canvas-gesture * {
+  user-select: none;
+}
+html.tocb-canvas-gesture
+  :is(
+    input,
+    textarea,
+    [contenteditable]:not([contenteditable='false']),
+    [contenteditable]:not([contenteditable='false']) *
+  ) {
+  user-select: text;
+}
