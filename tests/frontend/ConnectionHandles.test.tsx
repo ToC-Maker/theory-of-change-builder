@@ -11,6 +11,9 @@
 //     can pin them.
 //   - Pointer-down on a handle dot invokes the binder returned by
 //     `bindHandle(nodeId, side)`.
+//   - Both handles carry `data-export-exclude`, so a PNG/PDF export of
+//     the chart leaves out the dots that show while a node is hovered or
+//     selected.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';
@@ -100,6 +103,18 @@ describe('ConnectionHandles', () => {
     fireEvent.click(right);
     expect(innerClick).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    'marks both handles for exclusion from exports (visible=%s)',
+    (visible) => {
+      render(
+        <ConnectionHandles nodeId="n-1" visible={visible} bindHandle={makeBindHandle(vi.fn())} />,
+      );
+      const handles = document.querySelectorAll('[data-tocb-connection-handle]');
+      expect(handles).toHaveLength(2);
+      handles.forEach((handle) => expect(handle.hasAttribute('data-export-exclude')).toBe(true));
+    },
+  );
 
   it('exposes left and right as distinct sides', () => {
     const calls: Array<{ id: string; side: HandleSide }> = [];

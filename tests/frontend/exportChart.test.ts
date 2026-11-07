@@ -454,6 +454,94 @@ describe('exportToPng — SVG paint survives the capture', () => {
   });
 });
 
+describe('exportToPng — editing controls inside an SVG stay out of the capture', () => {
+  // html-to-image deep-clones an <svg> without calling `filter` on what is
+  // inside it, so `data-export-exclude` on an SVG element (the connection
+  // handles) would not be honoured by the filter alone. The exporter hides
+  // those elements while the library clones the tree.
+  function buildCanvas() {
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <svg>
+        <path id="connection"></path>
+        <g id="handles" data-export-exclude="">
+          <circle id="handle-dot" data-export-exclude=""></circle>
+        </g>
+        <g id="authored" data-export-exclude="" style="display: inline"></g>
+      </svg>
+      <div id="html-control" data-export-exclude=""></div>`;
+    document.body.appendChild(root);
+    const el = (id: string) => root.querySelector(`#${id}`) as HTMLElement;
+    return {
+      root,
+      connection: el('connection'),
+      handles: el('handles'),
+      handleDot: el('handle-dot'),
+      authored: el('authored'),
+      htmlControl: el('html-control'),
+    };
+  }
+
+  const displayOf = (el: HTMLElement) => el.style.getPropertyValue('display');
+
+  it('hides marked SVG elements during the capture and restores them afterwards', async () => {
+    const { root, connection, handles, handleDot, authored, htmlControl } = buildCanvas();
+
+    const seen: Record<string, string> = {};
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async () => {
+        Object.assign(seen, {
+          connection: displayOf(connection),
+          handles: displayOf(handles),
+          handleDot: displayOf(handleDot),
+          authored: displayOf(authored),
+          htmlControl: displayOf(htmlControl),
+        });
+        return 'data:image/png;base64,AAAA';
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await exportToPng(root, 'svg-exclude');
+
+    // The marked SVG elements are hidden while the library clones; the
+    // unmarked path is untouched, and the marked HTML control is left to
+    // the capture filter.
+    expect(seen).toEqual({
+      connection: '',
+      handles: 'none',
+      handleDot: 'none',
+      authored: 'none',
+      htmlControl: '',
+    });
+    // After: each element is back to what it had, authored value included.
+    expect(displayOf(handles)).toBe('');
+    expect(displayOf(handleDot)).toBe('');
+    expect(displayOf(authored)).toBe('inline');
+  });
+
+  it('restores the marked SVG elements even when the capture throws', async () => {
+    const { root, handles } = buildCanvas();
+
+    let displayWhenThrown = '';
+    vi.doMock('html-to-image', () => ({
+      toPng: vi.fn(async () => {
+        displayWhenThrown = displayOf(handles);
+        throw new Error('boom');
+      }),
+      toCanvas: vi.fn(),
+      getFontEmbedCSS: vi.fn(async () => ''),
+    }));
+
+    const { exportToPng } = await import('../../src/utils/exportChart');
+    await expect(exportToPng(root, 'svg-exclude-throw')).rejects.toThrow('boom');
+    expect(displayWhenThrown).toBe('none');
+    expect(displayOf(handles)).toBe('');
+  });
+});
+
 describe('exportToPdf — fits canvas into a single page', () => {
   // Parameterized orientation cases. The implementation uses
   // `width >= height ? 'landscape' : 'portrait'`, so equal-dim ties
