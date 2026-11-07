@@ -12,7 +12,8 @@
 //   - one request at a time; coming back to the tab or to the editor after a
 //     long idle checks at once
 //   - a failed check waits 30 s and then carries on; a chart the merge cannot
-//     use is reported once per server version, with versions only
+//     use is reported once per server version, and a polled chart that is not
+//     a chart once, both with versions only
 //
 // The document is the real one; the network is a mocked ChartService.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
