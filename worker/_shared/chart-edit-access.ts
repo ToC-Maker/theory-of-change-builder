@@ -51,6 +51,7 @@ export async function authorizeChartEdit(
       decoded = await verifyToken(authToken, env);
     } catch (err) {
       if (err instanceof JWKSFetchError) {
+        console.error('[authorizeChartEdit] JWKS fetch failed:', err.cause);
         return refuse('Authentication service unavailable. Please try again later.', 502);
       }
       return refuse('Invalid or expired authentication. Please log in again.', 403);
