@@ -733,10 +733,9 @@ function ToCViewer() {
     [permissions],
   );
 
-  // PR 4: 30s sync poll pauses while a pointer-drag is in flight.
-  // `ToC.onDragActiveChange` toggles this ref; `syncData` reads it and
-  // skips the network call until the gesture completes. Red-team
-  // Important: "PR 4 pointer-capture during cross-tab delete race".
+  // The poll (`useChartSync`) pauses while a pointer drag is in flight, so a
+  // landing cannot move the dragged node under the pointer. `ToC.onDragActiveChange`
+  // toggles this ref; the poll skips its check until the gesture completes.
   const isDragInFlightRef = useRef(false);
 
   // Reserved chrome space + breathing pad for the canvas auto-fit.
@@ -1349,12 +1348,12 @@ function ToCViewer() {
 
   // Update document title when data changes
   useEffect(() => {
-    if (data?.title) {
+    if (data.title) {
       document.title = `${data.title} - Theory of Change Builder`;
     } else {
       document.title = 'Theory of Change Builder';
     }
-  }, [data?.title]);
+  }, [data.title]);
 
   // Every 2.5 s an open, active editor asks whether the chart has a newer
   // version and merges it into the document (see `useChartSync`). A chart the
@@ -1490,14 +1489,6 @@ function ToCViewer() {
             </p>
           )}
         </div>
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div className="h-screen w-screen bg-white flex items-center justify-center">
-        <div className="text-xl text-gray-600">No data available</div>
       </div>
     );
   }
