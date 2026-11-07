@@ -1,6 +1,8 @@
 // Cancelling a waypoint drag (Escape, pointercancel, a second pointer) must
 // put the connection back as it was, with no save and no undo entry, and a
-// later unrelated edit must not carry the cancelled path along.
+// later unrelated edit must not carry the cancelled path along. The one
+// exception is a drag whose preview an unrelated notify already handed to
+// the parent: there the restored chart is sent too.
 //
 // Runs `useWaypointDrag` against the real `useGraphMutation`: the hooks
 // meet at `mutateDebounced` / `discardBuffered`, and "cancel really

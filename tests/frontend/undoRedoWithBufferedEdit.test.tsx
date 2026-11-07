@@ -1,6 +1,6 @@
-// A keyboard arrow on an editor slider (or a colour pick) buffers through
-// `mutateDebounced` and reaches the parent only when its 200 ms idle timer
-// fires. Undo is allowed while such a control has focus, so an undo can
+// A keyboard arrow on an editor slider (node width, edge confidence)
+// buffers through `mutateDebounced` and reaches the parent only when its
+// 200 ms idle timer fires. Undo is allowed while such a control has focus, so an undo can
 // arrive inside that window. The undo hands the graph an older chart; the
 // buffered edit must not later report that chart back as a new edit, or
 // the parent clears its redo stack and records an empty undo step.

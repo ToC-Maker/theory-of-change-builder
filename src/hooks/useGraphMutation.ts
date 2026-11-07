@@ -16,8 +16,8 @@
 //     the same task collapse to ONE parent notification via a shared
 //     `pendingNotifyRef` slot.
 //
-//   mutateDebounced(updater, key)
-//     Streaming-input mutation (slider drags, color pickers, title typing).
+//   mutateDebounced(updater, key, options?)
+//     Streaming-input mutation (slider drags, title typing).
 //     Updates local state synchronously (so the UI feels responsive) but
 //     does NOT notify the parent. Buffers the latest updater under `key` in
 //     a hook-local Map. Same-key calls REPLACE the buffered updater (latest
@@ -176,8 +176,8 @@ export function useGraphMutation(
   // produced two notifications (Red-Team Important).
   const pendingNotifyRef = useRef(false);
 
-  const notifyCountRef = useRef(0);
-  const notifyCount = useCallback(() => notifyCountRef.current, []);
+  const parentNotifyCountRef = useRef(0);
+  const notifyCount = useCallback(() => parentNotifyCountRef.current, []);
 
   // States already handed to the parent. The parent keeps them as its own
   // state and passes them back as `initialData`, and the caller then feeds
@@ -212,7 +212,7 @@ export function useGraphMutation(
       pendingNotifyRef.current = false;
       if (!isMountedRef.current) return; // L7 guard
       notifiedRef.current.add(dataRef.current);
-      notifyCountRef.current += 1;
+      parentNotifyCountRef.current += 1;
       onDataChangeRef.current?.(dataRef.current);
     });
   }, []);

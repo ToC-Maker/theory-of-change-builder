@@ -581,8 +581,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
             waypointIndex: state.waypointIndex,
           },
         });
-        // Treat as cancel: no commit, drop the buffered updater so the
-        // 200ms idle timer doesn't auto-commit a stale shape.
+        // Treat as cancel: no commit, drop the buffered updater so a later
+        // `commit()` can't flush a stale shape.
         cleanup(true);
         return;
       }
