@@ -33,10 +33,9 @@ export function useFieldBuffer(
   useLayoutEffect(() => {
     const previous = seen.current;
     seen.current = { source, resetKey };
-    if (resetKey !== previous.resetKey) {
-      lastWritten.current = null;
-      setBuffer(source);
-    } else if (source !== previous.source && source !== lastWritten.current && !mixed) {
+    const reselected = resetKey !== previous.resetKey;
+    const changedElsewhere = source !== previous.source && source !== lastWritten.current && !mixed;
+    if (reselected || changedElsewhere) {
       // The buffer now matches the source, so what the user typed earlier
       // no longer says which later source values are their own.
       lastWritten.current = null;
