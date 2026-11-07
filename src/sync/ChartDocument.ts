@@ -17,9 +17,12 @@
  *
  * A chart arriving from the server is merged into `committed` with the local
  * side winning a same-field conflict (the local save lands later), and `live` is
- * rebased onto the result with the preview winning. Nothing here asserts a
- * relation between versions: a response that arrives out of order is ignored
- * or merged, and saving never stops because of it.
+ * rebased onto the result with the preview winning. A response that is stale
+ * or out of order (a poll no newer than the version held, or one that arrives
+ * while a save is in flight) is ignored and saving goes on. The one thing that
+ * stops saving is a 409 reporting a lower version than the one sent: the stored
+ * chart went backwards (a database restore), and the document ends saving with
+ * a message to reload.
  *
  * A method notifies subscribers after its state is complete (`edit` is a
  * preview then a commit, so it notifies twice). A merge that throws (a chart
@@ -112,8 +115,7 @@ export class ChartDocument implements ChartStore {
     this.now = init.now ?? Date.now;
   }
 
-  // The `ChartStore` members and `getStatus` are arrow properties: `useSyncExternalStore`
-  // takes them as bare function references, and the canvas passes the store's members around.
+  // Arrow properties, as `ChartStore` requires; `getStatus` is bound for the same reason.
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => {
@@ -212,12 +214,17 @@ export class ChartDocument implements ChartStore {
     this.emit();
   }
 
-  /** After createChart. The first server wins when two creators race; edits made meanwhile go out on its version. */
-  attachServer(editToken: string, server: ServerState): void {
-    if (this.server) return;
+  /**
+   * After createChart. The first server wins when two creators race: a later call changes
+   * nothing and returns false, so its caller knows the document is on another chart. Edits made
+   * before the attach go out on the attached version.
+   */
+  attachServer(editToken: string, server: ServerState): boolean {
+    if (this.server) return false;
     this.editToken = editToken;
     this.server = server;
     this.emit();
+    return true;
   }
 
   takeSave(): { editToken: string; baseVersion: number; chart: ToCData } | null {
