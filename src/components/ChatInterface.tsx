@@ -2448,9 +2448,9 @@ export function ChatInterface({
   };
 
   // Cached chart identity for charts auto-saved this session. ensureChartExists
-  // updates the URL via history.replaceState (no route re-render), so React
-  // Router params lag the actual chart on subsequent calls; these refs are
-  // the synchronous source of truth.
+  // navigates through the router, whose params update on the next render, so
+  // they lag the actual chart for a call made before then; these refs are the
+  // synchronous source of truth.
   const autosavedEditTokenRef = useRef<string | null>(null);
   const autosavedChartIdRef = useRef<string | null>(null);
   // The create in flight, if any.
