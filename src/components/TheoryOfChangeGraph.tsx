@@ -39,8 +39,8 @@ import { AddControlZone, CANVAS_EDGE_PX, ColumnSlot } from './canvas/AddControlZ
 import type { AddControl } from './canvas/AddControlZone';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
-// The data an updater receives is the object App keeps as the undo
-// snapshot, so insertions copy every array they extend instead of
+// The chart an updater receives can be the object the store keeps as an
+// undo entry, so insertions copy every array they extend instead of
 // splicing it.
 const insertSection = (data: ToCData, index: number): ToCData => ({
   ...data,
@@ -459,14 +459,11 @@ export function ToC({
     [setDataAndNotify, nodeHeights],
   );
 
-  // Feedback 67: the alignment math lives in `computeAlignedSections`
-  // (`src/utils/alignNodes.ts`) — a PURE function. The previous inline
-  // implementation shallow-copied `prevData` and then assigned into the
-  // shared nested `sections[i].columns[j].nodes[k]` arrays, mutating
-  // the previous state in place. App.tsx's undo history deep-clones
-  // exactly that previous object (`saveToHistory(dataRef.current)`),
-  // so the undo entry already carried the aligned positions and Ctrl+Z
-  // after "Align nodes" was a no-op. Regression tests:
+  // The alignment math lives in `computeAlignedSections`
+  // (`src/utils/alignNodes.ts`) — a PURE function. Assigning into the
+  // shared nested `sections[i].columns[j].nodes[k]` arrays would mutate
+  // the previous chart in place, and that object is the undo entry, so
+  // Ctrl+Z after "Align nodes" would be a no-op. Regression tests:
   // `tests/frontend/TheoryOfChangeGraph.alignment.test.tsx`.
   const straightenEdges = useCallback(() => {
     if (!editMode) return;
@@ -889,11 +886,8 @@ export function ToC({
   // PR 7: waypoint drag is hoisted up to `TheoryOfChangeGraph` (parity
   // with `useConnectionDrag` placement) so its `isActive` flag can OR
   // into `isAnyDragActive` below — that is the polling-pause signal the
-  // 30s sync poll consumes via App.tsx's `isDragInFlightRef`. Previously
-  // this hook lived inside `<ConnectionsComponent>` and the signal
-  // never reached the parent (a poll mid-waypoint-drag could overwrite
-  // the buffered `mutateDebounced` state). Bind accessors and the
-  // current drag state are passed down to `<ConnectionsComponent>`,
+  // sync poll consumes via App.tsx's `isDragInFlightRef`. Bind accessors
+  // and the current drag state are passed down to `<ConnectionsComponent>`,
   // which forwards them to per-connection `<ConnectionWaypointHandles>`.
   const clientToContainer = useCallback(
     (clientX: number, clientY: number) => {
@@ -945,8 +939,8 @@ export function ToC({
     getLineMidpoint,
   });
 
-  // Notify parent (App) of drag-active transitions so the 30s sync
-  // poll can pause while a gesture is in flight (red-team Important).
+  // Notify parent (App) of drag-active transitions so the sync poll
+  // can pause while a gesture is in flight.
   // We OR-combine the node-drag, connection-drag, and waypoint-drag
   // flags so any gesture pauses polling.
   //

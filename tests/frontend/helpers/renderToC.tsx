@@ -1,7 +1,7 @@
 // Mounts the canvas, or just a chart document, the way the app does: on a
 // `ChartDocument` that has a server version, so a test can land a remote chart
-// with `land`. `onCommit` records every chart the document commits (what the
-// save hook would send), the way the canvas's old `onDataChange` did.
+// with `land`. `onCommit` records every chart the document commits, which is
+// what the save hook would send.
 import type { ComponentProps } from 'react';
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';

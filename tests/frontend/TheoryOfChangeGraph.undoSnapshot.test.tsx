@@ -92,7 +92,7 @@ const byId = (testId: string, index = 0) =>
 const clickGutter = (testId: string, index = 0) =>
   editAndCollect(() => fireEvent.click(byId(testId, index)));
 
-// Rewritten for revert-form undo when App moves onto the chart document.
+// Skipped until it is rewritten for revert-form undo when App moves onto the chart document.
 describe.skip('adding a column or section builds new state and leaves the previous state intact', () => {
   it('column before the first column', async () => {
     const next = await clickGutter('add-column-before-0-0');
@@ -125,7 +125,7 @@ describe.skip('adding a column or section builds new state and leaves the previo
   });
 });
 
-// Rewritten for revert-form undo when App moves onto the chart document.
+// Skipped until it is rewritten for revert-form undo when App moves onto the chart document.
 describe.skip('other edits leave the previous state intact', () => {
   const confirmDelete = () => {
     const dialog = document.querySelector('[role="dialog"]') as HTMLElement;

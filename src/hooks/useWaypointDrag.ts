@@ -609,7 +609,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       if (!offset || !findConnection(dataRef.current, state.sourceNodeId, state.targetNodeId)) {
         loggingService.reportError({
           error_name: 'stale-waypoint-drop',
-          error_message: `Waypoint drop on ${state.sourceNodeId}->${state.targetNodeId} hit stale state (connection vanished)`,
+          error_message: `Waypoint drop on ${state.sourceNodeId}->${state.targetNodeId} hit stale state (connection or an end node vanished)`,
           request_metadata: {
             sourceNodeId: state.sourceNodeId,
             targetNodeId: state.targetNodeId,

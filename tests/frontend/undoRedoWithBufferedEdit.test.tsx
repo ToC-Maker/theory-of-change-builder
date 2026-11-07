@@ -79,7 +79,7 @@ const advance = (ms: number) =>
     await vi.advanceTimersByTimeAsync(ms);
   });
 
-// Rewritten for revert-form undo when App moves onto the chart document.
+// Skipped until it is rewritten for revert-form undo when App moves onto the chart document.
 describe.skip('undo shortly after an editor control change', () => {
   it('keeps the undone step on the redo stack and adds no empty undo step', async () => {
     const { result } = renderHook(() => useParentAndGraph(makeData()));

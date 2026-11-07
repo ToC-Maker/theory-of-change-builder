@@ -43,12 +43,13 @@
 // Why commits go through queueMicrotask
 // ---------------------------------------------------------------------------
 //
-// A commit notifies every subscriber (App re-renders). Deferring it to a
-// microtask lets the writes of one event handler coalesce into a single commit,
-// and keeps the notification out of any React updater or render that calls
-// `mutate` (React warns "Cannot update a component while rendering a different
-// component"). The scheduling shape is pinned by
-// `useGraphMutation.queueMicrotask-scheduling-shape.test.ts`.
+// Deferring the commit lets all the writes of one event handler coalesce
+// into a single commit, and so a single undo step. The deferral does not make
+// `mutate` safe to call from a React updater or a render: each preview notifies
+// the store's subscribers synchronously (React warns "Cannot update a component
+// while rendering a different component"), so call `mutate` and
+// `mutateDebounced` from event handlers and effects. The scheduling shape is
+// pinned by `useGraphMutation.queueMicrotask-scheduling-shape.test.ts`.
 //
 // Unmounting commits the marked keys at once: the store outlives the canvas, so
 // the typed text must not wait for an idle timer that no longer exists.

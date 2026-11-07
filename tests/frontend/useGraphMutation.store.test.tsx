@@ -113,6 +113,30 @@ describe('useGraphMutation over a store', () => {
     expect(doc.getCommitCount()).toBe(1);
   });
 
+  it('a_replaced_chart_is_not_overwritten_by_the_idle_commit_of_an_earlier_preview', async () => {
+    vi.useFakeTimers();
+    const { doc, onCommit } = makeDoc(connectedChart());
+    const { result } = renderHook(() => useGraphMutation(doc));
+    const replacement = edit(connectedChart(), (draft) => {
+      nodeIn(draft, 'd').title = 'Imported';
+    });
+
+    act(() => {
+      result.current.mutateDebounced(retitle('a', 'Typed'), 'title-a');
+    });
+    act(() => {
+      doc.replace(replacement);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    // The replacement is the only commit, and it is what the document holds.
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('A');
+    expect(titleOf(doc.getCommitted(), 'd')).toBe('Imported');
+  });
+
   it('notifyCount_tracks_store_commit_count', () => {
     const { doc } = makeDoc(connectedChart());
     const { result } = renderHook(() => useGraphMutation(doc));
