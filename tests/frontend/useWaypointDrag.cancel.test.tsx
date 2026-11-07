@@ -4,13 +4,16 @@
 //
 // Runs `useWaypointDrag` against the real `useGraphMutation`: the hooks
 // meet at `mutateDebounced` / `discardBuffered`, and "cancel really
-// reverts" is a property of the pair, not of either mock.
+// reverts" is a property of the pair, not of either mock. The same setup
+// covers a drop whose validity depends on what the drag has already
+// written to local state.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
 import { useGraphMutation } from '../../src/hooks/useGraphMutation';
 import { useWaypointDrag } from '../../src/hooks/useWaypointDrag';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
+import { loggingService } from '../../src/services/loggingService';
 import type { ToCData } from '../../src/types';
 
 vi.mock('../../src/services/loggingService', () => ({
@@ -25,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
   _resetCanvasGestureStateForTest();
   vi.useRealTimers();
 });
@@ -267,5 +271,33 @@ describe('cancelling a waypoint drag', () => {
 
     expect(onDataChange).toHaveBeenCalledTimes(1);
     expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+  });
+});
+
+describe('dragging a later waypoint of a legacy multi-waypoint connection', () => {
+  it('commits the dragged position once and reports no stale drop', async () => {
+    // The first move collapses the array to the dragged waypoint, so the
+    // press-time index no longer exists in the live data at release.
+    const { result, onDataChange } = setup(
+      makeData([
+        { x: 60, y: 100 },
+        { x: 140, y: 100 },
+      ]),
+    );
+
+    act(() => {
+      result.current.drag.bindWaypoint('source', 'target', 1).onPointerDown(pointerDown(140, 100));
+    });
+    act(() => {
+      document.dispatchEvent(pointer('pointermove', 220, 140));
+    });
+    act(() => {
+      document.dispatchEvent(pointer('pointerup', 220, 140));
+    });
+    await settle();
+
+    expect(loggingService.reportError).not.toHaveBeenCalled();
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 220, y: 140 }]);
   });
 });

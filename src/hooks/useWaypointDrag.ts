@@ -153,9 +153,8 @@ export interface WaypointDragState {
   targetNodeId: string;
   /**
    * For `kind: 'move'`, the index of the waypoint being dragged (only
-   * relevant for the stale-gesture validity check on pointerup; the
-   * write itself always collapses to a single waypoint). For
-   * `kind: 'insert'` / `'path'`, 0.
+   * checked when the press lands; the write itself always collapses to a
+   * single waypoint). For `kind: 'insert'` / `'path'`, 0.
    */
   waypointIndex: number;
 }
@@ -499,8 +498,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   );
 
   // pointerup: commit one entry if the gesture armed; otherwise it was
-  // a click — clean up without writing anything. If the connection or
-  // waypoint vanished mid-gesture (cross-tab AI/collab edit) the replay
+  // a click — clean up without writing anything. If the connection
+  // vanished mid-gesture (cross-tab AI/collab edit) the replay
   // updater no-ops gracefully; we log one `stale-waypoint-drop` per
   // drop (NOT per pointermove — logging from the pure updater would
   // flood under the same race). Mirrors PR 4 `stale-node-drop` and PR 5
@@ -524,19 +523,15 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
         return;
       }
 
-      const liveConn = findConnection(dataRef.current, state.sourceNodeId, state.targetNodeId);
-      // 'insert' and 'path' gestures aren't anchored to a specific
-      // waypoint — the connection existing is the whole validity
-      // story. Only 'move' additionally requires its index to still
-      // be live.
-      const waypointStillValid =
-        !!liveConn &&
-        (state.kind !== 'move' ||
-          (state.waypointIndex >= 0 && state.waypointIndex < (liveConn.waypoints?.length ?? 0)));
-      if (!waypointStillValid) {
+      // The connection existing is the whole validity story. The press-time
+      // waypoint index is not checked here: the first armed move already
+      // replaced the connection's waypoints with the single dragged one, so
+      // a later waypoint of a legacy multi-waypoint connection would always
+      // look gone and its drop would never commit.
+      if (!findConnection(dataRef.current, state.sourceNodeId, state.targetNodeId)) {
         loggingService.reportError({
           error_name: 'stale-waypoint-drop',
-          error_message: `Waypoint drop on ${state.sourceNodeId}->${state.targetNodeId} hit stale state (connection or waypoint vanished)`,
+          error_message: `Waypoint drop on ${state.sourceNodeId}->${state.targetNodeId} hit stale state (connection vanished)`,
           request_metadata: {
             sourceNodeId: state.sourceNodeId,
             targetNodeId: state.targetNodeId,
