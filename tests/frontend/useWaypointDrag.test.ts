@@ -599,6 +599,38 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     );
   });
 
+  describe('a throwing mutateDebounced on cancel', () => {
+    it('still ends the gesture when the restore write throws on Escape', () => {
+      const { ctx, result } = setupHook({ data: makeData([{ x: 100, y: 50 }]) });
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 160, clientY: 90 }));
+      });
+      ctx.mutateDebounced.mockImplementation(() => {
+        throw new Error('restore failed');
+      });
+
+      const errors: unknown[] = [];
+      const onError = (e: ErrorEvent) => {
+        e.preventDefault();
+        errors.push(e.error);
+      };
+      window.addEventListener('error', onError);
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      window.removeEventListener('error', onError);
+
+      expect(errors).toEqual([expect.objectContaining({ message: 'restore failed' })]);
+      expect(isCanvasGestureActive()).toBe(false);
+      expect(result.current.isActive).toBe(false);
+    });
+  });
+
   describe('selection suppression', () => {
     const MARK = 'tocb-canvas-gesture';
 

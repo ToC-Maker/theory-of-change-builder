@@ -174,7 +174,10 @@ describe('cancelling a waypoint drag', () => {
     });
     await settle();
 
-    expect(connectionOf(result.current.graph.data)).toEqual({ targetId: 'target', confidence: 75 });
+    expect(connectionOf(result.current.graph.data)).toStrictEqual({
+      targetId: 'target',
+      confidence: 75,
+    });
     expect(onDataChange).not.toHaveBeenCalled();
   });
 
