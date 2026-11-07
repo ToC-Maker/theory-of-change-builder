@@ -9,11 +9,14 @@
 //     while the connection has NO waypoint. `cursor: crosshair`.
 //     Dragging it creates THE waypoint
 //     (`useWaypointDrag.bindMidpoint`). Round-7 issue 78: since the
-//     whole edge is now a drag surface, this dot's remaining job is
-//     DISCOVERABILITY — it advertises that the connection can be
-//     bent — so it is sized/contrasted like the waypoint handle
-//     (solid indigo + white halo) rather than the old r=4 translucent
-//     dot the reviewer called "tiny and barely visible".
+//     whole edge is now a drag surface, this dot's remaining job as a
+//     drag affordance is DISCOVERABILITY — it advertises that the
+//     connection can be bent — so it is sized/contrasted like the
+//     waypoint handle (solid indigo + white halo) rather than the old
+//     r=4 translucent dot the reviewer called "tiny and barely
+//     visible". A press that doesn't become a drag opens the
+//     connection editor: on a short connection the hit circle covers
+//     the whole line, so the line's own click can't be reached.
 //
 //   - A filled solid circle at each existing waypoint. `cursor: move`.
 //     Dragging moves the waypoint (`useWaypointDrag.bindWaypoint`);
@@ -83,7 +86,7 @@ interface WaypointBindResult {
 }
 
 interface MidpointBindResult {
-  onPointerDown: (e: ReactPointerEvent) => void;
+  onPointerDown: (e: ReactPointerEvent, onTap?: () => void) => void;
 }
 
 interface Point {
@@ -121,6 +124,12 @@ export interface ConnectionWaypointHandlesProps {
    */
   dragInProgress?: boolean;
   /**
+   * Called when a press on the midpoint is released without becoming a
+   * drag. The caller opens the connection's editor, as a click on the
+   * connection's line does.
+   */
+  onMidpointTap?: () => void;
+  /**
    * Current canvas zoom (camera.z). The invisible hit circles divide
    * by it so the effective on-screen press target stays ≥ 24px at any
    * zoom-out level (feedback 69). Defaults to 1.
@@ -146,6 +155,7 @@ export function ConnectionWaypointHandles({
   waypointCount,
   visible,
   dragInProgress,
+  onMidpointTap,
   zoomScale = 1,
   bindWaypoint,
   bindMidpoint,
@@ -190,7 +200,7 @@ export function ConnectionWaypointHandles({
             cy={midpoint.y}
             r={hitRadius(MIDPOINT_VISIBLE_R, zoomScale)}
             data-tocb-midpoint-handle={`${sourceNodeId}->${targetNodeId}|0`}
-            onPointerDown={midpointBound.onPointerDown}
+            onPointerDown={(e) => midpointBound.onPointerDown(e, onMidpointTap)}
             onClick={(e) => e.stopPropagation()}
             style={{
               fill: 'transparent',
@@ -199,7 +209,7 @@ export function ConnectionWaypointHandles({
               touchAction: 'none',
             }}
           >
-            <title>Drag to bend this connection</title>
+            <title>Drag to bend this connection; click to edit it</title>
           </circle>
         </>
       )}

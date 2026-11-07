@@ -20,7 +20,13 @@
 //     but the gesture always produces a single-element `waypoints`
 //     array. Nothing is written until the pointer travels beyond
 //     DRAG_THRESHOLD_PX — a plain click must not create a waypoint
-//     (and must not leave a phantom preview in local state).
+//     (and must not leave a phantom preview in local state). Instead the
+//     press may carry a per-press `onTap` handler, called when it is
+//     released without ever arming (never after a drag, even one that
+//     returned to the press point, and never after a cancel). The
+//     midpoint circle unmounts on pointerdown and Chrome then delivers
+//     no `click` for the press, so the hook reports the tap itself; the
+//     caller uses it to open the connection editor.
 //
 //   bindWaypoint(sourceId, targetId, waypointIndex)
 //     Drag the existing waypoint. Every write REPLACES the whole
@@ -199,7 +205,7 @@ export interface UseWaypointDragResult {
     sourceNodeId: string,
     targetNodeId: string,
     segmentIndex: number,
-  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  ) => { onPointerDown: (e: ReactPointerEvent, onTap?: () => void) => void };
   /** Round-7 issue 78: drag starting anywhere on the fat hit-path. */
   bindPath: (
     sourceNodeId: string,
@@ -362,6 +368,11 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   const gestureStartClientRef = useRef<{ x: number; y: number } | null>(null);
   const gestureArmedRef = useRef(false);
 
+  // The press's `onTap` handler, called when it is released without
+  // arming. Per press, so it always comes from the render the user
+  // pressed in.
+  const tapHandlerRef = useRef<(() => void) | undefined>(undefined);
+
   // Round-7 issue 78: sticky "the last path-initiated gesture was a
   // drag" flag, read (and cleared) by the fat path's click handler via
   // `consumePathGestureArmed`. Recorded in `cleanup` — which runs on
@@ -517,9 +528,12 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       // Sub-threshold press+release = click, not drag. Nothing was
       // written (pointermove gates on the same flag), so a plain
       // cleanup suffices: no commit, no undo entry, and a legacy
-      // multi-waypoint chart keeps its shape.
+      // multi-waypoint chart keeps its shape. The tap handler runs
+      // once the gesture has ended, so it never observes a live one.
       if (!armIfPastThreshold(e.clientX, e.clientY)) {
+        const onTap = tapHandlerRef.current;
         cleanup();
+        onTap?.();
         return;
       }
 
@@ -645,6 +659,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       targetNodeId: string,
       waypointIndex: number,
       e: ReactPointerEvent,
+      onTap?: () => void,
     ) => {
       if (!editModeRef.current) return;
       if (isCanvasGestureActive()) return;
@@ -671,6 +686,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
       activePointerIdRef.current = e.pointerId;
       setCanvasGestureActive(true);
+      tapHandlerRef.current = onTap;
       gestureKeyRef.current = buildKey(sourceNodeId, targetNodeId);
       originalWaypointsRef.current = conn.waypoints;
       gestureStartClientRef.current = { x: e.clientX, y: e.clientY };
@@ -729,9 +745,9 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       }
     >
   >(new Map());
-  const bindMidpointCache = useRef<Map<string, { onPointerDown: (e: ReactPointerEvent) => void }>>(
-    new Map(),
-  );
+  const bindMidpointCache = useRef<
+    Map<string, { onPointerDown: (e: ReactPointerEvent, onTap?: () => void) => void }>
+  >(new Map());
 
   const bindWaypoint = useCallback(
     (sourceNodeId: string, targetNodeId: string, waypointIndex: number) => {
@@ -755,8 +771,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       const cached = bindMidpointCache.current.get(key);
       if (cached) return cached;
       const entry = {
-        onPointerDown: (e: ReactPointerEvent) =>
-          startGesture('insert', sourceNodeId, targetNodeId, 0, e),
+        onPointerDown: (e: ReactPointerEvent, onTap?: () => void) =>
+          startGesture('insert', sourceNodeId, targetNodeId, 0, e, onTap),
       };
       bindMidpointCache.current.set(key, entry);
       return entry;

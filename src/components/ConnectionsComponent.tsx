@@ -79,7 +79,7 @@ interface ConnectionsComponentProps {
     sourceNodeId: string,
     targetNodeId: string,
     segmentIndex: number,
-  ) => { onPointerDown: (e: ReactPointerEvent) => void };
+  ) => { onPointerDown: (e: ReactPointerEvent, onTap?: () => void) => void };
   /**
    * Round-7 issue 78: drag starting anywhere on the fat hit-path
    * moves THE waypoint (supersedes K7's inert-drag decision). Same
@@ -605,6 +605,17 @@ export function ConnectionsComponent({
             !!bindWaypoint &&
             !!bindMidpoint &&
             (isEdgeHovered || isEdgeSelected || isThisConnectionBeingDragged);
+          // Only allow opening the editor of highlighted edges when nodes
+          // are selected, or of any edge when no nodes are selected.
+          const openEdgeEditor = () => {
+            if (hasHighlightedNodes && !isHighlighted) return;
+            setSelectedEdge({
+              sourceId: connection.sourceId,
+              targetId: connection.targetId,
+              midX: (startX + endX) / 2,
+              midY: (startY + endY) / 2,
+            });
+          };
           const waypointAnchors = [
             { x: startX, y: startY },
             ...(connection.waypoints ?? []),
@@ -757,20 +768,7 @@ export function ConnectionsComponent({
                     return; // Drag, not a click — no editor.
                   }
 
-                  // Only allow clicking on highlighted edges when nodes are selected
-                  // Or allow all edges when no nodes are selected
-                  if (hasHighlightedNodes && !isHighlighted) {
-                    return; // Don't show popup for non-highlighted edges when nodes are selected
-                  }
-
-                  const midX = (startX + endX) / 2;
-                  const midY = (startY + endY) / 2;
-                  setSelectedEdge({
-                    sourceId: connection.sourceId,
-                    targetId: connection.targetId,
-                    midX,
-                    midY,
-                  });
+                  openEdgeEditor();
                 }}
               />
               {/* Glow shadow layer */}
@@ -827,6 +825,7 @@ export function ConnectionsComponent({
                   waypointCount={waypointCount}
                   visible={handlesVisible}
                   dragInProgress={isThisConnectionBeingDragged}
+                  onMidpointTap={openEdgeEditor}
                   zoomScale={camera?.z}
                   bindWaypoint={bindWaypoint}
                   bindMidpoint={bindMidpoint}

@@ -15,10 +15,12 @@
 //     clicking a connection of the selected node opens its EdgeEditor
 //     (ConnectionsComponent's onClick → setSelectedEdge).
 //   - the waypoint/midpoint handles of a connection — manipulation
-//     affordances of the object being edited: their click is a
-//     stopPropagation no-op, but double-click on a waypoint handle
-//     resets the curve (useWaypointDrag.resetWaypoints) and must not
-//     be eaten when the press also dismissed an editor.
+//     affordances of the object being edited: a click on either is a
+//     stopPropagation no-op, but a press on the midpoint that doesn't
+//     become a drag opens the connection's editor (useWaypointDrag's
+//     tap handler, on pointerup), and double-click on a waypoint
+//     handle resets the curve (useWaypointDrag.resetWaypoints) and
+//     must not be eaten when the press also dismissed an editor.
 //
 // This is deliberately the same family of selectors App.tsx's
 // `excludeFromPan` treats as canvas-interactive. Both editors share

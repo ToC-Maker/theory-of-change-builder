@@ -289,6 +289,100 @@ describe('useWaypointDrag (single-waypoint model)', () => {
     });
   });
 
+  describe('bindMidpoint — tap handler', () => {
+    function pressMidpoint(
+      result: ReturnType<typeof setupHook>['result'],
+      onTap?: () => void,
+      at = { clientX: 50, clientY: 100 },
+    ) {
+      act(() => {
+        result.current
+          .bindMidpoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent(at), onTap);
+      });
+    }
+    const move = (clientX: number, clientY: number) =>
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX, clientY }));
+      });
+    const release = (clientX: number, clientY: number) =>
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX, clientY }));
+      });
+
+    it('runs once when the press is released inside the dead-zone, after the gesture has ended', () => {
+      const { result } = setupHook({ data: makeData([]) });
+      let gestureActiveInside: boolean | null = null;
+      const onTap = vi.fn(() => {
+        gestureActiveInside = isCanvasGestureActive();
+      });
+
+      pressMidpoint(result, onTap);
+      move(51, 100);
+      release(51, 100);
+
+      expect(onTap).toHaveBeenCalledTimes(1);
+      expect(gestureActiveInside).toBe(false);
+    });
+
+    it('does not run when the press became a drag', () => {
+      const { result } = setupHook({ data: makeData([]) });
+      const onTap = vi.fn();
+
+      pressMidpoint(result, onTap);
+      move(150, 200);
+      release(150, 200);
+
+      expect(onTap).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the press became a drag and came back to the press point', () => {
+      const { result } = setupHook({ data: makeData([]) });
+      const onTap = vi.fn();
+
+      pressMidpoint(result, onTap);
+      move(150, 200);
+      move(50, 100);
+      release(50, 100);
+
+      expect(onTap).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the gesture is cancelled before it armed', () => {
+      const { result } = setupHook({ data: makeData([]) });
+      const onTap = vi.fn();
+
+      pressMidpoint(result, onTap);
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      release(50, 100);
+
+      expect(onTap).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the press is refused (editMode=false)', () => {
+      const { result } = setupHook({ data: makeData([]), editMode: false });
+      const onTap = vi.fn();
+
+      pressMidpoint(result, onTap);
+      release(50, 100);
+
+      expect(onTap).not.toHaveBeenCalled();
+    });
+
+    it('does not run when the press is refused because another gesture is active', () => {
+      const { result } = setupHook({ data: makeData([]) });
+      const onTap = vi.fn();
+      setCanvasGestureActive(true);
+
+      pressMidpoint(result, onTap);
+      release(50, 100);
+
+      expect(onTap).not.toHaveBeenCalled();
+    });
+  });
+
   describe('bindWaypoint — move THE waypoint', () => {
     it('updates the waypoint position on pointerup', () => {
       const data = makeData([{ x: 100, y: 50 }]);
