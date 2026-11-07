@@ -2,9 +2,9 @@
 // that element's click on release.
 //
 // Panning moves the content with the cursor, so the element pressed
-// (a "+ Column" / "+ Section" gutter, a section title, ...) is still under
+// (a "+ Column" / "+ Section" control, a section title, ...) is still under
 // the pointer at `mouseup`: the browser dispatches a `click` on it, and the
-// gutter adds a column or section the user never asked for. `useZoomPan`
+// control adds a column or section the user never asked for. `useZoomPan`
 // swallows the click that immediately follows a pan which travelled past the
 // shared tap dead-zone (`MOVE_THRESHOLD_PX`), and leaves plain clicks alone.
 
@@ -13,7 +13,6 @@ import { render, act, cleanup, fireEvent } from '@testing-library/react';
 import { useRef } from 'react';
 import { useZoomPan } from '../../src/hooks/useZoomPan';
 import { MOVE_THRESHOLD_PX } from '../../src/hooks/usePointerDrag';
-import { GutterAffordance } from '../../src/components/canvas/GutterAffordance';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 
 afterEach(() => {
@@ -26,12 +25,12 @@ function Harness({ onAdd, zoomRef }: { onAdd: () => void; zoomRef: { zoomIn?: ()
   const { zoomIn } = useZoomPan({
     containerSize: { width: 800, height: 600 },
     containerRef,
-    // Mirror App.tsx: only buttons / nodes / editors are excluded; a gutter
-    // is a plain div, so a press on it pans.
+    // Mirror App.tsx: only buttons / nodes / editors are excluded; an add
+    // control is a plain div, so a press on it pans.
     excludeFromPan: () => false,
   });
   zoomRef.zoomIn = zoomIn;
-  return <GutterAffordance kind="column" width={48} onClick={onAdd} testId="gutter" />;
+  return <div role="button" data-testid="gutter" onClick={onAdd} />;
 }
 
 function setup() {

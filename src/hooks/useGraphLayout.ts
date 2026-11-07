@@ -232,7 +232,6 @@ export function scheduleRectRefresh(state: RefreshState, refresh: () => void): v
 
 export interface SectionWidthsOptions {
   columnPadding: number;
-  editMode: boolean;
 }
 
 export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions): number[] {
@@ -246,10 +245,7 @@ export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions):
       col.nodes.length === 0 ? 128 : Math.max(...col.nodes.map((n) => n.width || 192), 128),
     );
     const totalColumnWidth = columnWidths.reduce((s, w) => s + w, 0);
-    // PR 5: edit mode renders the column-gutter affordances between
-    // columns, so the flex `gap` between columns is 0 (gutters provide
-    // their own spacing). View mode keeps the bare gaps.
-    const gaps = opts.editMode ? 0 : Math.max(0, columnWidths.length - 1) * opts.columnPadding;
+    const gaps = Math.max(0, columnWidths.length - 1) * opts.columnPadding;
     return totalColumnWidth + gaps;
   });
 }
@@ -268,7 +264,6 @@ export interface UseGraphLayoutArgs {
   containerRef: RefObject<HTMLElement | null>;
   columnPadding: number;
   sectionPadding: number;
-  editMode: boolean;
   /**
    * Current canvas zoom scale (1 = no zoom). `refresh()` divides every
    * viewport rect delta by this so the snapshot is content-space — see
@@ -293,12 +288,11 @@ export function useGraphLayout({
   containerRef,
   columnPadding,
   sectionPadding,
-  editMode,
   zoomScale = 1,
 }: UseGraphLayoutArgs): UseGraphLayoutResult {
   const sectionWidths = useMemo(
-    () => computeSectionWidths(data, { columnPadding, editMode }),
-    [data, columnPadding, editMode],
+    () => computeSectionWidths(data, { columnPadding }),
+    [data, columnPadding],
   );
 
   // Zoom behind a ref so `refresh` (and everything downstream of it —

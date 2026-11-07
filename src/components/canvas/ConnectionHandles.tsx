@@ -80,6 +80,7 @@ export function ConnectionHandles({ nodeId, visible, bindHandle }: ConnectionHan
           tabIndex={-1}
           aria-hidden="true"
           data-tocb-connection-handle={`${nodeId}|${side}`}
+          data-export-exclude=""
           onPointerDown={bindHandle(nodeId, side).onPointerDown}
           // The handle is interactive; suppress the parent node's
           // click-to-select selection when it is clicked (so a tap on

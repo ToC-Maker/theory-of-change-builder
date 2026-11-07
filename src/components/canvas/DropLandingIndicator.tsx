@@ -41,7 +41,7 @@ export function DropLandingIndicator({ indicator, zoomScale }: DropLandingIndica
     );
   }
 
-  // Same blue as the column gutters' hover tint.
+  // Tinted blue-500, the accent of the add-column controls.
   return (
     <div
       className="pointer-events-none absolute z-[61] rounded-lg bg-blue-500/20"

@@ -15,6 +15,8 @@
 //   - Midpoint pointerdown binds via `bindMidpoint(s, t, 0)`.
 //   - Waypoint pointerdown binds via `bindWaypoint(s, t, wpIdx)`.
 //   - Waypoint double-click calls the bound onDoubleClick (reset).
+//   - The group carries `data-export-exclude` (midpoint affordance and
+//     waypoint handles are editing aids that exports leave out).
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
@@ -172,6 +174,38 @@ describe('ConnectionWaypointHandles', () => {
       });
       expect(container.querySelectorAll('[data-tocb-midpoint-handle]').length).toBe(0);
     });
+  });
+
+  describe('export', () => {
+    it.each([0, 1])(
+      'marks the handle group for exclusion from exports (%s waypoints)',
+      (waypointCount) => {
+        const anchors = [
+          { x: 0, y: 0 },
+          ...Array.from({ length: waypointCount }, () => ({ x: 50, y: 50 })),
+          { x: 100, y: 100 },
+        ];
+        const { container } = renderHandles({
+          sourceNodeId: 's',
+          targetNodeId: 't',
+          anchors,
+          segmentMidpoints: chordMidpoints(anchors),
+          waypointCount,
+          visible: true,
+          bindWaypoint: makeBind(vi.fn()),
+          bindMidpoint: makeBind(vi.fn()),
+        });
+        const group = container.querySelector('[data-tocb-waypoint-handles]');
+        expect(group).not.toBeNull();
+        expect(group!.hasAttribute('data-export-exclude')).toBe(true);
+        // Every handle circle sits inside the marked group.
+        const handles = container.querySelectorAll(
+          '[data-tocb-midpoint-handle], [data-tocb-waypoint-handle]',
+        );
+        expect(handles.length).toBeGreaterThan(0);
+        handles.forEach((h) => expect(h.closest('[data-export-exclude]')).toBe(group));
+      },
+    );
   });
 
   describe('handle positions', () => {

@@ -25,7 +25,8 @@ import {
 import { buildConnectionPath } from './canvas/connectionPath';
 import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
 import { DropLandingIndicator } from './canvas/DropLandingIndicator';
-import { GutterAffordance } from './canvas/GutterAffordance';
+import { AddControlZone, CANVAS_EDGE_PX, ColumnSlot } from './canvas/AddControlZone';
+import type { AddControl } from './canvas/AddControlZone';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 // The data an updater receives is the object App keeps as the undo
@@ -166,6 +167,10 @@ export function ToC({
   const [nodeColor, setNodeColor] = useState('#ffffff'); // Default white background
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
+  // Width (content px) the edited section's title bar had when its
+  // editor opened. The bar keeps it while typing so the section doesn't
+  // resize under the cursor.
+  const [editingBarWidth, setEditingBarWidth] = useState(0);
   // PR 3: `editingNodeId` / `nodePopup` / `edgePopup` state retired —
   // node editing now lives in the anchored `<NodeEditor>` (mounted
   // alongside the selected node) and edge editing in `<EdgeEditor>`
@@ -485,7 +490,6 @@ export function ToC({
     containerRef: graphContainerRef,
     columnPadding,
     sectionPadding,
-    editMode,
     // PR #34 zoom fix: the hook divides viewport rect deltas by the
     // zoom so the snapshot is content-space, matching the zoom-divided
     // classify points `usePointerDrag` feeds to `classifyRegion`.
@@ -1026,10 +1030,100 @@ export function ToC({
     nodeHeights,
   });
 
+  // View mode shows the title block only when the chart has a title; edit
+  // mode matches it, so an untitled chart gets no block (its "Click to
+  // add title" prompt is an overlay) until the title starts being typed.
+  const titleBlockShown = Boolean(data.title) || (editMode && editingTitle);
+
+  const addColumn = (sectionIndex: number, at: number) => {
+    setDataAndNotify((prevData) => insertColumn(prevData, sectionIndex, at));
+  };
+
+  const addSection = (at: number) => {
+    setDataAndNotify((prevData) => insertSection(prevData, at));
+  };
+
+  // Add controls for the gap on a section's outer side(s): the chart's
+  // outer edge before the first section and after the last, otherwise the
+  // gap shared with the next section. Ordered left to right by what each
+  // control adds.
+  const renderSectionZones = (sectionIndex: number) => {
+    const { sections } = data;
+    const section = sections[sectionIndex];
+    const lastColumnIndex = Math.max(0, section.columns.length - 1);
+    const sectionControl = (at: number, title: string, testId: string): AddControl => ({
+      kind: 'section',
+      title,
+      testId,
+      onClick: () => addSection(at),
+    });
+    const endColumnControl: AddControl = {
+      kind: 'column',
+      towards: 'left',
+      title: `Add a column at the end of "${section.title}"`,
+      testId: `add-column-after-${sectionIndex}-${lastColumnIndex}`,
+      onClick: () => addColumn(sectionIndex, section.columns.length),
+    };
+    const startColumnControl = (target: number): AddControl => ({
+      kind: 'column',
+      towards: 'right',
+      title: `Add a column at the start of "${sections[target].title}"`,
+      testId: `add-column-before-${target}-0`,
+      onClick: () => addColumn(target, 0),
+    });
+
+    return (
+      <>
+        {sectionIndex === 0 && (
+          <AddControlZone
+            testId="add-zone-edge-start"
+            edge="left"
+            outerEdge
+            width={CANVAS_EDGE_PX}
+            zoomScale={zoomScale}
+            controls={[
+              sectionControl(0, 'Add a section at the start', 'add-section-before'),
+              startColumnControl(0),
+            ]}
+          />
+        )}
+        {sectionIndex === sections.length - 1 ? (
+          <AddControlZone
+            testId="add-zone-edge-end"
+            edge="right"
+            outerEdge
+            width={CANVAS_EDGE_PX}
+            zoomScale={zoomScale}
+            controls={[
+              endColumnControl,
+              sectionControl(
+                sectionIndex + 1,
+                'Add a section at the end',
+                'add-section-after-last',
+              ),
+            ]}
+          />
+        ) : (
+          <AddControlZone
+            testId={`add-zone-section-gap-${sectionIndex}`}
+            edge="right"
+            width={sectionPadding}
+            zoomScale={zoomScale}
+            controls={[
+              endColumnControl,
+              sectionControl(sectionIndex + 1, 'Add a section here', 'add-section-before'),
+              startColumnControl(sectionIndex + 1),
+            ]}
+          />
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="flex flex-col">
       {/* Graph Title */}
-      {(data.title || editMode) && (
+      {titleBlockShown && (
         <div className="mb-6">
           {editMode && editingTitle ? (
             <input
@@ -1076,7 +1170,7 @@ export function ToC({
               onClick={() => editMode && setEditingTitle(true)}
               title={editMode ? 'Click to edit title' : ''}
             >
-              {data.title || (editMode ? 'Click to add title' : '')}
+              {data.title}
             </h1>
           )}
         </div>
@@ -1086,22 +1180,13 @@ export function ToC({
         ref={graphContainerRef}
         className="flex relative min-w-fit overflow-visible"
         style={{
-          // PR 5: add affordances (column-gutter "+ Column" and
-          // section-padding "+ Section") are always rendered in edit
-          // mode now (no `layoutMode` gate). They provide the
-          // inter-column / inter-section spacing themselves, so the
-          // parent flex `gap` collapses to 0 in edit mode. View mode
-          // keeps the explicit gap (no gutter divs render).
-          gap: editMode ? '0px' : `${sectionPadding}px`,
+          gap: `${sectionPadding}px`,
           width: svgSize.width > 0 ? `${svgSize.width}px` : 'auto',
-          // PR #34 fb4 issue 64: in edit mode the container takes its
-          // height from content (the section wrappers, whose column
-          // bodies carry the explicit height below). This makes the
-          // flex line the section-content height, so the stretch-sized
-          // section gutters end exactly at the column bodies' bottom —
-          // the canvas content edge — instead of overshooting the card
-          // via the old fixed `svgSize.height - 55` budget. View mode
-          // keeps the explicit height: its column bodies are
+          // In edit mode the container takes its height from content
+          // (the section wrappers, whose column bodies carry the
+          // explicit height below), so the add-control zones, which
+          // stretch to their section, end at the canvas content edge.
+          // View mode keeps the explicit height: its column bodies are
           // auto-height (nodes are absolutely positioned), so without
           // it the container — and the click-to-deselect area — would
           // collapse to the title bars.
@@ -1121,33 +1206,32 @@ export function ToC({
           }
         }}
       >
-        {/* PR 7 feedback (task 7): the previous "Double Click Anywhere
-            to Add a Node" empty-state banner is no longer accurate.
-            PR 5 introduced always-on add affordances in column gutters
-            and section padding, so "click anywhere" oversells where
-            adds actually land. Removed entirely (no replacement copy)
-            since the gutter labels already announce "+ Column" /
-            "+ Section" on hover. */}
+        {/* Prompt for an untitled chart: a chip floating just above the
+          canvas card, so view mode's layout is kept. It is sized in
+          on-screen pixels (content pixels divided by the zoom) so it
+          stays readable when the chart is zoomed out to fit. */}
+        {editMode && !titleBlockShown && (
+          <button
+            type="button"
+            data-export-exclude=""
+            className="absolute left-1/2 whitespace-nowrap rounded-md border border-gray-300 bg-white px-2 py-1 text-gray-600 shadow-sm hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+            style={{
+              bottom: `calc(100% + ${CANVAS_EDGE_PX + 6 / zoomScale}px)`,
+              fontSize: 13,
+              lineHeight: 1.2,
+              transform: `translateX(-50%) scale(${1 / zoomScale})`,
+              transformOrigin: 'bottom center',
+            }}
+            title="Click to edit title"
+            onClick={() => setEditingTitle(true)}
+          >
+            Click to add title
+          </button>
+        )}
 
         {Array.isArray(data.sections) ? (
           data.sections.map((section, sectionIndex) => (
             <React.Fragment key={sectionIndex}>
-              {/* PR 5 Task 5.1: always-on add-section affordance. The
-                gutter is rendered in edit mode regardless of layout
-                state. Default: minimal visual treatment (no background
-                tint, label hidden). Hover: translucent green tint plus
-                "+ Section" label. Click adds a section before this
-                index. The 32px width comes from `sectionPadding`. */}
-              {editMode && (
-                <GutterAffordance
-                  kind="section"
-                  width={sectionPadding}
-                  testId="add-section-before"
-                  onClick={() => {
-                    setDataAndNotify((prevData) => insertSection(prevData, sectionIndex));
-                  }}
-                />
-              )}
               <div
                 onClick={(e) => {
                   // Allow deselection by clicking section area in both view and edit mode
@@ -1180,33 +1264,16 @@ export function ToC({
                       )}
                       style={{
                         backgroundColor: data.color || '#374151', // Default to gray-700
-                        // PR 5: section title width must account for the
-                        // always-on column gutters in edit mode (N+1
-                        // gutters around N columns, each `columnPadding`
-                        // wide). View mode renders no gutters.
-                        //
-                        // PR 7 task 15: in edit mode, pin `width` to the
-                        // columns-driven layout figure so the section
-                        // doesn't visibly resize when the title swaps
-                        // between `<h2>` and `<input>`. The `<input>`
-                        // defaults to a ~20-char intrinsic width at
-                        // 3xl, which used to push `max-content`
-                        // (previously `width: max-content`) wider than
-                        // the columns. Locking the width matches what
-                        // the columns underneath need; the `<h2>` and
-                        // `<input>` inside use `w-full` and let this
-                        // wrapper dictate the layout. View mode keeps
-                        // the historical `max-content + minWidth`
-                        // behaviour so long titles can still grow the
-                        // section past its columns.
-                        ...(editMode
-                          ? {
-                              width: `${sectionWidths[sectionIndex] + (section.columns.length + 1) * columnPadding}px`,
-                            }
-                          : {
-                              minWidth: `${sectionWidths[sectionIndex]}px`,
-                              width: 'max-content',
-                            }),
+                        // The label sets the bar's width, but never less
+                        // than the columns below it. While the label is
+                        // being edited the bar keeps the width it had when
+                        // the editor opened: the input's own intrinsic
+                        // width would otherwise resize the whole section.
+                        minWidth: `${sectionWidths[sectionIndex]}px`,
+                        width:
+                          editMode && editingSectionIndex === sectionIndex
+                            ? `${editingBarWidth}px`
+                            : 'max-content',
                       }}
                     >
                       {/* PR 5 Task 5.3: hover-revealed section delete
@@ -1291,7 +1358,12 @@ export function ToC({
                             fontFamily: fontFamily,
                             fontSize: `${textSize * 1.875}rem`,
                           }}
-                          onClick={() => editMode && setEditingSectionIndex(sectionIndex)}
+                          onClick={(e) => {
+                            if (!editMode) return;
+                            const bar = e.currentTarget.parentElement!;
+                            setEditingBarWidth(bar.getBoundingClientRect().width / zoomScale);
+                            setEditingSectionIndex(sectionIndex);
+                          }}
                           title={editMode ? 'Click to edit section label' : ''}
                         >
                           {section.title}
@@ -1299,37 +1371,14 @@ export function ToC({
                       )}
                     </div>
                     <div
-                      className="flex"
+                      className={clsx('flex', editMode && 'relative')}
                       style={{
-                        // PR 5: same `gap`-collapses-to-0 rationale as
-                        // the outer section flex above. Column gutters
-                        // provide spacing in edit mode; view mode falls
-                        // back to the explicit gap.
-                        gap: editMode ? '0px' : `${columnPadding}px`,
+                        gap: `${columnPadding}px`,
                         justifyContent: 'center',
                       }}
                     >
                       {section.columns.map((column, colIndex) => (
-                        <React.Fragment key={`${sectionIndex}-${colIndex}`}>
-                          {/* PR 5 Task 5.1: always-on add-column
-                            affordance (left gutter before first
-                            column). Same minimal-default / hover-
-                            translucent-blue treatment as the section
-                            gutter above; `+ Column` label fades in
-                            on hover. */}
-                          {editMode && colIndex === 0 && (
-                            <GutterAffordance
-                              kind="column"
-                              width={columnPadding}
-                              testId={`add-column-before-${sectionIndex}-${colIndex}`}
-                              onClick={() => {
-                                setDataAndNotify((prevData) =>
-                                  insertColumn(prevData, sectionIndex, 0),
-                                );
-                              }}
-                            />
-                          )}
-
+                        <ColumnSlot key={`${sectionIndex}-${colIndex}`} editMode={editMode}>
                           {/* PR 5 Task 5.1: column body. No more
                             `layoutMode` red-state for empty columns
                             (delete-column moves to Task 5.3's hover-×
@@ -1358,23 +1407,16 @@ export function ToC({
                             )}
                             style={{
                               width: `${Math.max(...column.nodes.map((node) => node.width || 192), 128)}px`,
-                              // 62 = section header budget; 80 = title
-                              // block budget. PR #34 fb4 issue 64: edit
-                              // mode ALWAYS renders the title block (the
-                              // "Click to add title" placeholder when
-                              // `data.title` is empty), so the 80px is
-                              // unconditional here — the old
-                              // `data.title ? 80 : 0` ignored the
-                              // placeholder, pushing the column bodies
-                              // (and the gutters that stretch to match
-                              // them) ~79px past the canvas card on
-                              // no-title edit charts.
-                              // ConnectionsComponent.updateSize adds the
-                              // same 80px under `data.title || editMode`,
-                              // so body bottom and card bottom stay glued.
+                              // Edit-mode bodies get an explicit height so the
+                              // empty space under the nodes can be
+                              // double-clicked to add one. 62 = section
+                              // header budget; 80 = title block, when it
+                              // takes space (ConnectionsComponent's
+                              // updateSize adds the same 80, so body bottom
+                              // and card bottom stay glued).
                               height: editMode
                                 ? svgSize.height > 0
-                                  ? `${svgSize.height - 62 - 80}px`
+                                  ? `${svgSize.height - 62 - (titleBlockShown ? 80 : 0)}px`
                                   : '740px'
                                 : 'auto',
                             }}
@@ -1469,43 +1511,29 @@ export function ToC({
                             )}
                           </div>
 
-                          {/* PR 5 Task 5.1: always-on add-column
-                            affordance (right gutter after every
-                            column). Same minimal-default / hover-
-                            translucent-blue treatment. */}
-                          {editMode && (
-                            <GutterAffordance
-                              kind="column"
+                          {editMode && colIndex < section.columns.length - 1 && (
+                            <AddControlZone
+                              testId={`add-zone-column-gap-${sectionIndex}-${colIndex}`}
+                              edge="right"
                               width={columnPadding}
-                              testId={`add-column-after-${sectionIndex}-${colIndex}`}
-                              onClick={() => {
-                                // Add new column
-                                setDataAndNotify((prevData) =>
-                                  insertColumn(prevData, sectionIndex, colIndex + 1),
-                                );
-                              }}
+                              zoomScale={zoomScale}
+                              controls={[
+                                {
+                                  kind: 'column',
+                                  title: 'Add a column here',
+                                  testId: `add-column-after-${sectionIndex}-${colIndex}`,
+                                  onClick: () => addColumn(sectionIndex, colIndex + 1),
+                                },
+                              ]}
                             />
                           )}
-                        </React.Fragment>
+                        </ColumnSlot>
                       ))}
+                      {editMode && renderSectionZones(sectionIndex)}
                     </div>
                   </div>
                 </div>
               </div>
-              {/* PR 5 Task 5.1: always-on add-section affordance after
-                the last section. Same minimal-default / hover-
-                translucent-green treatment as the before-section
-                gutter above. */}
-              {editMode && sectionIndex === data.sections.length - 1 && (
-                <GutterAffordance
-                  kind="section"
-                  width={sectionPadding}
-                  testId="add-section-after-last"
-                  onClick={() => {
-                    setDataAndNotify((prevData) => insertSection(prevData, sectionIndex + 1));
-                  }}
-                />
-              )}
             </React.Fragment>
           ))
         ) : (
@@ -1531,6 +1559,7 @@ export function ToC({
           hoveredConnections={hoveredConnections}
           curvature={curvature}
           editMode={editMode}
+          titleBlockShown={titleBlockShown}
           sectionWidths={sectionWidths}
           columnPadding={columnPadding}
           sectionPadding={sectionPadding}
@@ -1666,6 +1695,7 @@ export function ToC({
               return (
                 <div
                   className="absolute z-50 p-3 pointer-events-none"
+                  data-export-exclude=""
                   style={{
                     left: `${position.x}px`,
                     top: `${position.y}px`,

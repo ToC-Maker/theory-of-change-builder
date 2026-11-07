@@ -177,7 +177,7 @@ export function ConnectionWaypointHandles({
   const midpointBound = midpoint ? bindMidpoint(sourceNodeId, targetNodeId, 0) : null;
 
   return (
-    <g data-tocb-waypoint-handles={`${sourceNodeId}->${targetNodeId}`}>
+    <g data-tocb-waypoint-handles={`${sourceNodeId}->${targetNodeId}`} data-export-exclude="">
       {/* Midpoint affordance: smaller, translucent, on the curve.
           Two circles per handle (feedback 69): the small decorative
           dot, and an invisible enlarged hit circle that owns the

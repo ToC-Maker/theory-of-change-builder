@@ -97,6 +97,7 @@ function setup() {
     hoveredConnections: new Set<string>(),
     curvature: 0.5,
     editMode: true,
+    titleBlockShown: true,
     sectionWidths: [200, 200],
     columnPadding: 24,
     sectionPadding: 32,

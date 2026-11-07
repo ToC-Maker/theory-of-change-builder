@@ -113,6 +113,7 @@ export function ColumnDeleteAffordance({
         title={`Delete ${scope}`}
         onClick={handleClick}
         data-testid={testIdBase}
+        data-export-exclude=""
       >
         {/* K10: the column glyph sits over whatever node color the
             user drags under the column's top-right corner; gray-400
