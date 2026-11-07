@@ -16,6 +16,7 @@ import { createRef, lazy, useEffect, useImperativeHandle, type Ref } from 'react
 import type { MDXEditorMethods } from '@mdxeditor/editor';
 import { DetailsEditor } from '../../src/components/node-editor/DetailsEditor';
 import { MDXEditorComponent } from '../../src/components/MDXEditor';
+import { loggingService } from '../../src/services/loggingService';
 
 afterEach(() => {
   cleanup();
@@ -137,14 +138,31 @@ describe('DetailsEditor following remote changes', () => {
     expect(t.seen.setMarkdown).toHaveBeenCalledWith('x then someone else');
   });
 
-  it('the same text arriving twice is applied once', async () => {
-    const t = await renderWithStandIn('old text');
+  it('a remote change and then a return to the original text is applied both times (unfocused)', async () => {
+    const t = await renderWithStandIn('original');
+
+    t.rerender('theirs');
+    await waitFor(() => expect(t.seen.mounts).toEqual(['original', 'theirs']));
+    t.rerender('theirs');
+    t.rerender('original');
+
+    // Each distinct text mounts a fresh editor once; the repeated 'theirs'
+    // is not applied again, and the last one is not mistaken for text the
+    // editor already showed.
+    await waitFor(() => expect(t.seen.mounts).toEqual(['original', 'theirs', 'original']));
+    expect(t.seen.setMarkdown).not.toHaveBeenCalled();
+  });
+
+  it('a remote change and then a return to the original text is applied both times (focused)', async () => {
+    const t = await renderWithStandIn('original');
     act(() => t.editor.focus());
 
-    t.rerender('text from someone else');
-    t.rerender('text from someone else');
+    t.rerender('theirs');
+    t.rerender('theirs');
+    t.rerender('original');
 
-    expect(t.seen.setMarkdown).toHaveBeenCalledTimes(1);
+    expect(t.seen.setMarkdown.mock.calls.map(([text]) => text)).toEqual(['theirs', 'original']);
+    expect(t.seen.mounts).toEqual(['original']);
   });
 
   it('a remote change while a toolbar button holds focus updates the real editor in place', async () => {
@@ -280,6 +298,20 @@ describe('MDXEditor behaviour the resync relies on (real editor)', () => {
     expect(onChange).not.toHaveBeenCalled();
   }, 20000);
 
+  it('mdxeditor_contract: setMarkdown of text not in normal form while focused reports nothing', async () => {
+    const { ref, onChange, content } = await mountReal('local text');
+    act(() => content.focus());
+    onChange.mockClear();
+
+    await act(async () => {
+      ref.current!.setMarkdown('- a\n- b  ');
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('* a\n* b');
+    expect(onChange).not.toHaveBeenCalled();
+  }, 20000);
+
   it('mdxeditor_contract: setMarkdown with text equal after trimming changes nothing', async () => {
     const { ref, onChange } = await mountReal('local text');
     onChange.mockClear();
@@ -313,5 +345,59 @@ describe('MDXEditor behaviour the resync relies on (real editor)', () => {
     });
     expect(ref.current!.getMarkdown()).toBe('new text');
     expect(onChange).not.toHaveBeenCalled();
+  }, 20000);
+});
+
+describe('MDXEditor markdown it cannot import (real editor)', () => {
+  // Text with inline HTML: the library cannot turn it into editor content, so
+  // the editor stops reporting edits. Making that visible is all the app does.
+  const unimportable = 'a <b> c';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function mountReal(markdown: string) {
+    const ref = createRef<MDXEditorMethods>();
+    const utils = render(<MDXEditorComponent markdown={markdown} editorRef={ref} />);
+    const content = await waitFor(
+      () => {
+        const el = utils.container.querySelector<HTMLElement>('[contenteditable="true"]');
+        expect(el).not.toBeNull();
+        return el!;
+      },
+      { timeout: 10000 },
+    );
+    return { ref, content };
+  }
+
+  function reportedWithoutContent(reportSpy: ReturnType<typeof vi.spyOn>) {
+    expect(reportSpy).toHaveBeenCalled();
+    for (const [report] of reportSpy.mock.calls) {
+      expect(report.error_name).toBe('MarkdownImportFailed');
+      expect(JSON.stringify(report)).not.toContain('<b>');
+    }
+  }
+
+  it('reports the failure to open text it cannot import, without the text', async () => {
+    const reportSpy = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
+
+    await mountReal(unimportable);
+
+    await waitFor(() => reportedWithoutContent(reportSpy));
+  }, 20000);
+
+  it('reports the failure when text it cannot import arrives through setMarkdown', async () => {
+    const reportSpy = vi.spyOn(loggingService, 'reportError').mockImplementation(() => {});
+    const { ref, content } = await mountReal('local text');
+    act(() => content.focus());
+    expect(reportSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      ref.current!.setMarkdown(unimportable);
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    await waitFor(() => reportedWithoutContent(reportSpy));
   }, 20000);
 });

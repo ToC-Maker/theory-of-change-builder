@@ -88,6 +88,17 @@ describe('useFieldBuffer', () => {
     expect(result.current[0]).toBe('B text');
   });
 
+  it('reset_key_reseeds_even_when_the_source_does_not_change', () => {
+    // The chart still holds '' for the first node (the typed text has not
+    // reached it), and the next node's value is '' too.
+    const { result, rerender } = setup({ source: '' });
+
+    act(() => result.current[1]('typed on n1'));
+    rerender({ source: '', resetKey: 'n2', mixed: false });
+
+    expect(result.current[0]).toBe('');
+  });
+
   it('reset_key_reseeds_even_when_the_new_source_equals_text_typed_before', () => {
     const { result, rerender } = setup();
 

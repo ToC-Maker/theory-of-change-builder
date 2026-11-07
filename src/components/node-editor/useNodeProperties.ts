@@ -47,10 +47,10 @@
 // previous key. If the user wanted to keep typing they'd return to that
 // selection.
 //
-// Between selection changes the buffer follows the node's value in `data`
-// when someone else changes it, and never rewrites a field the user is
-// typing in (see `useFieldBuffer`). While a multi-selection's values
-// differ it follows nothing.
+// Between selection changes the buffer adopts any value of the node in
+// `data` that the user did not write, which is how a collaborator's change
+// reaches the open editor (see `useFieldBuffer`). While a multi-selection's
+// values differ it follows nothing.
 //
 // ---------------------------------------------------------------------------
 // Cleanup

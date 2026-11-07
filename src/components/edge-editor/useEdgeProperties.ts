@@ -101,9 +101,9 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   const sourceAssumptions = conn?.assumptions ?? '';
 
   // Local buffers for the typing inputs. They reset when the (sourceId,
-  // targetId) pair changes (user clicks a different connection) and follow
-  // a collaborator's change to the connection, except in a field being
-  // typed in (see `useFieldBuffer`).
+  // targetId) pair changes (user clicks a different connection) and adopt
+  // any value of the connection the user did not write, which is how a
+  // collaborator's change reaches the open editor (see `useFieldBuffer`).
   const [evidenceBuffer, setEvidenceBuffer] = useFieldBuffer(sourceEvidence, edgeKey, false);
   const [assumptionsBuffer, setAssumptionsBuffer] = useFieldBuffer(
     sourceAssumptions,
