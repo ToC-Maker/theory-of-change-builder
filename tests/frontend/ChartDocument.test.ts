@@ -321,6 +321,19 @@ describe('ChartDocument undo and redo', () => {
     expect(doc.getStatus().canRedo).toBe(true);
   });
 
+  it('redo_commits_a_pending_preview_first_which_leaves_nothing_to_redo', () => {
+    const { doc } = openDoc();
+    doc.edit((c) => retitle(c, 'a', 'X'));
+    doc.undo();
+    doc.preview((c) => retitle(c, 'b', 'typed'));
+
+    doc.redo();
+
+    expect(titleOf(doc.getCommitted(), 'b')).toBe('typed');
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('A');
+    expect(doc.getStatus().canRedo).toBe(false);
+  });
+
   it('a_new_edit_clears_redo', () => {
     const { doc } = openDoc();
     doc.edit((c) => retitle(c, 'a', 'X'));
@@ -446,6 +459,17 @@ describe('ChartDocument AI edits and replacement', () => {
     });
   });
 
+  it('replace_commits_a_pending_preview_first', () => {
+    const { doc } = openDoc();
+    doc.preview((c) => retitle(c, 'a', 'typed before the import'));
+
+    doc.replace(retitle(seed(), 'd', 'Imported'));
+    doc.undo();
+
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('typed before the import');
+    expect(titleOf(doc.getCommitted(), 'd')).toBe('D');
+  });
+
   it('replace_on_unsaved_new_chart_counts_as_unsaved', () => {
     const doc = new ChartDocument({ chart: seed(), editToken: null, server: null });
     expect(doc.getStatus().unsaved).toBe(false);
@@ -467,6 +491,17 @@ describe('ChartDocument saving', () => {
     expect(doc.getStatus().saving).toBe(true);
 
     expect(doc.takeSave()).toBeNull();
+  });
+
+  it('takeSave_sends_the_committed_chart_not_the_pending_preview', () => {
+    const { doc } = openDoc(3);
+    doc.edit((c) => retitle(c, 'a', 'committed'));
+    doc.preview((c) => retitle(c, 'a', 'still typing'));
+
+    const save = doc.takeSave();
+
+    expect(titleOf(save!.chart, 'a')).toBe('committed');
+    expect(titleOf(doc.getLive(), 'a')).toBe('still typing');
   });
 
   it('takeSave_sends_nothing_without_changes_a_server_or_a_token', () => {
