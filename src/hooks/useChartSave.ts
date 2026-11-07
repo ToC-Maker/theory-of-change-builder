@@ -82,7 +82,7 @@ const isRetryable = (err: unknown): boolean =>
 
 export interface UseChartSaveArgs {
   doc: ChartDocument;
-  /** Called with the unsaved chart after each failed attempt (local backup). */
+  /** Called with the unsaved chart after each failed attempt and when saving stops; App writes a copy of it to localStorage. */
   onSaveFailed?: (data: ToCData) => void;
 }
 
