@@ -17,6 +17,8 @@ import { useWaypointDrag } from '../../src/hooks/useWaypointDrag';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import { loggingService } from '../../src/services/loggingService';
 import type { ChartInput, ToCData, WaypointOffset } from '../../src/types';
+import type { ChartDocument } from '../../src/sync/ChartDocument';
+import { hasNode, removeColumn, removeNode } from '../shared/chart-fixtures';
 import { makeDoc } from './helpers/renderToC';
 
 vi.mock('../../src/services/loggingService', () => ({
@@ -77,8 +79,13 @@ const connectionOf = (data: ToCData) => data.sections[0].columns[0].nodes[0].con
 // the pointer position and the stored offset differ by this midpoint.
 const LINE_MIDPOINT = { x: 0, y: 0 };
 
-function setup(initial: ChartInput, lineMidpoint = LINE_MIDPOINT) {
-  const { doc, onCommit } = makeDoc(initial);
+type LineMidpoint = { x: number; y: number } | null;
+
+function setup(
+  initial: ChartInput,
+  lineMidpoint: LineMidpoint | ((doc: ChartDocument) => LineMidpoint) = LINE_MIDPOINT,
+) {
+  const { doc, onCommit, land } = makeDoc(initial);
   const rendered = renderHook(() => {
     const graph = useGraphMutation(doc);
     const drag = useWaypointDrag({
@@ -90,11 +97,12 @@ function setup(initial: ChartInput, lineMidpoint = LINE_MIDPOINT) {
       notifyCount: graph.notifyCount,
       getCommitted: doc.getCommitted,
       clientToContainer: (x, y) => ({ x, y }),
-      getLineMidpoint: () => lineMidpoint,
+      getLineMidpoint: () =>
+        typeof lineMidpoint === 'function' ? lineMidpoint(doc) : lineMidpoint,
     });
     return { graph, drag };
   });
-  return { ...rendered, doc, onCommit };
+  return { ...rendered, doc, onCommit, land };
 }
 
 function pointerDown(x: number, y: number, pointerId = 1): React.PointerEvent {
@@ -392,6 +400,82 @@ describe('dragging a later waypoint of a legacy multi-waypoint connection', () =
     expect(loggingService.reportError).not.toHaveBeenCalled();
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(connectionOf(onCommit.mock.calls[0][0]).waypoints).toEqual([{ dx: 220, dy: 140 }]);
+  });
+});
+
+describe('a landing that removes the dragged connection or one of its end nodes mid-drag', () => {
+  const twoColumns = (): ChartInput => ({
+    title: 'Chart',
+    sections: [
+      {
+        title: 'A',
+        columns: [
+          {
+            nodes: [
+              {
+                id: 'source',
+                title: 'src',
+                text: '',
+                connectionIds: [],
+                connections: [
+                  { targetId: 'target', confidence: 75, waypoints: [{ dx: 100, dy: 50 }] },
+                ],
+                yPosition: 0,
+              },
+            ],
+          },
+          {
+            nodes: [
+              {
+                id: 'target',
+                title: 'tgt',
+                text: '',
+                connectionIds: [],
+                connections: [],
+                yPosition: 0,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  // The line has a midpoint only while both of its end nodes are on the canvas.
+  const midpointWhileBothEndsExist = (doc: ChartDocument) =>
+    hasNode(doc.getLive(), 'source') && hasNode(doc.getLive(), 'target') ? LINE_MIDPOINT : null;
+
+  it('the release leaves nothing unsaved when the target node is deleted', async () => {
+    const { result, doc, land } = setup(twoColumns(), midpointWhileBothEndsExist);
+
+    dragWaypointAway(result);
+    act(() => land((draft) => removeNode(draft, 'target')));
+    act(() => {
+      document.dispatchEvent(pointer('pointerup', 180, 90));
+    });
+    await settle();
+
+    expect(loggingService.reportError).toHaveBeenCalledTimes(1);
+    expect(result.current.drag.isActive).toBe(false);
+    expect(doc.getStatus().unsaved).toBe(false);
+  });
+
+  it('the release leaves no pending preview when a column delete left the connection dangling', async () => {
+    // The merge that rebases the preview drops the dangling connection while the
+    // committed chart keeps it, so what the release commits is that cleanup: a
+    // real, invisible difference from the server's chart, not a pending preview.
+    const { result, doc, land } = setup(twoColumns(), midpointWhileBothEndsExist);
+
+    dragWaypointAway(result);
+    act(() => land((draft) => removeColumn(draft, 'c0.1')));
+    act(() => {
+      document.dispatchEvent(pointer('pointerup', 180, 90));
+    });
+    await settle();
+
+    expect(loggingService.reportError).toHaveBeenCalledTimes(1);
+    expect(result.current.drag.isActive).toBe(false);
+    expect(doc.getLive()).toBe(doc.getCommitted());
   });
 });
 
