@@ -286,8 +286,18 @@ describe('normalizeChart shape and purity', () => {
     expect(reasonFor({ sections: [{ columns: [{ nodes: [{}, 'a'] }] }] })).toBe(
       'sections[0].columns[0].nodes[1] is not an object',
     );
-    expect(reasonFor({ sections: [{ columns: [{ nodes: [{ connections: [{}, null] }] }] }] })).toBe(
+    const withConnections = (connections: unknown[]) => ({
+      sections: [{ columns: [{ nodes: [{ id: 'a', connections }] }] }],
+    });
+    expect(reasonFor(withConnections([{ targetId: 'b' }, null]))).toBe(
       'sections[0].columns[0].nodes[0].connections[1] is not an object',
+    );
+    // An edge that names no node would be saved, and drawn nowhere.
+    expect(reasonFor(withConnections([{ confidence: 40 }]))).toBe(
+      'sections[0].columns[0].nodes[0].connections[0] has no targetId',
+    );
+    expect(reasonFor(withConnections([{ targetId: 'b' }, { targetId: 7 }]))).toBe(
+      'sections[0].columns[0].nodes[0].connections[1] has no targetId',
     );
   });
 
