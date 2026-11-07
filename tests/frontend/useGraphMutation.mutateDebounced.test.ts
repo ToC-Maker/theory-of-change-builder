@@ -240,3 +240,84 @@ describe('useGraphMutation.discardBuffered', () => {
     expect(onDataChange).not.toHaveBeenCalled();
   });
 });
+
+describe('useGraphMutation.mutateDebounced with idleCommit: false', () => {
+  it('never notifies on its own, only on an explicit commit', async () => {
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.9 }), 'curvature', {
+          idleCommit: false,
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(onDataChange).not.toHaveBeenCalled();
+      expect(result.current.data.curvature).toBe(0.9);
+
+      act(() => {
+        result.current.commit('curvature');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+      expect(onDataChange.mock.calls[0][0].curvature).toBe(0.9);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the idle timer an earlier call of the same key had armed', async () => {
+    vi.useFakeTimers();
+    try {
+      const onDataChange = vi.fn<(d: ToCData) => void>();
+      const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+
+      act(() => {
+        result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.6 }), 'curvature');
+        result.current.mutateDebounced((prev) => ({ ...prev, curvature: 0.9 }), 'curvature', {
+          idleCommit: false,
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(onDataChange).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('useGraphMutation.notifyCount', () => {
+  it('counts each parent notification, not each mutation', async () => {
+    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+    expect(result.current.notifyCount()).toBe(0);
+
+    // Two synchronous mutations collapse to one notify.
+    act(() => {
+      result.current.mutate((prev) => ({ ...prev, curvature: 0.6 }));
+      result.current.mutate((prev) => ({ ...prev, curvature: 0.7 }));
+    });
+    await flushMicrotasks();
+    expect(result.current.notifyCount()).toBe(1);
+
+    // A buffered write is not a notification until it is committed.
+    act(() => {
+      result.current.mutateDebounced((prev) => ({ ...prev, textSize: 2 }), 'textSize');
+    });
+    expect(result.current.notifyCount()).toBe(1);
+    act(() => {
+      result.current.commit('textSize');
+    });
+    await flushMicrotasks();
+    expect(result.current.notifyCount()).toBe(2);
+  });
+});

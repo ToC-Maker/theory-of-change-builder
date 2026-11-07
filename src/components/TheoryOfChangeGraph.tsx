@@ -115,6 +115,7 @@ export function ToC({
     mutateDebounced,
     commit: commitMutation,
     discardBuffered: discardBufferedMutation,
+    notifyCount,
   } = useGraphMutation(initialData, onDataChange);
   const [nodeRefs, setNodeRefs] = useState<{
     [key: string]: HTMLDivElement | null;
@@ -1037,6 +1038,7 @@ export function ToC({
     mutateDebounced,
     commit: commitMutation,
     discardBuffered: discardBufferedMutation,
+    notifyCount,
     clientToContainer,
   });
 

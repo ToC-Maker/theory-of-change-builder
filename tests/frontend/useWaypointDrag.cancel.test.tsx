@@ -80,6 +80,7 @@ function setup(initial: ToCData) {
       mutateDebounced: graph.mutateDebounced,
       commit: graph.commit,
       discardBuffered: graph.discardBuffered,
+      notifyCount: graph.notifyCount,
       clientToContainer: (x, y) => ({ x, y }),
     });
     return { graph, drag };
@@ -135,9 +136,9 @@ function dragWaypointAway(result: ReturnType<typeof setup>['result'], from = { x
   });
 }
 
-async function settle() {
+async function settle(ms = 500) {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(ms);
   });
 }
 
@@ -274,6 +275,99 @@ describe('cancelling a waypoint drag', () => {
 
     expect(onDataChange).toHaveBeenCalledTimes(1);
     expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+  });
+});
+
+describe('a waypoint drag that is held still', () => {
+  it('sends nothing until the pointer is released, then saves once', async () => {
+    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+
+    dragWaypointAway(result);
+    await settle();
+    expect(onDataChange).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer('pointerup', 180, 90));
+    });
+    await settle();
+
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+  });
+
+  it.each(cancels)(
+    '%s after the pause leaves the screen and the parent on the original path',
+    async (_name, makeEvent) => {
+      const original = [{ x: 100, y: 50 }];
+      const initial = makeData(original);
+      const { result, onDataChange } = setup(initial);
+
+      dragWaypointAway(result);
+      await settle();
+      act(() => {
+        document.dispatchEvent(makeEvent());
+      });
+      await settle();
+
+      expect(connectionOf(result.current.graph.data).waypoints).toEqual(original);
+      const parentChart: ToCData = onDataChange.mock.calls.at(-1)?.[0] ?? initial;
+      expect(connectionOf(parentChart).waypoints).toEqual(original);
+      expect(onDataChange).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('cancelling after an unrelated edit carried the preview to the parent', () => {
+  it.each(cancels)(
+    '%s sends the parent the original path, keeping the edit',
+    async (_n, makeEvent) => {
+      const original = [{ x: 100, y: 50 }];
+      const { result, onDataChange } = setup(makeData(original));
+
+      dragWaypointAway(result);
+      act(() => {
+        result.current.graph.mutate((prev) => ({ ...prev, title: 'Renamed' }));
+      });
+      await settle(0);
+      expect(onDataChange).toHaveBeenCalledTimes(1);
+      expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+
+      act(() => {
+        document.dispatchEvent(makeEvent());
+      });
+      await settle();
+
+      expect(onDataChange).toHaveBeenCalledTimes(2);
+      const parentChart: ToCData = onDataChange.mock.calls[1][0];
+      expect(parentChart.title).toBe('Renamed');
+      expect(connectionOf(parentChart).waypoints).toEqual(original);
+      expect(connectionOf(result.current.graph.data).waypoints).toEqual(original);
+    },
+  );
+
+  it('sends nothing when the unrelated edit went out before the drag moved', async () => {
+    const original = [{ x: 100, y: 50 }];
+    const { result, onDataChange } = setup(makeData(original));
+
+    act(() => {
+      result.current.drag.bindWaypoint('source', 'target', 0).onPointerDown(pointerDown(100, 50));
+    });
+    act(() => {
+      result.current.graph.mutate((prev) => ({ ...prev, title: 'Renamed' }));
+    });
+    await settle();
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      document.dispatchEvent(pointer('pointermove', 180, 90));
+    });
+    act(() => {
+      document.dispatchEvent(escape());
+    });
+    await settle();
+
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    expect(connectionOf(result.current.graph.data).waypoints).toEqual(original);
   });
 });
 

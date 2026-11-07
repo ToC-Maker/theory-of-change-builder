@@ -168,6 +168,7 @@ function setupHook(args: {
   const mutateDebounced = vi.fn();
   const commit = vi.fn();
   const discardBuffered = vi.fn();
+  const notifyCount = vi.fn(() => 0);
   const clientToContainer = vi.fn(
     args.translate ?? ((cx: number, cy: number) => ({ x: cx, y: cy })),
   );
@@ -183,6 +184,7 @@ function setupHook(args: {
         mutateDebounced,
         commit,
         discardBuffered,
+        notifyCount,
         clientToContainer,
       }),
     { initialProps: { data: args.data } },
@@ -791,10 +793,9 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(result.current.isActive).toBe(false);
     });
 
-    it('discards the buffered updater on Escape so no auto-commit fires 200ms later', () => {
-      // `mutateDebounced`'s 200ms idle timer would otherwise auto-commit
-      // the in-flight drag position as if the user had released — making
-      // Escape a 200ms-delayed commit rather than a true cancel. The
+    it('discards the buffered updater on Escape so a later commit() cannot save it', () => {
+      // A buffered key is flushed by any `commit()` without a key, which
+      // would save the restored state as if the user had released. The
       // hook calls `discardBuffered(key)` on cancel paths.
       const data = makeData([{ x: 100, y: 50 }]);
       const { ctx, result } = setupHook({ data });

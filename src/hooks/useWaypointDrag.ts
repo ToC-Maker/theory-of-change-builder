@@ -76,10 +76,10 @@
 // Mutation model
 // ---------------------------------------------------------------------------
 //
-// During the drag we use `mutateDebounced(updater, key)` so the UI
-// updates synchronously without notifying the parent. On pointerup we
-// `commit(key)` once, producing exactly one parent notify and one undo
-// entry.
+// During the drag we use `mutateDebounced` with `idleCommit: false` so the
+// UI updates synchronously without notifying the parent, however long the
+// pointer rests. On pointerup we `commit(key)` once, producing exactly one
+// parent notify and one undo entry.
 //
 // **Invariant: one gesture = one undo entry.** All writes during a drag
 // must go through `mutateDebounced` with the same `key`; the final
@@ -95,10 +95,18 @@
 // connection goes back to the waypoints it had when the press landed: the
 // preview is overwritten through `mutateDebounced` (a local write; the
 // hook-level `setData` would ignore a state it already notified), and then
-// `discardBuffered(key)` drops that buffered write so neither the 200ms
-// idle timer nor a later `commit()` can turn the cancel into a save. No
-// parent notify and no undo entry land, and a later unrelated edit saves
-// the connection as it was.
+// `discardBuffered(key)` drops that buffered write so a later `commit()`
+// cannot turn the cancel into a save. No parent notify and no undo entry
+// land, and a later unrelated edit saves the connection as it was.
+//
+// The one way the parent can hold the preview anyway is an unrelated
+// notify during the drag (another buffered edit's idle timer, a keyboard
+// edit), which hands over the whole local state. `notifyCount` tells the
+// cancel whether that happened since the drag armed; if so the restored
+// state is committed too, so the parent, the saved chart and the screen
+// agree. That notify is an ordinary edit to the parent: it adds an undo
+// step, and a cancel more than the grouping window after the unrelated
+// notify leaves a step that undoes back to the cancelled preview.
 //
 // ---------------------------------------------------------------------------
 // Coordinate translation
@@ -174,15 +182,21 @@ export interface UseWaypointDragArgs {
    * across the gesture so latest-wins semantics produce one buffered
    * updater at commit time (one undo entry).
    */
-  mutateDebounced: (updater: ToCData | ((prev: ToCData) => ToCData), key: string) => void;
+  mutateDebounced: (
+    updater: ToCData | ((prev: ToCData) => ToCData),
+    key: string,
+    options?: { idleCommit?: boolean },
+  ) => void;
   /** Flush the buffered updater under `key` → one parent notify. */
   commit: (key?: string) => void;
   /**
    * Drop the buffered updater for `key` WITHOUT a parent notify. Called
    * on Escape / pointercancel / second-pointer right after the preview is
-   * written back, so no undo entry lands when the 200ms idle timer fires.
+   * written back, so the written-back state is not saved as an edit.
    */
   discardBuffered: (key: string) => void;
+  /** Parent notifications sent so far; see "Mutation model". */
+  notifyCount: () => number;
   /**
    * Translate viewport client coords to container-local coords. Pure;
    * the hook calls it on every armed pointermove.
@@ -312,7 +326,15 @@ function restoreConnectionWaypoints(
 }
 
 export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResult {
-  const { data, editMode, mutateDebounced, commit, discardBuffered, clientToContainer } = args;
+  const {
+    data,
+    editMode,
+    mutateDebounced,
+    commit,
+    discardBuffered,
+    notifyCount,
+    clientToContainer,
+  } = args;
 
   const [dragState, setDragStateInternal] = useState<WaypointDragState | null>(null);
   const dragStateRef = useRef<WaypointDragState | null>(null);
@@ -345,6 +367,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   commitRef.current = commit;
   const discardBufferedRef = useRef(discardBuffered);
   discardBufferedRef.current = discardBuffered;
+  const notifyCountRef = useRef(notifyCount);
+  notifyCountRef.current = notifyCount;
   const clientToContainerRef = useRef(clientToContainer);
   clientToContainerRef.current = clientToContainer;
   const editModeRef = useRef(editMode);
@@ -367,6 +391,9 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   // NOTHING is written — see "sub-threshold gestures write nothing".
   const gestureStartClientRef = useRef<{ x: number; y: number } | null>(null);
   const gestureArmedRef = useRef(false);
+  // The parent's notification count when the gesture armed: if it has moved
+  // by cancel time, the parent was handed the preview.
+  const notifyCountAtArmRef = useRef(0);
 
   // The press's `onTap` handler, called when it is released without
   // arming. Per press, so it always comes from the render the user
@@ -415,8 +442,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   // clears the gesture flag, resets state. Safe to call multiple
   // times. `cancel=true` (Escape /
   // pointercancel / second-pointer) also discards the buffered
-  // `mutateDebounced` updater so the 200ms idle timer cannot fire an
-  // auto-commit that would turn cancel into a delayed commit.
+  // `mutateDebounced` updater so a later `commit()` cannot turn cancel
+  // into a commit.
   const cleanup = useCallback(
     (cancel = false) => {
       removeDocListeners();
@@ -485,6 +512,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     const dist = Math.hypot(clientX - start.x, clientY - start.y);
     if (dist >= DRAG_THRESHOLD_PX) {
       gestureArmedRef.current = true;
+      notifyCountAtArmRef.current = notifyCountRef.current();
       return true;
     }
     return false;
@@ -503,7 +531,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       const pos = clientToContainerRef.current(e.clientX, e.clientY);
 
       const key = gestureKeyRef.current!;
-      mutateDebouncedRef.current(buildReplayUpdater(state, pos), key);
+      mutateDebouncedRef.current(buildReplayUpdater(state, pos), key, { idleCommit: false });
     },
     [buildReplayUpdater, armIfPastThreshold],
   );
@@ -574,7 +602,9 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
   // Escape / pointercancel / second pointer: undo what the preview wrote
   // and end the gesture without committing. A press that never crossed the
-  // drag threshold wrote nothing, so there is nothing to put back.
+  // drag threshold wrote nothing, so there is nothing to put back. If an
+  // unrelated notify has already handed the parent the preview, the
+  // restored state goes to the parent as well (see "Mutation model").
   const cancelGesture = useCallback(() => {
     const state = dragStateRef.current;
     const key = gestureKeyRef.current;
@@ -586,6 +616,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
             restoreConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, original),
           key,
         );
+        if (notifyCountRef.current() !== notifyCountAtArmRef.current) commitRef.current(key);
       }
     } finally {
       cleanup(true);

@@ -22,7 +22,10 @@
 //     does NOT notify the parent. Buffers the latest updater under `key` in
 //     a hook-local Map. Same-key calls REPLACE the buffered updater (latest
 //     wins). Cross-key calls are buffered independently. A 200ms idle timer
-//     auto-commits each key if `commit()` is not called explicitly.
+//     auto-commits each key if `commit()` is not called explicitly; a caller
+//     whose gesture always ends in an explicit `commit(key)` or
+//     `discardBuffered(key)` passes `{ idleCommit: false }`, so pausing
+//     mid-gesture never reports the preview to the parent.
 //
 //   commit(key?)
 //     Flush buffered keys. With a key, flushes just that key; without, all
@@ -118,8 +121,15 @@ export interface UseGraphMutationResult {
   // parent of (the parent echoing it back) is ignored.
   setData: Dispatch<SetStateAction<ToCData>>;
   mutate: (updater: GraphUpdater) => void;
-  mutateDebounced: (updater: GraphUpdater, key: string) => void;
+  mutateDebounced: (updater: GraphUpdater, key: string, options?: { idleCommit?: boolean }) => void;
   commit: (key?: string) => void;
+  /**
+   * How many times the parent has been notified so far. A gesture holding
+   * an uncommitted preview compares the count at its start and at its end
+   * to learn whether some unrelated notify carried the preview to the
+   * parent in between.
+   */
+  notifyCount: () => number;
   /**
    * Drop the buffered updater for `key` WITHOUT scheduling a parent
    * notify. Cancels the per-key idle timer that would otherwise
@@ -164,6 +174,9 @@ export function useGraphMutation(
   // produced two notifications (Red-Team Important).
   const pendingNotifyRef = useRef(false);
 
+  const notifyCountRef = useRef(0);
+  const notifyCount = useCallback(() => notifyCountRef.current, []);
+
   // States already handed to the parent. The parent keeps them as its own
   // state and passes them back as `initialData`, and the caller then feeds
   // that echo to `setData` from an effect that runs after the render
@@ -190,6 +203,7 @@ export function useGraphMutation(
       pendingNotifyRef.current = false;
       if (!isMountedRef.current) return; // L7 guard
       notifiedRef.current.add(dataRef.current);
+      notifyCountRef.current += 1;
       onDataChangeRef.current?.(dataRef.current);
     });
   }, []);
@@ -272,7 +286,7 @@ export function useGraphMutation(
   );
 
   const mutateDebounced = useCallback(
-    (updater: GraphUpdater, key: string) => {
+    (updater: GraphUpdater, key: string, options?: { idleCommit?: boolean }) => {
       // Live preview: state updates synchronously.
       writeLocal(updater);
       // Buffer for the eventual commit. Replaces any earlier updater
@@ -280,7 +294,11 @@ export function useGraphMutation(
       bufferedRef.current.set(key, updater);
       // Reset the per-key idle timer.
       const existing = idleTimersRef.current.get(key);
-      if (existing !== undefined) clearTimeout(existing);
+      if (existing !== undefined) {
+        clearTimeout(existing);
+        idleTimersRef.current.delete(key);
+      }
+      if (options?.idleCommit === false) return;
       const timer = setTimeout(() => {
         if (!isMountedRef.current) return; // L7 guard for the outer timer
         idleTimersRef.current.delete(key);
@@ -337,5 +355,6 @@ export function useGraphMutation(
     mutateDebounced,
     commit,
     discardBuffered,
+    notifyCount,
   };
 }
