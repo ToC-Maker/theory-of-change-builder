@@ -334,6 +334,28 @@ describe('typing a title while a remote chart lands', { timeout: 20_000 }, () =>
     expect(titleOf(lastSent().chart, 'n2')).toBe('Beta from someone else');
   });
 
+  it('ai_reply_yields_on_a_field_someone_changed_during_the_stream', async () => {
+    const doc = openDoc();
+    mockPollChart.mockResolvedValueOnce({
+      version: 2,
+      chartData: retitle(CHART, 'n1', 'Alpha from someone else'),
+    });
+    render(<Editor doc={doc} />);
+
+    const asSent = doc.getCommitted();
+    await advance(2500);
+    expect(titleOf(doc.getCommitted(), 'n1')).toBe('Alpha from someone else');
+
+    const reply = applyEdits(asSent, [
+      { type: 'update', path: 'sections.0.columns.0.nodes.0.title', value: 'Alpha by AI' },
+      { type: 'update', path: 'sections.0.columns.0.nodes.1.title', value: 'Beta by AI' },
+    ]);
+    act(() => doc.applyRebased(asSent, prepareAIResult(asSent, reply)));
+
+    expect(titleOf(doc.getCommitted(), 'n1')).toBe('Alpha from someone else');
+    expect(titleOf(doc.getCommitted(), 'n2')).toBe('Beta by AI');
+  });
+
   it('undo_after_remote_landing_reverts_only_mine', async () => {
     const doc = openDoc();
     render(<Editor doc={doc} />);

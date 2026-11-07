@@ -204,7 +204,10 @@ export class ChartDocument implements ChartStore {
   /** An AI edit computed against `base`, the chart as it was sent, lands on the current chart. */
   applyRebased(base: ToCData, next: ToCData): void {
     this.beginForeignChange();
-    const merged = mergeCharts(base, next, this.committed, { onConflict: 'mine' });
+    // The reply yields to people: on a field both changed, whatever was
+    // committed during the stream wins, and a node deleted meanwhile stays
+    // deleted even if the reply edited it.
+    const merged = mergeCharts(base, next, this.committed, { onConflict: 'theirs' });
     if (!deepEqual(merged, this.committed)) {
       this.undoStack.push({ before: this.committed, after: merged });
       this.redoStack = [];

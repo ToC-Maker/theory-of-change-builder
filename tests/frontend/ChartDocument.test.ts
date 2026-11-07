@@ -492,6 +492,57 @@ describe('ChartDocument AI edits and replacement', () => {
     expect(doc.getStatus().canUndo).toBe(false);
   });
 
+  // An AI reply yields to people: whatever someone committed while the reply
+  // was streaming (a collaborator's landing or the requester's own typing)
+  // wins a conflict on the same field, and a node someone deleted stays
+  // deleted even if the reply edited it.
+  it('ai_reply_loses_a_same_field_conflict_to_a_collaborator', () => {
+    const { doc } = openDoc();
+    const asSent = doc.getCommitted();
+    doc.receiveRemote({ version: 2, chart: retitle(asSent, 'a', 'Remote A') });
+
+    doc.applyRebased(asSent, retitle(asSent, 'a', 'AI A'));
+
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('Remote A');
+  });
+
+  it('ai_reply_loses_a_same_field_conflict_to_the_requesters_typing', () => {
+    const { doc } = openDoc();
+    const asSent = doc.getCommitted();
+    doc.preview((c) => retitle(c, 'a', 'typed'));
+
+    doc.applyRebased(asSent, retitle(asSent, 'a', 'AI A'));
+
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('typed');
+    expect(titleOf(doc.getLive(), 'a')).toBe('typed');
+  });
+
+  it('ai_text_edit_does_not_bring_back_a_node_deleted_during_the_stream', () => {
+    const { doc } = openDoc();
+    const asSent = doc.getCommitted();
+    doc.receiveRemote({ version: 2, chart: change(asSent, (d) => removeNode(d, 'c')) });
+
+    doc.applyRebased(
+      asSent,
+      change(asSent, (d) => {
+        nodeIn(d, 'c').text = 'AI wrote this';
+      }),
+    );
+
+    expect(hasNode(doc.getCommitted(), 'c')).toBe(false);
+  });
+
+  it('ai_reply_and_a_collaborator_editing_different_fields_of_one_node_both_land', () => {
+    const { doc } = openDoc();
+    const asSent = doc.getCommitted();
+    doc.receiveRemote({ version: 2, chart: retitle(asSent, 'a', 'Remote A') });
+
+    doc.applyRebased(asSent, recolor(asSent, 'a', '#f00'));
+
+    expect(titleOf(doc.getCommitted(), 'a')).toBe('Remote A');
+    expect(colorOf(doc.getCommitted(), 'a')).toBe('#f00');
+  });
+
   it('applyRebased_noop_creates_no_entry', () => {
     const { doc } = openDoc();
     const asSent = doc.getCommitted();

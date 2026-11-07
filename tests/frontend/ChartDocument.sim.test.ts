@@ -518,8 +518,9 @@ function simulate(seed: number): void {
           const reply = edited(asSent, 2);
           const before = doc.getLive();
           doc.applyRebased(asSent, reply);
-          // What the AI changed counts, not what merging brought in from other tabs.
-          intents.note(asSent, reply);
+          // The reply yields to what people committed during the stream, so what it set
+          // counts only where it landed: the change the merge made to this tab's chart.
+          intents.note(before, doc.getLive());
           intents.broughtBack(before, doc.getLive());
         }),
       );
