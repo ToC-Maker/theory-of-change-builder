@@ -354,8 +354,11 @@ export function AddControlZone({
           width: triggerPx,
           height: triggerPx,
           transform: `translate(-50%, -50%) scale(${scale})`,
+          // It fades out while the controls are open but keeps catching
+          // the pointer: with a connection beneath it, a badge that let
+          // go would hand the pointer to the connection, which ends the
+          // hover and closes the controls under the pointer.
           opacity: open ? 0 : 1,
-          pointerEvents: open ? 'none' : 'auto',
         }}
       >
         <span
