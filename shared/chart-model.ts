@@ -217,9 +217,6 @@ export function assertChartShape(raw: unknown): asserts raw is ChartInput {
         connections.forEach((connection, m) => {
           const at = `${inNode}.connections[${m}]`;
           if (!isObject(connection)) fail(`${at} is not an object`);
-          if (typeof (connection as { targetId?: unknown }).targetId !== 'string') {
-            fail(`${at} has no targetId`);
-          }
         });
       });
     });
@@ -237,6 +234,9 @@ function normalizeNode(node: Node, id: string): Node {
       }));
   const seen = new Set<string>();
   const connections = listed.filter((c) => {
+    // An edge naming no node is drawn nowhere; it is dropped rather than
+    // refusing a chart that opens today.
+    if (typeof c.targetId !== 'string') return false;
     if (seen.has(c.targetId)) return false;
     seen.add(c.targetId);
     return true;

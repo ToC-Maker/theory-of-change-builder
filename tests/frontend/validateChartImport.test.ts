@@ -127,7 +127,7 @@ describe('validateChartImport', () => {
     }
   });
 
-  it('rejects a connection that names no node, by its position in the file', () => {
+  it('imports a file whose connection names no node, without that connection', () => {
     const result = validateChartImport({
       sections: [
         {
@@ -137,10 +137,8 @@ describe('validateChartImport', () => {
         },
       ],
     });
-    expect(result).toEqual({
-      ok: false,
-      reason: 'sections[0].columns[0].nodes[0].connections[0] has no targetId',
-    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.sections[0].columns[0].nodes[0].connections).toEqual([]);
   });
 
   it('returns the chart normalised, with ids and canonical connections', () => {

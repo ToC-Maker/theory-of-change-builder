@@ -292,13 +292,32 @@ describe('normalizeChart shape and purity', () => {
     expect(reasonFor(withConnections([{ targetId: 'b' }, null]))).toBe(
       'sections[0].columns[0].nodes[0].connections[1] is not an object',
     );
-    // An edge that names no node would be saved, and drawn nowhere.
-    expect(reasonFor(withConnections([{ confidence: 40 }]))).toBe(
-      'sections[0].columns[0].nodes[0].connections[0] has no targetId',
-    );
-    expect(reasonFor(withConnections([{ targetId: 'b' }, { targetId: 7 }]))).toBe(
-      'sections[0].columns[0].nodes[0].connections[1] has no targetId',
-    );
+  });
+
+  it('drops_a_connection_that_names_no_node_instead_of_refusing_the_chart', () => {
+    // Such an edge is drawn nowhere today; refusing it would make a stored
+    // chart that opens now impossible to open, so it is dropped on read.
+    const out = normalizeChart({
+      sections: [
+        {
+          columns: [
+            {
+              nodes: [
+                {
+                  id: 'a',
+                  connections: [{ confidence: 40 }, { targetId: 'b' }, { targetId: 7 }],
+                  connectionIds: ['b'],
+                },
+                { id: 'b', connections: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const a = out.sections[0].columns[0].nodes[0];
+    expect(a.connections).toEqual([{ targetId: 'b' }]);
+    expect(a.connectionIds).toEqual(['b']);
   });
 
   it('puts_the_reason_in_the_message_for_whoever_shows_the_error', () => {
