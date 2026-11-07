@@ -126,6 +126,32 @@ describe('creating the chart on the first message', () => {
     ).toBeVisible();
     expect(onChartCreated).not.toHaveBeenCalled();
   });
+
+  it('creates the chart on the next message after a failed create', async () => {
+    const createChart = vi
+      .spyOn(ChartService, 'createChart')
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({
+        chartId: 'chart-1',
+        editToken: 'tok-1',
+        viewUrl: 'https://x.test/chart/chart-1',
+        editUrl: 'https://x.test/edit/tok-1',
+        version: 1,
+      });
+    vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
+
+    const onChartCreated = sendFirstMessage();
+    expect(await screen.findByText(/network down/i, undefined, { timeout: 15_000 })).toBeVisible();
+
+    // The failed create must not stay in flight: the next send tries again.
+    fireEvent.change(screen.getByPlaceholderText('Ask about your Theory of Change...'), {
+      target: { value: 'Hello again' },
+    });
+    fireEvent.click(screen.getByTitle('Send message'));
+
+    await waitFor(() => expect(onChartCreated).toHaveBeenCalledTimes(1), { timeout: 15_000 });
+    expect(createChart).toHaveBeenCalledTimes(2);
+  }, 30_000);
 });
 
 // The first render of the chat is slow on a loaded machine.
