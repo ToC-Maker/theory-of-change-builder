@@ -107,6 +107,26 @@ describe('validateChartImport', () => {
     }
   });
 
+  it('accepts a node whose connections is a string, number or object, as normalizeChart does', () => {
+    for (const connections of ['x', 5, {}]) {
+      const result = validateChartImport({
+        sections: [
+          {
+            columns: [
+              {
+                nodes: [
+                  { id: 'n1', connections, connectionIds: ['n2'] },
+                  { id: 'n2', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.ok, JSON.stringify(connections)).toBe(true);
+    }
+  });
+
   it('returns the chart normalised, with ids and canonical connections', () => {
     const result = validateChartImport({
       title: 'T',

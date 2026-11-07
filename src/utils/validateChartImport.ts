@@ -27,8 +27,11 @@ function waypointProblem(parsed: unknown): string | null {
   for (const [i, section] of sections.entries()) {
     for (const [j, column] of section.columns.entries()) {
       for (const [k, node] of column.nodes.entries()) {
-        const connections = (node as { connections?: { waypoints?: unknown }[] }).connections ?? [];
-        for (const [m, connection] of connections.entries()) {
+        const { connections } = node as { connections?: unknown };
+        // A non-array `connections` is rebuilt from `connectionIds` by
+        // normalizeChart, so it carries no waypoints to check.
+        if (!Array.isArray(connections)) continue;
+        for (const [m, connection] of (connections as { waypoints?: unknown }[]).entries()) {
           const { waypoints } = connection;
           if (waypoints === undefined) continue;
           const at = `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints`;
