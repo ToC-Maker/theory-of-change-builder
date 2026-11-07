@@ -222,6 +222,31 @@ describe('normalizeChart shape and purity', () => {
     }
   });
 
+  it('throws_shape_error_for_malformed_nested_parts', () => {
+    // Callers surface ChartShapeError through their load, import and AI
+    // error paths; a bare TypeError from deep inside would bypass them.
+    const ok = { title: 'S', columns: [{ nodes: [{ id: 'a', title: 'A', text: '' }] }] };
+    for (const bad of [
+      { sections: [null] },
+      { sections: [{ title: 'S' }] },
+      { sections: [{ title: 'S', columns: [null] }] },
+      { sections: [{ title: 'S', columns: [{}] }] },
+      { sections: [{ title: 'S', columns: [{ nodes: [null] }] }] },
+      { sections: [{ title: 'S', columns: [{ nodes: ['a'] }] }] },
+      { sections: [ok, { title: 'T', columns: [{ nodes: 'x' }] }] },
+      { sections: [{ title: 'S', columns: [{ nodes: [{ id: 'a', connections: [null] }] }] }] },
+    ]) {
+      let thrown: unknown;
+      try {
+        normalizeChart(bad);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, JSON.stringify(bad)).toBeInstanceOf(ChartShapeError);
+      expect((thrown as ChartShapeError).raw).toBe(bad);
+    }
+  });
+
   it('does_not_mutate_its_input', () => {
     // A frozen input makes any write throw; the result must still be complete.
     const out = normalizeChart(deepFreeze(messy()));

@@ -97,8 +97,8 @@ export interface ChartInput extends Omit<ToCData, 'sections'> {
 export class ChartShapeError extends Error {
   readonly raw: unknown;
 
-  constructor(raw: unknown) {
-    super('Chart data has no sections array');
+  constructor(raw: unknown, message = 'Chart data has no sections array') {
+    super(message);
     this.name = 'ChartShapeError';
     this.raw = raw;
   }
@@ -117,15 +117,16 @@ export class ChartShapeError extends Error {
  * minted, so a positional id that collides with one gets a `~k` suffix, as
  * does a repeat of a stored id.
  *
- * Only the `sections` array is validated, with `ChartShapeError`; a section
- * without `columns`, a column without `nodes` or a null node fails with a
- * `TypeError`.
+ * Throws `ChartShapeError` when the chart is not an object with a `sections`
+ * array, or a section, column, node or connection is not an object, or a
+ * section lacks its `columns` array or a column its `nodes` array.
  */
 export function normalizeChart(raw: unknown): ToCData {
   if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as ChartInput).sections)) {
     throw new ChartShapeError(raw);
   }
   const chart = raw as ChartInput;
+  assertNestedShape(chart);
 
   const sectionId = idAssigner(chart.sections.map((s) => s.id));
   const columnId = idAssigner(chart.sections.flatMap((s) => s.columns.map((c) => c.id)));
@@ -169,6 +170,26 @@ function idAssigner(stored: unknown[]) {
     handedOut.add(candidate);
     return candidate;
   };
+}
+
+const isObject = (x: unknown): x is Record<string, unknown> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x);
+
+function assertNestedShape(chart: ChartInput): void {
+  const fail = (what: string) => {
+    throw new ChartShapeError(chart, `Chart data has a malformed ${what}`);
+  };
+  for (const section of chart.sections as unknown[]) {
+    if (!isObject(section) || !Array.isArray(section.columns)) fail('section');
+    for (const column of (section as { columns: unknown[] }).columns) {
+      if (!isObject(column) || !Array.isArray(column.nodes)) fail('column');
+      for (const node of (column as { nodes: unknown[] }).nodes) {
+        if (!isObject(node)) fail('node');
+        const connections = (node as { connections?: unknown }).connections;
+        if (Array.isArray(connections) && !connections.every(isObject)) fail('connection');
+      }
+    }
+  }
 }
 
 function normalizeNode(node: Node, id: string): Node {
