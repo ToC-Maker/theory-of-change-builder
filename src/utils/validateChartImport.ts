@@ -7,11 +7,18 @@
 // import overwrite the user's graph.
 //
 // Single canonical validator: callers (FileMenu.handleFileChosen,
-// App.handleUploadJSON) all route through this. PR 7's waypoint
-// shape — `connections[].waypoints: {x: number, y: number}[]` — is
-// covered, with finite-coord checks so the renderer never sees
-// NaN/string coords that would crash the SVG path builder.
+// App.handleUploadJSON) all route through this. Waypoints are
+// `connections[].waypoints: {dx: number, dy: number}[]`, checked for
+// finite numbers so garbage never reaches the SVG path builder. Entries
+// in the earlier absolute `{x, y}` format are accepted too and kept
+// as they are: the renderer ignores them (automatic curve) and the
+// next drag on that connection replaces them.
 import type { ToCData } from '../types';
+
+function hasFiniteNumbers(value: object, a: string, b: string): boolean {
+  const entry = value as Record<string, unknown>;
+  return Number.isFinite(entry[a]) && Number.isFinite(entry[b]);
+}
 
 export function validateChartImport(
   parsed: unknown,
@@ -49,7 +56,8 @@ export function validateChartImport(
         }
         // `connections` is optional (older charts use `connectionIds`).
         // When present it must be an array of objects; waypoints (when
-        // present) must be `{x: number, y: number}` with finite coords.
+        // present) must be `{dx, dy}` (or the old `{x, y}`) with finite
+        // numbers.
         if (n.connections !== undefined) {
           if (!Array.isArray(n.connections)) {
             return {
@@ -73,22 +81,17 @@ export function validateChartImport(
                 };
               }
               for (let w = 0; w < conn.waypoints.length; w++) {
-                const wp = conn.waypoints[w] as { x?: unknown; y?: unknown } | null;
+                const wp = conn.waypoints[w] as object | null;
                 if (!wp || typeof wp !== 'object') {
                   return {
                     ok: false,
                     reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints[${w}] is not an object`,
                   };
                 }
-                if (
-                  typeof wp.x !== 'number' ||
-                  typeof wp.y !== 'number' ||
-                  !Number.isFinite(wp.x) ||
-                  !Number.isFinite(wp.y)
-                ) {
+                if (!hasFiniteNumbers(wp, 'dx', 'dy') && !hasFiniteNumbers(wp, 'x', 'y')) {
                   return {
                     ok: false,
-                    reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints[${w}] has invalid coords (expected finite numeric {x, y})`,
+                    reason: `sections[${i}].columns[${j}].nodes[${k}].connections[${m}].waypoints[${w}] has invalid offsets (expected finite numeric {dx, dy})`,
                   };
                 }
               }

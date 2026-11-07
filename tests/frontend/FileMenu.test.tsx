@@ -368,7 +368,7 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
                     title: 'A',
                     text: 'a',
                     connectionIds: [],
-                    connections: [{ targetId: 'n2', waypoints: [{ x: Number.NaN, y: 50 }] }],
+                    connections: [{ targetId: 'n2', waypoints: [{ dx: Number.NaN, dy: 50 }] }],
                   },
                 ],
               },
@@ -426,9 +426,9 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
   });
 
   it('rejects malformed connection waypoints (NaN / string / wrong shape)', async () => {
-    // PR 7 will add `waypoints: {x: number, y: number}[]` on connections.
-    // Guard against malformed coords now so a bad import does not crash
-    // the renderer or persist invalid data.
+    // Waypoints are `{dx: number, dy: number}[]` on connections. Guard
+    // against malformed values so a bad import does not crash the
+    // renderer or persist invalid data.
     const user = userEvent.setup();
     const onImportJson = vi.fn();
     renderMenu({ data: { sections: [] }, onImportJson });
@@ -455,7 +455,7 @@ describe('FileMenu — Import (PR 6 Task 6.2)', () => {
                       {
                         targetId: 'n2',
                         confidence: 80,
-                        waypoints: [{ x: 'oops', y: 10 }],
+                        waypoints: [{ dx: 'oops', dy: 10 }],
                       },
                     ],
                   },

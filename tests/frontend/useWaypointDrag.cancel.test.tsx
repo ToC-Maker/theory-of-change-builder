@@ -16,13 +16,13 @@ import { useGraphMutation } from '../../src/hooks/useGraphMutation';
 import { useWaypointDrag } from '../../src/hooks/useWaypointDrag';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import { loggingService } from '../../src/services/loggingService';
-import type { ToCData } from '../../src/types';
+import type { ToCData, WaypointOffset } from '../../src/types';
 
 vi.mock('../../src/services/loggingService', () => ({
   loggingService: { reportError: vi.fn() },
 }));
 
-type Waypoints = Array<{ x: number; y: number }>;
+type Waypoints = WaypointOffset[];
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -72,7 +72,11 @@ function makeData(waypoints?: Waypoints): ToCData {
 
 const connectionOf = (data: ToCData) => data.sections[0].columns[0].nodes[0].connections![0];
 
-function setup(initial: ToCData) {
+// Waypoints are stored relative to the midpoint of the connection's line, so
+// the pointer position and the stored offset differ by this midpoint.
+const LINE_MIDPOINT = { x: 0, y: 0 };
+
+function setup(initial: ToCData, lineMidpoint = LINE_MIDPOINT) {
   const onDataChange = vi.fn();
   const rendered = renderHook(() => {
     const graph = useGraphMutation(initial, onDataChange);
@@ -84,6 +88,7 @@ function setup(initial: ToCData) {
       discardBuffered: graph.discardBuffered,
       notifyCount: graph.notifyCount,
       clientToContainer: (x, y) => ({ x, y }),
+      getLineMidpoint: () => lineMidpoint,
     });
     return { graph, drag };
   });
@@ -146,11 +151,11 @@ async function settle(ms = 500) {
 
 describe('cancelling a waypoint drag', () => {
   it.each(cancels)('%s puts the waypoint back and saves nothing', async (_name, makeEvent) => {
-    const original = [{ x: 100, y: 50 }];
+    const original = [{ dx: 100, dy: 50 }];
     const { result, onDataChange } = setup(makeData(original));
 
     dragWaypointAway(result);
-    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ x: 180, y: 90 }]);
+    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ dx: 180, dy: 90 }]);
 
     act(() => {
       document.dispatchEvent(makeEvent());
@@ -170,7 +175,7 @@ describe('cancelling a waypoint drag', () => {
     act(() => {
       document.dispatchEvent(pointer('pointermove', 60, 60));
     });
-    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ x: 60, y: 60 }]);
+    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ dx: 60, dy: 60 }]);
 
     act(() => {
       document.dispatchEvent(escape());
@@ -186,8 +191,8 @@ describe('cancelling a waypoint drag', () => {
 
   it('restores every waypoint of a legacy multi-waypoint connection', async () => {
     const original = [
-      { x: 60, y: 100 },
-      { x: 140, y: 100 },
+      { dx: 60, dy: 100 },
+      { dx: 140, dy: 100 },
     ];
     const { result, onDataChange } = setup(makeData(original));
 
@@ -204,7 +209,7 @@ describe('cancelling a waypoint drag', () => {
   });
 
   it('does not carry the cancelled path into the next unrelated edit', async () => {
-    const original = [{ x: 100, y: 50 }];
+    const original = [{ dx: 100, dy: 50 }];
     const { result, onDataChange } = setup(makeData(original));
 
     dragWaypointAway(result);
@@ -226,7 +231,7 @@ describe('cancelling a waypoint drag', () => {
     // The parent hands the hook's own notified state back as new data; the
     // restore must still land when the state to return to is one the hook
     // notified earlier.
-    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+    const { result, onDataChange } = setup(makeData([{ dx: 100, dy: 50 }]));
 
     dragWaypointAway(result);
     act(() => {
@@ -245,12 +250,12 @@ describe('cancelling a waypoint drag', () => {
     });
     await settle();
 
-    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ x: 180, y: 90 }]);
+    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ dx: 180, dy: 90 }]);
     expect(onDataChange).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the data untouched when the press never became a drag', async () => {
-    const original = [{ x: 100, y: 50 }];
+    const original = [{ dx: 100, dy: 50 }];
     const initial = makeData(original);
     const { result, onDataChange } = setup(initial);
 
@@ -267,7 +272,7 @@ describe('cancelling a waypoint drag', () => {
   });
 
   it('a completed drag still saves once, as before', async () => {
-    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+    const { result, onDataChange } = setup(makeData([{ dx: 100, dy: 50 }]));
 
     dragWaypointAway(result);
     act(() => {
@@ -276,13 +281,13 @@ describe('cancelling a waypoint drag', () => {
     await settle();
 
     expect(onDataChange).toHaveBeenCalledTimes(1);
-    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ dx: 180, dy: 90 }]);
   });
 });
 
 describe('a waypoint drag that is held still', () => {
   it('sends nothing until the pointer is released, then saves once', async () => {
-    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+    const { result, onDataChange } = setup(makeData([{ dx: 100, dy: 50 }]));
 
     dragWaypointAway(result);
     await settle();
@@ -294,13 +299,13 @@ describe('a waypoint drag that is held still', () => {
     await settle();
 
     expect(onDataChange).toHaveBeenCalledTimes(1);
-    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ dx: 180, dy: 90 }]);
   });
 
   it.each(cancels)(
     '%s after the pause leaves the screen and the parent on the original path',
     async (_name, makeEvent) => {
-      const original = [{ x: 100, y: 50 }];
+      const original = [{ dx: 100, dy: 50 }];
       const initial = makeData(original);
       const { result, onDataChange } = setup(initial);
 
@@ -323,7 +328,7 @@ describe('cancelling after an unrelated edit carried the preview to the parent',
   it.each(cancels)(
     '%s sends the parent the original path, keeping the edit',
     async (_n, makeEvent) => {
-      const original = [{ x: 100, y: 50 }];
+      const original = [{ dx: 100, dy: 50 }];
       const { result, onDataChange } = setup(makeData(original));
 
       dragWaypointAway(result);
@@ -332,7 +337,7 @@ describe('cancelling after an unrelated edit carried the preview to the parent',
       });
       await settle(0);
       expect(onDataChange).toHaveBeenCalledTimes(1);
-      expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 180, y: 90 }]);
+      expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ dx: 180, dy: 90 }]);
 
       act(() => {
         document.dispatchEvent(makeEvent());
@@ -348,7 +353,7 @@ describe('cancelling after an unrelated edit carried the preview to the parent',
   );
 
   it('sends nothing when the unrelated edit went out before the drag moved', async () => {
-    const original = [{ x: 100, y: 50 }];
+    const original = [{ dx: 100, dy: 50 }];
     const { result, onDataChange } = setup(makeData(original));
 
     act(() => {
@@ -375,10 +380,10 @@ describe('cancelling after an unrelated edit carried the preview to the parent',
 
 describe('a replacement chart arriving in the middle of a waypoint drag', () => {
   // A remote snapshot or an AI edit overwrites the preview the drag made.
-  const remoteChart = () => ({ ...makeData([{ x: 100, y: 50 }]), title: 'Remote' });
+  const remoteChart = () => ({ ...makeData([{ dx: 100, dy: 50 }]), title: 'Remote' });
 
   it('does not stop the drop from saving, on top of the replacement', async () => {
-    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+    const { result, onDataChange } = setup(makeData([{ dx: 100, dy: 50 }]));
 
     dragWaypointAway(result);
     act(() => {
@@ -392,11 +397,11 @@ describe('a replacement chart arriving in the middle of a waypoint drag', () => 
     expect(onDataChange).toHaveBeenCalledTimes(1);
     const saved: ToCData = onDataChange.mock.calls[0][0];
     expect(saved.title).toBe('Remote');
-    expect(connectionOf(saved).waypoints).toEqual([{ x: 180, y: 90 }]);
+    expect(connectionOf(saved).waypoints).toEqual([{ dx: 180, dy: 90 }]);
   });
 
   it('leaves a cancel with nothing to send', async () => {
-    const { result, onDataChange } = setup(makeData([{ x: 100, y: 50 }]));
+    const { result, onDataChange } = setup(makeData([{ dx: 100, dy: 50 }]));
 
     dragWaypointAway(result);
     act(() => {
@@ -409,7 +414,7 @@ describe('a replacement chart arriving in the middle of a waypoint drag', () => 
 
     expect(onDataChange).not.toHaveBeenCalled();
     expect(result.current.graph.data.title).toBe('Remote');
-    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ x: 100, y: 50 }]);
+    expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ dx: 100, dy: 50 }]);
   });
 });
 
@@ -419,8 +424,8 @@ describe('dragging a later waypoint of a legacy multi-waypoint connection', () =
     // press-time index no longer exists in the live data at release.
     const { result, onDataChange } = setup(
       makeData([
-        { x: 60, y: 100 },
-        { x: 140, y: 100 },
+        { dx: 60, dy: 100 },
+        { dx: 140, dy: 100 },
       ]),
     );
 
@@ -437,6 +442,43 @@ describe('dragging a later waypoint of a legacy multi-waypoint connection', () =
 
     expect(loggingService.reportError).not.toHaveBeenCalled();
     expect(onDataChange).toHaveBeenCalledTimes(1);
-    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ x: 220, y: 140 }]);
+    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ dx: 220, dy: 140 }]);
+  });
+});
+
+describe('a waypoint drag on a line whose midpoint is not the container origin', () => {
+  const midpoint = { x: 300, y: 200 };
+
+  it.each(cancels)(
+    '%s restores the offsets the connection had before the press',
+    async (_n, makeEvent) => {
+      const original = [{ dx: 100, dy: 50 }];
+      const { result, onDataChange } = setup(makeData(original), midpoint);
+
+      dragWaypointAway(result, { x: 400, y: 250 });
+      // The pointer is at (480, 290): 180 right of and 90 below the midpoint.
+      expect(connectionOf(result.current.graph.data).waypoints).toEqual([{ dx: 180, dy: 90 }]);
+
+      act(() => {
+        document.dispatchEvent(makeEvent());
+      });
+      await settle();
+
+      expect(connectionOf(result.current.graph.data).waypoints).toEqual(original);
+      expect(onDataChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it('saves the pointer position as an offset from the midpoint on release', async () => {
+    const { result, onDataChange } = setup(makeData([{ dx: 100, dy: 50 }]), midpoint);
+
+    dragWaypointAway(result, { x: 400, y: 250 });
+    act(() => {
+      document.dispatchEvent(pointer('pointerup', 480, 290));
+    });
+    await settle();
+
+    expect(onDataChange).toHaveBeenCalledTimes(1);
+    expect(connectionOf(onDataChange.mock.calls[0][0]).waypoints).toEqual([{ dx: 180, dy: 90 }]);
   });
 });

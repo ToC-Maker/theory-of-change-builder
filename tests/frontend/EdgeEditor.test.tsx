@@ -12,7 +12,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { EdgeEditor } from '../../src/components/edge-editor/EdgeEditor';
 import { TOP_BAR_HEIGHT_PX } from '../../src/hooks/useViewportOffset';
-import type { ToCData } from '../../src/types';
+import type { ToCData, WaypointOffset } from '../../src/types';
 import { deepFreeze } from './helpers/deepFreeze';
 
 function makeMutationApi(initial: ToCData) {
@@ -31,7 +31,7 @@ function makeMutationApi(initial: ToCData) {
   };
 }
 
-function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
+function makeData(waypoints?: WaypointOffset[]): ToCData {
   return deepFreeze({
     sections: [
       {
@@ -154,7 +154,7 @@ describe('EdgeEditor', () => {
     });
 
     it('is hidden when no onResetPath handler is provided (read-only hosts)', () => {
-      renderEdgeEditor({ data: makeData([{ x: 10, y: 20 }]) });
+      renderEdgeEditor({ data: makeData([{ dx: 10, dy: 20 }]) });
       expect(screen.queryByRole('button', { name: /reset path/i })).toBeNull();
     });
 
@@ -162,7 +162,7 @@ describe('EdgeEditor', () => {
       const onResetPath = vi.fn();
       const onRequestClose = vi.fn();
       renderEdgeEditor({
-        data: makeData([{ x: 10, y: 20 }]),
+        data: makeData([{ dx: 10, dy: 20 }]),
         onResetPath,
         onRequestClose,
       });
@@ -174,11 +174,19 @@ describe('EdgeEditor', () => {
       expect(onRequestClose).not.toHaveBeenCalled();
     });
 
-    it('shows for legacy multi-waypoint connections too', () => {
+    it('is hidden for old absolute {x, y} waypoints, which render as the automatic curve', () => {
+      renderEdgeEditor({
+        data: makeData([{ x: 10, y: 20 }] as unknown as WaypointOffset[]),
+        onResetPath: vi.fn(),
+      });
+      expect(screen.queryByRole('button', { name: /reset path/i })).toBeNull();
+    });
+
+    it('shows for connections carrying several waypoints too', () => {
       renderEdgeEditor({
         data: makeData([
-          { x: 10, y: 20 },
-          { x: 30, y: 40 },
+          { dx: 10, dy: 20 },
+          { dx: 30, dy: 40 },
         ]),
         onResetPath: vi.fn(),
       });

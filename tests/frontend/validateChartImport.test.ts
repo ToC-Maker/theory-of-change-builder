@@ -20,7 +20,7 @@ describe('validateChartImport', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('accepts nodes with optional connections + finite-numeric waypoints', () => {
+  it('accepts nodes with optional connections + finite-numeric waypoint offsets', () => {
     const result = validateChartImport({
       sections: [
         {
@@ -37,7 +37,7 @@ describe('validateChartImport', () => {
                     {
                       targetId: 'n2',
                       confidence: 80,
-                      waypoints: [{ x: 10, y: 20 }],
+                      waypoints: [{ dx: 10, dy: 20 }],
                     },
                   ],
                 },
@@ -48,6 +48,34 @@ describe('validateChartImport', () => {
       ],
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('accepts a file whose waypoints are in the old absolute {x, y} format, and passes them through', () => {
+    // Old entries render as the automatic curve and are replaced by the
+    // next drag; a file is not rejected just for carrying them.
+    const chart = {
+      sections: [
+        {
+          title: 'A',
+          columns: [
+            {
+              nodes: [
+                {
+                  id: 'n1',
+                  title: 'A',
+                  text: 'a',
+                  connectionIds: [],
+                  connections: [{ targetId: 'n2', confidence: 80, waypoints: [{ x: 10, y: 20 }] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const result = validateChartImport(chart);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toBe(chart);
   });
 
   it.each([
@@ -88,7 +116,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ x: 'oops', y: 10 }] }],
+                    connections: [{ waypoints: [{ dx: 'oops', dy: 10 }] }],
                   },
                 ],
               },
@@ -96,7 +124,25 @@ describe('validateChartImport', () => {
           },
         ],
       },
-      expectedReason: /waypoints\[0\] has invalid coords/,
+      expectedReason: /waypoints\[0\] has invalid offsets/,
+    },
+    {
+      input: {
+        sections: [
+          {
+            columns: [
+              {
+                nodes: [
+                  {
+                    connections: [{ waypoints: [{ dx: NaN, dy: 0 }] }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      expectedReason: /waypoints\[0\] has invalid offsets/,
     },
     {
       input: {
@@ -114,7 +160,43 @@ describe('validateChartImport', () => {
           },
         ],
       },
-      expectedReason: /waypoints\[0\] has invalid coords/,
+      expectedReason: /waypoints\[0\] has invalid offsets/,
+    },
+    {
+      input: {
+        sections: [
+          {
+            columns: [
+              {
+                nodes: [
+                  {
+                    connections: [{ waypoints: [{ dx: 4 }] }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      expectedReason: /waypoints\[0\] has invalid offsets/,
+    },
+    {
+      input: {
+        sections: [
+          {
+            columns: [
+              {
+                nodes: [
+                  {
+                    connections: [{ waypoints: [{ dx: Infinity, dy: 1 }] }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      expectedReason: /waypoints\[0\] has invalid offsets/,
     },
     {
       input: {

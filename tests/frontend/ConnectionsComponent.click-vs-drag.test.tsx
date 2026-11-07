@@ -41,9 +41,9 @@ import { cleanup, fireEvent, render } from '@testing-library/react';
 import React from 'react';
 import { ConnectionsComponent } from '../../src/components/ConnectionsComponent';
 import { MOVE_THRESHOLD_PX } from '../../src/hooks/usePointerDrag';
-import type { ToCData } from '../../src/types';
+import type { ToCData, WaypointOffset } from '../../src/types';
 
-function makeData(waypoints?: Array<{ x: number; y: number }>): ToCData {
+function makeData(waypoints?: WaypointOffset[]): ToCData {
   return {
     sections: [
       {
@@ -83,7 +83,7 @@ function setup(extraProps?: {
   ) => { onPointerDown: (e: React.PointerEvent) => void };
   consumePathGestureArmed?: () => boolean;
   resetWaypoints?: (sourceNodeId: string, targetNodeId: string) => void;
-  waypoints?: Array<{ x: number; y: number }>;
+  waypoints?: WaypointOffset[];
 }) {
   const data = makeData(extraProps?.waypoints);
   const container = document.createElement('div');
@@ -225,7 +225,7 @@ describe('EdgeEditor reset-path wiring (round-7 issue 78)', () => {
     const resetWaypoints = vi.fn();
     const { fatPath } = setup({
       resetWaypoints,
-      waypoints: [{ x: 150, y: 120 }],
+      waypoints: [{ dx: 150, dy: 120 }],
     });
 
     // Open the editor with a plain click.

@@ -17,6 +17,11 @@ import { usePointerDrag } from '../hooks/usePointerDrag';
 import type { DragOverLocation } from '../hooks/usePointerDrag';
 import { useConnectionDrag } from '../hooks/useConnectionDrag';
 import { useWaypointDrag } from '../hooks/useWaypointDrag';
+import {
+  computeConnectionAnchors,
+  getConnectionDirection,
+  lineMidpoint,
+} from '../utils/connectionGeometry';
 import { buildConnectionPath } from './canvas/connectionPath';
 import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
 import { DropLandingIndicator } from './canvas/DropLandingIndicator';
@@ -668,105 +673,10 @@ export function ToC({
         yPosition: adjustedYPosition,
       });
 
-      // PR 7 feedback (25 + B): when a node moves, translate the
-      // waypoints of all connections touching that node so the curve's
-      // middle segment "follows" the move. Three cases:
-      //
-      //   - Same-column move: only `y` changes. dx=0, dy=Δy.
-      //   - Cross-column move (existing target column): both x and y
-      //     change. dx = new column center-x − old column center-x.
-      //   - New-column move: a new column is inserted at
-      //     `targetColumnIndex`, pushing existing columns right. The
-      //     new column's x sits between the two columns it's inserted
-      //     between. Estimate as the gutter midpoint from the
-      //     pre-drop layout snapshot.
-      //
-      // The translation magnitude is HALF the node's delta. Rationale:
-      //   - If only the source (or only the target) moved, the
-      //     waypoint moves halfway along — preserving its relative
-      //     position to BOTH endpoints rather than locking to one.
-      //   - If both endpoints moved by the same delta (rigid drag),
-      //     the waypoint would move by that full delta — but in the
-      //     single-drop case we have here, only one node moves per
-      //     event, so half-delta is the correct contribution.
       const isSameColumnMove =
         !isNewColumn &&
         sourceLocation.sectionIndex === targetSectionIndex &&
         sourceLocation.columnIndex === targetColumnIndex;
-
-      // Snapshot the node's pre-drop CENTER y in CONTAINER-LOCAL coords.
-      // Reading from `data` is the source of truth — the renderer
-      // computes the same `centerY = node.yPosition ?? nodeIndex*180 +
-      // 30 + height/2` formula at line ~460, and `adjustedYPosition`
-      // is in that same space. DOM `offsetTop` is relative to the
-      // immediate offsetParent (a `relative z-10` wrapper one level
-      // up from the absolutely-positioned slot), so it can't be
-      // compared against `adjustedYPosition` directly.
-      let preDropYCenter: number | null = null;
-      const sourceColumn =
-        data.sections[sourceLocation.sectionIndex]?.columns[sourceLocation.columnIndex];
-      const sourceNodeIndex = sourceColumn?.nodes.findIndex((n) => n.id === draggedNodeId) ?? -1;
-      const sourceNodeFromData = sourceNodeIndex >= 0 ? sourceColumn!.nodes[sourceNodeIndex] : null;
-      if (sourceNodeFromData) {
-        preDropYCenter =
-          sourceNodeFromData.yPosition ?? sourceNodeIndex * 180 + 30 + draggedNodeHeight / 2;
-      }
-      // Snapshot the pre-drop COLUMN center-x for the source and target
-      // columns from the layout snapshot. The snapshot's `columnRects`
-      // are CONTENT-space (zoom-normalized container-local px — see the
-      // LayoutSnapshot invariant in useGraphLayout), which is the same
-      // space waypoints live in, so the centers are usable directly.
-      // (Pre-zoom-fix this block ran the raw viewport deltas through a
-      // `(x - containerRect.left) / zoomScale` conversion; the constant
-      // canceled in the dx subtraction below and the division is now
-      // done once in the snapshot producer.)
-      let preDropXCenter: number | null = null;
-      let postDropXCenter: number | null = null;
-      const layoutSnap = getSnapshot();
-      if (layoutSnap.columnRects.length > 0) {
-        const srcCol =
-          layoutSnap.columnRects[sourceLocation.sectionIndex]?.[sourceLocation.columnIndex];
-        if (srcCol) {
-          preDropXCenter = (srcCol.left + srcCol.right) / 2;
-        }
-        if (isSameColumnMove) {
-          // Same column → post-drop x equals pre-drop x.
-          postDropXCenter = preDropXCenter;
-        } else if (isNewColumn) {
-          // New column is inserted at `targetColumnIndex`, pushing the
-          // column currently at that index to the right. Best pre-drop
-          // estimate of the new column's center-x: the gutter midpoint
-          // between the column to the LEFT of the insertion point and
-          // the column currently AT the insertion point.
-          const sec = layoutSnap.columnRects[targetSectionIndex];
-          if (sec) {
-            const leftCol = sec[targetColumnIndex - 1];
-            const rightCol = sec[targetColumnIndex];
-            if (leftCol && rightCol) {
-              postDropXCenter = (leftCol.right + rightCol.left) / 2;
-            } else if (leftCol) {
-              // Drop past the last column → new column lands to the
-              // right of the current rightmost; approximate one
-              // column-width to the right.
-              postDropXCenter = leftCol.right + (leftCol.right - leftCol.left) / 2;
-            } else if (rightCol) {
-              // Drop before the first column → mirror.
-              postDropXCenter = rightCol.left - (rightCol.right - rightCol.left) / 2;
-            }
-          }
-        } else {
-          // Existing target column — its rect is already known.
-          const tgtCol = layoutSnap.columnRects[targetSectionIndex]?.[targetColumnIndex];
-          if (tgtCol) {
-            postDropXCenter = (tgtCol.left + tgtCol.right) / 2;
-          }
-        }
-      }
-      const dy = preDropYCenter !== null ? adjustedYPosition - preDropYCenter : 0;
-      const dx =
-        preDropXCenter !== null && postDropXCenter !== null ? postDropXCenter - preDropXCenter : 0;
-      const shouldTranslateWaypoints = dx !== 0 || dy !== 0;
-      const waypointShift = { x: dx / 2, y: dy / 2 }; // half-delta — see comment above
 
       setDataAndNotify((prevData) => {
         // Locate the source node fresh inside the updater so we don't
@@ -783,47 +693,6 @@ export function ToC({
           if (sourceNode) break;
         }
         if (!sourceNode) return prevData;
-
-        // Helper: shift every waypoint on every connection touching
-        // draggedNodeId (as source OR target). Pure, returns a new
-        // sections array, allocations gated on actual change.
-        const shiftWaypointsForNode = (
-          sections: ToCData['sections'],
-          nodeId: string,
-          shift: { x: number; y: number },
-        ): ToCData['sections'] => {
-          let changed = false;
-          const next = sections.map((section) => ({
-            ...section,
-            columns: section.columns.map((column) => ({
-              ...column,
-              nodes: column.nodes.map((node) => {
-                if (!node.connections || node.connections.length === 0) return node;
-                let nodeChanged = false;
-                const newConns = node.connections.map((conn) => {
-                  // Only touch connections where draggedNodeId is one
-                  // endpoint (node.id is the source side; targetId is
-                  // the target side).
-                  const isEndpoint = node.id === nodeId || conn.targetId === nodeId;
-                  if (!isEndpoint) return conn;
-                  if (!conn.waypoints || conn.waypoints.length === 0) return conn;
-                  nodeChanged = true;
-                  return {
-                    ...conn,
-                    waypoints: conn.waypoints.map((w) => ({
-                      x: w.x + shift.x,
-                      y: w.y + shift.y,
-                    })),
-                  };
-                });
-                if (!nodeChanged) return node;
-                changed = true;
-                return { ...node, connections: newConns };
-              }),
-            })),
-          }));
-          return changed ? next : sections;
-        };
 
         // Same-column move: in-place yPosition update only.
         if (isSameColumnMove) {
@@ -846,19 +715,11 @@ export function ToC({
                 }
               : section,
           );
-          const sectionsAfterWaypoints = shouldTranslateWaypoints
-            ? shiftWaypointsForNode(sectionsAfterMove, draggedNodeId, waypointShift)
-            : sectionsAfterMove;
-          return { ...prevData, sections: sectionsAfterWaypoints };
+          return { ...prevData, sections: sectionsAfterMove };
         }
 
         // Cross-column / cross-section / new-column move: remove from
-        // source, add to target, then translate waypoints by the
-        // half-delta computed from the layout snapshot (PR 7 feedback
-        // B). The waypoint translation is folded into the SAME update
-        // so undo/redo treats the whole gesture atomically — no extra
-        // history entry, no flash-of-stale-waypoint visual blink
-        // between the node move and the waypoint shift.
+        // source, add to target.
         const newData = { ...prevData };
         newData.sections = prevData.sections.map((section) => ({
           ...section,
@@ -879,14 +740,10 @@ export function ToC({
           );
         }
 
-        if (shouldTranslateWaypoints) {
-          newData.sections = shiftWaypointsForNode(newData.sections, draggedNodeId, waypointShift);
-        }
-
         return newData;
       });
     },
-    [data, findNodeLocation, zoomScale, nodeHeights, setDataAndNotify, getSnapshot],
+    [findNodeLocation, zoomScale, nodeHeights, setDataAndNotify],
   );
 
   // PR 4: `usePointerDrag` owns drag state. `onDrop` flows directly to
@@ -1032,6 +889,25 @@ export function ToC({
     [camera],
   );
 
+  // Waypoints are stored relative to the midpoint of the straight line
+  // between a connection's anchors; the drag hook needs that midpoint
+  // to turn the pointer position into an offset. Computed from the same
+  // DOM geometry and anchor rules `ConnectionsComponent` draws with.
+  const getLineMidpoint = useCallback(
+    (sourceId: string, targetId: string) => {
+      // A press only reaches the hook from a rendered connection, so the
+      // container, both node elements and both locations exist.
+      const container = graphContainerRef.current!;
+      const { source, target } = computeConnectionAnchors(
+        getLocalPosition(nodeRefsRef.current[sourceId]!, container),
+        getLocalPosition(nodeRefsRef.current[targetId]!, container),
+        getConnectionDirection(findNodeLocation(sourceId)!, findNodeLocation(targetId)!),
+      );
+      return lineMidpoint(source, target);
+    },
+    [findNodeLocation],
+  );
+
   const waypointDrag = useWaypointDrag({
     data,
     editMode,
@@ -1040,6 +916,7 @@ export function ToC({
     discardBuffered: discardBufferedMutation,
     notifyCount,
     clientToContainer,
+    getLineMidpoint,
   });
 
   // Notify parent (App) of drag-active transitions so the 30s sync
