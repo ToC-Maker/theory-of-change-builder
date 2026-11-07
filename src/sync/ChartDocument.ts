@@ -40,13 +40,16 @@ export interface ServerState {
 }
 
 /** What the canvas needs; the view route and tests use `staticStore`. */
+// Property signatures, not methods: callers hand these to
+// useSyncExternalStore and effects unbound, so an implementation must not
+// depend on `this` (the class uses arrow properties).
 export interface ChartStore {
-  subscribe(listener: () => void): () => void;
-  getLive(): ToCData;
-  getCommitted(): ToCData;
-  getCommitCount(): number;
-  preview(updater: ToCData | ((prev: ToCData) => ToCData)): void;
-  commit(): void;
+  subscribe: (listener: () => void) => () => void;
+  getLive: () => ToCData;
+  getCommitted: () => ToCData;
+  getCommitCount: () => number;
+  preview: (updater: ToCData | ((prev: ToCData) => ToCData)) => void;
+  commit: () => void;
 }
 
 export interface DocStatus {
