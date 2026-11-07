@@ -10,6 +10,10 @@ import { settle } from './editors.mjs';
 export async function settleAndCheck({ mock, token, pages, checks = new Checks(), ...options }) {
   const settled = await settle({ mock, token, pages, ...options });
   checks.ok('pages and server converge', settled.converged, settled.why);
+  settled.models.forEach((m, i) => {
+    if (!m.status)
+      checks.note(`page ${i} has no chart document: judged by its pill and titles only`);
+  });
   checks.eq('duplicate node ids on the server', duplicateIds(settled.server.chart), []);
   if (settled.models.length > 1) {
     const [first, ...rest] = settled.models;

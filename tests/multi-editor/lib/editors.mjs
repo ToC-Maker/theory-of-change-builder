@@ -280,14 +280,17 @@ export async function settle({ mock, token, pages, timeout = 30_000 }) {
     const problems = [];
     models.forEach((m, i) => {
       if (m.pill !== 'saved') problems.push(`page ${i} pill ${m.pill}`);
-      if (m.status.unsaved) problems.push(`page ${i} document has unsaved changes`);
-      if (m.status.serverVersion !== server.version) {
-        problems.push(
-          `page ${i} is at version ${m.status.serverVersion}, server at ${server.version}`,
-        );
-      }
-      if (!sameChart(m.committed, server.chart)) {
-        problems.push(`page ${i} chart differs from the server's`);
+      // The previous client has no chart document: a page on it is judged by what it shows.
+      if (m.status) {
+        if (m.status.unsaved) problems.push(`page ${i} document has unsaved changes`);
+        if (m.status.serverVersion !== server.version) {
+          problems.push(
+            `page ${i} is at version ${m.status.serverVersion}, server at ${server.version}`,
+          );
+        }
+        if (!sameChart(m.committed, server.chart)) {
+          problems.push(`page ${i} chart differs from the server's`);
+        }
       }
       if (!isDeepStrictEqual(m.titles, titles(server.chart))) {
         problems.push(
