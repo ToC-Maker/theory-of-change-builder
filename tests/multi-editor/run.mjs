@@ -5,7 +5,7 @@
 //   --root        the checkout whose client is under test (Vite is started with it as cwd)
 //   --old-root    a checkout of the previous client, for scenarios that need a tab running it
 //   --out         where event logs, screenshots and results.json go (outside the repo)
-//   --only        comma-separated scenario names (default: all)
+//   --only        comma-separated scenario names, or scenario/case to run one case (default: all)
 //   --runs        runs per case, overriding each scenario's own count
 //   --web-port / --mock-port / --old-port   free ports (never 5173 or 8787: those serve the real app)
 //   --session     browser session prefix; give each process running side by side its own
@@ -82,7 +82,12 @@ const scenarioFiles = fs
   .readdirSync(path.join(here, 'scenarios'))
   .filter((f) => f.endsWith('.mjs'))
   .sort();
-const wanted = args.only?.split(',');
+// `scenario` selects all of its cases, `scenario/case` one.
+const picks = args.only?.split(',').map((entry) => {
+  const [scenario, kase] = entry.split('/');
+  return { scenario, kase };
+});
+const wanted = picks?.map((p) => p.scenario);
 const scenarios = [];
 for (const file of scenarioFiles) {
   const scenario = await import(path.join(here, 'scenarios', file));
@@ -96,8 +101,16 @@ for (const file of scenarioFiles) {
   scenarios.push(scenario);
 }
 if (wanted) {
-  const unknown = wanted.filter((n) => !scenarios.some((s) => s.name === n));
-  if (unknown.length) throw new Error(`unknown scenarios: ${unknown.join(', ')}`);
+  const unknown = picks.filter(
+    (p) =>
+      !scenarios.some(
+        (s) => s.name === p.scenario && (!p.kase || (s.cases ?? []).some((c) => c.name === p.kase)),
+      ),
+  );
+  if (unknown.length)
+    throw new Error(
+      `unknown scenarios: ${unknown.map((p) => p.scenario + (p.kase ? '/' + p.kase : '')).join(', ')}`,
+    );
 }
 const needsOld = scenarios.some((s) => s.needs?.includes('old'));
 
@@ -184,6 +197,8 @@ try {
 
   for (const scenario of scenarios) {
     for (const kase of scenario.cases ?? [{ name: 'default' }]) {
+      const only = picks?.filter((p) => p.scenario === scenario.name && p.kase);
+      if (only?.length && !only.some((p) => p.kase === kase.name)) continue;
       const row = {
         scenario: scenario.name,
         case: kase.name,
