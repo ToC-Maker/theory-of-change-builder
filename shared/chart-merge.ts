@@ -3,9 +3,10 @@
  * and the Worker.
  *
  * Consumed by:
- *  - the client's chart document (`src/sync/ChartDocument.ts`), which calls it
- *    on every 409, every poll landing, every undo and redo (revert form,
- *    `onConflict: 'theirs'`) and every AI edit (base = the chart as sent),
+ *  - the client, to fold another editor's chart into the local one (a 409, a
+ *    poll landing) with `onConflict: 'mine'`, to replay an AI edit computed
+ *    against the chart as sent (that chart is `base`), and to undo or redo in
+ *    revert form (`mergeCharts(after, before, current, { onConflict: 'theirs' })`),
  *    compiled under `tsconfig.app.json`;
  *  - the Worker, once saves merge on the server, compiled under
  *    `worker/tsconfig.json`.
@@ -31,23 +32,25 @@
  *    set differently goes to `onConflict`.
  * 3. A record deleted on one side and present on the other survives only if
  *    the survivor changed a content field relative to `base` (node `title`,
- *    `text`; connection `evidence`, `assumptions`), or is a connection added
- *    with non-empty `evidence` or `assumptions`. A move, resize, recolour,
+ *    `text`; connection `evidence`, `assumptions`). A move, resize, recolour,
  *    confidence change, waypoint change or unknown field loses to the delete.
- *    With `onConflict: 'theirs'` a delete by theirs always stands, and an
- *    added connection keeps its end nodes only when both exist in theirs.
- * 4. A connection that survives by content keeps both end nodes (the node
- *    survives with the record of the side that still had it).
+ *    With `onConflict: 'theirs'` a delete by theirs always stands.
+ * 4. A connection that survives by content under rule 3, or that one side
+ *    added with non-empty `evidence` or `assumptions`, keeps both end nodes:
+ *    an end node rule 3 would drop survives with the record of the side that
+ *    still had it. With `onConflict: 'theirs'` it does so only when both end
+ *    nodes exist in theirs.
  * 5. A connection survives only if both end nodes do. A connection whose
  *    target is not a node of the same chart counts as absent: the app's
  *    column and section deletes leave such connections behind.
  * 6. A column deleted by either side survives only if a surviving node's `pos`
  *    points at it; a section deleted by either side survives only if a
  *    surviving column belongs to it (so a rename loses to the delete).
- * 7. Order is theirs' order minus what is gone, then mine's new items after
- *    their nearest surviving left neighbour in mine. A reorder by mine is
- *    therefore lost whenever theirs changed anything; nothing reorders
- *    sections, columns or nodes today.
+ * 7. Every list (the sections, a section's columns, a column's nodes, a
+ *    node's connections) is theirs' order minus what is gone, then mine's new
+ *    items, each after its nearest surviving left neighbour in mine, or first
+ *    when it has none. A reorder by mine is therefore lost whenever theirs
+ *    changed anything; nothing reorders sections, columns or nodes today.
  * 8. The result is rebuilt as a normalised chart: `connectionIds` from
  *    `connections`, `yPosition` from `pos`, no keys holding `undefined`.
  * 9. If theirs equals base the result is `mine` itself, and if mine equals
@@ -212,7 +215,10 @@ function mergeRecord(
 
 type Fate = 'both' | 'added' | 'edited' | 'gone';
 
-/** Whether a node or connection exists after the merge, and why, before the container rules. */
+/**
+ * What the add and delete rules (2 and 3) make of a node or connection, before pinning (4), the
+ * rule that a connection needs both end nodes (5) and the container rules (6).
+ */
 function fateOf(
   base: Rec | undefined,
   mine: Rec | undefined,

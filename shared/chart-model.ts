@@ -113,9 +113,9 @@ export class ChartShapeError extends Error {
  * id-less chart agree on every id) and idempotent. Never mutates `raw`; parts
  * it does not touch are shared with it, not copied.
  *
- * Stored ids are never renamed: all of them are reserved before any id is
- * minted, so a positional id that collides with one gets a `~k` suffix, as
- * does a repeat of a stored id.
+ * Only the first occurrence of a stored id keeps it. All stored ids are
+ * reserved before any id is minted, so a positional id that collides with one
+ * gets a `~k` suffix, and so does a later repeat of a stored id.
  *
  * Throws `ChartShapeError` when the chart is not an object with a `sections`
  * array, or a section, column, node or connection is not an object, or a
