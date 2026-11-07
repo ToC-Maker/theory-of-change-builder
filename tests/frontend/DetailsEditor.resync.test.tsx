@@ -137,14 +137,31 @@ describe('DetailsEditor following remote changes', () => {
     expect(t.seen.setMarkdown).toHaveBeenCalledWith('x then someone else');
   });
 
-  it('the same text arriving twice is applied once', async () => {
-    const t = await renderWithStandIn('old text');
+  it('a remote change and then a return to the original text is applied both times (unfocused)', async () => {
+    const t = await renderWithStandIn('original');
+
+    t.rerender('theirs');
+    await waitFor(() => expect(t.seen.mounts).toEqual(['original', 'theirs']));
+    t.rerender('theirs');
+    t.rerender('original');
+
+    // Each distinct text mounts a fresh editor once; the repeated 'theirs'
+    // is not applied again, and the last one is not mistaken for text the
+    // editor already showed.
+    await waitFor(() => expect(t.seen.mounts).toEqual(['original', 'theirs', 'original']));
+    expect(t.seen.setMarkdown).not.toHaveBeenCalled();
+  });
+
+  it('a remote change and then a return to the original text is applied both times (focused)', async () => {
+    const t = await renderWithStandIn('original');
     act(() => t.editor.focus());
 
-    t.rerender('text from someone else');
-    t.rerender('text from someone else');
+    t.rerender('theirs');
+    t.rerender('theirs');
+    t.rerender('original');
 
-    expect(t.seen.setMarkdown).toHaveBeenCalledTimes(1);
+    expect(t.seen.setMarkdown.mock.calls.map(([text]) => text)).toEqual(['theirs', 'original']);
+    expect(t.seen.mounts).toEqual(['original']);
   });
 
   it('a remote change while a toolbar button holds focus updates the real editor in place', async () => {
@@ -277,6 +294,20 @@ describe('MDXEditor behaviour the resync relies on (real editor)', () => {
     expect(ref.current!.getMarkdown()).toBe('new text');
     expect(content.textContent).toBe('new text');
     expect(document.activeElement).toBe(content);
+    expect(onChange).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('mdxeditor_contract: setMarkdown of text not in normal form while focused reports nothing', async () => {
+    const { ref, onChange, content } = await mountReal('local text');
+    act(() => content.focus());
+    onChange.mockClear();
+
+    await act(async () => {
+      ref.current!.setMarkdown('- a\n- b  ');
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    expect(ref.current!.getMarkdown()).toBe('* a\n* b');
     expect(onChange).not.toHaveBeenCalled();
   }, 20000);
 
