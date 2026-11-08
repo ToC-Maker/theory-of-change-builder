@@ -36,7 +36,18 @@
 // click that dismissed an editor ALSO fired whatever affordance it
 // landed on (close modal → surprise-create a column).
 //
-// When the mousedown path here actually dismisses, we register
+// Scope: the guard protects the CANVAS. A dismissing press on a control
+// outside the canvas (the top bar and its menus, the chat panel, zoom
+// controls, dialogs) is an explicit action with no surprise to guard
+// against, so its click must act on the first press; swallowing it made
+// File need two clicks while an editor was open. The hook itself
+// consumes by default; scoping is the caller's `allowClickThroughOnDismiss`
+// predicate, which both editors set to `isClickThroughOnDismiss`
+// (`canvas/editorSwitchTargets.ts`: pass through unless the press is on
+// canvas content that is not a selection switch target).
+//
+// When the mousedown path here actually dismisses (and the caller's
+// predicate doesn't pass the press through), we register
 // ONE-SHOT capture-phase `click` + `dblclick` listeners on `document`
 // that consume (preventDefault + stopPropagation) the gesture's
 // follow-up events, then remove themselves. Standard popover
@@ -57,11 +68,11 @@
 // them down too early. At most one guard is armed at a time (a newer
 // dismissal supersedes any pending one).
 //
-// `allowClickThroughOnDismiss` (see arg docs) exempts selection switch
-// targets: clicking node B while editing node A must dismiss A's
-// editor AND let the click select B (reopen on B) in one gesture.
-// Escape dismissal arms nothing — there's no press, so there's nothing
-// to swallow.
+// `allowClickThroughOnDismiss` (see arg docs) exempts presses outside
+// the canvas and selection switch targets inside it: clicking node B
+// while editing node A must dismiss A's editor AND let the click select
+// B (reopen on B) in one gesture. Escape dismissal arms nothing —
+// there's no press, so there's nothing to swallow.
 //
 // Edge cases:
 //   - Clicks on the container itself (e.target === el) are treated as
@@ -175,9 +186,11 @@ interface UseDismissOnOutsideEventArgs {
    * the dismissing mousedown. By default a mousedown dismissal consumes
    * the same gesture's `click` and `dblclick` (see the guard section in
    * the file header). Return `true` to let the gesture's click pass
-   * through instead — used for selection switch targets (nodes,
-   * connection hit paths) where the click must still select/open the
-   * next editor in one gesture rather than being eaten.
+   * through instead — used for presses outside the canvas (explicit
+   * controls such as the top bar) and for selection switch targets
+   * (nodes, connection hit paths) where the click must still
+   * select/open the next editor in one gesture rather than being
+   * eaten.
    */
   allowClickThroughOnDismiss?: (event: MouseEvent) => boolean;
 }
