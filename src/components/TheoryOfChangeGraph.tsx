@@ -38,6 +38,7 @@ import { ColumnDeleteAffordance } from './canvas/ColumnDeleteAffordance';
 import { DropLandingIndicator } from './canvas/DropLandingIndicator';
 import { AddControlZone, CANVAS_EDGE_PX, ColumnSlot } from './canvas/AddControlZone';
 import type { AddControl } from './canvas/AddControlZone';
+import { CANVAS_DOM_ATTR } from './canvas/editorSwitchTargets';
 import { PlusIcon, MinusIcon } from '@heroicons/react/24/outline';
 
 // The chart an updater receives can be the object the store keeps as an
@@ -1083,7 +1084,9 @@ export function ToC({
   };
 
   return (
-    <div className="flex flex-col">
+    // The canvas root: presses inside it are the ones the editors'
+    // dismiss-click guard protects (see `editorSwitchTargets.ts`).
+    <div className="flex flex-col" {...{ [CANVAS_DOM_ATTR]: '' }}>
       {/* Graph Title */}
       {titleBlockShown && (
         <div className="mb-6">
