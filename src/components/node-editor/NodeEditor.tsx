@@ -92,7 +92,7 @@ import { keepWheelInOverlay, useAnchorPosition } from './useAnchorPosition';
 import { DetailsEditor } from './DetailsEditor';
 import { useDismissOnOutsideEvent } from '../../hooks/useDismissOnOutsideEvent';
 import { TOP_BAR_HEIGHT_PX } from '../../hooks/useViewportOffset';
-import { isEditorSwitchTarget } from '../canvas/editorSwitchTargets';
+import { isClickThroughOnDismiss } from '../canvas/editorSwitchTargets';
 import { NODE_DOM_ATTR } from '../NodeComponent';
 
 type GraphUpdater = SetStateAction<ToCData>;
@@ -221,11 +221,13 @@ export function NodeEditor(props: NodeEditorProps) {
     onDismiss: onRequestClose,
     extraSafeRefs: safeRefs,
     shouldSkipDismiss,
-    // fb7 issue 77: the dismissing gesture's click is consumed (closing
-    // the editor must not also fire a gutter / double-click-create),
-    // EXCEPT when the press lands on a selection target — clicking
-    // another node or a connection switches editors in one gesture.
-    allowClickThroughOnDismiss: isEditorSwitchTarget,
+    // fb7 issue 77: a dismissing press on canvas content has its click
+    // consumed (closing the editor must not also fire a gutter /
+    // double-click-create). The click passes through when the press
+    // lands outside the canvas (top bar, chat panel: explicit
+    // controls) or on a selection target — clicking another node or a
+    // connection switches editors in one gesture.
+    allowClickThroughOnDismiss: isClickThroughOnDismiss,
   });
 
   if (selectedNodeIds.length === 0) return null;
