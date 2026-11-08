@@ -7,9 +7,10 @@
 --          leaves chart_data unchanged (view_count, link sharing, an identical
 --          resave) does not. updated_at cannot serve as the version: the
 --          update_charts_updated_at trigger bumps it on any update.
--- Apply:   to staging, then production, BEFORE deploying the Worker. The new
---          Worker reads version and compares on it; the previous Worker keeps
---          working against the migrated schema (additive column, no SELECT *).
+-- Apply:   to staging, then production, BEFORE the PR that carries it is merged
+--          (Workers Builds deploys every push to main). The new Worker reads
+--          version and compares on it; the previous Worker keeps working
+--          against the migrated schema (additive column, no SELECT *).
 -- Down:    roll the Worker back to a version that does not read `version`
 --          first (the current one fails every chart read without the column);
 --          then DROP TRIGGER charts_bump_version ON charts;
