@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
+import { useSuspendForExport } from '../utils/exportSuspend';
 import { computePathWithWaypoints, computeSegmentMidpoints } from '../utils/connectionPath';
 import {
   computeConnectionAnchors,
@@ -168,6 +169,13 @@ export function ConnectionsComponent({
   // `selectedEdge` (source+target pair + midpoint anchor). The anchored
   // EdgeEditor reads property values from `data` directly.
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdge | null>(null);
+  // An export shows the chart without a selected or hovered connection.
+  useSuspendForExport(() => {
+    const selected = selectedEdge;
+    setSelectedEdge(null);
+    setHoveredEdge(null);
+    return () => setSelectedEdge(selected);
+  });
 
   // Feedback 49: NodeEditor and EdgeEditor are mutually exclusive —
   // opening one must close the other. Mouse flows already satisfy this

@@ -16,6 +16,7 @@ import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
 import { computeAlignedSections } from '../utils/alignNodes';
 import { nodeExistsInData } from '../utils/findNode';
+import { useSuspendForExport } from '../utils/exportSuspend';
 import { NodeComponent } from './NodeComponent';
 import { ConnectionsComponent } from './ConnectionsComponent';
 import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
@@ -164,6 +165,13 @@ export function ToC({
     });
   }, [data]);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  // An export shows the chart without a selection or hover.
+  useSuspendForExport(() => {
+    const selected = highlightedNodes;
+    setHighlightedNodes(new Set());
+    setHoveredNode(null);
+    return () => setHighlightedNodes(selected);
+  });
   // PR 4: legacy `draggedNode`, `dragOffset`, `dragOverLocation` state
   // retired — `usePointerDrag` now owns drag state internally and
   // returns `dragState` (or null). The hook is wired below after

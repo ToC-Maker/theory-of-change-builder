@@ -81,6 +81,7 @@ Inside the graph, edit mode and view mode have the same geometry: node rects and
   - Touch takes two taps: the first, on the gap or its badge, opens the controls; the second, on a control, adds. They close on a tap elsewhere or after `TOUCH_OPEN_MS`.
   - Controls are `role="button"` divs, not `<button>`s, because a press on a `<button>` never starts a canvas pan; a press that travels past `MOVE_THRESHOLD_PX` adds nothing.
 - Elements with `data-export-exclude` are dropped from PNG and PDF exports (`src/utils/exportChart.ts`).
+- A PNG or PDF export shows the whole chart as published: selection and hover are cleared for the capture and the selection comes back after. A component that owns such state registers it with `useSuspendForExport` (`src/utils/exportSuspend.ts`): `TheoryOfChangeGraph` (selected and hovered nodes) and `ConnectionsComponent` (selected and hovered connection, whose editor closes meanwhile).
 
 ### AI Edit System
 

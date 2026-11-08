@@ -55,7 +55,12 @@
 // what is inside an `<svg>`, so `data-export-exclude` there is ignored by
 // the filter. `withSvgExclusionsHidden` hides those elements for the
 // duration of the capture instead.
+//
+// Selection: the canvas highlights what is selected or hovered (a ring, the
+// rest faded). `withSelectionCleared` clears that for the capture, so an
+// export always shows the chart as published, and puts the selection back.
 import type { ToCData } from '../types';
+import { suspendForExport } from './exportSuspend';
 
 /**
  * Trigger a download in the browser by creating an anonymous anchor,
@@ -222,6 +227,35 @@ async function withSvgExclusionsHidden<T>(root: HTMLElement, fn: () => Promise<T
 }
 
 /**
+ * Clear the canvas's selection and hover state for the duration of `fn`,
+ * then put the selection back (in a `finally`, like the other capture
+ * wrappers).
+ *
+ * `suspendForExport` commits the cleared state before it returns, so the
+ * DOM is clean when the capture starts. Nodes and connections fade over a
+ * CSS transition though, and the capture reads the style mid-fade, so
+ * transitions inside `root` are switched off first: the cleared state is
+ * then the computed state from the first read.
+ */
+async function withSelectionCleared<T>(root: HTMLElement, fn: () => Promise<T>): Promise<T> {
+  const noTransitions = document.createElement('style');
+  noTransitions.textContent =
+    '[data-exporting], [data-exporting] * { transition: none !important; }';
+  document.head.appendChild(noTransitions);
+  root.setAttribute('data-exporting', '');
+
+  let restoreSelection = () => {};
+  try {
+    restoreSelection = suspendForExport();
+    return await fn();
+  } finally {
+    restoreSelection();
+    root.removeAttribute('data-exporting');
+    noTransitions.remove();
+  }
+}
+
+/**
  * Shared capture-options shape for `toPng` / `toCanvas`. The `Options`
  * type from html-to-image is wider; we narrow to the fields we set.
  */
@@ -247,7 +281,8 @@ function includeInExport(node: Node): boolean {
 /**
  * Resolve `fontEmbedCSS` via html-to-image's `getFontEmbedCSS`, then
  * invoke `capture` with the merged options inside
- * `withTransformNeutralized` and `withSvgPaintPinned`. Used by both
+ * `withTransformNeutralized`, `withSelectionCleared`,
+ * `withSvgPaintPinned` and `withSvgExclusionsHidden`. Used by both
  * `exportToPng` (renderer: `toPng`) and `exportToPdf` (renderer:
  * `toCanvas`).
  *
@@ -276,24 +311,26 @@ async function captureWithFonts<T>(
   }
 
   return withTransformNeutralized(canvasRoot, () =>
-    withSvgPaintPinned(canvasRoot, () =>
-      withSvgExclusionsHidden(canvasRoot, () =>
-        capture({
-          // Omit `fontEmbedCSS` when undefined so html-to-image performs
-          // its internal walk. When defined, pass through verbatim.
-          ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
-          // 2x for hidpi. `skipAutoScale: true` tells the library not to
-          // back off the resolution for "very large" trees — we already
-          // know our canvas size and want fidelity.
-          pixelRatio: 2,
-          skipAutoScale: true,
-          // White background so transparent PNGs don't look broken when
-          // dropped into a presentation. The canvas already has a white
-          // card, but other zoom states might bleed transparent edges.
-          backgroundColor: '#ffffff',
-          cacheBust: true,
-          filter: includeInExport,
-        }),
+    withSelectionCleared(canvasRoot, () =>
+      withSvgPaintPinned(canvasRoot, () =>
+        withSvgExclusionsHidden(canvasRoot, () =>
+          capture({
+            // Omit `fontEmbedCSS` when undefined so html-to-image performs
+            // its internal walk. When defined, pass through verbatim.
+            ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
+            // 2x for hidpi. `skipAutoScale: true` tells the library not to
+            // back off the resolution for "very large" trees — we already
+            // know our canvas size and want fidelity.
+            pixelRatio: 2,
+            skipAutoScale: true,
+            // White background so transparent PNGs don't look broken when
+            // dropped into a presentation. The canvas already has a white
+            // card, but other zoom states might bleed transparent edges.
+            backgroundColor: '#ffffff',
+            cacheBust: true,
+            filter: includeInExport,
+          }),
+        ),
       ),
     ),
   );
