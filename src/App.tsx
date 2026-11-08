@@ -1381,7 +1381,7 @@ function ToCViewer() {
     }
   }, [data.title]);
 
-  // Every 2.5 s an open, active editor asks whether the chart has a newer
+  // Every `POLL_MS` an open, active editor asks whether the chart has a newer
   // version and merges it into the document (see `useChartSync`). A chart the
   // merge cannot use shows in the save pill, which an idle tab has no other way
   // to reach.

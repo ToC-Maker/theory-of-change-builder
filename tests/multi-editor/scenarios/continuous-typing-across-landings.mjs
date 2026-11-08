@@ -1,6 +1,7 @@
-// A types without pausing, in the middle of n1's title, for 16 seconds while B retitles n6 three
-// times. Three landings arrive during the typing; the caret must stay one place right of the last
-// key after every keystroke, focus must stay in the input, and every key must reach the server.
+// A types without pausing, in the middle of n1's title, while B retitles n6 three times with more
+// than a poll interval between them. Each retitle is its own landing, so three arrive during the
+// typing; the caret must stay one place right of the last key after every keystroke, focus must stay
+// in the input, and every key must reach the server.
 import { focusTitle, selectNode, titleInput } from '../lib/editors.mjs';
 import { titles } from '../lib/chart.mjs';
 import { settleAndCheck } from '../lib/oracle.mjs';
@@ -10,7 +11,11 @@ import { sleep } from '../lib/browser.mjs';
 export const name = 'continuous-typing-across-landings';
 export const runs = 6;
 
-const TYPING_MS = 16_000;
+// B waits one poll interval before each retitle, so a poll tick falls between any two of them. The
+// typing outlasts all three plus the tick that brings the last one; one retitle takes B up to
+// RETITLE_MS.
+const RETITLE_MS = 3500;
+const typingMs = (pollMs) => 3 * (pollMs + RETITLE_MS) + pollMs + 1000;
 
 export async function run(ctx) {
   const { mock, token, A, B } = ctx;
@@ -35,7 +40,7 @@ export async function run(ctx) {
   let remoteError;
   const remote = (async () => {
     for (const suffix of ['-B1', '-B2', '-B3']) {
-      await sleep(1500);
+      await sleep(ctx.pollMs);
       await retitle(ctx, B, 'n6', suffix);
     }
   })().catch((error) => {
@@ -46,7 +51,7 @@ export async function run(ctx) {
   let typed = 0;
   let expectedCaret = 3;
   const t0 = Date.now();
-  while (Date.now() - t0 < TYPING_MS && !remoteError) {
+  while (Date.now() - t0 < typingMs(ctx.pollMs) && !remoteError) {
     await A.type('a');
     typed++;
     expectedCaret++;

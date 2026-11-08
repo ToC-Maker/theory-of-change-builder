@@ -1,13 +1,15 @@
 // Timing for "the other person changes the chart while A holds a pointer gesture".
 //
 //   tick: a poll tick falls inside the hold. Polls are skipped while a drag is in flight, so A
-//         should not see B's change until it lets go.
+//         should not see B's change until it lets go. The hold lasts a poll interval plus
+//         TICK_MARGIN_MS after B's change, so a tick falls in it however the ticks line up.
 //   mid:  a slow poll is already in flight when the drag starts; its answer carries B's change and
 //         arrives mid-drag. The answer is dropped and fetched again after the release.
 import { sleep } from './browser.mjs';
 import { docState } from './editors.mjs';
 
 export const SLOW_POLL = { delay: 26_000, readAt: 16_000 };
+const TICK_MARGIN_MS = 4500;
 
 /** Call before pressing the pointer: returns once A has just polled (tick) or a slow poll is out (mid). */
 export async function armHold(ctx, timing, slow = SLOW_POLL) {
@@ -54,7 +56,7 @@ export async function endHold(ctx, timing, armed, snap, slow = SLOW_POLL) {
       );
     }
   } else {
-    await sleep(7000);
+    await sleep(ctx.pollMs + TICK_MARGIN_MS);
   }
   await assertHoldingBack(ctx);
   return snap(A);

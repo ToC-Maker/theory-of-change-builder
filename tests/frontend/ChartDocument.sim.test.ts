@@ -1,7 +1,7 @@
 // Three tabs edit one chart through the real ChartDocument. A discrete-event simulation on a
 // virtual clock supplies what the document's callers supply: a compare-and-swap server with
 // random latency and lost requests and acknowledgements, a save loop that debounces 300 ms and
-// keeps one request in flight, a poll every 2.5 s, typing and slider gestures that preview
+// keeps one request in flight, a poll every POLL_MS, typing and slider gestures that preview
 // many times before they commit, undo, redo, whole-chart replacement and AI edits computed
 // against the chart as it was sent.
 //
@@ -11,6 +11,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ConflictWinner } from '../../shared/chart-merge';
 import { deepEqual, normalizeChart, type ToCData } from '../../shared/chart-model';
+import { POLL_MS } from '../../src/hooks/useChartSync';
 import { ChartDocument } from '../../src/sync/ChartDocument';
 import { connectedChart, edit } from '../shared/chart-fixtures';
 import {
@@ -56,7 +57,6 @@ vi.mock('../../shared/chart-merge', async (importOriginal) => {
 
 const RUNS = 200;
 const TABS = 3;
-const POLL_MS = 2500;
 const DEBOUNCE_MS = 300;
 const RETRY_MS = 1000;
 const EDITING_MS = 10_000;

@@ -129,6 +129,18 @@ const shots = path.join(out, 'shots');
 const urlFor = (kind, token, who) =>
   `http://127.0.0.1:${kind === 'old' ? args['old-port'] : args['web-port']}/edit/${token}?who=${who}`;
 
+/**
+ * The client's poll interval, read from its source so that scenarios timed against a poll tick
+ * follow it. Only those scenarios ask: a checkout without `POLL_MS` (the previous client) still runs
+ * the rest.
+ */
+function readPollMs() {
+  const source = fs.readFileSync(path.join(root, 'src/hooks/useChartSync.ts'), 'utf8');
+  const match = /export const POLL_MS = ([\d_]+);/.exec(source);
+  if (!match) throw new Error('src/hooks/useChartSync.ts under --root exports no POLL_MS');
+  return Number(match[1].replaceAll('_', ''));
+}
+
 /** What a scenario gets: the mock, its browsers, and helpers that name things per run. */
 function context(scenario, kase, index) {
   const token = `${scenario.name}-${kase.name}-${index}`;
@@ -138,6 +150,10 @@ function context(scenario, kase, index) {
     index,
     kase,
     out,
+    /** The poll interval of the client under test, in ms. */
+    get pollMs() {
+      return readPollMs();
+    },
     // What the run got wrong, kept here rather than returned so that a scenario that throws
     // part-way still reports the losses it had already found.
     checks: new Checks(),

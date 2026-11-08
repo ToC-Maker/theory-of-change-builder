@@ -1,8 +1,8 @@
-// useChartSync: the version check an open editor makes every 2.5 seconds.
+// useChartSync: the version check an open editor makes every POLL_MS (5 seconds).
 //
 // The contract under test, in the user's terms:
 //   - while the editor is in use, the server is asked for its version every
-//     2.5 s, and the chart travels (and is merged) only when the version
+//     POLL_MS, and the chart travels (and is merged) only when the version
 //     differs from the one the document holds
 //   - nothing is asked while the tab is hidden, after 5 minutes without
 //     activity, during a pointer drag, while a save is in flight, or for a
@@ -18,7 +18,7 @@
 // The document is the real one; the network is a mocked ChartService.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
-import { useChartSync } from '../../src/hooks/useChartSync';
+import { POLL_MS, useChartSync } from '../../src/hooks/useChartSync';
 import { ChartApiError, ChartService } from '../../src/services/chartService';
 import { loggingService } from '../../src/services/loggingService';
 import { ChartDocument } from '../../src/sync/ChartDocument';
@@ -127,17 +127,17 @@ afterEach(() => {
 });
 
 describe('useChartSync: the cadence', () => {
-  it('asks for the version every 2.5 s and never merges when it is unchanged', async () => {
+  it('asks for the version every POLL_MS and never merges when it is unchanged', async () => {
     const { receiveRemote } = setup();
 
-    await advance(2499);
+    await advance(POLL_MS - 1);
     expect(mockPollChart).not.toHaveBeenCalled();
     await advance(1);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     expect(mockPollChart).toHaveBeenLastCalledWith('tok', 3);
 
-    await advance(2500);
-    await advance(2500);
+    await advance(POLL_MS);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(3);
     expect(receiveRemote).not.toHaveBeenCalled();
   });
@@ -145,7 +145,7 @@ describe('useChartSync: the cadence', () => {
   it('does not log a line per quiet check', async () => {
     setup();
 
-    await advance(60_000);
+    await advance(24 * POLL_MS);
 
     expect(mockPollChart.mock.calls.length).toBeGreaterThan(20);
     expect(logSpy).not.toHaveBeenCalled();
@@ -157,13 +157,13 @@ describe('useChartSync: the cadence', () => {
     mockPollChart.mockResolvedValueOnce({ version: 4, chartData: theirs });
     const { doc, receiveRemote } = setup();
 
-    await advance(2500);
+    await advance(POLL_MS);
 
     expect(receiveRemote).toHaveBeenCalledWith({ version: 4, chart: theirs });
     expect(doc.getStatus().serverVersion).toBe(4);
     expect(titleOf(doc.getCommitted(), 'b')).toBe('Theirs');
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenLastCalledWith('tok', 4);
   });
 
@@ -171,20 +171,20 @@ describe('useChartSync: the cadence', () => {
     const slow = pendingPoll();
     setup();
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     await advance(30_000);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
 
     await slow.resolve({ version: 3 });
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
   });
 
   it('does not start a second check when the tab becomes visible while one is still out', async () => {
     const slow = pendingPoll();
     setup();
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -193,7 +193,7 @@ describe('useChartSync: the cadence', () => {
     expect(mockPollChart).toHaveBeenCalledTimes(1);
 
     await slow.resolve({ version: 3 });
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
   });
 
@@ -204,14 +204,14 @@ describe('useChartSync: the cadence', () => {
     expect(mockPollChart).not.toHaveBeenCalled();
 
     rerender({ ready: true });
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
   });
 
   it('stops polling when the editor unmounts, even with a request still out', async () => {
     const slow = pendingPoll();
     const { unmount, doc, receiveRemote } = setup();
-    await advance(2500);
+    await advance(POLL_MS);
 
     unmount();
     await slow.resolve({ version: 9, chartData: retitle(SEED, 'b', 'Late') });
@@ -228,7 +228,7 @@ describe('useChartSync: when it does not ask', () => {
     const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
     setup();
 
-    await advance(5 * 2500);
+    await advance(5 * POLL_MS);
     expect(mockPollChart).not.toHaveBeenCalled();
 
     hidden.mockReturnValue(false);
@@ -237,7 +237,7 @@ describe('useChartSync: when it does not ask', () => {
     });
     expect(mockPollChart).toHaveBeenCalledTimes(1);
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
   });
 
@@ -253,7 +253,7 @@ describe('useChartSync: when it does not ask', () => {
     });
     expect(mockPollChart.mock.calls.length).toBe(callsWhenIdle + 1);
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart.mock.calls.length).toBe(callsWhenIdle + 2);
   });
 
@@ -265,7 +265,7 @@ describe('useChartSync: when it does not ask', () => {
     }
     const calls = mockPollChart.mock.calls.length;
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart.mock.calls.length).toBe(calls + 1);
   });
 
@@ -273,11 +273,11 @@ describe('useChartSync: when it does not ask', () => {
     const { isDragInFlightRef } = setup();
     isDragInFlightRef.current = true;
 
-    await advance(5 * 2500);
+    await advance(5 * POLL_MS);
     expect(mockPollChart).not.toHaveBeenCalled();
 
     isDragInFlightRef.current = false;
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
   });
 
@@ -287,11 +287,11 @@ describe('useChartSync: when it does not ask', () => {
     const save = doc.takeSave();
     expect(save).not.toBeNull();
 
-    await advance(5 * 2500);
+    await advance(5 * POLL_MS);
     expect(mockPollChart).not.toHaveBeenCalled();
 
     act(() => doc.saveSucceeded(4));
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     expect(mockPollChart).toHaveBeenLastCalledWith('tok', 4);
   });
@@ -300,11 +300,11 @@ describe('useChartSync: when it does not ask', () => {
     const doc = new ChartDocument({ chart: SEED, editToken: null, server: null });
     setup(doc);
 
-    await advance(5 * 2500);
+    await advance(5 * POLL_MS);
     expect(mockPollChart).not.toHaveBeenCalled();
 
     act(() => doc.attachServer('new-tok', { version: 1, chart: SEED }));
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     expect(mockPollChart).toHaveBeenLastCalledWith('new-tok', 1);
   });
@@ -316,7 +316,7 @@ describe('useChartSync: when it does not ask', () => {
     act(() => doc.saveConflicted({ version: 2, chart: SEED }));
     expect(doc.getStatus().terminalError).not.toBeNull();
 
-    await advance(5 * 2500);
+    await advance(5 * POLL_MS);
 
     expect(mockPollChart).not.toHaveBeenCalled();
   });
@@ -327,7 +327,7 @@ describe('useChartSync: a response that arrives late', () => {
     const theirs = retitle(SEED, 'b', 'Theirs');
     const slow = pendingPoll();
     const { doc, isDragInFlightRef, receiveRemote } = setup();
-    await advance(2500);
+    await advance(POLL_MS);
 
     isDragInFlightRef.current = true;
     await slow.resolve({ version: 4, chartData: theirs });
@@ -337,7 +337,7 @@ describe('useChartSync: a response that arrives late', () => {
     // The drag ends; the next check asks from the same version and gets the chart again.
     isDragInFlightRef.current = false;
     mockPollChart.mockResolvedValueOnce({ version: 4, chartData: theirs });
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenLastCalledWith('tok', 3);
     expect(doc.getStatus().serverVersion).toBe(4);
     expect(titleOf(doc.getCommitted(), 'b')).toBe('Theirs');
@@ -347,7 +347,7 @@ describe('useChartSync: a response that arrives late', () => {
     const theirs = retitle(SEED, 'b', 'Theirs');
     const slow = pendingPoll();
     const { doc } = setup();
-    await advance(2500);
+    await advance(POLL_MS);
 
     act(() => doc.edit((chart) => retitle(chart, 'a', 'Mine')));
     const save = doc.takeSave();
@@ -365,7 +365,7 @@ describe('useChartSync: failures', () => {
     mockPollChart.mockRejectedValueOnce(new ChartApiError('Failed to poll chart', 503));
     setup();
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(errorSpy.mock.calls)).toContain('503');
 
@@ -374,7 +374,7 @@ describe('useChartSync: failures', () => {
     await advance(1);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(mockPollChart).toHaveBeenCalledTimes(3);
   });
 
@@ -382,7 +382,7 @@ describe('useChartSync: failures', () => {
     mockPollChart.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     const { onSyncFailed } = setup();
 
-    await advance(2500 + 30_000);
+    await advance(POLL_MS + 30_000);
     expect(mockPollChart).toHaveBeenCalledTimes(2);
     expect(onSyncFailed).not.toHaveBeenCalled();
   });
@@ -395,7 +395,7 @@ describe('useChartSync: failures', () => {
     );
     const { onSyncFailed } = setup();
 
-    await advance(2500);
+    await advance(POLL_MS);
     expect(onSyncFailed).toHaveBeenCalledTimes(1);
     expect(onSyncFailed.mock.calls[0][0]).toContain('sections is not an array');
 
@@ -408,7 +408,7 @@ describe('useChartSync: failures', () => {
     mockPollChart.mockRejectedValue(new ChartShapeError({ title: 'A private title' }));
     setup();
 
-    await advance(2500);
+    await advance(POLL_MS);
 
     expect(mockReportError).toHaveBeenCalledTimes(1);
     const report = mockReportError.mock.calls[0][0];
@@ -437,7 +437,7 @@ describe('useChartSync: failures', () => {
       const { doc } = setupWithLocalEdit();
       const typed = doc.getCommitted();
 
-      await advance(2500);
+      await advance(POLL_MS);
 
       expect(mockReportError).toHaveBeenCalledTimes(1);
       const report = mockReportError.mock.calls[0][0];
@@ -455,7 +455,7 @@ describe('useChartSync: failures', () => {
       mockPollChart.mockResolvedValue({ version: 5, chartData: chartWithRepeatedSectionId() });
       const { onSyncFailed } = setupWithLocalEdit();
 
-      await advance(2500);
+      await advance(POLL_MS);
       expect(onSyncFailed).toHaveBeenCalledTimes(1);
       expect(onSyncFailed.mock.calls[0][0]).toMatch(/section/i);
       expect(onSyncFailed.mock.calls[0][0]).not.toContain('A private title');
@@ -471,7 +471,7 @@ describe('useChartSync: failures', () => {
       mockPollChart.mockResolvedValue({ version: 5, chartData: chartWithRepeatedSectionId() });
       setupWithLocalEdit();
 
-      await advance(2500);
+      await advance(POLL_MS);
       await advance(29_999);
       expect(mockPollChart).toHaveBeenCalledTimes(1);
       await advance(1);
@@ -492,7 +492,7 @@ describe('useChartSync: failures', () => {
         .mockResolvedValueOnce({ version: 6, chartData: good });
       const { doc } = setupWithLocalEdit();
 
-      await advance(2500 + 30_000);
+      await advance(POLL_MS + 30_000);
 
       expect(doc.getStatus().serverVersion).toBe(6);
       expect(titleOf(doc.getCommitted(), 'b')).toBe('Theirs');

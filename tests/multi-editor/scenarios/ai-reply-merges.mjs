@@ -52,7 +52,9 @@ const AI_COLUMN = {
   },
 };
 
-const STREAM_MS = 14_000;
+// The reply must still be streaming once A's edit and B's edit are made and A's tab has taken B's by
+// polling: 11.5 s for the two edits and the saves, plus one poll interval.
+const streamMs = (pollMs) => 11_500 + pollMs;
 
 async function replyApplied(ctx, from) {
   const { mock, A } = ctx;
@@ -80,7 +82,7 @@ export async function run(ctx, kase) {
     'edit-of-deleted-node': [update(N4, 'Delta +AI')],
     'column-insert-during-drag': [AI_COLUMN],
   }[kase.name];
-  mock.nextAi({ ms: STREAM_MS, edits });
+  mock.nextAi({ ms: streamMs(ctx.pollMs), edits });
   ctx.mark('A sends a chat message');
   await sendChat(A, 'Please improve the chart');
   await mock.waitFor(() => mock.since(from, (e) => e.kind === 'AI-start').length, {

@@ -19,7 +19,7 @@ import { lexical } from '@mdxeditor/editor';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import { _resetSwallowNextClickGuardForTest } from '../../src/hooks/useDismissOnOutsideEvent';
 import { useChartSave } from '../../src/hooks/useChartSave';
-import { useChartSync } from '../../src/hooks/useChartSync';
+import { POLL_MS, useChartSync } from '../../src/hooks/useChartSync';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import { ChartService } from '../../src/services/chartService';
 import { ChartDocument } from '../../src/sync/ChartDocument';
@@ -160,9 +160,9 @@ afterEach(() => {
 
 // Generous: on a loaded machine the first render alone can pass the 5 s default.
 describe('typing a title while a remote chart lands', { timeout: 20_000 }, () => {
-  // Poll at 2500 ms; the user's last key is at 2450 ms.
-  const KEY_TIME = 2450;
-  const POLL_TIME = 2500;
+  // The poll is at POLL_MS; the user's last key is 50 ms before it.
+  const POLL_TIME = POLL_MS;
+  const KEY_TIME = POLL_TIME - 50;
 
   beforeEach(installFakeTimers);
 
@@ -315,7 +315,7 @@ describe('typing a title while a remote chart lands', { timeout: 20_000 }, () =>
 
     // The message is sent against version 1; the reply streams for a while.
     const asSent = doc.getCommitted();
-    await advance(2500);
+    await advance(POLL_MS);
     expect(titleOf(doc.getCommitted(), 'n2')).toBe('Beta from someone else');
 
     const reply = applyEdits(asSent, [
@@ -343,7 +343,7 @@ describe('typing a title while a remote chart lands', { timeout: 20_000 }, () =>
     render(<Editor doc={doc} />);
 
     const asSent = doc.getCommitted();
-    await advance(2500);
+    await advance(POLL_MS);
     expect(titleOf(doc.getCommitted(), 'n1')).toBe('Alpha from someone else');
 
     const reply = applyEdits(asSent, [
@@ -370,7 +370,7 @@ describe('typing a title while a remote chart lands', { timeout: 20_000 }, () =>
       version: 3,
       chartData: deepFreeze({ ...retitle(CHART, 'n2', 'Beta!'), curvature: 0.8 }),
     });
-    await advance(2500);
+    await advance(POLL_MS);
     expect(titleOf(doc.getCommitted(), 'n2')).toBe('Beta!');
 
     act(() => doc.undo());
@@ -425,7 +425,7 @@ describe('typing a title while a remote chart lands', { timeout: 20_000 }, () =>
 
     // The import happens 100 ms before the next poll and its save (300 ms
     // after it) has not gone out yet when a collaborator's chart arrives.
-    await advance(2400);
+    await advance(POLL_MS - 100);
     act(() => doc.replace(imported));
     expect(screen.getByText('From the file')).toBeTruthy();
     expect(screen.queryByText('Alpha')).toBeNull();
@@ -525,7 +525,7 @@ describe('the details editor while a remote chart lands', () => {
       }),
     );
     mockPollChart.mockResolvedValueOnce({ version: 2, chartData: theirs });
-    await advance(2500 + 100);
+    await advance(POLL_MS + 100);
 
     expect(content.textContent).toBe('details from a collaborator');
     // The same editor, still focused: nothing remounted.
@@ -553,7 +553,7 @@ describe('the details editor while a remote chart lands', () => {
     mockPollChart.mockResolvedValueOnce({ version: 2, chartData: retitle(CHART, 'n2', 'Beta!') });
 
     // The poll answers 50 ms after the last edit, before it is committed.
-    await advance(2450);
+    await advance(POLL_MS - 50);
     await typeInto(content, ' and more');
     expect(findNode(doc.getLive(), 'n1')?.text).toBe('old details and more');
     expect(doc.getCommitted()).toBe(CHART);

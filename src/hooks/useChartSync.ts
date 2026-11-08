@@ -27,7 +27,9 @@ import { ChartShapeError } from '../../shared/chart-model';
 import type { ChartDocument } from '../sync/ChartDocument';
 import { reportSyncFailure } from './useChartSave';
 
-export const POLL_MS = 2500;
+// Every open, active editor costs one Worker request per tick, and the Workers free plan
+// allows 100,000 requests a day, so the check is every 5 s.
+export const POLL_MS = 5000;
 const FAILURE_WAIT_MS = 30_000;
 const IDLE_MS = 5 * 60_000;
 

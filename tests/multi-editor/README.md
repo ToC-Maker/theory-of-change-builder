@@ -112,14 +112,19 @@ from a chart whose sections and columns have stored ids, even runs from one that
 | `title-typing-across-landing` | A types into a node title while B's change to another node lands. | keys 300, 250 or 120 ms before the answer, or the last key inside its response handler |
 | `details-typing-across-landing` | A types into the rich-text details editor inside the response handler of a poll carrying B's change. | one |
 | `title-focus-through-landing` | A's title input has focus with the caret inside the text when B's change lands. | `typed-then-409`, `idle-poll`, `idle-poll-same-field` |
-| `continuous-typing-across-landings` | A types without pausing for 16 s while B retitles n6 three times. | one |
+| `continuous-typing-across-landings` | A types without pausing for about 30 s (it follows the poll interval) while B retitles n6 three times, with more than a poll interval between them. | one |
 | `details-remote-rewrite` | B rewrites the details A has open and focused; A then presses the toolbar Undo and Ctrl+Z. | one |
 | `ime-composition-during-landing` | A is mid-composition with an input method in the title when a change to another field lands. | `other-node`, `same-node-other-fields` |
 | `open-editor-vs-remote-delete` | A has an editor open on something B deletes. | `edge-editor`, `node-editor-idle`, `node-editor-typed-before-landing`, `node-editor-typed-across-landing` |
-| `ai-reply-merges` | A chat reply streams for 14 s while people edit. | `edits-elsewhere`, `yields-on-same-field`, `edit-of-deleted-node`, `column-insert-during-drag` |
+| `ai-reply-merges` | A chat reply streams for 11.5 s plus one poll interval while people edit. | `edits-elsewhere`, `yields-on-same-field`, `edit-of-deleted-node`, `column-insert-during-drag` |
 | `connection-drags-while-other-saves` | A draws 15 connections one after another while B saves about every 2 s. | one |
 | `create-chart-races` | Two things on the start page need a chart on the server at once. | `two-pdfs-one-pick`, `two-pdfs-two-picks`, `chat-and-share-at-once` |
 | `legacy-tab` | A tab on the previous client saves without a version while a current tab edits. Needs `--old-root`. | `old-saves-while-new-is-stale`, `old-saves-while-new-types`, `old-tab-overwrites-newer-edit` |
+
+Scenarios that time themselves against a poll tick (`lib/holds.mjs`, `continuous-typing-across-landings`,
+`ai-reply-merges`) read the client's `POLL_MS` from `src/hooks/useChartSync.ts` under `--root`
+(`ctx.pollMs`), so a change of the interval needs no edit here. The held-back answers in the other
+scenarios (`delay`) are how long one answer is held, not a poll interval.
 
 A run counts as lost an edit when the server's chart or a page differs from the outcome the merge
 rules predict (in `shared/chart-merge.ts`), typed text is missing or reordered, a page does not
@@ -143,7 +148,8 @@ The scenarios were also run against two clients that lose edits, to see that the
 
 ### Results
 
-Last full run: 226 runs of 48 cases, 0 lost edits, 0 caret jumps (counted in
+Last full run, made when the client polled every 2.5 s (it polls every 5 s now; the scenarios above
+were scaled to the interval but the full run was not repeated): 226 runs of 48 cases, 0 lost edits, 0 caret jumps (counted in
 `continuous-typing-across-landings`; the other scenarios check the caret per sample and report a move
 as a lost edit), 3 errors. The errors are runs in which `agent-browser` replaced a tab that had
 stopped answering under memory pressure ("the tab was closed or replaced", or a call with no answer
