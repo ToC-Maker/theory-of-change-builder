@@ -21,13 +21,25 @@
 //   7. EdgeEditor: dismiss-over-gutter → closes, no column added
 //   8. click a connection while editing a node → EdgeEditor opens
 //      (connection hit paths are switch targets, not canvas actions)
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
+//   9. press on a control OUTSIDE the canvas (the top bar's File
+//      menu) → editor closes AND the click acts in the same gesture.
+//      The guard exists for canvas affordances only; top-bar, chat
+//      panel and dialog controls are explicit actions and must not
+//      need a second click.
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, cleanup, fireEvent, act, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
+import { FileMenu } from '../../src/components/top-bar/FileMenu';
 import type { ToCData } from '../../src/types';
 import { _resetSwallowNextClickGuardForTest } from '../../src/hooks/useDismissOnOutsideEvent';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import { deepFreeze } from './helpers/deepFreeze';
+
+// FileMenu reads the signed-in user; anonymous is all scenario 9 needs.
+vi.mock('@auth0/auth0-react', () => ({
+  useAuth0: () => ({ user: undefined, isAuthenticated: false, isLoading: false }),
+}));
 
 afterEach(() => {
   cleanup();
@@ -272,5 +284,47 @@ describe('TheoryOfChangeGraph dismissal guard (fb7 issue 77)', () => {
 
     expect(document.querySelector('.node-editor')).toBeNull();
     expect(document.querySelector('.edge-editor')).not.toBeNull();
+  });
+
+  // Scenario 9 renders the real File menu beside the canvas. It stands
+  // for every control outside the canvas: they all sit outside the
+  // `[data-tocb-canvas]` root, so what holds for File holds for them.
+  describe('9. controls outside the canvas keep their click', () => {
+    const renderWithFileMenu = () =>
+      render(
+        <MemoryRouter>
+          <FileMenu
+            isAuthenticated={false}
+            isOwner={false}
+            currentEditToken="tok"
+            currentChartId="chart"
+            onDeleteChart={() => {}}
+          />
+          <ToC data={deepFreeze(makeData())} showEditButton={true} />
+        </MemoryRouter>,
+      );
+    const fileButton = () => screen.getByRole('button', { name: /file/i });
+    const fileMenuIsOpen = () => screen.queryByText(/new toc/i) !== null;
+
+    it('9a. one click on File closes a NodeEditor AND opens the menu', () => {
+      renderWithFileMenu();
+      openNodeEditor('n-1');
+
+      gestureClick(fileButton(), at(30, 20));
+
+      expect(document.querySelector('.node-editor')).toBeNull();
+      expect(fileMenuIsOpen()).toBe(true);
+    });
+
+    it('9b. one click on File closes an EdgeEditor AND opens the menu', () => {
+      renderWithFileMenu();
+      fireEvent.click(q('[data-tocb-connection-hitpath]'));
+      expect(document.querySelector('.edge-editor')).not.toBeNull();
+
+      gestureClick(fileButton(), at(30, 20));
+
+      expect(document.querySelector('.edge-editor')).toBeNull();
+      expect(fileMenuIsOpen()).toBe(true);
+    });
   });
 });
