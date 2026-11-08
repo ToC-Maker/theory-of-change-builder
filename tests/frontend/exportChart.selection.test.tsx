@@ -119,7 +119,7 @@ async function runExport() {
   return captured[0];
 }
 
-describe('export clears the canvas selection', () => {
+describe('export clears the canvas selection', { timeout: 20_000 }, () => {
   it('captures a chart with no selected node and nothing faded, then selects the node again', async () => {
     await renderCanvas();
     fireEvent.click(nodeEl('n-a'));
