@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import React, { useRef, useEffect, memo } from 'react';
 import { Node } from '../types';
 import { getContrastTextColor } from '../utils';
+import { DEFAULT_NODE_WIDTH } from '../utils/nodeWidth';
 import { ConnectionHandles } from './canvas/ConnectionHandles';
 import type { BindConnectionHandle } from '../hooks/useConnectionDrag';
 
@@ -158,7 +159,7 @@ function NodeComponentInner({
           isDragging && 'opacity-50 scale-95 shadow-lg',
         )}
         style={{
-          width: `${node.width || 192}px`,
+          width: `${node.width || DEFAULT_NODE_WIDTH}px`,
           backgroundColor: node.color || '#ffffff',
         }}
         onClick={handleClick}

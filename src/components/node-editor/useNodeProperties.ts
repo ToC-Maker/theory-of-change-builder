@@ -64,6 +64,7 @@ import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
 import { useFieldBuffer } from '../../hooks/useFieldBuffer';
 import type { Node as GraphNode, ToCData } from '../../types';
+import { DEFAULT_NODE_WIDTH } from '../../utils/nodeWidth';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
@@ -99,7 +100,6 @@ export interface UseNodePropertiesResult {
   deleteSelectedNodes: () => void;
 }
 
-const DEFAULT_WIDTH = 192;
 const DEFAULT_COLOR = '#ffffff';
 
 function findAllNodes(data: ToCData): GraphNode[] {
@@ -155,7 +155,7 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
 
   // Width/color: read the first selected node's value (or default if no
   // selection / property unset).
-  const width = selectedNodes[0]?.width ?? DEFAULT_WIDTH;
+  const width = selectedNodes[0]?.width ?? DEFAULT_NODE_WIDTH;
   const color = selectedNodes[0]?.color ?? DEFAULT_COLOR;
 
   // ---------------------------------------------------------------
