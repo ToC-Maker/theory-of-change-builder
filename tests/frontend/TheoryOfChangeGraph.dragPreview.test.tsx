@@ -166,12 +166,15 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
     expect(tops('n-1')).toEqual(['162px']);
   });
 
-  it('eases the nodes while a drag is under way and not otherwise', async () => {
+  it('eases only the nodes that are shifted, and only while they are', async () => {
     await startDrag();
     expect(nodeWrapper('n-3').className).not.toContain('transition');
     move(...OVER_COLUMN_1);
     expect(nodeWrapper('n-3').className).toContain('transition-[top]');
     expect(nodeWrapper('n-3').className).toContain('motion-reduce:transition-none');
+    // n-2 (another column) and the dragged n-1 are not shifted.
+    expect(nodeWrapper('n-2').className).not.toContain('transition');
+    expect(nodeWrapper('n-1').className).not.toContain('transition');
     pressEscape();
     expect(nodeWrapper('n-3').className).not.toContain('transition');
   });

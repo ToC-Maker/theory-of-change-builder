@@ -1525,12 +1525,13 @@ export function ToC({
                                   key={node.id}
                                   className={clsx(
                                     'absolute',
-                                    // Ease the make-room shifts while a drag
-                                    // is under way (and the return when the
-                                    // pointer leaves). `top` is what
-                                    // connections measure, and their
-                                    // per-frame refresh follows it.
-                                    dragState?.hasMoved &&
+                                    // Ease a node while it is shifted to
+                                    // make room. `top` is what connections
+                                    // measure, and their per-frame refresh
+                                    // follows it. Only shifted nodes carry
+                                    // the transition, so the rest of the
+                                    // chart costs nothing extra per frame.
+                                    previewCenterY !== undefined &&
                                       'transition-[top] duration-[120ms] ease-out motion-reduce:transition-none',
                                   )}
                                   style={{
