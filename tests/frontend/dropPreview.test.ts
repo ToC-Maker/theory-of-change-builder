@@ -5,10 +5,15 @@
 // Anywhere else (a gap between columns, outside every drop region, before
 // the tap dead-zone is crossed) it returns null and the copy follows the
 // cursor.
+//
+// Over a column it also reports how the column's other nodes shift to make
+// room (`computeMakeRoom`), and when they cannot all shift far enough the
+// landing spot, and with it the copy, moves down.
 import { describe, it, expect } from 'vitest';
 import { computeDropPreview } from '../../src/utils/dropPreview';
 import type { DragState } from '../../src/hooks/usePointerDrag';
 import type { LayoutSnapshot } from '../../src/hooks/useGraphLayout';
+import type { Node, ToCData } from '../../src/types';
 
 const snapshot: LayoutSnapshot = {
   sectionPadding: 32,
@@ -35,11 +40,30 @@ const dragState = (over: Partial<DragState> = {}): DragState => ({
   ...over,
 });
 
-const args = (state: DragState, zoomScale = 1) => ({
+const node = (id: string, yPosition: number): Node => ({
+  id,
+  title: id,
+  text: '',
+  connectionIds: [],
+  connections: [],
+  yPosition,
+});
+
+// The columns the snapshot describes, with the dragged node n-1 in 0-0.
+const emptySections = (over: { '0-0'?: Node[]; '0-1'?: Node[] } = {}): ToCData['sections'] => [
+  {
+    title: 'S1',
+    columns: [{ nodes: over['0-0'] ?? [node('n-1', 200)] }, { nodes: over['0-1'] ?? [] }],
+  },
+  { title: 'S2', columns: [{ nodes: [] }] },
+];
+
+const args = (state: DragState, zoomScale = 1, sections = emptySections()) => ({
   dragState: state,
   snapshot,
   zoomScale,
-  nodeHeight: 76,
+  sections,
+  nodeHeights: {} as Record<string, number>,
 });
 
 describe('computeDropPreview — over a column', () => {
@@ -52,6 +76,7 @@ describe('computeDropPreview — over a column', () => {
       columnIndex: 0,
       centerY: 308,
       copy: { left: 54, top: 370 },
+      shifted: {},
     });
   });
 
@@ -115,6 +140,49 @@ describe('computeDropPreview — over a column', () => {
       dragOverLocation: { kind: 'node-slot', sectionIndex: 5, columnIndex: 0, yPosition: 300 },
     });
     expect(computeDropPreview(args(state))).toBeNull();
+  });
+});
+
+describe('computeDropPreview — making room', () => {
+  // Cursor at column-local 320 grabbed 30px down → landing centre 328, box 290..366.
+  const over = (columnIndex: number, sectionIndex = 0) =>
+    dragState({
+      dragOverLocation: { kind: 'node-slot', sectionIndex, columnIndex, yPosition: 320 },
+    });
+
+  it('reports the shifts of the nodes in the target column that the landing box crowds', () => {
+    const sections = emptySections({ '0-1': [node('a', 300), node('b', 400), node('far', 700)] });
+    const preview = computeDropPreview(args(over(1), 1, sections));
+    // a (262..338) is above the landing centre → bottom 274 → centre 236;
+    // b (362..438) is below → top 382 → centre 420; far is clear.
+    expect(preview).toMatchObject({ centerY: 328, shifted: { a: 236, b: 420 } });
+  });
+
+  it('leaves nodes of other columns alone', () => {
+    const sections = emptySections({ '0-0': [node('n-1', 200), node('x', 330)] });
+    expect(computeDropPreview(args(over(1), 1, sections))!.shifted).toEqual({});
+  });
+
+  it("leaves the dragged node's own slot out when dragging within its column", () => {
+    const sections = emptySections({ '0-0': [node('n-1', 330), node('e', 500)] });
+    // n-1's old slot overlaps the landing box but is not an obstacle; e is clear.
+    expect(computeDropPreview(args(over(0), 1, sections))!.shifted).toEqual({});
+  });
+
+  it('moves the copy down with the landing spot when the nodes above cannot make room', () => {
+    // Landing centre 128 (box 90..166); 'a' (12..88) would have to end at
+    // bottom 74, top -2: past the column top. The landing drops by 2 to
+    // centre 130, and 'a' settles at 0..76.
+    const state = dragState({
+      pointerOffset: { x: 40, y: 38 },
+      dragOverLocation: { kind: 'node-slot', sectionIndex: 0, columnIndex: 1, yPosition: 128 },
+    });
+    const sections = emptySections({ '0-1': [node('a', 50)] });
+    expect(computeDropPreview(args(state, 1, sections))).toMatchObject({
+      centerY: 130,
+      copy: { top: 100 + 130 - 38 },
+      shifted: { a: 38 },
+    });
   });
 });
 

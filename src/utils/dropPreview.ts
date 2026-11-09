@@ -8,25 +8,35 @@
 // uses, so the copy shows exactly where the node lands, clamp included.
 // Everywhere else (a gap between columns, outside every drop region) there
 // is nothing to snap to and the copy follows the cursor.
+//
+// The same call works out how the target column's other nodes shift to
+// make room (`planColumnDrop`, which the drop commit also runs). When the
+// nodes above cannot all move up far enough the landing spot itself moves
+// down, and the copy shows that spot.
 import type { DragState } from '../hooks/usePointerDrag';
 import type { LayoutSnapshot } from '../hooks/useGraphLayout';
+import type { ToCData } from '../types';
+import { planColumnDrop } from './makeRoom';
 import { computeDropCenterY } from './nodePosition';
 
 export interface DropPreview {
   sectionIndex: number;
   columnIndex: number;
-  /** Column-local centre Y the dropped node will have. */
+  /** Column-local centre Y the dropped node will have, after any push down. */
   centerY: number;
   /** Top-left of the copy, content space. */
   copy: { left: number; top: number };
+  /** New centre Y by node id, for the target column's nodes that move. */
+  shifted: Record<string, number>;
 }
 
 export interface DropPreviewArgs {
   dragState: DragState;
   snapshot: LayoutSnapshot;
   zoomScale: number;
-  /** The dragged node's height as `handleDrop` measures it. */
-  nodeHeight: number;
+  sections: ToCData['sections'];
+  /** Measured node heights by id; the dragged node's is read as `handleDrop` reads it. */
+  nodeHeights: Readonly<Record<string, number>>;
 }
 
 /**
@@ -44,28 +54,38 @@ export function computeDropPreview({
   dragState,
   snapshot,
   zoomScale,
-  nodeHeight,
+  sections,
+  nodeHeights,
 }: DropPreviewArgs): DropPreview | null {
   const target = dragState.dragOverLocation;
   if (!dragState.hasMoved || !target) return null;
   if (target.kind !== 'node-slot' && target.kind !== 'over-node') return null;
 
   const col = snapshot.columnRects[target.sectionIndex]?.[target.columnIndex];
-  if (!col) return null;
+  const column = sections[target.sectionIndex]?.columns[target.columnIndex];
+  if (!col || !column) return null;
 
-  const centerY = computeDropCenterY({
-    cursorColumnLocalY: target.yPosition,
-    pointerOffsetY: dragState.pointerOffset.y,
-    zoomScale,
-    nodeHeight,
+  const nodeHeight = nodeHeights[dragState.nodeId] || 76;
+  const { droppedCenterY, shifted } = planColumnDrop({
+    columnNodes: column.nodes,
+    draggedId: dragState.nodeId,
+    draggedHeight: nodeHeight,
+    landingCenterY: computeDropCenterY({
+      cursorColumnLocalY: target.yPosition,
+      pointerOffsetY: dragState.pointerOffset.y,
+      zoomScale,
+      nodeHeight,
+    }),
+    nodeHeights,
   });
   return {
     sectionIndex: target.sectionIndex,
     columnIndex: target.columnIndex,
-    centerY,
+    centerY: droppedCenterY,
     copy: {
       left: (col.left + col.right) / 2 - dragState.nodeSize.width / 2,
-      top: col.top + centerY - nodeHeight / 2,
+      top: col.top + droppedCenterY - nodeHeight / 2,
     },
+    shifted,
   };
 }

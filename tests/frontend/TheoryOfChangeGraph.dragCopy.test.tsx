@@ -8,11 +8,18 @@
 // width are stubbed; everything else (layout snapshot, drag hook, placement
 // maths) is the real thing.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
+import { cleanup, act } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import type { ToCData } from '../../src/types';
-import { deepFreeze } from './helpers/deepFreeze';
+import {
+  move,
+  pointer,
+  pressEscape,
+  rect,
+  release,
+  startDrag as startCanvasDrag,
+  stubCanvasLayout,
+} from './helpers/dragCanvas';
 
 const makeData = (): ToCData => ({
   title: 'Test',
@@ -35,35 +42,13 @@ const COLUMN_RECTS: Record<string, [number, number]> = { '0-0': [50, 250], '0-1'
 const COLUMN_TOP = 100;
 const NODE_TOP = 262;
 
-function rect(left: number, top: number, right: number, bottom: number): DOMRect {
-  return {
-    left,
-    top,
-    right,
-    bottom,
-    x: left,
-    y: top,
-    width: right - left,
-    height: bottom - top,
-    toJSON: () => ({}),
-  };
-}
-
 beforeEach(() => {
   // The grabbed node is 192px wide; nothing else has a measured width.
-  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    return this.id === 'node-n-1' ? 192 : 0;
-  });
-  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-    const column = (this as HTMLElement).dataset?.column;
-    if (column && COLUMN_RECTS[column]) {
-      const [left, right] = COLUMN_RECTS[column];
-      return rect(left, COLUMN_TOP, right, 900);
-    }
-    if (this.id === 'node-n-1') return rect(50, NODE_TOP, 242, NODE_TOP + 76);
-    return rect(0, 0, 0, 0);
+  stubCanvasLayout({
+    columns: COLUMN_RECTS,
+    columnTop: COLUMN_TOP,
+    columnBottom: 900,
+    grabbed: { id: 'n-1', rect: rect(50, NODE_TOP, 242, NODE_TOP + 76), width: 192 },
   });
 });
 
@@ -81,30 +66,9 @@ const ghost = () => document.querySelector<HTMLElement>('[data-testid="node-drag
 const ghostTop = () => ghost()!.style.top;
 const ghostShift = () => (ghost()!.firstElementChild as HTMLElement).style.transform;
 
-function pointer(type: string, x: number, y: number) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperties(event, {
-    clientX: { value: x },
-    clientY: { value: y },
-    pointerId: { value: 1 },
-    pointerType: { value: 'mouse' },
-  });
-  return event;
-}
-
-async function startDrag(onDataChange?: (data: ToCData) => void) {
-  render(<ToC data={deepFreeze(makeData())} showEditButton={true} onDataChange={onDataChange} />);
-  // Let the layout hook's rAF-coalesced rect refresh read the stubbed rects.
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  });
-  const node = document.getElementById('node-n-1')!;
-  // Grab 30px below the node's top edge.
-  fireEvent.pointerDown(node, { clientX: 100, clientY: NODE_TOP + 30, button: 0, pointerId: 1 });
-}
-
-const move = (x: number, y: number) =>
-  act(() => void document.dispatchEvent(pointer('pointermove', x, y)));
+// Grab 30px below the node's top edge.
+const startDrag = (onDataChange?: (data: ToCData) => void) =>
+  startCanvasDrag(makeData(), { id: 'n-1', x: 100, y: NODE_TOP + 30 }, onDataChange);
 
 // The first ToC render in a worker pays the lazy-import and JIT warm-up, which
 // can pass the 5s default on a busy machine.
@@ -185,7 +149,7 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     await startDrag();
     move(100, 400);
     expect(ghost()).not.toBeNull();
-    act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
+    pressEscape();
     expect(ghost()).toBeNull();
   });
 
@@ -194,7 +158,7 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     move(262, 450);
     expect(ghost()).not.toBeNull();
     expect(indicator()).not.toBeNull();
-    act(() => void document.dispatchEvent(pointer('pointerup', 262, 450)));
+    await release(262, 450);
     expect(ghost()).toBeNull();
     expect(indicator()).toBeNull();
   });
@@ -211,9 +175,7 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     const onDataChange = vi.fn();
     await startDrag(onDataChange);
     move(300, 400);
-    await act(async () => {
-      document.dispatchEvent(pointer('pointerup', 300, 400));
-    });
+    await release(300, 400);
     expect(onDataChange).toHaveBeenCalledTimes(1);
     const next = onDataChange.mock.calls[0][0] as ToCData;
     expect(next.sections[0].columns.map((c) => c.nodes.map((n) => n.id))).toEqual([[], ['n-1']]);

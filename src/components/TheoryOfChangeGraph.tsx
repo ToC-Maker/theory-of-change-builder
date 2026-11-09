@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { ToCData, Node } from '../types';
 import { getContrastTextColor } from '../utils';
-import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
+import { clampNodeCenterY, computeDropCenterY, resolveNodeCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
 import { computeDropPreview } from '../utils/dropPreview';
 import { computeAlignedSections } from '../utils/alignNodes';
@@ -792,14 +792,16 @@ export function ToC({
   });
 
   // Where the dragged node's copy snaps while the pointer is over a
-  // column, or null (copy follows the cursor). Computed from the same
-  // placement formula `handleDrop` uses.
+  // column, or null (copy follows the cursor), and how that column's other
+  // nodes shift to make room. Computed from the same placement maths
+  // `handleDrop` uses, so the preview is what the drop commits.
   const dropPreview = dragState
     ? computeDropPreview({
         dragState,
         snapshot: getSnapshot(),
         zoomScale,
-        nodeHeight: nodeHeights[dragState.nodeId] || 76,
+        sections: data.sections,
+        nodeHeights,
       })
     : null;
 
@@ -1480,22 +1482,40 @@ export function ToC({
                               // typical height for "New Node".
                               const nodeHeight = nodeHeights[node.id] || 76;
 
+                              // While a drag previews this column, the nodes
+                              // that make room render at their shifted
+                              // centre. A transient override: the stored
+                              // yPosition is not touched.
+                              const previewCenterY =
+                                dropPreview?.sectionIndex === sectionIndex &&
+                                dropPreview.columnIndex === colIndex
+                                  ? dropPreview.shifted[node.id]
+                                  : undefined;
+                              // Convert from center to top position. The
+                              // stored center is clamped VISUALLY so
+                              // out-of-range data (old charts, AI edits)
+                              // renders inside the column body instead of
+                              // over the section title bar (PR #34 fb 46).
+                              const nodeTop =
+                                (previewCenterY ??
+                                  resolveNodeCenterY(node.yPosition, nodeIndex, nodeHeight)) -
+                                nodeHeight / 2;
+
                               return (
                                 <div
                                   key={node.id}
-                                  className="absolute"
+                                  className={clsx(
+                                    'absolute',
+                                    // Ease the make-room shifts while a drag
+                                    // is under way (and the return when the
+                                    // pointer leaves). `top` is what
+                                    // connections measure, and their
+                                    // per-frame refresh follows it.
+                                    dragState?.hasMoved &&
+                                      'transition-[top] duration-[120ms] ease-out motion-reduce:transition-none',
+                                  )}
                                   style={{
-                                    // Convert from center to top position.
-                                    // The center is clamped VISUALLY so
-                                    // out-of-range data (old charts, AI
-                                    // edits) renders inside the column
-                                    // body instead of over the section
-                                    // title bar (PR #34 fb 46) — the
-                                    // stored yPosition is not rewritten.
-                                    top:
-                                      node.yPosition !== undefined
-                                        ? `${clampNodeCenterY(node.yPosition, nodeHeight) - nodeHeight / 2}px`
-                                        : `${nodeIndex * 180 + 30}px`, // Default spacing with more generous padding
+                                    top: `${nodeTop}px`,
                                     left: `${leftOffset}px`,
                                     width: `${nodeWidth}px`,
                                   }}
