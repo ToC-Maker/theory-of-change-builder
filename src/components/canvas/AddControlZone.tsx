@@ -15,10 +15,12 @@
 // Placement: the controls open at the pointer's height and, while a mouse
 // or pen moves along the zone, follow it (re-placed at most once per
 // animation frame, no top transition: it would only make them trail the
-// cursor). They hold still while the pointer is over them, otherwise the
-// first or last control of a row, reached by moving sideways, could slip
-// away from under the pointer; they follow again once it is back on the
-// strip. Touch has no hover: a tap places them at the tap and they stay.
+// cursor). A lone control follows continuously: it stays under the pointer
+// and is always reachable. A row of several holds still while the pointer
+// is over it, otherwise its first or last control, reached by moving
+// sideways, could slip away from under the pointer; it follows again once
+// the pointer is back on the strip. Touch has no hover: a tap places the
+// controls at the tap and they stay.
 //
 // Sizes: controls are sized in on-screen pixels, not content pixels (the
 // content is divided by the canvas zoom, as the waypoint handles do), so
@@ -276,10 +278,11 @@ export function AddControlZone({
   };
 
   // Moves the open controls to the pointer, on the next animation frame
-  // and at most once per frame. Stands still over the controls themselves.
+  // and at most once per frame. A row of several stands still while the
+  // pointer is over it.
   const follow = (target: EventTarget) => {
     if (openedByTouch.current) return;
-    if (controlsRef.current?.contains(target as Node)) {
+    if (controls.length > 1 && controlsRef.current?.contains(target as Node)) {
       cancelFollow();
       return;
     }
