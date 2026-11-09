@@ -48,7 +48,8 @@ export interface Rect {
  *   - the classify points `usePointerDrag` produces
  *     (`(clientX - containerRect.left) / zoomScale`),
  *   - `node.yPosition` / node-wrapper `style.top` data coordinates,
- *   - connection waypoint coordinates.
+ *   - the container-local pointer position `useWaypointDrag` turns into a
+ *     waypoint offset.
  * Content-space rects are zoom-invariant, so a zoom change alone never
  * requires a rect reseed (the next refresh just divides by the new
  * scale and lands on the same numbers).

@@ -28,6 +28,7 @@
 // connection as gone.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SetStateAction } from 'react';
+import { validWaypointOffsets } from '../../utils/connectionGeometry';
 import type { Connection, Node as GraphNode, ToCData } from '../../types';
 
 type GraphUpdater = SetStateAction<ToCData>;
@@ -46,10 +47,10 @@ export interface UseEdgePropertiesResult {
   evidence: string;
   assumptions: string;
   /**
-   * True when the connection has at least one custom waypoint (the
-   * single-waypoint model edits one; legacy charts may carry more).
-   * Gates the EdgeEditor's "Reset path" button (PR #34 round-7
-   * issue 78).
+   * True when the connection has at least one custom waypoint that
+   * renders (old-format or malformed entries draw the automatic curve,
+   * so there is nothing to reset). Gates the EdgeEditor's "Reset path"
+   * button.
    */
   hasWaypoints: boolean;
   setConfidence: (next: number) => void;
@@ -213,7 +214,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
     confidence: sourceConfidence,
     evidence: evidenceBuffer,
     assumptions: assumptionsBuffer,
-    hasWaypoints: (conn?.waypoints?.length ?? 0) > 0,
+    hasWaypoints: validWaypointOffsets(conn?.waypoints).length > 0,
     setConfidence,
     setEvidence,
     setAssumptions,

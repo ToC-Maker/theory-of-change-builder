@@ -119,7 +119,7 @@ The structure includes:
 
 Some fields are controlled by the user through the visual editor, not by you. Treat them as read-only and carry them through unchanged:
 
-- **connection.waypoints** — an optional `Array<{ x, y }>` of bezier routing points the user drags by hand to shape a connection's curve. NEVER add, remove, or invent waypoint coordinates. When you change a connection, you MUST preserve any existing waypoints.
+- **connection.waypoints** — an optional `Array<{ dx, dy }>` holding the bend the user drags by hand to shape a connection's curve, as a pixel offset from the midpoint of the straight line between the connection's two nodes. NEVER add, remove, or invent waypoints or their offsets. When you change a connection, you MUST preserve any existing waypoints.
 - **node.width / node.color** and the root-level format fields (curvature, textSize, fontFamily, columnPadding, sectionPadding) — appearance/layout the user controls. Leave them untouched unless the user explicitly asks you to restyle.
 
 To keep these fields safe, **prefer granular path edits over rewriting a whole object**: update the single property you mean to change (e.g. `sections.1.columns.0.nodes.0.connections.0.confidence`) instead of replacing an entire connection or node. A whole-object `update` overwrites the target completely and silently drops any field you omit (waypoints, width, color). Use `push`/`insert` only for brand-new nodes/connections (where there is nothing to preserve); use granular `update` to modify existing ones.

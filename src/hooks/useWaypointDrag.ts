@@ -32,12 +32,10 @@
 //     Drag the existing waypoint. Every write REPLACES the whole
 //     `waypoints` array with `[draggedPos]`.
 //
-//     Legacy-chart policy: charts saved by the earlier multi-waypoint
-//     build may carry N > 1 waypoints. They keep RENDERING with all N
-//     (see `computePathWithWaypoints`), and every legacy waypoint stays
-//     visible/draggable — but the first actual drag collapses the
-//     array to the single dragged waypoint. A sub-threshold click is
-//     NOT an edit and leaves the legacy shape untouched.
+//     Whatever the array held before (several waypoints, or entries
+//     that render as the automatic curve) is replaced by the one
+//     dragged waypoint on the first actual drag. A sub-threshold click
+//     is NOT an edit and leaves the stored array untouched.
 //
 //   bindWaypoint(...).onDoubleClick / resetWaypoints(sourceId, targetId)
 //     Remove the waypoint(s) entirely — the connection returns to its
@@ -112,13 +110,18 @@
 // Coordinate translation
 // ---------------------------------------------------------------------------
 //
-// Pointer events arrive as `clientX/clientY` (viewport coords).
-// Waypoint positions are stored in container-local coords (same space
-// as `node.yPosition`). The caller passes a `clientToContainer`
-// translator so the hook doesn't have to know about camera/zoom math.
-// Identity translator is fine for hosts without zoom. The drag
+// Pointer events arrive as `clientX/clientY` (viewport coords). The
+// caller passes a `clientToContainer` translator (container-local px,
+// zoom factored out) so the hook doesn't have to know about camera/zoom
+// math. Identity translator is fine for hosts without zoom. The drag
 // threshold is measured in CLIENT pixels so it tracks finger/mouse
 // travel rather than zoom-scaled chart distance.
+//
+// Waypoints are STORED as offsets from the midpoint of the straight
+// line between the connection's anchors (see `connectionGeometry.ts`),
+// so the hook subtracts that midpoint from the container-local pointer
+// position. The caller supplies it via `getLineMidpoint`; it is read
+// once when the gesture starts, since nodes don't move during a drag.
 //
 // ---------------------------------------------------------------------------
 // Mutual exclusion
@@ -135,7 +138,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { isCanvasGestureActive, setCanvasGestureActive } from './_canvasGestureState';
 import { loggingService } from '../services/loggingService';
-import type { ToCData, Connection } from '../types';
+import { offsetFromMidpoint } from '../utils/connectionGeometry';
+import type { ToCData, Connection, WaypointOffset } from '../types';
 
 /**
  * Minimum pointer travel (client px) before a press becomes a drag.
@@ -145,8 +149,8 @@ import type { ToCData, Connection } from '../types';
  * enough that intentional drags arm on the first meaningful move,
  * large enough that the micro-jitter of a click (or of the two clicks
  * in a double-click) never mutates the chart. This matters doubly for
- * legacy multi-waypoint charts, where an armed drag COLLAPSES the
- * waypoints to one: a plain click must not be destructive.
+ * connections carrying several waypoints, where an armed drag COLLAPSES
+ * them to one: a plain click must not be destructive.
  */
 const DRAG_THRESHOLD_PX = 3;
 
@@ -202,6 +206,12 @@ export interface UseWaypointDragArgs {
    * the hook calls it on every armed pointermove.
    */
   clientToContainer: (clientX: number, clientY: number) => { x: number; y: number };
+  /**
+   * Midpoint of the straight line between the connection's source and
+   * target anchors, in the same container-local space as
+   * `clientToContainer`.
+   */
+  getLineMidpoint: (sourceNodeId: string, targetNodeId: string) => { x: number; y: number };
 }
 
 export interface UseWaypointDragResult {
@@ -259,8 +269,6 @@ function findConnection(
   return undefined;
 }
 
-type Waypoints = Array<{ x: number; y: number }>;
-
 /**
  * Pure: produce a new ToCData where the connection (S→T) is replaced by
  * `update(connection)`. Preserves all other state (immutable copy along
@@ -301,7 +309,7 @@ function updateConnectionWaypoints(
   data: ToCData,
   sourceNodeId: string,
   targetNodeId: string,
-  updater: (current: Waypoints) => Waypoints,
+  updater: (current: WaypointOffset[]) => WaypointOffset[],
 ): ToCData {
   return updateConnection(data, sourceNodeId, targetNodeId, (conn) => {
     const current = conn.waypoints ?? [];
@@ -315,7 +323,7 @@ function restoreConnectionWaypoints(
   data: ToCData,
   sourceNodeId: string,
   targetNodeId: string,
-  original: Waypoints | undefined,
+  original: WaypointOffset[] | undefined,
 ): ToCData {
   return updateConnection(data, sourceNodeId, targetNodeId, (conn) => {
     const restored = { ...conn };
@@ -334,6 +342,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
     discardBuffered,
     notifyCount,
     clientToContainer,
+    getLineMidpoint,
   } = args;
 
   const [dragState, setDragStateInternal] = useState<WaypointDragState | null>(null);
@@ -371,6 +380,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   notifyCountRef.current = notifyCount;
   const clientToContainerRef = useRef(clientToContainer);
   clientToContainerRef.current = clientToContainer;
+  const getLineMidpointRef = useRef(getLineMidpoint);
+  getLineMidpointRef.current = getLineMidpoint;
   const editModeRef = useRef(editMode);
   editModeRef.current = editMode;
 
@@ -384,7 +395,11 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
   // The connection's `waypoints` as they were when the press landed, so a
   // cancel can put them back.
-  const originalWaypointsRef = useRef<Waypoints | undefined>(undefined);
+  const originalWaypointsRef = useRef<WaypointOffset[] | undefined>(undefined);
+
+  // Line midpoint of the connection being dragged, captured at press
+  // time: the origin the stored offset is measured from.
+  const gestureMidpointRef = useRef<{ x: number; y: number } | null>(null);
 
   // Drag-threshold bookkeeping: where the press landed (client coords)
   // and whether the gesture has crossed DRAG_THRESHOLD_PX. Until armed,
@@ -474,6 +489,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       captureElRef.current = null;
       activePointerIdRef.current = null;
       gestureKeyRef.current = null;
+      gestureMidpointRef.current = null;
       gestureStartClientRef.current = null;
       gestureArmedRef.current = false;
       setCanvasGestureActive(false);
@@ -483,20 +499,25 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
   );
 
   // The single write shape of the gesture: REPLACE the connection's
-  // waypoints with `[pos]`. Idempotent and self-contained, so
+  // waypoints with `[offset]`. Idempotent and self-contained, so
   // `mutateDebounced`'s latest-wins semantics converge to the right end
-  // state regardless of intermediate updaters' apply order. This is
-  // also what implements the legacy-chart collapse policy: an old
-  // multi-waypoint array becomes the single dragged waypoint.
+  // state regardless of intermediate updaters' apply order. This also
+  // replaces whatever was stored before with the one dragged waypoint.
   const buildReplayUpdater = useCallback(
-    (state: WaypointDragState, pos: { x: number; y: number }): ((prev: ToCData) => ToCData) => {
+    (state: WaypointDragState, offset: WaypointOffset): ((prev: ToCData) => ToCData) => {
       return (prev: ToCData) =>
-        updateConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, () => [
-          { x: pos.x, y: pos.y },
-        ]);
+        updateConnectionWaypoints(prev, state.sourceNodeId, state.targetNodeId, () => [offset]);
     },
     [],
   );
+
+  /** Pointer position as an offset from the dragged connection's line midpoint. */
+  const offsetAt = useCallback((clientX: number, clientY: number): WaypointOffset => {
+    return offsetFromMidpoint(
+      clientToContainerRef.current(clientX, clientY),
+      gestureMidpointRef.current!,
+    );
+  }, []);
 
   /**
    * Threshold gate. Returns true once the pointer has traveled ≥
@@ -528,12 +549,13 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       const state = dragStateRef.current;
       if (!state) return;
       if (!armIfPastThreshold(e.clientX, e.clientY)) return;
-      const pos = clientToContainerRef.current(e.clientX, e.clientY);
 
       const key = gestureKeyRef.current!;
-      mutateDebouncedRef.current(buildReplayUpdater(state, pos), key, { idleCommit: false });
+      mutateDebouncedRef.current(buildReplayUpdater(state, offsetAt(e.clientX, e.clientY)), key, {
+        idleCommit: false,
+      });
     },
-    [buildReplayUpdater, armIfPastThreshold],
+    [buildReplayUpdater, armIfPastThreshold, offsetAt],
   );
 
   // pointerup: commit one entry if the gesture armed; otherwise it was
@@ -555,9 +577,9 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
 
       // Sub-threshold press+release = click, not drag. Nothing was
       // written (pointermove gates on the same flag), so a plain
-      // cleanup suffices: no commit, no undo entry, and a legacy
-      // multi-waypoint chart keeps its shape. The tap handler runs
-      // once the gesture has ended, so it never observes a live one.
+      // cleanup suffices: no commit, no undo entry, and the stored
+      // waypoints stay as they were. The tap handler runs once the gesture
+      // has ended, so it never observes a live one.
       if (!armIfPastThreshold(e.clientX, e.clientY)) {
         const onTap = tapHandlerRef.current;
         cleanup();
@@ -590,14 +612,13 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       // Both calls are caller code: if either throws, the gesture must
       // still end, or the flag stays set and no later drag can start.
       try {
-        const pos = clientToContainerRef.current(e.clientX, e.clientY);
-        mutateDebouncedRef.current(buildReplayUpdater(state, pos), key);
+        mutateDebouncedRef.current(buildReplayUpdater(state, offsetAt(e.clientX, e.clientY)), key);
         commitRef.current(key);
       } finally {
         cleanup();
       }
     },
-    [cleanup, buildReplayUpdater, armIfPastThreshold],
+    [cleanup, buildReplayUpdater, armIfPastThreshold, offsetAt],
   );
 
   // Escape / pointercancel / second pointer: undo what the preview wrote
@@ -702,6 +723,8 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
         const count = conn.waypoints?.length ?? 0;
         if (waypointIndex < 0 || waypointIndex >= count) return;
       }
+      // Read before the gesture is claimed: if it throws, no mutex is left set.
+      const lineMidpoint = getLineMidpointRef.current(sourceNodeId, targetNodeId);
 
       const target = e.target as HTMLElement | null;
       if (target) {
@@ -720,6 +743,7 @@ export function useWaypointDrag(args: UseWaypointDragArgs): UseWaypointDragResul
       tapHandlerRef.current = onTap;
       gestureKeyRef.current = buildKey(sourceNodeId, targetNodeId);
       originalWaypointsRef.current = conn.waypoints;
+      gestureMidpointRef.current = lineMidpoint;
       gestureStartClientRef.current = { x: e.clientX, y: e.clientY };
       gestureArmedRef.current = false;
       // Subscribe NOW, synchronously — see `docListenersRef`.

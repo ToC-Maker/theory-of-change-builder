@@ -58,7 +58,7 @@ function baseGraph(): ToCData {
                     confidence: 50,
                     evidence: 'baseline evidence',
                     assumptions: 'baseline assumption',
-                    waypoints: [{ x: 120, y: 240 }],
+                    waypoints: [{ dx: 120, dy: 240 }],
                   },
                 ],
                 yPosition: 100,
@@ -156,7 +156,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
     const conn = firstConnection(result);
 
     expect(conn.confidence).toBe(90);
-    expect(conn.waypoints).toEqual([{ x: 120, y: 240 }]); // preserved
+    expect(conn.waypoints).toEqual([{ dx: 120, dy: 240 }]); // preserved
     expect(conn.evidence).toBe('baseline evidence'); // siblings untouched
   });
 
@@ -174,7 +174,7 @@ describe('applyEdits — UI-managed field preservation (PR #34 prompt-schema dri
     expect(node.title).toBe('Node One');
     expect(node.width).toBe(240); // preserved
     expect(node.color).toBe('#E3F2FD'); // preserved
-    expect(firstConnection(result).waypoints).toEqual([{ x: 120, y: 240 }]); // preserved
+    expect(firstConnection(result).waypoints).toEqual([{ dx: 120, dy: 240 }]); // preserved
   });
 
   it('SAFE pattern: granular node/connection edits never touch ToCData-level format fields', () => {

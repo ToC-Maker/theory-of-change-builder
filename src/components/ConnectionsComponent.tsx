@@ -4,6 +4,12 @@ import { ToCData } from '../types';
 import { getConfidenceStrokeStyle } from '../utils';
 import { getLocalPosition } from '../hooks/useGraphLayout';
 import { computePathWithWaypoints, computeSegmentMidpoints } from '../utils/connectionPath';
+import {
+  computeConnectionAnchors,
+  getConnectionDirection,
+  lineMidpoint,
+  resolveWaypoints,
+} from '../utils/connectionGeometry';
 import { EdgeEditor } from './edge-editor/EdgeEditor';
 import { buildConnectionPath } from './canvas/connectionPath';
 import type { WaypointDragState } from '../hooks/useWaypointDrag';
@@ -497,48 +503,25 @@ export function ConnectionsComponent({
           const startPos = getLocalPosition(startNode, container as HTMLElement);
           const endPos = getLocalPosition(endNode, container as HTMLElement);
 
-          // Check if nodes are in the same column for vertical connections
-          const isSameColumn =
-            connection.sourceSectionIndex === connection.targetSectionIndex &&
-            connection.sourceColumnIndex === connection.targetColumnIndex;
+          const pathDirection = getConnectionDirection(
+            {
+              sectionIndex: connection.sourceSectionIndex,
+              columnIndex: connection.sourceColumnIndex,
+            },
+            {
+              sectionIndex: connection.targetSectionIndex,
+              columnIndex: connection.targetColumnIndex,
+            },
+          );
+          const { source, target } = computeConnectionAnchors(startPos, endPos, pathDirection);
+          const { x: startX, y: startY } = source;
+          const { x: endX, y: endY } = target;
 
-          // Check if this is a backward connection (right to left)
-          const isBackwardConnection =
-            !isSameColumn &&
-            (connection.targetSectionIndex < connection.sourceSectionIndex ||
-              (connection.targetSectionIndex === connection.sourceSectionIndex &&
-                connection.targetColumnIndex < connection.sourceColumnIndex));
-
-          let startX, startY, endX, endY;
-
-          if (isSameColumn) {
-            // Vertical connection logic
-            startX = startPos.x + startPos.width / 2;
-            endX = endPos.x + endPos.width / 2;
-
-            // Determine which node is higher (lower y position)
-            if (startPos.y < endPos.y) {
-              // Source is above target: go from bottom of source to top of target
-              startY = startPos.y + startPos.height;
-              endY = endPos.y - 14; // Offset by arrow height
-            } else {
-              // Source is below target: go from top of source to bottom of target
-              startY = startPos.y;
-              endY = endPos.y + endPos.height + 14; // Offset by arrow height
-            }
-          } else if (isBackwardConnection) {
-            // Backward connection logic (right to left)
-            startX = startPos.x; // Start from left side of source node
-            startY = startPos.y + startPos.height / 2;
-            endX = endPos.x + endPos.width + 14; // End at right side of target node with arrow offset
-            endY = endPos.y + endPos.height / 2;
-          } else {
-            // Forward connection logic (left to right)
-            startX = startPos.x + startPos.width;
-            startY = startPos.y + startPos.height / 2;
-            endX = endPos.x - 14; // Offset by arrow width
-            endY = endPos.y + endPos.height / 2;
-          }
+          // Stored waypoints are offsets from the midpoint of the straight
+          // line between the anchors; resolve them against the nodes'
+          // current positions. Entries that aren't finite offsets resolve
+          // to none, which draws the automatic curve.
+          const waypoints = resolveWaypoints(connection.waypoints, lineMidpoint(source, target));
 
           // PR 7: factor path math into `computePathWithWaypoints`. With
           // an empty waypoints array the output is BYTE-IDENTICAL to
@@ -547,15 +530,10 @@ export function ConnectionsComponent({
           // waypoints are present we get a single multi-segment cubic
           // bezier (one `<path>` element) so dashed/dotted strokes stay
           // continuous through corners.
-          const pathDirection: 'forward' | 'backward' | 'vertical' = isSameColumn
-            ? 'vertical'
-            : isBackwardConnection
-              ? 'backward'
-              : 'forward';
           const pathD = computePathWithWaypoints({
-            source: { x: startX, y: startY },
-            target: { x: endX, y: endY },
-            waypoints: connection.waypoints ?? [],
+            source,
+            target,
+            waypoints,
             curvature,
             direction: pathDirection,
           });
@@ -616,12 +594,8 @@ export function ConnectionsComponent({
               midY: (startY + endY) / 2,
             });
           };
-          const waypointAnchors = [
-            { x: startX, y: startY },
-            ...(connection.waypoints ?? []),
-            { x: endX, y: endY },
-          ];
-          const waypointCount = connection.waypoints?.length ?? 0;
+          const waypointAnchors = [source, ...waypoints, target];
+          const waypointCount = waypoints.length;
           // PR 7 feedback (A): midpoint affordances must sit ON the
           // rendered curve, not on the straight chord between anchors.
           // `computeSegmentMidpoints` shares the exact same control-
@@ -629,9 +603,9 @@ export function ConnectionsComponent({
           // at t=0.5 → handle dots line up with the visible curve
           // regardless of waypoint position, curvature, or zoom.
           const segmentMidpoints = computeSegmentMidpoints({
-            source: { x: startX, y: startY },
-            target: { x: endX, y: endY },
-            waypoints: connection.waypoints ?? [],
+            source,
+            target,
+            waypoints,
             curvature,
             direction: pathDirection,
           });

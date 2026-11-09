@@ -31,12 +31,12 @@
 // affordances are the waypoint handle itself (drag to adjust,
 // double-click to reset).
 //
-// Legacy charts: connections saved by the earlier multi-waypoint build
-// can carry N > 1 waypoints. All N handles render (the curve still
-// passes through them — `computePathWithWaypoints` keeps N-waypoint
-// support for rendering), but no midpoint-insert affordances are
-// offered, and the first drag of any handle collapses the connection
-// to the single dragged waypoint (see `useWaypointDrag`).
+// Several waypoints: a connection whose array holds N > 1 valid offsets
+// (only from an import, an AI edit or a hand-edited chart) shows all N
+// handles, and the curve passes through them. No midpoint affordance is
+// offered, and the first drag of any handle collapses the connection to
+// the single dragged waypoint (see `useWaypointDrag`). Old absolute
+// `{x, y}` entries are dropped before this and show no handles.
 //
 // Geometry: the midpoint affordance coordinate comes from the caller as
 // `segmentMidpoints[0]` — the bezier B(0.5) of the rendered curve (see
@@ -214,8 +214,8 @@ export function ConnectionWaypointHandles({
         </>
       )}
 
-      {/* Waypoint handles: filled, opaque. More than one only for
-          legacy charts saved by the old multi-waypoint build. */}
+      {/* Waypoint handles: filled, opaque. More than one only when
+          an import or AI edit saved several valid offsets. */}
       {waypoints.map(({ x, y, index }) => {
         const bound = bindWaypoint(sourceNodeId, targetNodeId, index);
         return (
