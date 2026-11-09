@@ -262,8 +262,9 @@ export function useKeyboardShortcuts({
       // the narrower isTextEntryFocused.
       if (isInputFocused()) return;
 
-      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)
-      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && editMode) {
+      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode). Caps Lock
+      // makes `key` 'A', so compare without case.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && editMode) {
         event.preventDefault();
         selectAllNodes();
         return;
