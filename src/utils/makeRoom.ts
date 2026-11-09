@@ -8,10 +8,10 @@
 //   - Only the target column's nodes move, and only vertically; they keep
 //     their order.
 //   - Nodes whose centre is at or below the dropped centre move down, the
-//     others up, each just far enough to leave MAKE_ROOM_GAP_PX between boxes. A node
-//     moves only when it is closer than that to the dropped box or to the
-//     node before it in the cascade, as that one now sits; nodes that clear
-//     it stay where they are.
+//     others up, each just far enough to leave MAKE_ROOM_GAP_PX between
+//     boxes. A node moves only when it is closer than that to the dropped
+//     box or to the node before it in the cascade, as that one now sits;
+//     nodes that clear it stay where they are.
 //   - Upward moves stop at the top of the column (a box may not rise above
 //     y = 0, the clamp `clampNodeCenterY` applies). When the nodes above
 //     cannot fit even then, the dropped node moves down by the shortfall
@@ -46,7 +46,7 @@ export interface MakeRoomResult {
   /** Where the dropped node ends up: the requested centre, or lower when pushed. */
   droppedCenterY: number;
   /** New centre Y by node id, for the nodes that moved only. */
-  shifted: Record<string, number>;
+  shifted: Map<string, number>;
 }
 
 /**
@@ -57,15 +57,15 @@ export interface MakeRoomResult {
 function cascadeUp(
   above: readonly MakeRoomNode[],
   droppedTop: number,
-): { moved: Record<string, number>; minTop: number } {
-  const moved: Record<string, number> = {};
+): { moved: Map<string, number>; minTop: number } {
+  const moved = new Map<string, number>();
   let minTop = Infinity;
   let ceiling = droppedTop - MAKE_ROOM_GAP_PX;
   for (let i = above.length - 1; i >= 0; i--) {
     const { id, centerY, height } = above[i];
     if (centerY + height / 2 <= ceiling) continue;
     const top = ceiling - height;
-    moved[id] = top + height / 2;
+    moved.set(id, top + height / 2);
     minTop = Math.min(minTop, top);
     ceiling = top - MAKE_ROOM_GAP_PX;
   }
@@ -91,11 +91,11 @@ export function computeMakeRoom({
     up = cascadeUp(above, landingCenterY - droppedHeight / 2);
   }
 
-  const shifted: Record<string, number> = { ...up.moved };
+  const shifted = new Map(up.moved);
   let floor = landingCenterY + droppedHeight / 2 + MAKE_ROOM_GAP_PX;
   for (const { id, centerY, height } of below) {
     if (centerY - height / 2 >= floor) continue;
-    shifted[id] = floor + height / 2;
+    shifted.set(id, floor + height / 2);
     floor += height + MAKE_ROOM_GAP_PX;
   }
   return { droppedCenterY: landingCenterY, shifted };

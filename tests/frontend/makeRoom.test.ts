@@ -11,14 +11,21 @@ import {
   planColumnDrop,
   MAKE_ROOM_GAP_PX,
   type MakeRoomNode,
+  type MakeRoomResult,
 } from '../../src/utils/makeRoom';
 import type { Node } from '../../src/types';
 
 const H = 76;
 const n = (id: string, centerY: number, height = H): MakeRoomNode => ({ id, centerY, height });
 
+// `shifted` is a Map keyed by node id; the assertions read it as a plain object.
+const plain = ({ droppedCenterY, shifted }: MakeRoomResult) => ({
+  droppedCenterY,
+  shifted: Object.fromEntries(shifted),
+});
+
 const room = (droppedCenterY: number, nodes: MakeRoomNode[], droppedHeight = H) =>
-  computeMakeRoom({ droppedCenterY, droppedHeight, nodes });
+  plain(computeMakeRoom({ droppedCenterY, droppedHeight, nodes }));
 
 describe('computeMakeRoom', () => {
   it('uses a 16px minimum gap by default', () => {
@@ -130,6 +137,18 @@ describe('computeMakeRoom', () => {
     });
   });
 
+  it('keys the shifts by id without touching Object.prototype names', () => {
+    // A plain-object lookup of these ids would answer with inherited members.
+    const { shifted } = computeMakeRoom({
+      droppedCenterY: 300,
+      droppedHeight: H,
+      nodes: [n('constructor', 330), n('toString', 900)],
+    });
+    expect(shifted.get('constructor')).toBe(392);
+    expect(shifted.get('toString')).toBeUndefined();
+    expect(shifted.get('hasOwnProperty')).toBeUndefined();
+  });
+
   it('leaves its input untouched', () => {
     const nodes = Object.freeze([Object.freeze(n('a', 330)), Object.freeze(n('b', 420))]);
     expect(() => room(300, nodes as MakeRoomNode[])).not.toThrow();
@@ -152,13 +171,15 @@ describe('planColumnDrop', () => {
     landingCenterY: number,
     nodeHeights: Record<string, number> = {},
   ) =>
-    planColumnDrop({
-      columnNodes,
-      draggedId,
-      draggedHeight: H,
-      landingCenterY,
-      nodeHeights,
-    });
+    plain(
+      planColumnDrop({
+        columnNodes,
+        draggedId,
+        draggedHeight: H,
+        landingCenterY,
+        nodeHeights,
+      }),
+    );
 
   it('excludes the dragged node: its own slot neither moves nor pushes anything', () => {
     // D sits at 300, E at 340. Dropping D at 320 (282..358): E (302..378) is

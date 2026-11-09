@@ -13,7 +13,7 @@
 // room (`computeMakeRoom`), and when they cannot all shift far enough the
 // landing spot, and with it the copy, moves down.
 import { describe, it, expect } from 'vitest';
-import { computeDropPreview } from '../../src/utils/dropPreview';
+import { computeDropPreview, type DropPreview } from '../../src/utils/dropPreview';
 import type { DragState } from '../../src/hooks/usePointerDrag';
 import type { LayoutSnapshot } from '../../src/hooks/useGraphLayout';
 import type { Node, ToCData } from '../../src/types';
@@ -62,6 +62,9 @@ const emptySections = (over: { '0-0'?: Node[]; '0-1'?: Node[] } = {}): ToCData['
   { title: 'S2', columns: [{ nodes: [] }] },
 ];
 
+// `shifted` is a Map keyed by node id; the assertions read it as a plain object.
+const shiftedOf = (preview: DropPreview | null) => Object.fromEntries(preview!.shifted);
+
 const args = (state: DragState, zoomScale = 1, sections = emptySections()) => ({
   dragState: state,
   snapshot,
@@ -80,7 +83,7 @@ describe('computeDropPreview — over a column', () => {
       columnIndex: 0,
       centerY: 308,
       copy: { left: 50, top: 370 },
-      shifted: {},
+      shifted: new Map(),
     });
   });
 
@@ -184,18 +187,19 @@ describe('computeDropPreview — making room', () => {
     const preview = computeDropPreview(args(over(1), 1, sections));
     // a (262..338) is above the landing centre → bottom 274 → centre 236;
     // b (362..438) is below → top 382 → centre 420; far is clear.
-    expect(preview).toMatchObject({ centerY: 328, shifted: { a: 236, b: 420 } });
+    expect(preview).toMatchObject({ centerY: 328 });
+    expect(shiftedOf(preview)).toEqual({ a: 236, b: 420 });
   });
 
   it('leaves nodes of other columns alone', () => {
     const sections = emptySections({ '0-0': [node('n-1', 200), node('x', 330)] });
-    expect(computeDropPreview(args(over(1), 1, sections))!.shifted).toEqual({});
+    expect(shiftedOf(computeDropPreview(args(over(1), 1, sections)))).toEqual({});
   });
 
   it("leaves the dragged node's own slot out when dragging within its column", () => {
     const sections = emptySections({ '0-0': [node('n-1', 330), node('e', 500)] });
     // n-1's old slot overlaps the landing box but is not an obstacle; e is clear.
-    expect(computeDropPreview(args(over(0), 1, sections))!.shifted).toEqual({});
+    expect(shiftedOf(computeDropPreview(args(over(0), 1, sections)))).toEqual({});
   });
 
   it('moves the copy down with the landing spot when the nodes above cannot make room', () => {
@@ -207,11 +211,9 @@ describe('computeDropPreview — making room', () => {
       dragOverLocation: { kind: 'node-slot', sectionIndex: 0, columnIndex: 1, yPosition: 128 },
     });
     const sections = emptySections({ '0-1': [node('a', 50)] });
-    expect(computeDropPreview(args(state, 1, sections))).toMatchObject({
-      centerY: 130,
-      copy: { top: 100 + 130 - 38 },
-      shifted: { a: 38 },
-    });
+    const preview = computeDropPreview(args(state, 1, sections));
+    expect(preview).toMatchObject({ centerY: 130, copy: { top: 100 + 130 - 38 } });
+    expect(shiftedOf(preview)).toEqual({ a: 38 });
   });
 });
 

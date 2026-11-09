@@ -727,10 +727,10 @@ export function ToC({
               landingCenterY,
               nodeHeights,
             })
-          : { droppedCenterY: landingCenterY, shifted: {} };
+          : { droppedCenterY: landingCenterY, shifted: new Map<string, number>() };
         const settle = (node: Node): Node => {
           if (node.id === draggedNodeId) return { ...node, yPosition: droppedCenterY };
-          const yPosition = shifted[node.id];
+          const yPosition = shifted.get(node.id);
           return yPosition === undefined ? node : { ...node, yPosition };
         };
 
@@ -1508,7 +1508,7 @@ export function ToC({
                               const previewCenterY =
                                 dropPreview?.sectionIndex === sectionIndex &&
                                 dropPreview.columnIndex === colIndex
-                                  ? dropPreview.shifted[node.id]
+                                  ? dropPreview.shifted.get(node.id)
                                   : undefined;
                               // Convert from center to top position. The
                               // stored center is clamped VISUALLY so

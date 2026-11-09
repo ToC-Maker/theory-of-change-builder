@@ -28,7 +28,7 @@ export interface DropPreview {
   /** Top-left of the copy, content space. */
   copy: { left: number; top: number };
   /** New centre Y by node id, for the target column's nodes that move. */
-  shifted: Record<string, number>;
+  shifted: Map<string, number>;
 }
 
 export interface DropPreviewArgs {
