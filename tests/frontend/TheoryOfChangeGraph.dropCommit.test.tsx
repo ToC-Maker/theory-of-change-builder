@@ -62,8 +62,14 @@ afterEach(() => {
 
 // Feeds each change back as the new data prop and keeps the previous
 // object for undo, the way App's change notification does.
-function Controlled({ onChange }: { onChange: (next: ToCData) => void }) {
-  const [data, setData] = useState(() => deepFreeze(makeData()));
+function Controlled({
+  onChange,
+  initial = makeData,
+}: {
+  onChange: (next: ToCData) => void;
+  initial?: () => ToCData;
+}) {
+  const [data, setData] = useState(() => deepFreeze(initial()));
   const history = useRef<ToCData[]>([]);
   return (
     <>
@@ -167,6 +173,28 @@ describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
     expect(yOf(next, 'n-2')).toBe(572);
     expect(idsIn(next, 1)).toEqual(['n-3', 'n-4']);
     expect(yOf(next, 'n-3')).toBe(300);
+  });
+
+  it('writes the pushed-down landing spot when the nodes above cannot make room', async () => {
+    // Column 0-1 holds 'top' (12..88), too near the column top to move up
+    // out of the way of a landing box at 90..166 (pointer column-local 120,
+    // grab offset 30 → centre 128). 'top' settles at the column top (centre
+    // 38) and the landing spot moves down to 130, not the raw 128.
+    const onChange = vi.fn();
+    const initial = (): ToCData => ({
+      title: 'Test',
+      sections: [
+        { title: 'Inputs', columns: [{ nodes: [node('n-1', 200)] }, { nodes: [node('top', 50)] }] },
+      ],
+    });
+    await startDrag(<Controlled onChange={onChange} initial={initial} />, grab);
+    move(350, 220);
+    await release(350, 220);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0] as ToCData;
+    expect(yOf(next, 'n-1')).toBe(130);
+    expect(yOf(next, 'top')).toBe(38);
   });
 
   it('shifts nothing when the drop creates a new column', async () => {
