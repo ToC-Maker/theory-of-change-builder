@@ -83,7 +83,7 @@ export const canvas = (data: ToCData, onDataChange?: (data: ToCData) => void) =>
  * rects.
  */
 export async function startDrag(ui: ReactElement, grab: { id: string; x: number; y: number }) {
-  render(ui);
+  const view = render(ui);
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   });
@@ -93,6 +93,7 @@ export async function startDrag(ui: ReactElement, grab: { id: string; x: number;
     button: 0,
     pointerId: 1,
   });
+  return view;
 }
 
 /** The absolutely positioned slot wrapper that carries a node's inline `top`. */

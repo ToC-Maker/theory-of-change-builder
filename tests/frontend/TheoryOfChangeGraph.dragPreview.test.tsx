@@ -66,12 +66,14 @@ afterEach(() => {
 const startDrag = (onDataChange?: (data: ToCData) => void) =>
   startCanvasDrag(canvas(makeData(), onDataChange), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
 
+const ghost = () => document.querySelector('[data-testid="node-drag-ghost"]');
 const tops = (...ids: string[]) => ids.map((id) => nodeWrapper(id).style.top);
 
 // Pointer at container y 420 over column 0-1: column-local 320, grab offset
 // 30 → landing centre 328, box 290..366. n-3 (above its centre) moves up to
 // bottom 274 → centre 236 → top 198; n-4 (below) moves down to top 382.
 const OVER_COLUMN_1 = [350, 420] as const;
+const SHIFTED = ['198px', '382px'];
 
 describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () => {
   it('renders no shift before the drag leaves the tap dead-zone', async () => {
@@ -83,7 +85,7 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
   it('shifts the crowded nodes of the target column to their make-room positions', async () => {
     await startDrag();
     move(...OVER_COLUMN_1);
-    expect(tops('n-3', 'n-4')).toEqual(['198px', '382px']);
+    expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
   });
 
   it('leaves the nodes of other columns where they are', async () => {
@@ -122,6 +124,7 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
   it('returns the nodes when the pointer leaves the column', async () => {
     await startDrag();
     move(...OVER_COLUMN_1);
+    expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
     move(262, 420); // the gap between the columns
     expect(tops('n-3', 'n-4')).toEqual(['262px', '362px']);
   });
@@ -129,6 +132,7 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
   it('returns the nodes on Escape', async () => {
     await startDrag();
     move(...OVER_COLUMN_1);
+    expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
     pressEscape();
     expect(tops('n-3', 'n-4')).toEqual(['262px', '362px']);
   });
@@ -136,7 +140,20 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
   it('returns the nodes when the pointer is cancelled', async () => {
     await startDrag();
     move(...OVER_COLUMN_1);
+    expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
     act(() => void document.dispatchEvent(pointer('pointercancel', ...OVER_COLUMN_1)));
+    expect(tops('n-3', 'n-4')).toEqual(['262px', '362px']);
+  });
+
+  it('drops the shifts when the dragged node disappears mid-drag', async () => {
+    const view = await startDrag();
+    move(...OVER_COLUMN_1);
+    expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
+    // Another editor deletes the node being dragged.
+    const without = makeData();
+    without.sections[0].columns[0].nodes = [node('n-2', 500)];
+    view.rerender(canvas(without));
+    expect(ghost()).toBeNull();
     expect(tops('n-3', 'n-4')).toEqual(['262px', '362px']);
   });
 

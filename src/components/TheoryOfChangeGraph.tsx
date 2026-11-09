@@ -811,16 +811,19 @@ export function ToC({
   // Where the dragged node's copy snaps while the pointer is over a
   // column, or null (copy follows the cursor), and how that column's other
   // nodes shift to make room. Computed from the same placement maths
-  // `handleDrop` uses, so the preview is what the drop commits.
-  const dropPreview = dragState
-    ? computeDropPreview({
-        dragState,
-        snapshot: getSnapshot(),
-        zoomScale,
-        sections: data.sections,
-        nodeHeights,
-      })
-    : null;
+  // `handleDrop` uses, so the preview is what the drop commits. Only while
+  // the dragged node still exists: when someone else deletes it mid-drag
+  // the copy is gone, and the column must not stay opened up around it.
+  const dropPreview =
+    dragState && findNodeLocation(dragState.nodeId)
+      ? computeDropPreview({
+          dragState,
+          snapshot: getSnapshot(),
+          zoomScale,
+          sections: data.sections,
+          nodeHeights,
+        })
+      : null;
 
   // PR 5 Task 5.3: column / section delete callbacks shared by the
   // hover-`×` affordance. Each writes through `setDataAndNotify` so the
