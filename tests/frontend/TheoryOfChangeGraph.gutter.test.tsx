@@ -248,15 +248,15 @@ describe('add controls', () => {
         vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
           this: Element,
         ) {
-          if (this.matches('[data-testid="add-zone-section-gap-0"]')) return rect(100, 0, 32, 600);
+          if (this.matches('[data-testid^="add-zone-"]')) return rect(100, 0, 32, 600);
           if (this.matches('[data-column]')) return rect(0, 60, 100, 540);
           if (this.matches('[data-tocb-node]')) return rect(60, nodeTop, 80, nodeHeight);
           return rect(0, 0, 0, 0);
         });
 
-      const openAt = (clientY: number) => {
+      const openAt = (clientY: number, zoneId = 'add-zone-section-gap-0') => {
         renderToC(makeBaseData());
-        const zone = zoneOf('add-zone-section-gap-0');
+        const zone = zoneOf(zoneId);
         fireEvent.pointerEnter(zone, { pointerType: 'mouse', clientY });
         advance(HOVER_INTENT_MS);
         return zone.querySelector<HTMLElement>('[data-revealed]')!;
@@ -354,7 +354,7 @@ describe('add controls', () => {
           expect(stack.style.top).toBe('459.5px');
         });
 
-        it('stays put while the pointer is over the controls, so every one of them can be reached', () => {
+        it('holds still while the pointer is over a stack of controls, so every one of them can be reached', () => {
           layOut(400, 80);
           const stack = openAt(150);
           const zone = zoneOf('add-zone-section-gap-0');
@@ -368,6 +368,24 @@ describe('add controls', () => {
 
           // Back on the strip, it follows again.
           move(zone, 300);
+          expect(stack.style.top).toBe('259.5px');
+        });
+
+        it('follows continuously, over the control too, in a zone with a single control', () => {
+          layOut(400, 80);
+          const stack = openAt(150, 'add-zone-column-gap-0-0');
+          const control = stack.querySelector('[data-testid="add-column-after-0-0"]')!;
+          expect(stack.style.top).toBe('109.5px');
+
+          // Every step is inside the control's 81px extent, so a hold
+          // would leave it where it is.
+          move(control, 160);
+          expect(stack.style.top).toBe('119.5px');
+          move(control, 175);
+          expect(stack.style.top).toBe('134.5px');
+          move(stack, 140);
+          expect(stack.style.top).toBe('99.5px');
+          move(zoneOf('add-zone-column-gap-0-0'), 300);
           expect(stack.style.top).toBe('259.5px');
         });
 
