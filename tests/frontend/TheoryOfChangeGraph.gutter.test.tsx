@@ -416,7 +416,7 @@ describe('add controls', () => {
 
         it('does not follow when a tap opened the controls', () => {
           layOut(400, 80);
-          render(<ToC data={makeBaseData()} showEditButton={true} />);
+          renderToC(makeBaseData());
           const zone = zoneOf('add-zone-section-gap-0');
           fireEvent.pointerDown(zone, touch);
           fireEvent.click(zone, { ...touch, clientY: 150 });
