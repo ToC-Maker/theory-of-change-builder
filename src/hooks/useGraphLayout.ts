@@ -26,6 +26,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import type { RefObject } from 'react';
 import type { ToCData } from '../types';
+import { DEFAULT_NODE_WIDTH, columnWidth } from '../utils/nodeWidth';
 
 // ---------------------------------------------------------------------------
 // Pure-function types
@@ -240,10 +241,8 @@ export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions):
   }
   return data.sections.map((section) => {
     const cols = section.columns;
-    if (cols.length === 0) return 192;
-    const columnWidths = cols.map((col) =>
-      col.nodes.length === 0 ? 128 : Math.max(...col.nodes.map((n) => n.width || 192), 128),
-    );
+    if (cols.length === 0) return DEFAULT_NODE_WIDTH;
+    const columnWidths = cols.map((col) => columnWidth(col.nodes));
     const totalColumnWidth = columnWidths.reduce((s, w) => s + w, 0);
     const gaps = Math.max(0, columnWidths.length - 1) * opts.columnPadding;
     return totalColumnWidth + gaps;

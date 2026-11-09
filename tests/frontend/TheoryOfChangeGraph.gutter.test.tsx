@@ -252,15 +252,15 @@ describe('add controls', () => {
         vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
           this: Element,
         ) {
-          if (this.matches('[data-testid="add-zone-section-gap-0"]')) return rect(100, 0, 32, 600);
+          if (this.matches('[data-testid^="add-zone-"]')) return rect(100, 0, 32, 600);
           if (this.matches('[data-column]')) return rect(0, 60, 100, 540);
           if (this.matches('[data-tocb-node]')) return rect(60, nodeTop, 80, nodeHeight);
           return rect(0, 0, 0, 0);
         });
 
-      const openAt = (clientY: number) => {
+      const openAt = (clientY: number, zoneId = 'add-zone-section-gap-0') => {
         render(<ToC data={makeBaseData()} showEditButton={true} />);
-        const zone = zoneOf('add-zone-section-gap-0');
+        const zone = zoneOf(zoneId);
         fireEvent.pointerEnter(zone, { pointerType: 'mouse', clientY });
         advance(HOVER_INTENT_MS);
         return zone.querySelector<HTMLElement>('[data-revealed]')!;
@@ -316,6 +316,140 @@ describe('add controls', () => {
         layOut(400, 80);
         const stack = openAt(10);
         expect(stack.style.top).toBe('60px');
+      });
+
+      describe('following the pointer', () => {
+        const FRAME_MS = 16;
+        const move = (el: Element, clientY: number, init: Record<string, unknown> = {}) => {
+          fireEvent.pointerMove(el, { pointerType: 'mouse', clientY, ...init });
+          advance(FRAME_MS);
+        };
+        const zoneRects = (spy: ReturnType<typeof layOut>) =>
+          spy.mock.contexts.filter((el) =>
+            (el as Element).matches('[data-testid="add-zone-section-gap-0"]'),
+          ).length;
+
+        it('moves the controls to the pointer as it travels along the zone, within the columns', () => {
+          layOut(400, 80);
+          const stack = openAt(150);
+          const zone = zoneOf('add-zone-section-gap-0');
+          expect(stack.style.top).toBe('109.5px');
+
+          move(zone, 300);
+          expect(stack.style.top).toBe('259.5px');
+          // Clamped to the columns: no higher than the first column's top,
+          // no lower than the zone's bottom less the controls' length.
+          move(zone, 10);
+          expect(stack.style.top).toBe('60px');
+          move(zone, 590);
+          expect(stack.style.top).toBe('519px');
+        });
+
+        it('avoids nodes while following', () => {
+          layOut(200, 80);
+          const stack = openAt(240);
+          const zone = zoneOf('add-zone-section-gap-0');
+          // The node and its handles' reach span 188-292: the nearest free
+          // spot above it ends at 188; below it, the first 8px step past 292 is 295.5.
+          expect(stack.style.top).toBe('103.5px');
+          move(zone, 320);
+          expect(stack.style.top).toBe('295.5px');
+          move(zone, 500);
+          expect(stack.style.top).toBe('459.5px');
+        });
+
+        it('holds still while the pointer is over a stack of controls, so every one of them can be reached', () => {
+          layOut(400, 80);
+          const stack = openAt(150);
+          const zone = zoneOf('add-zone-section-gap-0');
+          const first = stack.querySelector('[data-testid="add-column-after-0-1"]')!;
+          const last = stack.querySelector('[data-testid="add-column-before-1-0"]')!;
+
+          move(first, 300);
+          move(last, 450);
+          move(stack, 200);
+          expect(stack.style.top).toBe('109.5px');
+
+          // Back on the strip, it follows again.
+          move(zone, 300);
+          expect(stack.style.top).toBe('259.5px');
+        });
+
+        it('follows continuously, over the control too, in a zone with a single control', () => {
+          layOut(400, 80);
+          const stack = openAt(150, 'add-zone-column-gap-0-0');
+          const control = stack.querySelector('[data-testid="add-column-after-0-0"]')!;
+          expect(stack.style.top).toBe('109.5px');
+
+          // Every step is inside the control's 81px extent, so a hold
+          // would leave it where it is.
+          move(control, 160);
+          expect(stack.style.top).toBe('119.5px');
+          move(control, 175);
+          expect(stack.style.top).toBe('134.5px');
+          move(stack, 140);
+          expect(stack.style.top).toBe('99.5px');
+          move(zoneOf('add-zone-column-gap-0-0'), 300);
+          expect(stack.style.top).toBe('259.5px');
+        });
+
+        it('follows over the resting badge as well, which stays under the pointer while the controls are open', () => {
+          layOut(400, 80);
+          const stack = openAt(150);
+          const zone = zoneOf('add-zone-section-gap-0');
+          move(zone.querySelector('[data-add-badge]')!, 330);
+          expect(stack.style.top).toBe('289.5px');
+        });
+
+        it('does not follow while a mouse button is held (a pan is under way)', () => {
+          layOut(400, 80);
+          const stack = openAt(150);
+          move(zoneOf('add-zone-section-gap-0'), 300, { buttons: 1 });
+          expect(stack.style.top).toBe('109.5px');
+        });
+
+        it('places at most once per animation frame, at the latest pointer position', () => {
+          const spy = layOut(400, 80);
+          const stack = openAt(150);
+          const zone = zoneOf('add-zone-section-gap-0');
+
+          const before = zoneRects(spy);
+          for (const y of [200, 220, 240, 260, 280]) {
+            fireEvent.pointerMove(zone, { pointerType: 'mouse', clientY: y });
+          }
+          expect(stack.style.top).toBe('109.5px');
+          advance(FRAME_MS);
+
+          expect(stack.style.top).toBe('239.5px');
+          expect(zoneRects(spy) - before).toBe(1);
+        });
+
+        it('does nothing once the pointer has left and the controls are closing', () => {
+          layOut(400, 80);
+          const stack = openAt(150);
+          const zone = zoneOf('add-zone-section-gap-0');
+
+          fireEvent.pointerMove(zone, { pointerType: 'mouse', clientY: 300 });
+          fireEvent.pointerLeave(zone, { pointerType: 'mouse', clientY: 300 });
+          advance(FRAME_MS);
+
+          expect(stack.style.top).toBe('109.5px');
+        });
+
+        it('does not follow when a tap opened the controls', () => {
+          layOut(400, 80);
+          render(<ToC data={makeBaseData()} showEditButton={true} />);
+          const zone = zoneOf('add-zone-section-gap-0');
+          fireEvent.pointerDown(zone, touch);
+          fireEvent.click(zone, { ...touch, clientY: 150 });
+          const stack = zone.querySelector<HTMLElement>('[data-revealed]')!;
+          // Touch-sized: 44px wide, 14px font, 92px long, centred on the tap.
+          expect(stack.style.top).toBe('104px');
+
+          move(zone, 300, { pointerType: 'touch' });
+          move(zone, 400);
+          expect(stack.style.top).toBe('104px');
+        });
       });
     });
 

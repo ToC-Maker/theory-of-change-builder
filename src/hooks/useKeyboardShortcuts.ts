@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Node, ToCData } from '../types';
 import { isInputFocused } from '../utils/isInputFocused';
+import { DEFAULT_NODE_WIDTH } from '../utils/nodeWidth';
 
 interface UseKeyboardShortcutsProps {
   data: ToCData;
@@ -85,7 +86,7 @@ export function useKeyboardShortcuts({
   // Clear all selections and close search
   const clearSelections = useCallback(() => {
     setHighlightedNodes(new Set());
-    setNodeWidth(192);
+    setNodeWidth(DEFAULT_NODE_WIDTH);
     setNodeColor('#ffffff');
     // PR 3: the anchored NodeEditor watches `highlightedNodes`, so it
     // dismisses automatically when we clear the set.
@@ -114,7 +115,7 @@ export function useKeyboardShortcuts({
         nodeRef.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
         // Update width and color controls
-        setNodeWidth(targetNode.node.width || 192);
+        setNodeWidth(targetNode.node.width || DEFAULT_NODE_WIDTH);
         setNodeColor(targetNode.node.color || '#ffffff');
       }
     },
@@ -261,8 +262,9 @@ export function useKeyboardShortcuts({
       // the narrower isTextEntryFocused.
       if (isInputFocused()) return;
 
-      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)
-      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && editMode) {
+      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode). Caps Lock
+      // makes `key` 'A', so compare without case.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && editMode) {
         event.preventDefault();
         selectAllNodes();
         return;

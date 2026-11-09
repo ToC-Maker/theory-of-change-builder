@@ -15,6 +15,7 @@ import { AlignmentSuggestionBanner } from './AlignmentSuggestionBanner';
 import { NodeEditor } from './node-editor/NodeEditor';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useGraphLayout, getLocalPosition } from '../hooks/useGraphLayout';
+import { DEFAULT_NODE_WIDTH, columnWidth } from '../utils/nodeWidth';
 import { useGraphMutation } from '../hooks/useGraphMutation';
 import { usePointerDrag } from '../hooks/usePointerDrag';
 import type { DragOverLocation } from '../hooks/usePointerDrag';
@@ -174,7 +175,7 @@ export function ToC({
   const fontFamily = initialData.fontFamily ?? "'Ubuntu', sans-serif";
   const columnPadding = initialData.columnPadding ?? 24; // pixels
   const sectionPadding = initialData.sectionPadding ?? 32; // pixels
-  const [nodeWidth, setNodeWidth] = useState(192); // Default width in pixels (w-48)
+  const [nodeWidth, setNodeWidth] = useState(DEFAULT_NODE_WIDTH);
   const [nodeColor, setNodeColor] = useState('#ffffff'); // Default white background
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
@@ -269,7 +270,7 @@ export function ToC({
       let newNodeWidth = nodeWidth; // Default to current width setting
       if (column.nodes.length > 0) {
         // If column has nodes, match their width (use max width in column)
-        const columnNodeWidths = column.nodes.map((node) => node.width || 192);
+        const columnNodeWidths = column.nodes.map((node) => node.width || DEFAULT_NODE_WIDTH);
         newNodeWidth = Math.max(...columnNodeWidths);
       }
 
@@ -361,7 +362,7 @@ export function ToC({
             const nodeLocation = findNodeLocation(id);
             if (nodeLocation) {
               const node = nodeLocation.node;
-              const currentWidth = node.width || 192;
+              const currentWidth = node.width || DEFAULT_NODE_WIDTH;
               const currentColor = node.color || '#ffffff';
               setNodeWidth(currentWidth);
               setNodeColor(currentColor);
@@ -391,7 +392,7 @@ export function ToC({
 
               // Snap to the clicked node's properties
               const node = nodeLocation.node;
-              const currentWidth = node.width || 192;
+              const currentWidth = node.width || DEFAULT_NODE_WIDTH;
               const currentColor = node.color || '#ffffff';
               setNodeWidth(currentWidth);
               setNodeColor(currentColor);
@@ -412,7 +413,7 @@ export function ToC({
             const nodeLocation = findNodeLocation(id);
             if (nodeLocation) {
               const node = nodeLocation.node;
-              const currentWidth = node.width || 192;
+              const currentWidth = node.width || DEFAULT_NODE_WIDTH;
               const currentColor = node.color || '#ffffff';
               setNodeWidth(currentWidth);
               setNodeColor(currentColor);
@@ -578,7 +579,7 @@ export function ToC({
 
     // Clear selection after disconnecting
     setHighlightedNodes(new Set());
-    setNodeWidth(192);
+    setNodeWidth(DEFAULT_NODE_WIDTH);
     setNodeColor('#ffffff');
   }, [editMode, highlightedNodes, deleteConnection]);
 
@@ -632,7 +633,7 @@ export function ToC({
 
     // Clear selection after connecting
     setHighlightedNodes(new Set());
-    setNodeWidth(192);
+    setNodeWidth(DEFAULT_NODE_WIDTH);
     setNodeColor('#ffffff');
   }, [editMode, highlightedNodes, setDataAndNotify, areNodesConnected, disconnectSelectedNodes]);
 
@@ -1243,7 +1244,7 @@ export function ToC({
           if (e.target === e.currentTarget) {
             setHighlightedNodes(new Set());
             // Reset controls to default when clearing selection
-            setNodeWidth(192);
+            setNodeWidth(DEFAULT_NODE_WIDTH);
             setNodeColor('#ffffff');
           }
         }}
@@ -1279,7 +1280,7 @@ export function ToC({
                   // Allow deselection by clicking section area in both view and edit mode
                   if (e.target === e.currentTarget) {
                     setHighlightedNodes(new Set());
-                    setNodeWidth(192);
+                    setNodeWidth(DEFAULT_NODE_WIDTH);
                     setNodeColor('#ffffff');
                   }
                 }}
@@ -1448,7 +1449,7 @@ export function ToC({
                                 'cursor-cell hover:bg-gray-500/5 transition-colors rounded-lg',
                             )}
                             style={{
-                              width: `${Math.max(...column.nodes.map((node) => node.width || 192), 128)}px`,
+                              width: `${columnWidth(column.nodes)}px`,
                               // Edit-mode bodies get an explicit height so the
                               // empty space under the nodes can be
                               // double-clicked to add one. 62 = section
@@ -1467,7 +1468,7 @@ export function ToC({
                               // column area (not a node inside it).
                               if (e.target === e.currentTarget) {
                                 setHighlightedNodes(new Set());
-                                setNodeWidth(192);
+                                setNodeWidth(DEFAULT_NODE_WIDTH);
                                 setNodeColor('#ffffff');
                               }
                             }}
@@ -1488,12 +1489,11 @@ export function ToC({
                             }
                           >
                             {column.nodes.map((node, nodeIndex) => {
-                              const nodeWidth = node.width || 192;
-                              const columnWidth = Math.max(
-                                ...column.nodes.map((node) => node.width || 192),
-                                128,
+                              const nodeWidth = node.width || DEFAULT_NODE_WIDTH;
+                              const leftOffset = Math.max(
+                                0,
+                                (columnWidth(column.nodes) - nodeWidth) / 2,
                               );
-                              const leftOffset = Math.max(0, (columnWidth - nodeWidth) / 2);
                               // Cached measured height; 76px is the
                               // typical height for "New Node".
                               const nodeHeight = nodeHeights[node.id] || 76;
