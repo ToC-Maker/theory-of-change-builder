@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -766,6 +767,7 @@ export function ToC({
     dragState,
     bindNode: bindNodeDrag,
     isActive: isDragActive,
+    locate: locateDrop,
   } = usePointerDrag({
     data,
     containerRef: graphContainerRef,
@@ -785,6 +787,24 @@ export function ToC({
     },
   });
 
+  // The drag as the preview sees it: the drop target is where a drop at the
+  // pointer would land NOW, read from the layout the way the drop reads it
+  // at release. A chart landing mid-drag can insert, remove or resize
+  // columns, so the target of the last pointermove can name another column
+  // by now; and the layout read behind it is re-read when the chart changes
+  // (below), so the preview does not wait for the next pointermove.
+  const liveDrag = dragState
+    ? { ...dragState, dragOverLocation: locateDrop(dragState.ghostPos.x, dragState.ghostPos.y) }
+    : null;
+  const isDragActiveRef = useRef(false);
+  isDragActiveRef.current = isDragActive;
+  const [, setLayoutRead] = useState(0);
+  useLayoutEffect(() => {
+    if (!isDragActiveRef.current) return;
+    getSnapshot({ fresh: true });
+    setLayoutRead((n) => n + 1);
+  }, [data.sections, getSnapshot]);
+
   // Where the dragged node's copy snaps while the pointer is over a
   // column, or null (copy follows the cursor), and how that column's other
   // nodes shift to make room. Computed from the same placement maths
@@ -792,9 +812,9 @@ export function ToC({
   // the dragged node still exists: when someone else deletes it mid-drag
   // the copy is gone, and the column must not stay opened up around it.
   const dropPreview =
-    dragState && findNodeLocation(dragState.nodeId)
+    liveDrag && findNodeLocation(liveDrag.nodeId)
       ? computeDropPreview({
-          dragState,
+          dragState: liveDrag,
           snapshot: getSnapshot(),
           zoomScale,
           sections: data.sections,
@@ -1780,9 +1800,9 @@ export function ToC({
             inserted into. Over a column body nothing is drawn here; the
             dragged node's copy snaps into place instead (below). Absent
             unless a drag has left the tap dead-zone. */}
-        {dragState ? (
+        {liveDrag ? (
           <DropLandingIndicator
-            indicator={computeLandingIndicator({ dragState, snapshot: getSnapshot() })}
+            indicator={computeLandingIndicator({ dragState: liveDrag, snapshot: getSnapshot() })}
             zoomScale={zoomScale}
           />
         ) : null}

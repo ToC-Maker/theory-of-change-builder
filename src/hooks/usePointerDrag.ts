@@ -157,6 +157,13 @@ export interface UsePointerDragResult {
   };
   /** Convenience read of `dragState !== null` for the polling-pause guard. */
   isActive: boolean;
+  /**
+   * Where a drop at a viewport position would land: the position
+   * classified against the layout snapshot, which `fresh` re-reads first
+   * (as the drop does at release). A consumer previewing the drop uses it
+   * to name the same target the drop will.
+   */
+  locate: (clientX: number, clientY: number, fresh?: boolean) => DragOverLocation | null;
 }
 
 /** Map a classifyRegion result onto the public DragOverLocation union. */
@@ -599,7 +606,8 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       dragState,
       bindNode,
       isActive: dragState !== null,
+      locate,
     }),
-    [dragState, bindNode],
+    [dragState, bindNode, locate],
   );
 }
