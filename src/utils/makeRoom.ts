@@ -16,6 +16,10 @@
 //     y = 0, the clamp `clampNodeCenterY` applies). When the nodes above
 //     cannot fit even then, the dropped node moves down by the shortfall
 //     and the downward cascade starts from there.
+//   - Every centre the function returns is a whole number of px: the landing
+//     centre is rounded, and a moved node's centre is rounded away from the
+//     dropped box, so the gap is never shorter than MAKE_ROOM_GAP_PX. Saved
+//     charts then do not accumulate long fractions from cursor positions.
 import type { Node } from '../types';
 import { resolveNodeCenterY } from './nodePosition';
 
@@ -64,8 +68,9 @@ function cascadeUp(
   for (let i = above.length - 1; i >= 0; i--) {
     const { id, centerY, height } = above[i];
     if (centerY + height / 2 <= ceiling) continue;
-    const top = ceiling - height;
-    moved.set(id, top + height / 2);
+    const centre = Math.floor(ceiling - height / 2);
+    const top = centre - height / 2;
+    moved.set(id, centre);
     minTop = Math.min(minTop, top);
     ceiling = top - MAKE_ROOM_GAP_PX;
   }
@@ -81,13 +86,13 @@ export function computeMakeRoom({
     .map((node, order) => ({ node, order }))
     .sort((a, b) => a.node.centerY - b.node.centerY || a.order - b.order)
     .map(({ node }) => node);
-  const above = sorted.filter((node) => node.centerY < droppedCenterY);
-  const below = sorted.filter((node) => node.centerY >= droppedCenterY);
+  let landingCenterY = Math.round(droppedCenterY);
+  const above = sorted.filter((node) => node.centerY < landingCenterY);
+  const below = sorted.filter((node) => node.centerY >= landingCenterY);
 
-  let landingCenterY = droppedCenterY;
   let up = cascadeUp(above, landingCenterY - droppedHeight / 2);
   while (up.minTop < 0) {
-    landingCenterY -= up.minTop;
+    landingCenterY += Math.ceil(-up.minTop);
     up = cascadeUp(above, landingCenterY - droppedHeight / 2);
   }
 
@@ -95,8 +100,9 @@ export function computeMakeRoom({
   let floor = landingCenterY + droppedHeight / 2 + MAKE_ROOM_GAP_PX;
   for (const { id, centerY, height } of below) {
     if (centerY - height / 2 >= floor) continue;
-    shifted.set(id, floor + height / 2);
-    floor += height + MAKE_ROOM_GAP_PX;
+    const centre = Math.ceil(floor + height / 2);
+    shifted.set(id, centre);
+    floor = centre + height / 2 + MAKE_ROOM_GAP_PX;
   }
   return { droppedCenterY: landingCenterY, shifted };
 }

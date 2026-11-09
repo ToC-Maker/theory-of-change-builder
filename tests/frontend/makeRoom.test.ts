@@ -137,6 +137,50 @@ describe('computeMakeRoom', () => {
     });
   });
 
+  describe('whole pixels', () => {
+    it('rounds a fractional landing centre', () => {
+      expect(room(300.4, [])).toEqual({ droppedCenterY: 300, shifted: {} });
+      expect(room(300.6, [])).toEqual({ droppedCenterY: 301, shifted: {} });
+    });
+
+    it('moves nodes to whole-pixel centres, away from the landing box, so the gap never shrinks', () => {
+      // Landing 301 (box 263..339). Below: a 75px node → exact centre 392.5,
+      // rounded away from the landing box to 393 (top 355.5, gap 16.5).
+      expect(room(300.6, [n('below', 330, 75)]).shifted).toEqual({ below: 393 });
+      // Above: bottom must be 247 → exact centre 209.5, rounded away to 209.
+      expect(room(300.6, [n('above', 290, 75)]).shifted).toEqual({ above: 209 });
+    });
+
+    it('holds the gap and whole pixels across a cascade of odd and even heights', () => {
+      for (const landing of [150.3, 301.5, 420.9]) {
+        const nodes = [n('a', 140, 75), n('b', 200, 77), n('c', 260, 76), n('d', 330, 75)];
+        const result = computeMakeRoom({ droppedCenterY: landing, droppedHeight: 77, nodes });
+        const boxes = [
+          { top: result.droppedCenterY - 77 / 2, bottom: result.droppedCenterY + 77 / 2 },
+          ...nodes.map((node) => {
+            const c = result.shifted.get(node.id) ?? node.centerY;
+            return { top: c - node.height / 2, bottom: c + node.height / 2 };
+          }),
+        ].sort((p, q) => p.top - q.top);
+        expect(Number.isInteger(result.droppedCenterY)).toBe(true);
+        for (const c of result.shifted.values()) expect(Number.isInteger(c)).toBe(true);
+        for (let i = 1; i < boxes.length; i++) {
+          expect(boxes[i].top - boxes[i - 1].bottom).toBeGreaterThanOrEqual(MAKE_ROOM_GAP_PX);
+        }
+      }
+    });
+
+    it('keeps a rounded node inside the column top', () => {
+      // A 75px node at the column top would exactly fit at centre 37.5; the
+      // whole-pixel centre 37 would put its top at -0.5, so the landing goes
+      // one px further down instead (130) and the node settles at 38 (top 0.5).
+      const result = room(100, [n('a', 50, 75)]);
+      expect(result.droppedCenterY).toBe(130);
+      expect(result.shifted.a).toBe(38);
+      expect(result.shifted.a - 75 / 2).toBeGreaterThanOrEqual(0);
+    });
+  });
+
   it('keys the shifts by id without touching Object.prototype names', () => {
     // A plain-object lookup of these ids would answer with inherited members.
     const { shifted } = computeMakeRoom({
