@@ -12,6 +12,7 @@ import { cleanup, act } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import type { ToCData } from '../../src/types';
 import {
+  canvas,
   move,
   nodeWrapper,
   pointer,
@@ -63,7 +64,7 @@ afterEach(() => {
 
 // Grab 30px below the node's top edge.
 const startDrag = (onDataChange?: (data: ToCData) => void) =>
-  startCanvasDrag(makeData(), { id: 'n-1', x: 100, y: NODE_TOP + 30 }, onDataChange);
+  startCanvasDrag(canvas(makeData(), onDataChange), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
 
 const tops = (...ids: string[]) => ids.map((id) => nodeWrapper(id).style.top);
 

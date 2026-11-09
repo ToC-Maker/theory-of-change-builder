@@ -4,6 +4,7 @@
 // its width are stubbed; everything else (layout snapshot, drag hook,
 // placement maths) is the real thing. Container coordinates equal client
 // coordinates: the container's own rect is all zeros.
+import type { ReactElement } from 'react';
 import { vi } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../../src/components/TheoryOfChangeGraph';
@@ -71,17 +72,18 @@ export const release = (x: number, y: number) =>
 export const pressEscape = () =>
   act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
 
+/** The editable canvas on frozen data (an updater that writes into it throws). */
+export const canvas = (data: ToCData, onDataChange?: (data: ToCData) => void) => (
+  <ToC data={deepFreeze(data)} showEditButton={true} onDataChange={onDataChange} />
+);
+
 /**
- * Renders the canvas on frozen data and presses on the grabbed node at
- * (`x`, `y`). Waits first for the layout hook's rAF-coalesced rect refresh
- * to read the stubbed rects.
+ * Renders `ui` and presses on the grabbed node at (`x`, `y`). Waits first
+ * for the layout hook's rAF-coalesced rect refresh to read the stubbed
+ * rects.
  */
-export async function startDrag(
-  data: ToCData,
-  grab: { id: string; x: number; y: number },
-  onDataChange?: (data: ToCData) => void,
-) {
-  render(<ToC data={deepFreeze(data)} showEditButton={true} onDataChange={onDataChange} />);
+export async function startDrag(ui: ReactElement, grab: { id: string; x: number; y: number }) {
+  render(ui);
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   });

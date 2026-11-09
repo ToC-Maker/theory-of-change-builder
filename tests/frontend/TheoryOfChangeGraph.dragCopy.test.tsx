@@ -12,6 +12,7 @@ import { cleanup, act } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
 import type { ToCData } from '../../src/types';
 import {
+  canvas,
   move,
   pointer,
   pressEscape,
@@ -68,7 +69,7 @@ const ghostShift = () => (ghost()!.firstElementChild as HTMLElement).style.trans
 
 // Grab 30px below the node's top edge.
 const startDrag = (onDataChange?: (data: ToCData) => void) =>
-  startCanvasDrag(makeData(), { id: 'n-1', x: 100, y: NODE_TOP + 30 }, onDataChange);
+  startCanvasDrag(canvas(makeData(), onDataChange), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
 
 // The first ToC render in a worker pays the lazy-import and JIT warm-up, which
 // can pass the 5s default on a busy machine.

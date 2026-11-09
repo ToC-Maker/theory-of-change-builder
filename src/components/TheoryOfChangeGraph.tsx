@@ -6,6 +6,7 @@ import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY, resolveNodeCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
 import { computeDropPreview } from '../utils/dropPreview';
+import { planColumnDrop } from '../utils/makeRoom';
 import { computeAlignedSections } from '../utils/alignNodes';
 import { useSuspendForExport } from '../utils/exportSuspend';
 import { NodeComponent } from './NodeComponent';
@@ -672,7 +673,7 @@ export function ToC({
       // top-of-column default. Every result is clamped below the
       // section title bar (PR #34 fb 46).
       const draggedNodeHeight = nodeHeights[draggedNodeId] || 76;
-      const adjustedYPosition = computeDropCenterY({
+      const landingCenterY = computeDropCenterY({
         cursorColumnLocalY:
           target.kind === 'node-slot' || target.kind === 'over-node' ? target.yPosition : null,
         pointerOffsetY: pointerOffset.y,
@@ -684,7 +685,7 @@ export function ToC({
         targetSectionIndex,
         targetColumnIndex,
         isNewColumn,
-        yPosition: adjustedYPosition,
+        yPosition: landingCenterY,
       });
 
       const isSameColumnMove =
@@ -708,7 +709,31 @@ export function ToC({
         }
         if (!sourceNode) return prevData;
 
-        // Same-column move: in-place yPosition update only.
+        // The nodes of the target column make room for the dropped one,
+        // by the same maths the live preview ran (`planColumnDrop`), and
+        // are written in this one change. A new column has no other
+        // nodes, so nothing shifts there. The plan reads the column as it
+        // is NOW, so a node moved or deleted since the drag began is
+        // accounted for.
+        const targetColumn = isNewColumn
+          ? undefined
+          : prevData.sections[targetSectionIndex]?.columns[targetColumnIndex];
+        const { droppedCenterY, shifted } = targetColumn
+          ? planColumnDrop({
+              columnNodes: targetColumn.nodes,
+              draggedId: draggedNodeId,
+              draggedHeight: draggedNodeHeight,
+              landingCenterY,
+              nodeHeights,
+            })
+          : { droppedCenterY: landingCenterY, shifted: {} };
+        const settle = (node: Node): Node => {
+          if (node.id === draggedNodeId) return { ...node, yPosition: droppedCenterY };
+          const yPosition = shifted[node.id];
+          return yPosition === undefined ? node : { ...node, yPosition };
+        };
+
+        // Same-column move: positions updated in place.
         if (isSameColumnMove) {
           const sectionsAfterMove = prevData.sections.map((section, sIndex) =>
             sIndex === targetSectionIndex
@@ -716,14 +741,7 @@ export function ToC({
                   ...section,
                   columns: section.columns.map((column, cIndex) =>
                     cIndex === targetColumnIndex
-                      ? {
-                          ...column,
-                          nodes: column.nodes.map((node) =>
-                            node.id === draggedNodeId
-                              ? { ...node, yPosition: adjustedYPosition }
-                              : node,
-                          ),
-                        }
+                      ? { ...column, nodes: column.nodes.map(settle) }
                       : column,
                   ),
                 }
@@ -743,15 +761,13 @@ export function ToC({
           })),
         }));
 
+        const droppedNode = settle(sourceNode);
         if (isNewColumn) {
           const targetSection = newData.sections[targetSectionIndex];
-          const newColumn = { nodes: [{ ...sourceNode, yPosition: adjustedYPosition }] };
-          targetSection.columns.splice(targetColumnIndex, 0, newColumn);
+          targetSection.columns.splice(targetColumnIndex, 0, { nodes: [droppedNode] });
         } else {
-          const nodeWithPosition = { ...sourceNode, yPosition: adjustedYPosition };
-          newData.sections[targetSectionIndex].columns[targetColumnIndex].nodes.push(
-            nodeWithPosition,
-          );
+          const column = newData.sections[targetSectionIndex].columns[targetColumnIndex];
+          column.nodes = [...column.nodes.map(settle), droppedNode];
         }
 
         return newData;
