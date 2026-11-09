@@ -10,6 +10,8 @@
 //   - Modal body copy adapts to node-count (empty vs non-empty).
 //   - Both `column` and `section` scopes work and produce the right
 //     test-id prefix.
+//   - Both scopes carry `data-export-exclude`: the bin is hidden at rest
+//     but shows on hover or focus, and exports must not capture it.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
@@ -90,6 +92,14 @@ describe('ColumnDeleteAffordance', () => {
     expect(modal.textContent).toContain('Delete section');
     expect(modal.textContent).toContain('section contains 5 node');
   });
+
+  it.each(['column', 'section'] as const)(
+    '%s scope: marked for exclusion from exports',
+    (scope) => {
+      render(<ColumnDeleteAffordance nodeCount={0} scope={scope} onDelete={vi.fn()} />);
+      expect(screen.getByTestId(`${scope}-delete`).hasAttribute('data-export-exclude')).toBe(true);
+    },
+  );
 
   it('click on × does not bubble (parent click handlers do not fire)', () => {
     const parentClick = vi.fn();

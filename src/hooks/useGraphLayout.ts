@@ -26,6 +26,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import type { RefObject } from 'react';
 import type { ToCData } from '../types';
+import { DEFAULT_NODE_WIDTH, columnWidth } from '../utils/nodeWidth';
 
 // ---------------------------------------------------------------------------
 // Pure-function types
@@ -232,7 +233,6 @@ export function scheduleRectRefresh(state: RefreshState, refresh: () => void): v
 
 export interface SectionWidthsOptions {
   columnPadding: number;
-  editMode: boolean;
 }
 
 export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions): number[] {
@@ -241,15 +241,10 @@ export function computeSectionWidths(data: ToCData, opts: SectionWidthsOptions):
   }
   return data.sections.map((section) => {
     const cols = section.columns;
-    if (cols.length === 0) return 192;
-    const columnWidths = cols.map((col) =>
-      col.nodes.length === 0 ? 128 : Math.max(...col.nodes.map((n) => n.width || 192), 128),
-    );
+    if (cols.length === 0) return DEFAULT_NODE_WIDTH;
+    const columnWidths = cols.map((col) => columnWidth(col.nodes));
     const totalColumnWidth = columnWidths.reduce((s, w) => s + w, 0);
-    // PR 5: edit mode renders the column-gutter affordances between
-    // columns, so the flex `gap` between columns is 0 (gutters provide
-    // their own spacing). View mode keeps the bare gaps.
-    const gaps = opts.editMode ? 0 : Math.max(0, columnWidths.length - 1) * opts.columnPadding;
+    const gaps = Math.max(0, columnWidths.length - 1) * opts.columnPadding;
     return totalColumnWidth + gaps;
   });
 }
@@ -268,7 +263,6 @@ export interface UseGraphLayoutArgs {
   containerRef: RefObject<HTMLElement | null>;
   columnPadding: number;
   sectionPadding: number;
-  editMode: boolean;
   /**
    * Current canvas zoom scale (1 = no zoom). `refresh()` divides every
    * viewport rect delta by this so the snapshot is content-space — see
@@ -293,12 +287,11 @@ export function useGraphLayout({
   containerRef,
   columnPadding,
   sectionPadding,
-  editMode,
   zoomScale = 1,
 }: UseGraphLayoutArgs): UseGraphLayoutResult {
   const sectionWidths = useMemo(
-    () => computeSectionWidths(data, { columnPadding, editMode }),
-    [data, columnPadding, editMode],
+    () => computeSectionWidths(data, { columnPadding }),
+    [data, columnPadding],
   );
 
   // Zoom behind a ref so `refresh` (and everything downstream of it —

@@ -50,7 +50,17 @@
 // and the curves export as solid black shapes. `withSvgPaintPinned` pins
 // the computed paint onto the SVG elements for the duration of the
 // capture and removes it afterwards.
+//
+// SVG exclusions: the same clone never calls the capture `filter` for
+// what is inside an `<svg>`, so `data-export-exclude` there is ignored by
+// the filter. `withSvgExclusionsHidden` hides those elements for the
+// duration of the capture instead.
+//
+// Selection: the canvas highlights what is selected or hovered (a ring, the
+// rest faded). `withSelectionCleared` clears that for the capture, so an
+// export always shows the chart as published, and puts the selection back.
 import type { ToCData } from '../types';
+import { suspendForExport } from './exportSuspend';
 
 /**
  * Trigger a download in the browser by creating an anonymous anchor,
@@ -193,6 +203,59 @@ async function withSvgPaintPinned<T>(root: HTMLElement, fn: () => Promise<T>): P
 }
 
 /**
+ * html-to-image calls `filter` for the HTML nodes it clones but never
+ * for what sits inside an `<svg>`, which it deep-clones as-is. A
+ * `data-export-exclude` element drawn in SVG (the connection handles)
+ * would therefore stay in the image.
+ *
+ * Hide each one for the duration of `fn`: the clone copies the inline
+ * `display: none`. Restores the previous inline value in a `finally`,
+ * like the other capture wrappers.
+ */
+async function withSvgExclusionsHidden<T>(root: HTMLElement, fn: () => Promise<T>): Promise<T> {
+  const hidden: { el: SVGElement; prev: string }[] = [];
+  root.querySelectorAll<SVGElement>('svg [data-export-exclude]').forEach((el) => {
+    hidden.push({ el, prev: el.style.display });
+    el.style.display = 'none';
+  });
+
+  try {
+    return await fn();
+  } finally {
+    for (const { el, prev } of hidden) el.style.display = prev;
+  }
+}
+
+/**
+ * Clear the canvas's selection and hover state for the duration of `fn`,
+ * then put the selection back (in a `finally`, like the other capture
+ * wrappers).
+ *
+ * `suspendForExport` commits the cleared state before it returns, so the
+ * DOM is clean when the capture starts. Nodes and connections fade over a
+ * CSS transition though, and the capture reads the style mid-fade, so
+ * transitions inside `root` are switched off first: the cleared state is
+ * then the computed state from the first read.
+ */
+async function withSelectionCleared<T>(root: HTMLElement, fn: () => Promise<T>): Promise<T> {
+  const noTransitions = document.createElement('style');
+  noTransitions.textContent =
+    '[data-exporting], [data-exporting] * { transition: none !important; }';
+  document.head.appendChild(noTransitions);
+  root.setAttribute('data-exporting', '');
+
+  let restoreSelection = () => {};
+  try {
+    restoreSelection = suspendForExport();
+    return await fn();
+  } finally {
+    restoreSelection();
+    root.removeAttribute('data-exporting');
+    noTransitions.remove();
+  }
+}
+
+/**
  * Shared capture-options shape for `toPng` / `toCanvas`. The `Options`
  * type from html-to-image is wider; we narrow to the fields we set.
  */
@@ -202,12 +265,24 @@ interface CaptureOptions {
   skipAutoScale: boolean;
   backgroundColor: string;
   cacheBust: boolean;
+  filter: (node: Node) => boolean;
+}
+
+/**
+ * html-to-image calls this for every node it clones, text nodes
+ * included. Elements that only help while editing (controls, handles,
+ * prompts) carry `data-export-exclude` and stay out of the image, so an
+ * export shows the chart as published.
+ */
+function includeInExport(node: Node): boolean {
+  return !(node instanceof Element && node.hasAttribute('data-export-exclude'));
 }
 
 /**
  * Resolve `fontEmbedCSS` via html-to-image's `getFontEmbedCSS`, then
  * invoke `capture` with the merged options inside
- * `withTransformNeutralized` and `withSvgPaintPinned`. Used by both
+ * `withTransformNeutralized`, `withSelectionCleared`,
+ * `withSvgPaintPinned` and `withSvgExclusionsHidden`. Used by both
  * `exportToPng` (renderer: `toPng`) and `exportToPdf` (renderer:
  * `toCanvas`).
  *
@@ -236,22 +311,27 @@ async function captureWithFonts<T>(
   }
 
   return withTransformNeutralized(canvasRoot, () =>
-    withSvgPaintPinned(canvasRoot, () =>
-      capture({
-        // Omit `fontEmbedCSS` when undefined so html-to-image performs
-        // its internal walk. When defined, pass through verbatim.
-        ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
-        // 2x for hidpi. `skipAutoScale: true` tells the library not to
-        // back off the resolution for "very large" trees — we already
-        // know our canvas size and want fidelity.
-        pixelRatio: 2,
-        skipAutoScale: true,
-        // White background so transparent PNGs don't look broken when
-        // dropped into a presentation. The canvas already has a white
-        // card, but other zoom states might bleed transparent edges.
-        backgroundColor: '#ffffff',
-        cacheBust: true,
-      }),
+    withSelectionCleared(canvasRoot, () =>
+      withSvgPaintPinned(canvasRoot, () =>
+        withSvgExclusionsHidden(canvasRoot, () =>
+          capture({
+            // Omit `fontEmbedCSS` when undefined so html-to-image performs
+            // its internal walk. When defined, pass through verbatim.
+            ...(fontEmbedCSS !== undefined ? { fontEmbedCSS } : {}),
+            // 2x for hidpi. `skipAutoScale: true` tells the library not to
+            // back off the resolution for "very large" trees — we already
+            // know our canvas size and want fidelity.
+            pixelRatio: 2,
+            skipAutoScale: true,
+            // White background so transparent PNGs don't look broken when
+            // dropped into a presentation. The canvas already has a white
+            // card, but other zoom states might bleed transparent edges.
+            backgroundColor: '#ffffff',
+            cacheBust: true,
+            filter: includeInExport,
+          }),
+        ),
+      ),
     ),
   );
 }
