@@ -57,6 +57,7 @@ Theory of Change graphs use nested structure: `sections[] → columns[] → node
 - `node.yPosition` is the CENTER Y coordinate, not top-left
 - Calculate top position: `yPosition - (nodeHeight / 2)`
 - Never treat yPosition as top coordinate or nodes will misalign
+- A node dropped into a column rewrites the `yPosition` of that column's other nodes that would overlap it, in the same change (`computeMakeRoom` in `src/utils/makeRoom.ts` is the single source; the live drag preview shows the same shifts at render time without saving them)
 
 **Connections:**
 - New format: `connections: [{ targetId, confidence, evidence, assumptions, waypoints? }]`
