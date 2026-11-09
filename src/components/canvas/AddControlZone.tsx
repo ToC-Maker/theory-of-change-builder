@@ -12,6 +12,14 @@
 // never hides it, and close on their own after a tap that is not followed
 // by a second one.
 //
+// Placement: the controls open at the pointer's height and, while a mouse
+// or pen moves along the zone, follow it (re-placed at most once per
+// animation frame, no top transition: it would only make them trail the
+// cursor). They hold still while the pointer is over them, otherwise the
+// first or last control of a row, reached by moving sideways, could slip
+// away from under the pointer; they follow again once it is back on the
+// strip. Touch has no hover: a tap places them at the tap and they stay.
+//
 // Sizes: controls are sized in on-screen pixels, not content pixels (the
 // content is divided by the canvas zoom, as the waypoint handles do), so
 // they are at least MOUSE_TARGET_PX wide for a mouse or pen and
@@ -215,7 +223,11 @@ export function AddControlZone({
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState({ top: 0, touch: false, clear: true });
   const openRef = useRef(false);
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const openedByTouch = useRef(false);
   const lastPointerY = useRef(0);
+  const placedAtY = useRef(0);
+  const followFrame = useRef<number | undefined>(undefined);
   const lastPointerType = useRef<'mouse' | 'touch'>('mouse');
   const intentTimer = useRef<number | undefined>(undefined);
   const hideTimer = useRef<number | undefined>(undefined);
@@ -229,13 +241,19 @@ export function AddControlZone({
   const anchor: Anchor = !outerEdge ? 'center' : edge === 'left' ? 'left' : 'right';
   const scale = 1 / zoomScale;
 
+  const cancelFollow = useCallback(() => {
+    if (followFrame.current !== undefined) window.cancelAnimationFrame(followFrame.current);
+    followFrame.current = undefined;
+  }, []);
+
   const hide = useCallback(() => {
     window.clearTimeout(intentTimer.current);
     window.clearTimeout(hideTimer.current);
     intentTimer.current = undefined;
+    cancelFollow();
     openRef.current = false;
     setOpen(false);
-  }, []);
+  }, [cancelFollow]);
 
   const reveal = (touch: boolean, pointerY: number) => {
     const zone = zoneRef.current;
@@ -251,8 +269,38 @@ export function AddControlZone({
       anchor,
     );
     setPlacement({ ...spot, touch });
+    openedByTouch.current = touch;
+    placedAtY.current = pointerY;
     openRef.current = true;
     setOpen(true);
+  };
+
+  // Moves the open controls to the pointer, on the next animation frame
+  // and at most once per frame. Stands still over the controls themselves.
+  const follow = (target: EventTarget) => {
+    if (openedByTouch.current) return;
+    if (controlsRef.current?.contains(target as Node)) {
+      cancelFollow();
+      return;
+    }
+    if (followFrame.current !== undefined) return;
+    followFrame.current = window.requestAnimationFrame(() => {
+      followFrame.current = undefined;
+      const zone = zoneRef.current;
+      const pointerY = lastPointerY.current;
+      if (!zone || !openRef.current || pointerY === placedAtY.current) return;
+      placedAtY.current = pointerY;
+      const spot = placeControls(
+        zone,
+        pointerY,
+        zoomScale,
+        controlSize(false, controls.length),
+        anchor,
+      );
+      setPlacement((prev) =>
+        prev.top === spot.top && prev.clear === spot.clear ? prev : { ...spot, touch: false },
+      );
+    });
   };
 
   // Hover intent: the pointer has to rest on the zone before the controls
@@ -260,7 +308,12 @@ export function AddControlZone({
   // inside a zone does not leave it dead until the pointer re-enters.
   const armIntent = (e: ReactPointerEvent<HTMLDivElement>) => {
     lastPointerY.current = e.clientY;
-    if (openRef.current || intentTimer.current !== undefined || e.buttons !== 0) return;
+    if (e.buttons !== 0) return;
+    if (openRef.current) {
+      follow(e.target);
+      return;
+    }
+    if (intentTimer.current !== undefined) return;
     intentTimer.current = window.setTimeout(
       () => reveal(false, lastPointerY.current),
       HOVER_INTENT_MS,
@@ -284,8 +337,9 @@ export function AddControlZone({
     () => () => {
       window.clearTimeout(intentTimer.current);
       window.clearTimeout(hideTimer.current);
+      cancelFollow();
     },
-    [],
+    [cancelFollow],
   );
 
   const size = controlSize(placement.touch, controls.length);
@@ -331,6 +385,7 @@ export function AddControlZone({
         if (e.pointerType === 'touch') return;
         window.clearTimeout(intentTimer.current);
         intentTimer.current = undefined;
+        cancelFollow();
         if (!openRef.current) return;
         window.clearTimeout(hideTimer.current);
         hideTimer.current = window.setTimeout(hide, HOVER_GRACE_MS);
@@ -378,6 +433,7 @@ export function AddControlZone({
         </span>
       </div>
       <div
+        ref={controlsRef}
         data-revealed={open}
         className={`absolute flex transition-opacity duration-100 ${placement.clear ? 'z-[5]' : 'z-30'} ${open ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         style={{ ...controlsStyle, gap: CONTROL_GAP_PX }}
