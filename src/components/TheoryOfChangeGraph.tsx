@@ -5,6 +5,7 @@ import { ToCData, Node } from '../types';
 import { getContrastTextColor } from '../utils';
 import { clampNodeCenterY, computeDropCenterY } from '../utils/nodePosition';
 import { computeLandingIndicator } from '../utils/landingIndicator';
+import { computeDropPreview } from '../utils/dropPreview';
 import { computeAlignedSections } from '../utils/alignNodes';
 import { useSuspendForExport } from '../utils/exportSuspend';
 import { NodeComponent } from './NodeComponent';
@@ -789,6 +790,18 @@ export function ToC({
       nodeEditorDragStartRef.current?.();
     },
   });
+
+  // Where the dragged node's copy snaps while the pointer is over a
+  // column, or null (copy follows the cursor). Computed from the same
+  // placement formula `handleDrop` uses.
+  const dropPreview = dragState
+    ? computeDropPreview({
+        dragState,
+        snapshot: getSnapshot(),
+        zoomScale,
+        nodeHeight: nodeHeights[dragState.nodeId] || 76,
+      })
+    : null;
 
   // PR 5 Task 5.3: column / section delete callbacks shared by the
   // hover-`×` affordance. Each writes through `setDataAndNotify` so the
@@ -1767,85 +1780,98 @@ export function ToC({
           />
         )}
 
-        {/* Landing indicator: a thin insertion line in the target
-            column (or a tinted gutter for a new column) at the spot
-            the node will land. Computed from the same placement
-            formula `handleDrop` uses; absent unless a drag has left
-            the tap dead-zone. */}
+        {/* Landing indicator: the tinted gutter a new column would be
+            inserted into. Over a column body nothing is drawn here; the
+            dragged node's copy snaps into place instead (below). Absent
+            unless a drag has left the tap dead-zone. */}
         {dragState ? (
           <DropLandingIndicator
-            indicator={computeLandingIndicator({
-              dragState,
-              snapshot: getSnapshot(),
-              zoomScale,
-              nodeHeight: nodeHeights[dragState.nodeId] || 76,
-            })}
+            indicator={computeLandingIndicator({ dragState, snapshot: getSnapshot() })}
             zoomScale={zoomScale}
           />
         ) : null}
 
-        {/* PR 4 + PR 7 feedback (#3): single cursor-following ghost
-            that is a visual clone of the dragged node. Renders the
-            actual title/color/size/font so the user is looking at the
-            same thing they grabbed (with reduced opacity); previously
-            two abstract indigo silhouettes rendered side-by-side which
-            confused reviewers about which one represented the drop
-            target. The original node still renders at half opacity in
+        {/* PR 4 + PR 7 feedback (#3): the dragged node's copy, a visual
+            clone of it. Renders the actual title/color/size/font so the
+            user is looking at the same thing they grabbed (with reduced
+            opacity). The original node still renders at half opacity in
             place via NodeComponent's `isDragging` prop above (visual
-            anchor for the source location). No separate drop-preview
-            silhouette: the landing indicator above marks the spot with a
-            line, never a second node shape. The ghost sits in the same
-            transform stack as the canvas so it translates with pan/zoom. */}
+            anchor for the source location). There is no separate
+            drop-preview silhouette, which confused reviewers about which
+            shape was the node.
+
+            Over a column the copy snaps into it, centred and at the exact
+            height the drop will place the node (`dropPreview`); anywhere
+            else it follows the cursor. The copy sits in the same transform
+            stack as the canvas so it translates with pan/zoom.
+
+            Two nested elements keep the axes separate: the outer one carries
+            the vertical position (`top`, never transitioned, so the copy
+            tracks the pointer's vertical moves without lag) and the inner
+            one the horizontal position as a transform. Only while snapped
+            does the inner one glide, so the jump between columns is
+            softened but the cursor-following copy is never delayed. */}
         {dragState && dragState.hasMoved && graphContainerRef.current
           ? (() => {
               const draggedLoc = findNodeLocation(dragState.nodeId);
               if (!draggedLoc) return null;
               const draggedNode = draggedLoc.node;
 
-              // Translate ghostPos (viewport coords) to container-local
-              // so the absolute-positioned ghost lines up with the
-              // canvas geometry. The cursor offset within the node is
-              // preserved (the grab point stays under the finger / mouse).
+              // Follow the cursor: translate ghostPos (viewport coords) to
+              // container-local so the absolute-positioned copy lines up
+              // with the canvas geometry. The cursor offset within the
+              // node is preserved (the grab point stays under the finger
+              // / mouse).
               const containerRect = graphContainerRef.current.getBoundingClientRect();
               const localX = (dragState.ghostPos.x - containerRect.left) / zoomScale;
               const localY = (dragState.ghostPos.y - containerRect.top) / zoomScale;
               const offsetXLocal = dragState.pointerOffset.x / zoomScale;
               const offsetYLocal = dragState.pointerOffset.y / zoomScale;
               const ghostWidth = dragState.nodeSize.width;
+              const copyLeft = dropPreview ? dropPreview.copy.left : localX - offsetXLocal;
+              const copyTop = dropPreview ? dropPreview.copy.top : localY - offsetYLocal;
               return (
                 <div
-                  className="pointer-events-none absolute z-[60] opacity-50"
-                  style={{
-                    left: `${localX - offsetXLocal}px`,
-                    top: `${localY - offsetYLocal}px`,
-                    width: `${ghostWidth}px`,
-                  }}
+                  className="pointer-events-none absolute left-0 z-[60] opacity-50"
+                  style={{ top: `${copyTop}px` }}
                   aria-hidden
                   data-testid="node-drag-ghost"
                 >
-                  {/* Mirrors NodeComponent's visual chrome (sans
-                      interactive bits — no ring, no hover scale, no
-                      connection handles). The ghost is a pure visual
-                      duplicate so the user sees the exact node they're
-                      dragging, only translucent. */}
                   <div
-                    className="flex flex-col border-0 rounded-xl shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] pt-3 px-3 pb-6 select-none"
+                    className={
+                      dropPreview
+                        ? 'transition-transform duration-[90ms] ease-out motion-reduce:transition-none'
+                        : undefined
+                    }
                     style={{
-                      backgroundColor: draggedNode.color || '#ffffff',
+                      transform: `translateX(${copyLeft}px)`,
+                      width: `${ghostWidth}px`,
                     }}
                   >
-                    <div className="flex flex-col justify-center relative py-2">
-                      <div
-                        className="font-medium text-center leading-tight break-words"
-                        style={{
-                          fontSize: `${textSize * 1.125}rem`,
-                          fontFamily: fontFamily,
-                          color: draggedNode.color
-                            ? getContrastTextColor(draggedNode.color)
-                            : '#000000',
-                        }}
-                      >
-                        {draggedNode.title}
+                    {/* Mirrors NodeComponent's visual chrome (sans
+                        interactive bits — no ring, no hover scale, no
+                        connection handles). The copy is a pure visual
+                        duplicate so the user sees the exact node they're
+                        dragging, only translucent. */}
+                    <div
+                      className="flex flex-col border-0 rounded-xl shadow-[0_10px_15px_-3px_rgba(0,0,0,0.3),_0_4px_6px_-2px_rgba(0,0,0,0.15)] pt-3 px-3 pb-6 select-none"
+                      style={{
+                        backgroundColor: draggedNode.color || '#ffffff',
+                      }}
+                    >
+                      <div className="flex flex-col justify-center relative py-2">
+                        <div
+                          className="font-medium text-center leading-tight break-words"
+                          style={{
+                            fontSize: `${textSize * 1.125}rem`,
+                            fontFamily: fontFamily,
+                            color: draggedNode.color
+                              ? getContrastTextColor(draggedNode.color)
+                              : '#000000',
+                          }}
+                        >
+                          {draggedNode.title}
+                        </div>
                       </div>
                     </div>
                   </div>

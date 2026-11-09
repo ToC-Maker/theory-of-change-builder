@@ -1,10 +1,12 @@
-// Wiring of the drag landing indicator in the canvas: it appears once a
-// node drag has left the tap dead-zone, sits where the drop will place the
-// node, and is gone on drop, Escape and unmount.
+// Wiring of the dragged node's copy in the canvas: once a drag has left the
+// tap dead-zone the copy snaps into the column under the pointer, centred
+// and at the height the drop will place the node, with no line drawn in the
+// column. Over a gap between columns it follows the cursor and the gap is
+// tinted; it is gone on drop, Escape and unmount.
 //
-// jsdom has no layout, so the columns' and the grabbed node's rects are
-// stubbed; everything else (layout snapshot, drag hook, placement maths)
-// is the real thing.
+// jsdom has no layout, so the columns', the grabbed node's rects and its
+// width are stubbed; everything else (layout snapshot, drag hook, placement
+// maths) is the real thing.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { ToC } from '../../src/components/TheoryOfChangeGraph';
@@ -48,6 +50,12 @@ function rect(left: number, top: number, right: number, bottom: number): DOMRect
 }
 
 beforeEach(() => {
+  // The grabbed node is 192px wide; nothing else has a measured width.
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.id === 'node-n-1' ? 192 : 0;
+  });
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
     const column = (this as HTMLElement).dataset?.column;
     if (column && COLUMN_RECTS[column]) {
@@ -67,6 +75,11 @@ afterEach(() => {
 
 const indicator = () =>
   document.querySelector<HTMLElement>('[data-testid="drop-landing-indicator"]');
+const ghost = () => document.querySelector<HTMLElement>('[data-testid="node-drag-ghost"]');
+// The ghost's vertical position is the outer element's `top`; its horizontal
+// position is a translateX on the element inside it.
+const ghostTop = () => ghost()!.style.top;
+const ghostShift = () => (ghost()!.firstElementChild as HTMLElement).style.transform;
 
 function pointer(type: string, x: number, y: number) {
   const event = new Event(type, { bubbles: true, cancelable: true });
@@ -95,68 +108,103 @@ const move = (x: number, y: number) =>
 
 // The first ToC render in a worker pays the lazy-import and JIT warm-up, which
 // can pass the 5s default on a busy machine.
-describe('TheoryOfChangeGraph drag landing indicator', { timeout: 20_000 }, () => {
+describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
   it('is absent before the pointer leaves the tap dead-zone', async () => {
     await startDrag();
     move(102, NODE_TOP + 31);
+    expect(ghost()).toBeNull();
     expect(indicator()).toBeNull();
   });
 
-  it('shows an insertion line at the dropped node top edge once the drag is under way', async () => {
+  it('snaps into the column under the pointer, centred, at the height the drop will use', async () => {
     await startDrag();
     // Cursor over column 0-0 at container y 400 = column-local 300; grab
-    // offset 30 → node top at column-local 270 → container y 370.
+    // offset 30 → node top at column-local 270 → container y 370. The
+    // column's centre is 150, so the 192px copy starts at 54.
     move(100, 400);
-    const el = indicator();
-    expect(el).not.toBeNull();
-    expect(el!.dataset.kind).toBe('line');
-    expect(el!.style.left).toBe('50px');
-    expect(el!.style.width).toBe('200px');
-    // 3px line centred on 370.
-    expect(el!.style.top).toBe('368.5px');
+    expect(ghostTop()).toBe('370px');
+    expect(ghostShift()).toBe('translateX(54px)');
   });
 
-  it('follows the cursor into another column', async () => {
+  it('draws no line in the column', async () => {
+    await startDrag();
+    move(100, 400);
+    expect(indicator()).toBeNull();
+  });
+
+  it('snaps into another column when the pointer crosses into it', async () => {
     await startDrag();
     move(100, 400);
     move(350, 500);
-    const el = indicator();
-    expect(el!.style.left).toBe('274px');
-    // column-local 400 - 30 = 370 → container y 470.
-    expect(el!.style.top).toBe('468.5px');
+    // Column 0-1 centre is 374; column-local 400 - 30 = 370 → container y 470.
+    expect(ghostShift()).toBe('translateX(278px)');
+    expect(ghostTop()).toBe('470px');
   });
 
-  it('highlights the gutter when the cursor is between two columns', async () => {
+  it('tracks vertical pointer moves within the column at once', async () => {
     await startDrag();
-    move(262, 400);
+    move(100, 400);
+    move(120, 450);
+    expect(ghostTop()).toBe('420px');
+    expect(ghostShift()).toBe('translateX(54px)');
+  });
+
+  it('glides only sideways, only while snapped: the vertical position never transitions', async () => {
+    await startDrag();
+    move(100, 400);
+    expect(ghost()!.className).not.toContain('transition');
+    expect(ghost()!.firstElementChild!.className).toContain('transition-transform');
+    expect(ghost()!.firstElementChild!.className).toContain('motion-reduce:transition-none');
+    // Over a gap the copy follows the cursor, so it must not lag behind it.
+    move(262, 450);
+    expect(ghost()!.firstElementChild!.className).not.toContain('transition');
+  });
+
+  it('highlights the gap between two columns and follows the cursor there', async () => {
+    await startDrag();
+    move(262, 450);
     const el = indicator();
     expect(el!.dataset.kind).toBe('gutter');
     expect(el!.style.left).toBe('250px');
     expect(el!.style.width).toBe('24px');
+    // Grab point (50, 30) stays under the cursor: left 262 - 50, top 450 - 30.
+    expect(ghostShift()).toBe('translateX(212px)');
+    expect(ghostTop()).toBe('420px');
+  });
+
+  it('follows the cursor outside every drop region', async () => {
+    await startDrag();
+    // Below the columns (y > 900): no region.
+    move(100, 950);
+    expect(indicator()).toBeNull();
+    expect(ghostShift()).toBe('translateX(50px)');
+    expect(ghostTop()).toBe('920px');
   });
 
   it('is removed on Escape', async () => {
     await startDrag();
     move(100, 400);
-    expect(indicator()).not.toBeNull();
+    expect(ghost()).not.toBeNull();
     act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
-    expect(indicator()).toBeNull();
+    expect(ghost()).toBeNull();
   });
 
-  it('is removed on drop', async () => {
+  it('is removed on drop, with the gap tint', async () => {
     await startDrag();
-    move(100, 400);
+    move(262, 450);
+    expect(ghost()).not.toBeNull();
     expect(indicator()).not.toBeNull();
-    act(() => void document.dispatchEvent(pointer('pointerup', 100, 400)));
+    act(() => void document.dispatchEvent(pointer('pointerup', 262, 450)));
+    expect(ghost()).toBeNull();
     expect(indicator()).toBeNull();
   });
 
   it('is removed when the pointer is cancelled', async () => {
     await startDrag();
     move(100, 400);
-    expect(indicator()).not.toBeNull();
+    expect(ghost()).not.toBeNull();
     act(() => void document.dispatchEvent(pointer('pointercancel', 100, 400)));
-    expect(indicator()).toBeNull();
+    expect(ghost()).toBeNull();
   });
 
   it('dropping on another column moves the node there and leaves the previous state intact', async () => {
@@ -174,8 +222,8 @@ describe('TheoryOfChangeGraph drag landing indicator', { timeout: 20_000 }, () =
   it('is gone when the canvas unmounts mid-drag', async () => {
     await startDrag();
     move(100, 400);
-    expect(indicator()).not.toBeNull();
+    expect(ghost()).not.toBeNull();
     cleanup();
-    expect(indicator()).toBeNull();
+    expect(ghost()).toBeNull();
   });
 });
