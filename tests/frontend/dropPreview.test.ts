@@ -1,7 +1,10 @@
 // `computeDropPreview` says where the dragged node's copy sits while the
-// pointer is over a column: snapped into the column, horizontally centred
-// as the node will sit, at the height the drop will place it (the same
+// pointer is over a column: snapped into the column, horizontally where
+// the node will sit, at the height the drop will place it (the same
 // `computeDropCenterY` formula `handleDrop` uses, so clamp included).
+// Columns are left-anchored and take the width of their widest node, so a
+// node narrower than its column is centred in it and a wider one pushes
+// the column's right edge out, leaving its left edge where it was.
 // Anywhere else (a gap between columns, outside every drop region, before
 // the tap dead-zone is crossed) it returns null and the copy follows the
 // cursor.
@@ -40,13 +43,14 @@ const dragState = (over: Partial<DragState> = {}): DragState => ({
   ...over,
 });
 
-const node = (id: string, yPosition: number): Node => ({
+const node = (id: string, yPosition: number, width?: number): Node => ({
   id,
   title: id,
   text: '',
   connectionIds: [],
   connections: [],
   yPosition,
+  width,
 });
 
 // The columns the snapshot describes, with the dragged node n-1 in 0-0.
@@ -67,15 +71,15 @@ const args = (state: DragState, zoomScale = 1, sections = emptySections()) => ({
 });
 
 describe('computeDropPreview — over a column', () => {
-  it('centres the copy on the column, at the height the drop will place the node', () => {
+  it('puts the copy where the dropped node will sit, at the height the drop uses', () => {
     // Cursor at column-local 300, grabbed 30px below the node top → top at
-    // local 270, centre 308 → container y 100 + 270. Column centre is 150,
-    // so a 192px copy starts at 54.
+    // local 270, centre 308 → container y 100 + 270. A 192px node is as
+    // wide as its column, so it starts at the column's left, 50.
     expect(computeDropPreview(args(dragState()))).toEqual({
       sectionIndex: 0,
       columnIndex: 0,
       centerY: 308,
-      copy: { left: 54, top: 370 },
+      copy: { left: 50, top: 370 },
       shifted: {},
     });
   });
@@ -84,10 +88,10 @@ describe('computeDropPreview — over a column', () => {
     const state = dragState({
       dragOverLocation: { kind: 'node-slot', sectionIndex: 0, columnIndex: 1, yPosition: 400 },
     });
-    // Column 0-1 centre is 374 → 374 - 96; local top 370 → 100 + 370.
+    // Column 0-1 starts at 274; local top 370 → 100 + 370.
     expect(computeDropPreview(args(state))).toMatchObject({
       columnIndex: 1,
-      copy: { left: 278, top: 470 },
+      copy: { left: 274, top: 470 },
     });
   });
 
@@ -114,15 +118,40 @@ describe('computeDropPreview — over a column', () => {
     expect(computeDropPreview(args(state))).toMatchObject({ centerY: 38, copy: { top: 100 } });
   });
 
-  it('keeps a node wider than its column centred on the column', () => {
-    // A 128px empty column takes a 192px node and widens around its centre.
-    const narrow: LayoutSnapshot = {
-      ...snapshot,
-      columnRects: [[{ left: 100, right: 228, top: 100, bottom: 900 }]],
-    };
-    expect(computeDropPreview({ ...args(dragState()), snapshot: narrow })).toMatchObject({
-      copy: { left: 164 - 96 },
+  it('keeps a wider node at the column left: the column grows rightwards', () => {
+    // The column's 128px node is narrower than the 192px one dropped in, so
+    // the column becomes 192 wide with its left edge where it was.
+    const state = dragState({
+      dragOverLocation: { kind: 'node-slot', sectionIndex: 0, columnIndex: 1, yPosition: 300 },
     });
+    const sections = emptySections({ '0-1': [node('narrow', 600, 128)] });
+    expect(computeDropPreview(args(state, 1, sections))).toMatchObject({
+      copy: { left: 274 },
+    });
+  });
+
+  it('centres a node narrower than the column in it', () => {
+    // The column is 320 wide (its widest node), the dropped node 192.
+    const state = dragState({
+      dragOverLocation: { kind: 'node-slot', sectionIndex: 0, columnIndex: 1, yPosition: 300 },
+    });
+    const sections = emptySections({ '0-1': [node('wide', 600, 320)] });
+    expect(computeDropPreview(args(state, 1, sections))).toMatchObject({
+      copy: { left: 274 + (320 - 192) / 2 },
+    });
+  });
+
+  it('counts the dragged node in the width of the column it lands in', () => {
+    // n-1 is the 320px node that sets 0-0's width; dropped back into its own
+    // column it still does, so it sits at the column's left.
+    const state = dragState({ nodeSize: { width: 320, height: 76 } });
+    const sections = emptySections({ '0-0': [node('n-1', 200, 320), node('small', 600, 128)] });
+    expect(computeDropPreview(args(state, 1, sections))).toMatchObject({ copy: { left: 50 } });
+  });
+
+  it('centres a node narrower than the 128px column minimum in it', () => {
+    const state = dragState({ nodeSize: { width: 100, height: 76 } });
+    expect(computeDropPreview(args(state))).toMatchObject({ copy: { left: 50 + 14 } });
   });
 
   it('uses the rect of the section the cursor is over', () => {
@@ -131,7 +160,7 @@ describe('computeDropPreview — over a column', () => {
     });
     expect(computeDropPreview(args(state))).toMatchObject({
       sectionIndex: 1,
-      copy: { left: 622 - 96, top: 100 + 500 - 30 },
+      copy: { left: 522, top: 100 + 500 - 30 },
     });
   });
 

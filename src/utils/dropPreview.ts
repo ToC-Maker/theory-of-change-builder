@@ -2,8 +2,8 @@
 // in CONTENT space (container-relative px with the zoom transform factored
 // out, the same space as the layout snapshot's column rects).
 //
-// Over a column the copy snaps into it, horizontally centred the way the
-// node will sit, at the height the drop will place it. The height goes
+// Over a column the copy snaps into it, horizontally where the node will
+// sit, at the height the drop will place it. The height goes
 // through `computeDropCenterY`, the single placement formula `handleDrop`
 // uses, so the copy shows exactly where the node lands, clamp included.
 // Everywhere else (a gap between columns, outside every drop region) there
@@ -18,6 +18,7 @@ import type { LayoutSnapshot } from '../hooks/useGraphLayout';
 import type { ToCData } from '../types';
 import { planColumnDrop } from './makeRoom';
 import { computeDropCenterY } from './nodePosition';
+import { columnWidth } from './nodeWidth';
 
 export interface DropPreview {
   sectionIndex: number;
@@ -46,9 +47,19 @@ export interface DropPreviewArgs {
  * (a new-column gap, which draws its own indicator, and `new-section`,
  * which `handleDrop` ignores).
  *
- * The column grows to fit a node wider than it (empty columns are 128px),
- * widening around its centre, so the copy is centred on the column either
- * way.
+ * Horizontal placement follows how the layout grows: columns are
+ * left-anchored and are as wide as their widest node (`columnWidth`), so a
+ * node narrower than the column it lands in is centred in it, and a wider
+ * one makes the column grow rightwards, leaving its left edge where it
+ * was. The width counts the dragged node, which is in the column after the
+ * drop, and not the pre-drop rect.
+ *
+ * Not modelled, so the copy can be off the landed spot by the amount noted:
+ *  - a section whose title bar is wider than its columns' row centres the
+ *    row in the bar, so growing a column moves its left edge too;
+ *  - the dragged node leaving its source column shrinks that column when
+ *    it was the widest, which shifts every column to its right in the same
+ *    section, and the sections after it, left by the difference.
  */
 export function computeDropPreview({
   dragState,
@@ -66,6 +77,10 @@ export function computeDropPreview({
   if (!col || !column) return null;
 
   const nodeHeight = nodeHeights[dragState.nodeId] || 76;
+  const landedColumnWidth = columnWidth([
+    ...column.nodes.filter((node) => node.id !== dragState.nodeId),
+    { width: dragState.nodeSize.width },
+  ]);
   const { droppedCenterY, shifted } = planColumnDrop({
     columnNodes: column.nodes,
     draggedId: dragState.nodeId,
@@ -83,7 +98,7 @@ export function computeDropPreview({
     columnIndex: target.columnIndex,
     centerY: droppedCenterY,
     copy: {
-      left: (col.left + col.right) / 2 - dragState.nodeSize.width / 2,
+      left: col.left + (landedColumnWidth - dragState.nodeSize.width) / 2,
       top: col.top + droppedCenterY - nodeHeight / 2,
     },
     shifted,

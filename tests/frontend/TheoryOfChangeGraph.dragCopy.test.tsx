@@ -85,10 +85,11 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     await startDrag();
     // Cursor over column 0-0 at container y 400 = column-local 300; grab
     // offset 30 → node top at column-local 270 → container y 370. The
-    // column's centre is 150, so the 192px copy starts at 54.
+    // 192px node is as wide as its column, so it starts at the column's
+    // left edge, 50.
     move(100, 400);
     expect(ghostTop()).toBe('370px');
-    expect(ghostShift()).toBe('translateX(54px)');
+    expect(ghostShift()).toBe('translateX(50px)');
   });
 
   it('draws no line in the column', async () => {
@@ -101,8 +102,8 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     await startDrag();
     move(100, 400);
     move(350, 500);
-    // Column 0-1 centre is 374; column-local 400 - 30 = 370 → container y 470.
-    expect(ghostShift()).toBe('translateX(278px)');
+    // Column 0-1 starts at 274; column-local 400 - 30 = 370 → container y 470.
+    expect(ghostShift()).toBe('translateX(274px)');
     expect(ghostTop()).toBe('470px');
   });
 
@@ -111,7 +112,7 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     move(100, 400);
     move(120, 450);
     expect(ghostTop()).toBe('420px');
-    expect(ghostShift()).toBe('translateX(54px)');
+    expect(ghostShift()).toBe('translateX(50px)');
   });
 
   it('glides only sideways, only while snapped: the vertical position never transitions', async () => {
