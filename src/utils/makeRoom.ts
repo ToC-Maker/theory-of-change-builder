@@ -1,0 +1,140 @@
+// Make-room maths for dropping a node into a column that already holds
+// others. Given where the dropped node's box lands, it works out the
+// vertical shifts that keep every node of the column clear of it, so the
+// live drag preview and the drop commit share one answer and cannot
+// disagree.
+//
+// Rules:
+//   - Only the target column's nodes move, and only vertically; they keep
+//     their order.
+//   - Nodes whose centre is at or below the dropped centre move down, the
+//     others up, each just far enough to leave MAKE_ROOM_GAP_PX between
+//     boxes. A node moves only when it is closer than that to the dropped
+//     box or to the node before it in the cascade, as that one now sits;
+//     nodes that clear it stay where they are.
+//   - Upward moves stop at the top of the column (a box may not rise above
+//     y = 0, the clamp `clampNodeCenterY` applies). When the nodes above
+//     cannot fit even then, the dropped node moves down by the shortfall
+//     and the downward cascade starts from there.
+//   - Every centre the function returns is a whole number of px: the landing
+//     centre is rounded, and a moved node's centre is rounded away from the
+//     dropped box, so the gap is never shorter than MAKE_ROOM_GAP_PX. Saved
+//     charts then do not accumulate long fractions from cursor positions.
+import type { Node } from '../types';
+import { resolveNodeCenterY } from './nodePosition';
+
+/**
+ * Minimum space kept between stacked node boxes, in column-content px.
+ * The canvas has no minimum spacing of its own: double-click adds a node
+ * at the click, the arrow keys move in 20px steps, and unpositioned nodes
+ * stack 180px top to top. So 16px is chosen here.
+ */
+export const MAKE_ROOM_GAP_PX = 16;
+
+export interface MakeRoomNode {
+  id: string;
+  /** Centre Y as the node renders, column-local px. */
+  centerY: number;
+  height: number;
+}
+
+export interface MakeRoomArgs {
+  /** Centre Y where the dropped node's box lands (already clamped). */
+  droppedCenterY: number;
+  droppedHeight: number;
+  /** The column's nodes, without the dropped one. */
+  nodes: readonly MakeRoomNode[];
+}
+
+export interface MakeRoomResult {
+  /** Where the dropped node ends up: the requested centre, or lower when pushed. */
+  droppedCenterY: number;
+  /** New centre Y by node id, for the nodes that moved only. */
+  shifted: Map<string, number>;
+}
+
+/**
+ * Shifts nodes away from `droppedTop` toward the top of the column.
+ * Returns each moved node's new centre and the highest top edge reached
+ * (negative when the stack does not fit).
+ */
+function cascadeUp(
+  above: readonly MakeRoomNode[],
+  droppedTop: number,
+): { moved: Map<string, number>; minTop: number } {
+  const moved = new Map<string, number>();
+  let minTop = Infinity;
+  let ceiling = droppedTop - MAKE_ROOM_GAP_PX;
+  for (let i = above.length - 1; i >= 0; i--) {
+    const { id, centerY, height } = above[i];
+    if (centerY + height / 2 <= ceiling) continue;
+    const centre = Math.floor(ceiling - height / 2);
+    const top = centre - height / 2;
+    moved.set(id, centre);
+    minTop = Math.min(minTop, top);
+    ceiling = top - MAKE_ROOM_GAP_PX;
+  }
+  return { moved, minTop };
+}
+
+export function computeMakeRoom({
+  droppedCenterY,
+  droppedHeight,
+  nodes,
+}: MakeRoomArgs): MakeRoomResult {
+  const sorted = nodes
+    .map((node, order) => ({ node, order }))
+    .sort((a, b) => a.node.centerY - b.node.centerY || a.order - b.order)
+    .map(({ node }) => node);
+  let landingCenterY = Math.round(droppedCenterY);
+  const above = sorted.filter((node) => node.centerY < landingCenterY);
+  const below = sorted.filter((node) => node.centerY >= landingCenterY);
+
+  let up = cascadeUp(above, landingCenterY - droppedHeight / 2);
+  while (up.minTop < 0) {
+    landingCenterY += Math.ceil(-up.minTop);
+    up = cascadeUp(above, landingCenterY - droppedHeight / 2);
+  }
+
+  const shifted = new Map(up.moved);
+  let floor = landingCenterY + droppedHeight / 2 + MAKE_ROOM_GAP_PX;
+  for (const { id, centerY, height } of below) {
+    if (centerY - height / 2 >= floor) continue;
+    const centre = Math.ceil(floor + height / 2);
+    shifted.set(id, centre);
+    floor = centre + height / 2 + MAKE_ROOM_GAP_PX;
+  }
+  return { droppedCenterY: landingCenterY, shifted };
+}
+
+export interface PlanColumnDropArgs {
+  /** The target column's nodes in stored order (the dragged one may be among them). */
+  columnNodes: readonly Node[];
+  draggedId: string;
+  draggedHeight: number;
+  /** Where the dragged node's box lands: `computeDropCenterY`'s result. */
+  landingCenterY: number;
+  /** Measured heights by node id; unmeasured nodes count as 76px, like the renderer. */
+  nodeHeights: Readonly<Record<string, number>>;
+}
+
+/**
+ * `computeMakeRoom` for a column of stored nodes: reads each at the
+ * centre it renders and leaves the dragged node's own slot out, so a
+ * drag within a column is not blocked by where the node came from.
+ */
+export function planColumnDrop({
+  columnNodes,
+  draggedId,
+  draggedHeight,
+  landingCenterY,
+  nodeHeights,
+}: PlanColumnDropArgs): MakeRoomResult {
+  const nodes: MakeRoomNode[] = [];
+  columnNodes.forEach((node, index) => {
+    if (node.id === draggedId) return;
+    const height = nodeHeights[node.id] || 76;
+    nodes.push({ id: node.id, height, centerY: resolveNodeCenterY(node.yPosition, index, height) });
+  });
+  return computeMakeRoom({ droppedCenterY: landingCenterY, droppedHeight: draggedHeight, nodes });
+}

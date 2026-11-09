@@ -1,8 +1,9 @@
-// Drag landing indicator — the thin mark that shows where a dragged
-// node will land. Deliberately NOT node-shaped: a second node outline
-// next to the cursor-following clone would be indistinguishable from the
-// node being dragged. An insertion line (or a tinted gutter for a new
-// column) cannot be mistaken for one.
+// Drag landing indicator — the tinted strip that shows where a dragged
+// node would land when it is over the gap between two columns (a new
+// column). Deliberately NOT node-shaped: a second node outline next to the
+// cursor-following copy would be indistinguishable from the node being
+// dragged. Over a column body the copy itself snaps into place, so this
+// draws nothing there.
 //
 // Absolutely positioned, pointer-transparent overlay in the canvas
 // transform stack, so it never reflows the columns and moves with
@@ -11,7 +12,7 @@
 // and unmount, and is never present when a chart is exported.
 import type { LandingIndicator } from '../../utils/landingIndicator';
 
-/** Line thickness on screen, so it stays visible at low zoom. */
+/** Thickness of the strip's centre line on screen, so it stays visible at low zoom. */
 const LINE_SCREEN_PX = 3;
 
 interface DropLandingIndicatorProps {
@@ -22,24 +23,6 @@ interface DropLandingIndicatorProps {
 export function DropLandingIndicator({ indicator, zoomScale }: DropLandingIndicatorProps) {
   if (!indicator) return null;
   const thickness = LINE_SCREEN_PX / zoomScale;
-
-  if (indicator.kind === 'line') {
-    return (
-      <div
-        className="pointer-events-none absolute z-[61] rounded-full bg-blue-500"
-        style={{
-          left: `${indicator.left}px`,
-          // Centre the line on the node's top edge.
-          top: `${indicator.top - thickness / 2}px`,
-          width: `${indicator.width}px`,
-          height: `${thickness}px`,
-        }}
-        aria-hidden
-        data-testid="drop-landing-indicator"
-        data-kind="line"
-      />
-    );
-  }
 
   // Tinted blue-500, the accent of the add-column controls.
   return (

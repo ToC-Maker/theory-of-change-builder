@@ -20,6 +20,7 @@ import {
   clampNodeCenterY,
   computeDropCenterY,
   DEFAULT_DROP_CENTER_Y,
+  resolveNodeCenterY,
 } from '../../src/utils/nodePosition';
 
 describe('clampNodeCenterY', () => {
@@ -100,5 +101,21 @@ describe('computeDropCenterY', () => {
         nodeHeight: 30,
       }),
     ).toBe(DEFAULT_DROP_CENTER_Y);
+  });
+});
+
+describe('resolveNodeCenterY', () => {
+  it('returns a stored yPosition whose top edge is inside the column body as is', () => {
+    expect(resolveNodeCenterY(200, 3, 76)).toBe(200);
+  });
+
+  it('clamps a stored yPosition the way the renderer does', () => {
+    expect(resolveNodeCenterY(10, 0, 76)).toBe(38);
+  });
+
+  it('places a node without yPosition at its slot in the default stack', () => {
+    // Top at index * 180 + 30, so the centre is half the height lower.
+    expect(resolveNodeCenterY(undefined, 0, 76)).toBe(68);
+    expect(resolveNodeCenterY(undefined, 2, 100)).toBe(2 * 180 + 30 + 50);
   });
 });

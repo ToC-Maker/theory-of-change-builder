@@ -68,3 +68,27 @@ export function computeDropCenterY({
   const nodeTopLocal = cursorColumnLocalY - pointerOffsetY / zoomScale;
   return clampNodeCenterY(nodeTopLocal + nodeHeight / 2, nodeHeight);
 }
+
+/**
+ * Vertical distance between the tops of nodes stacked by default, for
+ * nodes that have no stored `yPosition`.
+ */
+const DEFAULT_STACK_STRIDE = 180;
+/** Top offset of the first node of a default stack. */
+const DEFAULT_STACK_TOP = 30;
+
+/**
+ * The center Y a node renders at: its stored `yPosition`, clamped below
+ * the section title; a node without one sits at its slot in the default
+ * stack (`index` is its position in the column). This is the position
+ * the canvas draws, so geometry computed from it matches the screen.
+ */
+export function resolveNodeCenterY(
+  yPosition: number | undefined,
+  index: number,
+  nodeHeight: number,
+): number {
+  return yPosition !== undefined
+    ? clampNodeCenterY(yPosition, nodeHeight)
+    : index * DEFAULT_STACK_STRIDE + DEFAULT_STACK_TOP + nodeHeight / 2;
+}

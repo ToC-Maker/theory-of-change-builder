@@ -1112,13 +1112,16 @@ function ToCViewer() {
       // guard as handleUndo/handleRedo).
       if (isTextEntryFocused()) return;
 
-      if ((event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey) {
+      if (!(event.ctrlKey || event.metaKey)) return;
+
+      // Shift or Caps Lock turns the letter into a capital ('Z'), so compare
+      // without case. `key` rather than `code` keeps the letter on non-QWERTY
+      // layouts.
+      const key = event.key.toLowerCase();
+      if (key === 'z' && !event.shiftKey) {
         event.preventDefault();
         handleUndo();
-      } else if (
-        ((event.ctrlKey || event.metaKey) && event.key === 'z' && event.shiftKey) ||
-        ((event.ctrlKey || event.metaKey) && event.key === 'y')
-      ) {
+      } else if ((key === 'z' && event.shiftKey) || key === 'y') {
         event.preventDefault();
         handleRedo();
       }
