@@ -278,8 +278,13 @@ export interface UseGraphLayoutResult {
    * Read the current layout snapshot (rect cache + paddings). Cheap; safe
    * to call inside a pointermove handler. The returned object is a
    * shallow copy so callers can't mutate the cache.
+   *
+   * The cache is refreshed a frame after the layout changes, so right after
+   * a chart landing it can describe the old columns. `{ fresh: true }` reads
+   * the DOM now (a layout read, so not per move) for a decision that must
+   * match what is on screen.
    */
-  getSnapshot: () => LayoutSnapshot;
+  getSnapshot: (options?: { fresh?: boolean }) => LayoutSnapshot;
 }
 
 export function useGraphLayout({
@@ -426,7 +431,13 @@ export function useGraphLayout({
   const [, _setForceRender] = useState(0);
   void _setForceRender; // currently unused; reserved for future use.
 
-  const getSnapshot = useCallback(() => ({ ...snapshotRef.current }), []);
+  const getSnapshot = useCallback(
+    (options?: { fresh?: boolean }) => {
+      if (options?.fresh) refresh();
+      return { ...snapshotRef.current };
+    },
+    [refresh],
+  );
 
   return { sectionWidths, getSnapshot };
 }

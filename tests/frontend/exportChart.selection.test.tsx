@@ -7,11 +7,10 @@
 // moment the capture starts; the canvas is the real ToC.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
+import { act, cleanup, fireEvent } from '@testing-library/react';
 import { exportToPng } from '../../src/utils/exportChart';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import { deepFreeze } from './helpers/deepFreeze';
+import { renderToC } from './helpers/renderToC';
 import type { ToCData } from '../../src/types';
 
 interface CaptureView {
@@ -102,7 +101,7 @@ async function renderCanvas() {
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-  const view = render(<ToC data={deepFreeze(makeData())} showEditButton={true} />);
+  const view = renderToC(makeData());
   await act(async () => {
     await Promise.resolve();
   });

@@ -4,12 +4,10 @@
 // its width are stubbed; everything else (layout snapshot, drag hook,
 // placement maths) is the real thing. Container coordinates equal client
 // coordinates: the container's own rect is all zeros.
-import type { ReactElement } from 'react';
 import { vi } from 'vitest';
-import { render, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../../src/types';
-import { deepFreeze } from './deepFreeze';
+import { fireEvent, act } from '@testing-library/react';
+import type { ChartInput } from '../../../src/types';
+import { renderToC } from './renderToC';
 
 export function rect(left: number, top: number, right: number, bottom: number): DOMRect {
   return {
@@ -72,18 +70,14 @@ export const release = (x: number, y: number) =>
 export const pressEscape = () =>
   act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
 
-/** The editable canvas on frozen data (an updater that writes into it throws). */
-export const canvas = (data: ToCData, onDataChange?: (data: ToCData) => void) => (
-  <ToC data={deepFreeze(data)} showEditButton={true} onDataChange={onDataChange} />
-);
-
 /**
- * Renders `ui` and presses on the grabbed node at (`x`, `y`). Waits first
- * for the layout hook's rAF-coalesced rect refresh to read the stubbed
- * rects.
+ * Renders the canvas over a chart document on `chart` and presses on the
+ * grabbed node at (`x`, `y`). Waits first for the layout hook's
+ * rAF-coalesced rect refresh to read the stubbed rects. Returns
+ * `renderToC`'s result (the document, `onCommit`, `land`, ...).
  */
-export async function startDrag(ui: ReactElement, grab: { id: string; x: number; y: number }) {
-  const view = render(ui);
+export async function startDrag(chart: ChartInput, grab: { id: string; x: number; y: number }) {
+  const rendered = renderToC(chart);
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   });
@@ -93,7 +87,7 @@ export async function startDrag(ui: ReactElement, grab: { id: string; x: number;
     button: 0,
     pointerId: 1,
   });
-  return view;
+  return rendered;
 }
 
 /** The absolutely positioned slot wrapper that carries a node's inline `top`. */

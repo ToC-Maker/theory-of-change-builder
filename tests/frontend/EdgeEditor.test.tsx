@@ -142,6 +142,81 @@ describe('EdgeEditor', () => {
     );
   });
 
+  describe('following changes made by someone else', () => {
+    function dataWith(evidence: string, assumptions: string, confidence: number): ToCData {
+      return deepFreeze({
+        sections: [
+          {
+            title: 'S',
+            columns: [
+              {
+                nodes: [
+                  {
+                    id: 'a',
+                    title: 'A',
+                    text: '',
+                    connectionIds: ['b'],
+                    connections: [{ targetId: 'b', confidence, evidence, assumptions }],
+                  },
+                  { id: 'b', title: 'B', text: '', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    function renderOpenEditor(initial: ToCData) {
+      const api = makeMutationApi(initial);
+      const anchor = document.createElement('div');
+      anchor.id = 'edge-anchor';
+      document.body.appendChild(anchor);
+      const element = (data: ToCData) => (
+        <EdgeEditor
+          sourceId="a"
+          targetId="b"
+          data={data}
+          mutate={api.mutate}
+          mutateDebounced={api.mutateDebounced}
+          commit={api.commit}
+          anchorRef={{ current: anchor } as React.RefObject<HTMLElement>}
+          camera={{ x: 0, y: 0, z: 1 }}
+          onRequestClose={() => {}}
+        />
+      );
+      const utils = render(element(initial));
+      return { api, rerenderWith: (data: ToCData) => utils.rerender(element(data)) };
+    }
+
+    const evidenceBox = () =>
+      screen.getByRole('textbox', { name: /evidence/i }) as HTMLTextAreaElement;
+    const assumptionsBox = () =>
+      screen.getByRole('textbox', { name: /assumptions/i }) as HTMLTextAreaElement;
+
+    it('shows evidence and assumptions a collaborator saved while the editor was open', () => {
+      const { rerenderWith } = renderOpenEditor(dataWith('old evidence', 'old assumptions', 60));
+
+      rerenderWith(dataWith('their evidence', 'their assumptions', 60));
+
+      expect(evidenceBox().value).toBe('their evidence');
+      expect(assumptionsBox().value).toBe('their assumptions');
+    });
+
+    it('keeps the evidence being typed when a collaborator changes the other fields', () => {
+      const { rerenderWith } = renderOpenEditor(dataWith('old evidence', 'old assumptions', 60));
+
+      fireEvent.change(evidenceBox(), { target: { value: 'my evidence' } });
+      rerenderWith(dataWith('my evidence', 'their assumptions', 90));
+
+      expect(evidenceBox().value).toBe('my evidence');
+      expect(assumptionsBox().value).toBe('their assumptions');
+      expect((screen.getByRole('slider', { name: /confidence/i }) as HTMLInputElement).value).toBe(
+        '90',
+      );
+    });
+  });
+
   describe('Reset path button (PR #34 round-7 issue 78)', () => {
     // Discoverable counterpart of the dblclick-on-handle reset. Only
     // offered when the connection actually HAS a custom waypoint; the

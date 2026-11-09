@@ -1,292 +1,128 @@
-// `useGraphMutation` — the single mutation seam for ToC graph state.
+// `useGraphMutation` — the canvas's mutation seam over the chart store.
 //
-// Replaces the ad-hoc `setDataAndNotify` pattern previously inlined in
-// `TheoryOfChangeGraph.tsx:57-67`. Centralizes three concerns: live state,
-// parent notification timing, and debounced/streaming-input semantics for
-// gestures like slider drags.
+// The canvas keeps no copy of the chart. It renders the store's live chart
+// (committed plus the previews of typing and drags), writes every change as a
+// preview, and asks the store to commit when a gesture is done. A remote chart
+// landing in the store rebases the preview synchronously, so nothing typed or
+// dragged can fall between two copies.
 //
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
 //
 //   mutate(updater)
-//     One-shot, discrete mutation. Updates local state synchronously
-//     (live preview) and queues a parent `onDataChange` notification via
-//     `queueMicrotask`. Multiple consecutive synchronous `mutate()` calls in
-//     the same task collapse to ONE parent notification via a shared
-//     `pendingNotifyRef` slot.
+//     One-shot, discrete mutation. Previews synchronously and queues a store
+//     commit on a microtask; consecutive `mutate()` calls in the same task share
+//     that one commit, so they make one undo step.
 //
 //   mutateDebounced(updater, key, options?)
-//     Streaming-input mutation (slider drags, title typing).
-//     Updates local state synchronously (so the UI feels responsive) but
-//     does NOT notify the parent. Buffers the latest updater under `key` in
-//     a hook-local Map. Same-key calls REPLACE the buffered updater (latest
-//     wins). Cross-key calls are buffered independently. A 200ms idle timer
-//     auto-commits each key if `commit()` is not called explicitly; a caller
-//     whose gesture always ends in an explicit `commit(key)` or
-//     `discardBuffered(key)` passes `{ idleCommit: false }`, so pausing
-//     mid-gesture never reports the preview to the parent.
+//     Streaming-input mutation (slider drags, title typing). Previews
+//     synchronously and marks `key` as holding an uncommitted preview. A 200 ms
+//     idle timer per key commits it if `commit()` is not called first; a caller
+//     whose gesture always ends in `commit(key)` or `discardBuffered(key)`
+//     passes `{ idleCommit: false }`, so pausing mid-gesture commits nothing.
 //
 //   commit(key?)
-//     Flush buffered keys. With a key, flushes just that key; without, all
-//     keys in insertion order. The flush dispatches `onDataChange` via
-//     `queueMicrotask` (same scheduling as `mutate`). Keys that aren't
-//     buffered (never written, or already flushed by the idle timer) are
-//     skipped: committing them notifies nobody.
+//     Commits the preview of `key`, or of every key. A key with nothing marked
+//     (never written, or already committed by its idle timer) is skipped:
+//     closing an editor that changed nothing must not look like an edit.
+//
+//   discardBuffered(key)
+//     Forgets `key` and its idle timer without committing. The preview stays in
+//     the store, so a caller cancelling a gesture writes the old value back
+//     first, then discards: the cancel leaves nothing to save.
+//
+//   notifyCount()
+//     The store's commit count. A gesture holding a preview compares it at its
+//     start and its end to learn whether another commit carried the preview.
+//
+// The store has one preview layer, so a commit promotes every key's preview,
+// not only the committed key's.
 //
 // ---------------------------------------------------------------------------
-// Why queueMicrotask, not setTimeout(0)
+// Why commits go through queueMicrotask
 // ---------------------------------------------------------------------------
 //
-// The ORIGINAL comment at `TheoryOfChangeGraph.tsx:61` said "to avoid
-// infinite loops". That framing is imprecise. The actual failure class is
-// React's runtime warning "Cannot update a component while rendering a
-// different component", which fires when a parent's setState-triggering
-// callback is invoked synchronously inside a child's `setState` updater
-// (updater impurity).
+// Deferring the commit lets all the writes of one event handler coalesce
+// into a single commit, and so a single undo step. The deferral does not make
+// `mutate` safe to call from a React updater or a render: each preview notifies
+// the store's subscribers synchronously (React warns "Cannot update a component
+// while rendering a different component"), so call `mutate` and
+// `mutateDebounced` from event handlers and effects.
 //
-// Canonical console-search anchor (the message React actually prints, with
-// the parens placeholders):
-//   `Cannot update a component (X) while rendering a different component (Y).`
-//
-// `queueMicrotask` preserves the ordering invariant that previously came
-// from `setTimeout(0)` — "parent setter runs after child commit" — while
-// being strictly better: pre-paint timing, no 4 ms macrotask clamp at
-// nesting depth > 5, no timer-batching surprises, and it matches React
-// 18.3+/19's own internal microtask scheduling.
-//
-// Sources:
-//   - https://github.com/facebook/react/issues/18949 (the warning)
-//   - https://github.com/facebook/react/pull/26512 (React's own
-//     migration to microtask scheduling for updater-triggered effects)
-//   - https://react.dev/reference/react/useState (updater purity)
-//
-// Do NOT replace `queueMicrotask` with `setTimeout` or with a synchronous
-// notify. The deferral-primitive regression test in
-// `tests/frontend/useGraphMutation.queueMicrotask-scheduling-shape.test.ts`
-// asserts that `queueMicrotask` is called when `mutate()` runs; it catches
-// the swap-to-synchronous failure mode.
+// Unmounting commits the marked keys at once: the store outlives the canvas, so
+// the typed text must not wait for an idle timer that no longer exists.
 //
 // ---------------------------------------------------------------------------
-// Key conventions for mutateDebounced (foot-gun warning)
+// Key conventions for mutateDebounced
 // ---------------------------------------------------------------------------
 //
-// Keys MUST be property-scoped, not shared across distinct properties.
-// Recommended pattern: `'width-${nodeId}'`, `'color-${nodeId}'`,
-// `'title-${nodeId}'`, `'curvature'`, `'textSize'`, `'section-${idx}-title'`.
-//
-// Sharing a key across two different properties silently merges the
-// notify CADENCE: subsequent calls REPLACE the buffered updater under
-// that key, so a single per-key flush (timer or `commit('key')`) fires
-// ONE `onDataChange`, not two. Both writes still land in the live state
-// (writeLocal applied them synchronously), but the parent only learns
-// about them once. If the parent uses the notify edge to trigger a
-// distinct side effect per property (e.g. logging two undo entries),
-// they'll be merged into one — silently dropping the earlier write's
-// SIGNAL even though its effect is in state. The
-// `mutateDebounced` test "emits a SINGLE parent notify when two same-key
-// writes target different properties (foot-gun)" pins this for
-// regression purposes; future contributors who introduce key sharing
-// across properties should fail that test.
-//
-// ---------------------------------------------------------------------------
-// Unmount safety (L7)
-// ---------------------------------------------------------------------------
-//
-// `isMountedRef` guards both the queued microtask callback (so a deferred
-// `onDataChange` after unmount becomes a no-op) and the outer 200 ms
-// debounce timer (so a stale idle-commit never fires after unmount).
-// Belt-and-suspenders fix from the Red-Team failure-modes pass. Under
-// React's actual cleanup-before-unmount semantics the window is narrow
-// but non-zero, especially with future Suspense / concurrent-mode work.
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Dispatch, SetStateAction } from 'react';
+// Keys MUST be property-scoped (`'width-${nodeId}'`, `'title-${nodeId}'`,
+// `'curvature'`, `'section-title-${sectionId}'`). Two properties sharing a key
+// share one idle timer, so a write to either postpones the idle commit of the
+// other, and `discardBuffered(key)` forgets both.
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import type { SetStateAction } from 'react';
+import type { ChartStore } from '../sync/ChartDocument';
 import type { ToCData } from '../types';
 
 type GraphUpdater = SetStateAction<ToCData>;
 
-// 200 ms matches the "idle commit" expectation for streaming inputs: a
-// brief pause in slider movement still commits without requiring the
-// caller to wire a pointerup handler. Callers that already wire pointerup
-// will see this timer be a no-op (commit() clears it).
+// A brief pause in slider movement still commits without requiring the caller
+// to wire a pointerup handler.
 const DEBOUNCE_IDLE_MS = 200;
 
 export interface UseGraphMutationResult {
   data: ToCData;
-  // External-replacement setter (no parent notify). Used by the parent's
-  // "absorb new initialData prop" effect (AI-edit / external-state-replace
-  // path). Routes through the same `dataRef.current` write that the
-  // mutate paths use, so a subsequent `mutate(prev => ...)` derives from
-  // the post-replacement state. A state this hook already notified the
-  // parent of (the parent echoing it back) is ignored. Any other
-  // replacement also drops the buffered `mutateDebounced` edits, which it
-  // has overwritten.
-  setData: Dispatch<SetStateAction<ToCData>>;
   mutate: (updater: GraphUpdater) => void;
   mutateDebounced: (updater: GraphUpdater, key: string, options?: { idleCommit?: boolean }) => void;
   commit: (key?: string) => void;
-  /**
-   * How many times the parent has been notified so far. A gesture holding
-   * an uncommitted preview compares the count at its start and at its end
-   * to learn whether some unrelated notify carried the preview to the
-   * parent in between.
-   */
+  /** How many times the store has committed so far. */
   notifyCount: () => number;
-  /**
-   * Drop the buffered updater for `key` WITHOUT scheduling a parent
-   * notify. Cancels the per-key idle timer that would otherwise
-   * auto-commit ~200ms after the last `mutateDebounced` call. Leaves the
-   * live preview already written to local state as it is, so a caller
-   * cancelling a gesture (waypoint Escape / pointercancel /
-   * second-pointer) first writes the pre-gesture value back through
-   * `mutateDebounced` and then discards: the cancel leaves neither a
-   * changed preview nor an undo entry. No-op for unknown keys.
-   */
   discardBuffered: (key: string) => void;
 }
 
-const applyUpdater = (prev: ToCData, updater: GraphUpdater): ToCData =>
-  typeof updater === 'function' ? (updater as (p: ToCData) => ToCData)(prev) : updater;
+export function useGraphMutation(store: ChartStore): UseGraphMutationResult {
+  const data = useSyncExternalStore(store.subscribe, store.getLive);
 
-export function useGraphMutation(
-  initialData: ToCData,
-  onDataChange?: (data: ToCData) => void,
-): UseGraphMutationResult {
-  const [data, setData] = useState<ToCData>(initialData);
-
-  // The latest data, kept in a ref so the deferred parent notify reads
-  // post-commit state (not the closed-over version from the call site).
-  const dataRef = useRef<ToCData>(initialData);
-
-  // L7 guard: gates both the queued microtask callback and the outer
-  // debounce timer. Flipped false in the cleanup effect at the end.
-  const isMountedRef = useRef(true);
-
-  // Stable callback ref so listeners and updaters always see the latest
-  // `onDataChange` without forcing a re-subscription.
-  const onDataChangeRef = useRef<typeof onDataChange>(onDataChange);
-  useEffect(() => {
-    onDataChangeRef.current = onDataChange;
-  }, [onDataChange]);
-
-  // Transactional-batch primitive: at most one microtask is queued at a
-  // time. Consecutive synchronous `mutate()` calls in the same task
-  // collapse to ONE parent notification carrying the latest `dataRef`.
-  // Closes the `deleteSelectedNodes` two-call pattern that previously
-  // produced two notifications (Red-Team Important).
-  const pendingNotifyRef = useRef(false);
-
-  const parentNotifyCountRef = useRef(0);
-  const notifyCount = useCallback(() => parentNotifyCountRef.current, []);
-
-  // States already handed to the parent. The parent keeps them as its own
-  // state and passes them back as `initialData`, and the caller then feeds
-  // that echo to `setData` from an effect that runs after the render
-  // carrying it. By then the user may have edited again, so applying the
-  // echo would roll the newer local state back to the older one.
-  const notifiedRef = useRef(new WeakSet<ToCData>());
-
-  // Buffered debounced updaters. Insertion-ordered (Map preserves order),
-  // so `commit()` with no args flushes in the order keys were first added.
-  // Latest-write-wins per key.
-  const bufferedRef = useRef<Map<string, GraphUpdater>>(new Map());
-
-  // Per-key idle timers. Set on `mutateDebounced`, cleared on the
-  // corresponding `commit(key)` or by a subsequent `mutateDebounced` for
-  // the same key.
+  // Keys whose preview is in the store but not committed.
+  const bufferedRef = useRef<Set<string>>(new Set());
   const idleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // At most one commit microtask is queued at a time.
+  const commitPendingRef = useRef(false);
 
-  // Forgets every buffered key and its idle timer without notifying anyone.
-  const dropBuffered = useCallback(() => {
-    for (const timer of idleTimersRef.current.values()) clearTimeout(timer);
-    idleTimersRef.current.clear();
-    bufferedRef.current.clear();
-  }, []);
-
-  // Schedules a single coalesced microtask. Safe to call multiple times
-  // in the same task: only the first call actually enqueues.
-  const scheduleNotify = useCallback(() => {
-    if (pendingNotifyRef.current) return;
-    pendingNotifyRef.current = true;
+  const scheduleCommit = useCallback(() => {
+    if (commitPendingRef.current) return;
+    commitPendingRef.current = true;
     queueMicrotask(() => {
-      pendingNotifyRef.current = false;
-      if (!isMountedRef.current) return; // L7 guard
-      notifiedRef.current.add(dataRef.current);
-      parentNotifyCountRef.current += 1;
-      onDataChangeRef.current?.(dataRef.current);
+      commitPendingRef.current = false;
+      store.commit();
     });
-  }, []);
+  }, [store]);
 
-  // Synchronous live state update; common to `mutate` and `mutateDebounced`.
-  //
-  // Computes the next value from `dataRef.current` (the latest-known state)
-  // BEFORE calling setData, so consecutive synchronous calls in the same
-  // task observe each other's writes.
-  const writeLocal = useCallback((updater: GraphUpdater): ToCData => {
-    const next = applyUpdater(dataRef.current, updater);
-    dataRef.current = next;
-    setData(next);
-    return next;
+  const clearIdleTimer = useCallback((key: string) => {
+    const timer = idleTimersRef.current.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    idleTimersRef.current.delete(key);
   }, []);
-
-  // External setter exposed to callers (e.g. the parent's "absorb new
-  // initialData prop" effect in `TheoryOfChangeGraph.tsx:219-224` for the
-  // AI-edit / external-state-replace path). Routes through the same
-  // `dataRef.current` write that `writeLocal` performs, so a subsequent
-  // `mutate(prev => ...)` derives from the post-replacement state — not
-  // the stale snapshot. Without this, an external replacement followed
-  // by any user mutation silently wipes the replacement (AI edit lost).
-  // Does NOT call `scheduleNotify`: the parent already owns the new
-  // value (it triggered the replacement), so re-emitting it would loop.
-  //
-  // A state this hook itself notified the parent of is not a replacement:
-  // it is already here, or superseded by newer local edits, so it is
-  // ignored (see `notifiedRef`).
-  //
-  // A real replacement also supersedes every buffered edit: the previews
-  // they were made on are gone, so a pending notify would hand the parent
-  // the replacement back as if it were a new edit (clearing the redo
-  // stack and adding an empty undo step after an undo).
-  const setDataExternal = useCallback<Dispatch<SetStateAction<ToCData>>>(
-    (value) => {
-      if (typeof value !== 'function' && notifiedRef.current.has(value)) return;
-      dropBuffered();
-      const next = applyUpdater(dataRef.current, value);
-      dataRef.current = next;
-      setData(next);
-    },
-    [dropBuffered],
-  );
 
   const mutate = useCallback(
     (updater: GraphUpdater) => {
-      writeLocal(updater);
-      scheduleNotify();
+      store.preview(updater);
+      scheduleCommit();
     },
-    [writeLocal, scheduleNotify],
+    [store, scheduleCommit],
   );
 
-  // Commit a single key: drop it from the buffer, clear its idle timer,
-  // and queue the coalesced parent notify. State has already been updated
-  // by the preceding `mutateDebounced` calls (live preview), so this just
-  // notifies the parent.
-  //
-  // A key that isn't buffered has nothing to report: either it was never
-  // written (an editor opened and closed untouched) or the idle timer
-  // already notified for it. Notifying anyway would hand the parent an
-  // unchanged state as a new edit: a full-chart save and an empty undo step.
   const commitOne = useCallback(
     (key: string) => {
       if (!bufferedRef.current.has(key)) return;
-      const timer = idleTimersRef.current.get(key);
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        idleTimersRef.current.delete(key);
-      }
+      clearIdleTimer(key);
       bufferedRef.current.delete(key);
-      scheduleNotify();
+      scheduleCommit();
     },
-    [scheduleNotify],
+    [clearIdleTimer, scheduleCommit],
   );
 
   const commit = useCallback(
@@ -295,78 +131,52 @@ export function useGraphMutation(
         commitOne(key);
         return;
       }
-      // Flush all in insertion order. We snapshot the keys to avoid
-      // mutation-during-iteration foot-guns (commitOne mutates the map).
-      const keys = Array.from(bufferedRef.current.keys());
-      for (const k of keys) commitOne(k);
+      for (const k of Array.from(bufferedRef.current)) commitOne(k);
     },
     [commitOne],
   );
 
   const mutateDebounced = useCallback(
     (updater: GraphUpdater, key: string, options?: { idleCommit?: boolean }) => {
-      // Live preview: state updates synchronously.
-      writeLocal(updater);
-      // Buffer for the eventual commit. Replaces any earlier updater
-      // under the same key (latest-wins — see foot-gun note above).
-      bufferedRef.current.set(key, updater);
-      // Reset the per-key idle timer.
-      const existing = idleTimersRef.current.get(key);
-      if (existing !== undefined) {
-        clearTimeout(existing);
-        idleTimersRef.current.delete(key);
-      }
+      store.preview(updater);
+      bufferedRef.current.add(key);
+      clearIdleTimer(key);
       if (options?.idleCommit === false) return;
-      const timer = setTimeout(() => {
-        if (!isMountedRef.current) return; // L7 guard for the outer timer
-        idleTimersRef.current.delete(key);
-        bufferedRef.current.delete(key);
-        scheduleNotify();
-      }, DEBOUNCE_IDLE_MS);
-      idleTimersRef.current.set(key, timer);
+      idleTimersRef.current.set(
+        key,
+        setTimeout(() => {
+          idleTimersRef.current.delete(key);
+          bufferedRef.current.delete(key);
+          scheduleCommit();
+        }, DEBOUNCE_IDLE_MS),
+      );
     },
-    [writeLocal, scheduleNotify],
+    [store, clearIdleTimer, scheduleCommit],
   );
 
-  // Drop the buffered updater for `key` without scheduling a parent
-  // notify: neither the explicit commit path nor the 200ms idle timer
-  // fires. The live preview stays as-is (writeLocal was synchronous), so
-  // a canceller restores it first.
-  const discardBuffered = useCallback((key: string) => {
-    const timer = idleTimersRef.current.get(key);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      idleTimersRef.current.delete(key);
-    }
-    bufferedRef.current.delete(key);
-  }, []);
+  const discardBuffered = useCallback(
+    (key: string) => {
+      clearIdleTimer(key);
+      bufferedRef.current.delete(key);
+    },
+    [clearIdleTimer],
+  );
 
-  // Cleanup: flip isMountedRef and clear pending timers. Pending
-  // microtask still fires (microtasks aren't cancellable), but is gated
-  // by `isMountedRef.current`.
-  //
-  // The effect body re-arms `isMountedRef.current = true` on every
-  // (re-)mount. Under React 19 `<StrictMode>` (active in dev via
-  // `src/main.tsx:25`), every effect runs mount -> cleanup -> mount;
-  // without the re-arm, the ref stays `false` after the first cycle and
-  // every subsequent parent notify is silently dropped. The
-  // `useGraphMutation.unmount.test.tsx` "still notifies after a
-  // StrictMode mount-cleanup-remount cycle" case pins this.
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-      dropBuffered();
-    };
-  }, [dropBuffered]);
+  const commitBufferedNow = useCallback(() => {
+    for (const timer of idleTimersRef.current.values()) clearTimeout(timer);
+    idleTimersRef.current.clear();
+    if (bufferedRef.current.size === 0) return;
+    bufferedRef.current.clear();
+    store.commit();
+  }, [store]);
+  useEffect(() => commitBufferedNow, [commitBufferedNow]);
 
   return {
     data,
-    setData: setDataExternal,
     mutate,
     mutateDebounced,
     commit,
     discardBuffered,
-    notifyCount,
+    notifyCount: store.getCommitCount,
   };
 }

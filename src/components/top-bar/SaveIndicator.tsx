@@ -44,7 +44,7 @@ interface Props {
   saveError: SaveError | null;
   /**
    * True while local edits exist that have not been persisted to the
-   * server (App mirrors its `pendingChangesRef` into state). Drives the
+   * server (App passes the chart document's `unsaved` status). Drives the
    * "Unsaved changes" state — including after a FAILED save, when the
    * edits silently survive only in memory/localStorage.
    */

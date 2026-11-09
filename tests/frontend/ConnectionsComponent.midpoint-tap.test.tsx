@@ -13,10 +13,10 @@
 // exercised here; the gesture contract is.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { cleanup, fireEvent } from '@testing-library/react';
+import type { ChartInput } from '../../src/types';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
@@ -25,7 +25,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -59,7 +59,7 @@ const makeData = (): ToCData => ({
 const POINTER = { pointerId: 1, button: 0 };
 
 function renderAndHoverMidpoint() {
-  render(<ToC data={makeData()} showEditButton={true} onDataChange={vi.fn()} />);
+  renderToC(makeData());
   const fatPath = document.querySelector('svg path.cursor-pointer') as SVGPathElement;
   fireEvent.mouseOver(fatPath, { relatedTarget: document.body });
   const midpoint = document.querySelector('[data-tocb-midpoint-handle]') as SVGCircleElement;

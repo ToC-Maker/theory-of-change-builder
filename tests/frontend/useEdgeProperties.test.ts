@@ -234,4 +234,115 @@ describe('useEdgeProperties', () => {
     expect(aNode?.connections?.[0].confidence).toBe(60);
     expect(aNode?.connections?.[0].evidence).toBe('e2');
   });
+
+  describe('following changes made by someone else', () => {
+    function withEdge(evidence: string, assumptions: string, confidence = 60): ToCData {
+      return deepFreeze({
+        sections: [
+          {
+            title: 'S',
+            columns: [
+              {
+                nodes: [
+                  {
+                    id: 'a',
+                    title: 'A',
+                    text: '',
+                    connectionIds: ['b'],
+                    connections: [{ targetId: 'b', confidence, evidence, assumptions }],
+                  },
+                  { id: 'b', title: 'B', text: '', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    function renderWithData(initial: ToCData) {
+      const api = makeMutationApi(initial);
+      return {
+        api,
+        ...renderHook(
+          (props: { data: ToCData }) =>
+            useEdgeProperties({
+              sourceId: 'a',
+              targetId: 'b',
+              data: props.data,
+              mutate: api.mutate,
+              mutateDebounced: api.mutateDebounced,
+              commit: api.commit,
+            }),
+          { initialProps: { data: initial } },
+        ),
+      };
+    }
+
+    it('shows remote evidence and assumptions the user is not editing', () => {
+      const { result, rerender } = renderWithData(withEdge('e1', 'a1'));
+
+      rerender({ data: withEdge('remote evidence', 'remote assumptions') });
+
+      expect(result.current.evidence).toBe('remote evidence');
+      expect(result.current.assumptions).toBe('remote assumptions');
+    });
+
+    it('leaves evidence being typed alone when a remote change touches another field', () => {
+      const { result, rerender } = renderWithData(withEdge('e1', 'a1'));
+
+      act(() => {
+        result.current.setEvidence('typed evidence');
+      });
+      rerender({ data: withEdge('typed evidence', 'remote assumptions', 90) });
+
+      expect(result.current.evidence).toBe('typed evidence');
+      expect(result.current.assumptions).toBe('remote assumptions');
+      expect(result.current.confidence).toBe(90);
+    });
+  });
+
+  describe('a connection that no longer exists', () => {
+    function withoutConnection(): ToCData {
+      return deepFreeze({
+        sections: [
+          {
+            title: 'S',
+            columns: [
+              {
+                nodes: [
+                  { id: 'a', title: 'A', text: '', connectionIds: [], connections: [] },
+                  { id: 'b', title: 'B', text: '', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    it('patchConnection_does_not_recreate_missing_connection', () => {
+      const data = withoutConnection();
+      const api = makeMutationApi(data);
+      const { result } = renderHook(() =>
+        useEdgeProperties({
+          sourceId: 'a',
+          targetId: 'b',
+          data,
+          mutate: api.mutate,
+          mutateDebounced: api.mutateDebounced,
+          commit: api.commit,
+        }),
+      );
+
+      act(() => {
+        result.current.setEvidence('typed after it was deleted');
+        result.current.setAssumptions('typed after it was deleted');
+        result.current.setConfidence(90);
+      });
+
+      expect(api.mutateDebounced).toHaveBeenCalledTimes(3);
+      expect(api.dataRef.current).toBe(data);
+    });
+  });
 });

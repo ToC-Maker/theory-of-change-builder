@@ -1,3 +1,5 @@
+import { useImperativeHandle, useMemo, useRef } from 'react';
+import type { Ref } from 'react';
 import {
   MDXEditor,
   headingsPlugin,
@@ -12,9 +14,14 @@ import {
   ListsToggle,
   BlockTypeSelect,
   Separator,
+  lexical,
+  realmPlugin,
+  rootEditor$,
+  type MDXEditorMethods,
   type Translation,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
+import { loggingService } from '../services/loggingService';
 
 // The library's default "Block type" label reads as jargon in the
 // toolbar, so the select is called "Text style" instead. Only these
@@ -35,9 +42,35 @@ const translation: Translation = (key, defaultValue, interpolations = {}) => {
   return value;
 };
 
+// The library calls this when it cannot turn markdown into editor content
+// (inline HTML such as `a <b> c`, an unhandled construct). The editor then
+// shows truncated or blank text and stops reporting edits, so typing in it
+// is lost without a sign; this makes the failure countable. The library's
+// payload quotes the markdown, which is user content, so none of it is sent.
+function reportMarkdownImportFailure() {
+  loggingService.reportError({
+    error_name: 'MarkdownImportFailed',
+    error_message: 'MDXEditor could not import the markdown it was given',
+    request_metadata: { component: 'MDXEditor' },
+  });
+}
+
 interface MDXEditorComponentProps {
   markdown: string;
-  onChange?: (markdown: string) => void;
+  /**
+   * `initialMarkdownNormalize` is true when the call only reports the
+   * editor's normal form of the `markdown` it was opened with (nothing
+   * was typed). Callers that persist the text must ignore those calls.
+   */
+  onChange?: (markdown: string, initialMarkdownNormalize: boolean) => void;
+  /**
+   * The library's imperative methods, except that `setMarkdown` also
+   * empties the editor's undo history. The library records a
+   * `setMarkdown` as an undoable step, and undoing it fires `onChange`
+   * with the text from before, which a caller that saves on `onChange`
+   * would save over the change it just applied.
+   */
+  editorRef?: Ref<MDXEditorMethods>;
   placeholder?: string;
   fontFamily?: string;
 }
@@ -45,9 +78,36 @@ interface MDXEditorComponentProps {
 export function MDXEditorComponent({
   markdown,
   onChange,
+  editorRef,
   placeholder = 'Enter text...',
   fontFamily,
 }: MDXEditorComponentProps) {
+  const libraryRef = useRef<MDXEditorMethods>(null);
+  const clearHistoryRef = useRef<() => void>(() => {});
+  // The ref gives no way to reach the history, so a plugin reads the
+  // root Lexical editor from the editor's realm.
+  const historyPlugin = useMemo(
+    () =>
+      realmPlugin({
+        init(realm) {
+          clearHistoryRef.current = () => {
+            realm.getValue(rootEditor$)?.dispatchCommand(lexical.CLEAR_HISTORY_COMMAND, undefined);
+          };
+        },
+      })(),
+    [],
+  );
+  useImperativeHandle(editorRef, () => {
+    const library = libraryRef.current!;
+    return {
+      ...library,
+      setMarkdown(next: string) {
+        library.setMarkdown(next);
+        clearHistoryRef.current();
+      },
+    };
+  }, []);
+
   return (
     <div
       className="mdx-editor-wrapper"
@@ -56,11 +116,14 @@ export function MDXEditorComponent({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <MDXEditor
+        ref={libraryRef}
         markdown={markdown}
         onChange={onChange}
+        onError={reportMarkdownImportFailure}
         placeholder={placeholder}
         translation={translation}
         plugins={[
+          historyPlugin,
           headingsPlugin(),
           listsPlugin(),
           quotePlugin(),

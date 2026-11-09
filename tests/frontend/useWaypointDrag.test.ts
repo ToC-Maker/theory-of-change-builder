@@ -190,6 +190,7 @@ function setupHook(args: {
         commit,
         discardBuffered,
         notifyCount,
+        getCommitted: () => dataRef.current,
         clientToContainer,
         getLineMidpoint,
       }),
@@ -931,6 +932,36 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(next).toBe(dataNoConnection);
     });
 
+    it('stops writing and reports a stale drop when an end node leaves the canvas mid-drag', () => {
+      const { ctx, result } = setupHook({ data: makeData([{ dx: 100, dy: 50 }]) });
+      act(() => {
+        result.current
+          .bindWaypoint(sourceId, targetId, 0)
+          .onPointerDown(makePointerDownEvent({ clientX: 100, clientY: 50 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 160, clientY: 80 }));
+      });
+      expect(ctx.mutateDebounced).toHaveBeenCalledTimes(1);
+
+      // The midpoint can no longer be found: a landing removed a node.
+      ctx.getLineMidpoint.mockReturnValue(null);
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 170, clientY: 90 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 170, clientY: 90 }));
+      });
+
+      expect(ctx.mutateDebounced).toHaveBeenCalledTimes(1);
+      // The earlier preview is promoted so the store can collapse it (see the
+      // real-store cases in useWaypointDrag.cancel.test.tsx); nothing new is written.
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+      expect(ctx.commit).toHaveBeenCalledWith(`waypoints-${sourceId}->${targetId}`);
+      expect(loggingService.reportError).toHaveBeenCalledTimes(1);
+      expect(result.current.isActive).toBe(false);
+    });
+
     it('does not report stale-waypoint-drop on a successful drop', () => {
       const data = makeData([{ dx: 100, dy: 50 }]);
       const { result } = setupHook({ data });
@@ -1056,7 +1087,7 @@ describe('useWaypointDrag (single-waypoint model)', () => {
       expect(ctx.mutateDebounced).not.toHaveBeenCalled();
     });
 
-    it('cancels (no commit, buffered discard) when the connection vanished mid-gesture', () => {
+    it('writes nothing new and commits the earlier preview when the connection vanished mid-gesture', () => {
       const data = makeData([]);
       const { ctx, result } = setupHook({ data });
 
@@ -1089,7 +1120,9 @@ describe('useWaypointDrag (single-waypoint model)', () => {
         document.dispatchEvent(pointerEvent('pointerup', { clientX: 140, clientY: 190 }));
       });
 
-      expect(ctx.commit).not.toHaveBeenCalled();
+      expect(ctx.commit).toHaveBeenCalledTimes(1);
+      expect(ctx.commit).toHaveBeenCalledWith(`waypoints-${sourceId}->${targetId}`);
+      expect(ctx.mutateDebounced).toHaveBeenCalledTimes(1);
       expect(loggingService.reportError).toHaveBeenCalledTimes(1);
       expect((loggingService.reportError as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual(
         expect.objectContaining({ error_name: 'stale-waypoint-drop' }),

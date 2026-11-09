@@ -7,16 +7,15 @@
 // to the column body (top ≥ 0 keeps the node below the section title
 // bar) without rewriting the stored yPosition.
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
-import { deepFreeze } from './helpers/deepFreeze';
+import { cleanup } from '@testing-library/react';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
 });
 
-const makeData = (yPosition: number): ToCData => ({
+const makeData = (yPosition: number): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -52,19 +51,19 @@ function nodeWrapperTop(): string {
 describe('TheoryOfChangeGraph node render clamp (PR #34 fb 46)', () => {
   it('renders in-range yPositions at center - height/2 (unchanged behavior)', () => {
     // jsdom measures no heights → the 76px default applies: top = 200 - 38.
-    render(<ToC data={deepFreeze(makeData(200))} showEditButton={true} />);
+    renderToC(makeData(200));
     expect(nodeWrapperTop()).toBe('162px');
   });
 
   it('clamps an out-of-range yPosition to the top of the column body', () => {
     // yPosition 10 with the 76px default height → raw top would be
     // -28px, poking above the column body into the section title bar.
-    render(<ToC data={deepFreeze(makeData(10))} showEditButton={true} />);
+    renderToC(makeData(10));
     expect(nodeWrapperTop()).toBe('0px');
   });
 
   it('clamps in view-only mode too', () => {
-    render(<ToC data={deepFreeze(makeData(-100))} showEditButton={false} />);
+    renderToC(makeData(-100), { showEditButton: false });
     expect(nodeWrapperTop()).toBe('0px');
   });
 });

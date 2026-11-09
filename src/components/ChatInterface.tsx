@@ -13,7 +13,7 @@ import {
 } from '../services/chatService';
 import type { AssistantBlock } from '../../shared/chat-blocks';
 import { MODEL_CAPABILITIES, type EffortLevel } from '../../shared/pricing';
-import { ChartService } from '../services/chartService';
+import { ChartService, type ChartCreated, type OpenChart } from '../services/chartService';
 import { buildOutgoingMessages } from '../services/outgoingMessages';
 import { applyEdits, prepareStreamingDisplay } from '../utils/graphEdits';
 import { loggingService } from '../services/loggingService';
@@ -43,7 +43,7 @@ import { ComposerBlockerBanner } from './chat/ComposerBlockerBanner';
 import { useAuthSessionDegraded } from '../hooks/useAuthSessionDegraded';
 import { useClampedPopoverX } from './chat/useClampedPopoverX';
 import { ConfirmModal } from './ConfirmModal';
-import type { ToCData } from '../types';
+import type { ChartInput, ToCData } from '../types';
 import {
   formatCostUsd,
   estimateCostLowBound,
@@ -150,14 +150,26 @@ interface ChatInterfaceProps {
   height?: number;
   isCollapsed: boolean;
   onToggle: () => void;
+  /** The committed chart, with ids: the reply's edits are computed against it. */
   graphData?: ToCData | null;
-  onGraphUpdate?: (newGraphData: ToCData) => void;
+  /**
+   * An AI reply's edits applied to `asSent`, the chart as it was when the
+   * message went out. The parent merges the result into whatever the chart is
+   * by now and returns the result as it prepared it (ids made safe), which the
+   * chat logs with the edit. Throws when the result cannot be used; the chat
+   * shows that as an edit error.
+   */
+  onAIEdit?: (asSent: ToCData, result: ChartInput) => ToCData;
+  /** The user loads a generated chart: it replaces the whole chart. */
+  onLoadGeneratedGraph?: (chart: ToCData) => void;
   highlightedNodes?: Set<string>;
   // Called when an action in Chat/Generate (e.g. auto-saving the chart on
   // first file upload) creates a new chart row. The parent uses this to
-  // sync its own state (currentEditToken/currentChartId) without needing
-  // a full navigation — URL is updated in place via history.replaceState.
-  onChartCreated?: (editToken: string, chartId: string) => void;
+  // sync its own state (edit token, version, chart id) without needing a
+  // full navigation, and returns the chart it is saving to: the one just
+  // created, or the one it attached first if two creates raced. The chat
+  // follows that chart (URL, uploads), not its own.
+  onChartCreated?: (created: ChartCreated) => OpenChart;
 }
 
 const MODELS = {
@@ -638,11 +650,22 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
   );
 });
 
+// The chat message for an AI reply whose edits the app could not apply.
+function editErrorMessage(error: unknown): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
+    timestamp: new Date(),
+  };
+}
+
 export function ChatInterface({
   isCollapsed,
   onToggle,
   graphData,
-  onGraphUpdate,
+  onAIEdit,
+  onLoadGeneratedGraph,
   highlightedNodes = new Set(),
   onChartCreated,
 }: ChatInterfaceProps) {
@@ -1949,9 +1972,9 @@ export function ChatInterface({
     // so the stream headers downstream use the 12-char id and not the
     // 36-char editToken (VARCHAR(12) overflow at the worker otherwise).
     const resolvedChart = await ensureChartExists();
-    // Q1: explicit null-check. ensureChartExists returns null on the
-    // "couldn't load your chart" path (it already set an advisory
-    // composer blocker in that branch). Bail cleanly — without the
+    // Explicit null-check. ensureChartExists returns null when the chart
+    // could not be loaded or created (it already set an advisory composer
+    // blocker in those branches). Bail cleanly — without the
     // check, we'd proceed with undefined chartId, optimistically commit
     // the user message later, then either silently desync or surface
     // a generic worker error.
@@ -2162,15 +2185,14 @@ export function ChatInterface({
             // whole graph-update + snapshot path to run for every reply
             // that parsed to zero edits (leading to a 500 on saveSnapshot
             // when the assistant message wasn't persisted).
-            if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
+            if (editInstructions && editInstructions.length > 0 && onAIEdit && graphData) {
               console.log('Edit instructions detected in ChatInterface:', editInstructions);
               try {
-                const updatedGraph = applyEdits(graphData, editInstructions);
-                onGraphUpdate(updatedGraph);
+                const applied = onAIEdit(graphData, applyEdits(graphData, editInstructions));
 
                 // Log successful AI edit
                 loggingService.logAIEdit({
-                  graphData: updatedGraph,
+                  graphData: applied,
                   messageId: assistantMessageId,
                   editInstructions,
                   success: true,
@@ -2188,18 +2210,12 @@ export function ChatInterface({
                 });
 
                 // Add an error message to the chat
-                const errorMessage: ChatMessage = {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  content: `❌ **Edit Error**: I couldn't apply the requested changes to the graph. ${error instanceof Error ? error.message : 'Unknown error occurred'}. The graph remains unchanged.`,
-                  timestamp: new Date(),
-                };
-                setMessages((prev) => [...prev, errorMessage]);
+                setMessages((prev) => [...prev, editErrorMessage(error)]);
               }
             } else {
               console.log('No edit instructions, callback, or graph data:', {
                 hasEditInstructions: !!editInstructions,
-                hasCallback: !!onGraphUpdate,
+                hasCallback: !!onAIEdit,
                 hasGraphData: !!graphData,
               });
             }
@@ -2432,11 +2448,15 @@ export function ChatInterface({
   };
 
   // Cached chart identity for charts auto-saved this session. ensureChartExists
-  // updates the URL via history.replaceState (no route re-render), so React
-  // Router params lag the actual chart on subsequent calls; these refs are
-  // the synchronous source of truth.
+  // navigates through the router, whose params update on the next render, so
+  // they lag the actual chart for a call made before then; these refs are the
+  // synchronous source of truth.
   const autosavedEditTokenRef = useRef<string | null>(null);
   const autosavedChartIdRef = useRef<string | null>(null);
+  // The create in flight, if any.
+  const creatingChartRef = useRef<Promise<{ chartId: string; editToken: string } | null> | null>(
+    null,
+  );
 
   /**
    * Ensure the chat has a persisted chart before doing anything that needs a
@@ -2489,53 +2509,77 @@ export function ChatInterface({
         return null;
       }
     }
-    // 3. No chart yet — auto-save.
+    // 3. No chart yet — auto-save. Files added together all arrive here before
+    // the first create returns, and a second create would leave the document, the
+    // URL and the uploads on different charts, so they share one.
     if (!graphData) return null;
-    try {
-      const created = await ChartService.createChart(graphData);
-      ChartService.saveEditToken(created.chartId, created.editToken);
-      autosavedEditTokenRef.current = created.editToken;
-      autosavedChartIdRef.current = created.chartId;
-      // Migrate any chat history already persisted under the pre-navigation
-      // URL's storage key to the new chart's key. Covers the refresh-after-
-      // send case (user sends a message on `/`, we auto-create a chart, the
-      // message gets saved under `chatHistory_root` by the save-effect
-      // before we navigate — without this migration it'd be stranded
-      // there after the URL transitions to `/edit/<token>`).
-      const oldKey = getStorageKey();
-      const newKey = `chatHistory_edit_${created.editToken}`;
-      if (oldKey !== newKey) {
-        const existing = localStorage.getItem(oldKey);
-        if (existing) {
-          localStorage.setItem(newKey, existing);
-          localStorage.removeItem(oldKey);
+    const create = async (chart: ToCData): Promise<OpenChart | null> => {
+      try {
+        const created = await ChartService.createChart(chart);
+        // What the page follows is the chart the app kept, which is another one
+        // if a create from the Share dialog attached first.
+        const opened = onChartCreated?.({
+          editToken: created.editToken,
+          chartId: created.chartId,
+          version: created.version,
+          chart,
+        }) ?? { chartId: created.chartId, editToken: created.editToken };
+        ChartService.saveEditToken(opened.chartId, opened.editToken);
+        autosavedEditTokenRef.current = opened.editToken;
+        autosavedChartIdRef.current = opened.chartId;
+        // Migrate any chat history already persisted under the pre-navigation
+        // URL's storage key to the new chart's key. Covers the refresh-after-
+        // send case (user sends a message on `/`, we auto-create a chart, the
+        // message gets saved under `chatHistory_root` by the save-effect
+        // before we navigate — without this migration it'd be stranded
+        // there after the URL transitions to `/edit/<token>`).
+        const oldKey = getStorageKey();
+        const newKey = `chatHistory_edit_${opened.editToken}`;
+        if (oldKey !== newKey) {
+          const existing = localStorage.getItem(oldKey);
+          if (existing) {
+            localStorage.setItem(newKey, existing);
+            localStorage.removeItem(oldKey);
+          }
         }
+        // Use React Router's navigate instead of window.history.replaceState
+        // so useParams()/useLocation() stay in sync with the URL bar. Raw
+        // replaceState bypasses the router, leaving params.editToken stale,
+        // which caused the save-chat effect to keep writing to
+        // chatHistory_root instead of chatHistory_edit_<token> until the
+        // next full reload — so first-message sessions lost their history.
+        // The flag tells the route-change effect NOT to wipe the in-memory
+        // `messages` state during the transition (messages are mid-flight).
+        // `state.skipChartReload` tells ToCViewer's load effect not to
+        // re-fetch the chart from the server (we just created it, it's
+        // already in memory). Without this, the user sees a brief flash of
+        // the loading state every time auto-create fires — on first
+        // message, on every PDF upload, and after Turnstile if that's the
+        // first send.
+        justAutoCreatedRef.current = true;
+        navigate(`/edit/${opened.editToken}`, {
+          replace: true,
+          state: { skipChartReload: true },
+        });
+        return opened;
+      } catch (e) {
+        console.error('[ChatInterface] ensureChartExists failed:', e);
+        // Instead of bailing out of the send without a word: the message would
+        // vanish and the user could not tell why.
+        setComposerBlocker({
+          type: 'advisory',
+          cost_error_type: 'database_unavailable',
+          detail: `Couldn't save your chart, so the message was not sent: ${
+            e instanceof Error ? e.message : 'unknown error'
+          }. Try again in a moment.`,
+        });
+        return null;
       }
-      // Use React Router's navigate instead of window.history.replaceState
-      // so useParams()/useLocation() stay in sync with the URL bar. Raw
-      // replaceState bypasses the router, leaving params.editToken stale,
-      // which caused the save-chat effect to keep writing to
-      // chatHistory_root instead of chatHistory_edit_<token> until the
-      // next full reload — so first-message sessions lost their history.
-      // The flag tells the route-change effect NOT to wipe the in-memory
-      // `messages` state during the transition (messages are mid-flight).
-      // `state.skipChartReload` tells ToCViewer's load effect not to
-      // re-fetch the chart from the server (we just created it, it's
-      // already in memory). Without this, the user sees a brief flash of
-      // the loading state every time auto-create fires — on first
-      // message, on every PDF upload, and after Turnstile if that's the
-      // first send.
-      justAutoCreatedRef.current = true;
-      navigate(`/edit/${created.editToken}`, {
-        replace: true,
-        state: { skipChartReload: true },
-      });
-      onChartCreated?.(created.editToken, created.chartId);
-      return { chartId: created.chartId, editToken: created.editToken };
-    } catch (e) {
-      console.error('[ChatInterface] ensureChartExists failed:', e);
-      return null;
-    }
+    };
+    creatingChartRef.current ??= create(graphData).finally(() => {
+      creatingChartRef.current = null;
+    });
+    return creatingChartRef.current;
   }, [params.chartId, params.editToken, graphData, onChartCreated, navigate, getStorageKey]);
 
   const uploadPdfToFilesApi = useCallback(
@@ -2936,9 +2980,9 @@ export function ChatInterface({
   );
 
   const loadGeneratedGraph = () => {
-    if (generatedGraphData && onGraphUpdate) {
+    if (generatedGraphData && onLoadGeneratedGraph) {
       console.log('Manually loading generated graph');
-      onGraphUpdate(generatedGraphData);
+      onLoadGeneratedGraph(generatedGraphData);
       setGeneratedGraphData(null); // Clear after loading
 
       const confirmMessage: ChatMessage = {
@@ -3168,7 +3212,6 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             if (hasGeneratedGraph(finalMessage)) {
               const generatedGraph = parseGeneratedGraph(finalMessage);
               console.log('Generated graph:', generatedGraph);
-              console.log('onGraphUpdate available:', !!onGraphUpdate);
 
               if (generatedGraph) {
                 // Store the generated graph for manual loading
@@ -3200,12 +3243,14 @@ IMPORTANT: Generate this as a realistic conversation between Strategy Co-Pilot a
             // Handle edit instructions if present (for regular chat mode).
             // Empty array is truthy; length check avoids triggering the
             // graph-update + snapshot path when Claude returned no edits.
-            if (editInstructions && editInstructions.length > 0 && onGraphUpdate && graphData) {
+            if (editInstructions && editInstructions.length > 0 && onAIEdit && graphData) {
               try {
-                const updatedGraph = applyEdits(graphData, editInstructions);
-                onGraphUpdate(updatedGraph);
+                onAIEdit(graphData, applyEdits(graphData, editInstructions));
               } catch (error) {
                 console.error('Error applying graph edits:', error);
+                // Not logged as an AI edit: Generate does not log its assistant
+                // message, which a logged edit would reference.
+                setMessages((prev) => [...prev, editErrorMessage(error)]);
               }
             }
           },

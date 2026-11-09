@@ -4,7 +4,7 @@
 // PR 7 round-2 feedback (signed-in 401s + silent save failure): the
 // worker now requires a valid Bearer JWT on getUserCharts (and on
 // updateChart for owned, restricted charts) — see commit 533e6ba and
-// tests/worker/{getUserCharts,updateChart}-auth.test.ts. The client,
+// tests/worker/getUserCharts-auth.test.ts and chart-edit-gate.test.ts. The client,
 // however, attached a token only from `ChartService.authToken`, a
 // static snapshot fetched ONCE per editor mount (src/App.tsx auth
 // effect). Two real-world states broke it:
@@ -44,7 +44,7 @@ function sentAuthHeader(call = 0): string | undefined {
 const chartData: ToCData = { title: 'T', sections: [] };
 
 beforeEach(() => {
-  fetchSpy = vi.fn(async () => okJson({ charts: [], success: true }));
+  fetchSpy = vi.fn(async () => okJson({ charts: [], success: true, version: 2 }));
   vi.stubGlobal('fetch', fetchSpy);
 });
 
@@ -78,7 +78,16 @@ describe('ChartService request-time token resolution', () => {
     ChartService.setAuthToken('stale-mount-time-token');
     ChartService.setAuthTokenProvider(async () => 'refreshed-token');
 
-    await ChartService.updateChart('edit-tok-1', chartData);
+    await ChartService.updateChart('edit-tok-1', chartData, 1);
+
+    expect(sentAuthHeader()).toBe('Bearer refreshed-token');
+  });
+
+  it('pollChart attaches the provider token (an owned chart refuses a poll without it)', async () => {
+    ChartService.setAuthToken('stale-mount-time-token');
+    ChartService.setAuthTokenProvider(async () => 'refreshed-token');
+
+    await ChartService.pollChart('edit-tok-1', 2);
 
     expect(sentAuthHeader()).toBe('Bearer refreshed-token');
   });
@@ -113,7 +122,7 @@ describe('ChartService request-time token resolution', () => {
     ChartService.setAuthToken('stale-token');
     ChartService.setAuthTokenProvider(async () => null);
 
-    await ChartService.updateChart('edit-tok-1', chartData);
+    await ChartService.updateChart('edit-tok-1', chartData, 1);
 
     expect(sentAuthHeader()).toBeUndefined();
   });
@@ -140,7 +149,7 @@ describe('ChartService request-time token resolution', () => {
       ),
     );
 
-    await expect(ChartService.updateChart('edit-tok-1', chartData)).rejects.toThrow(
+    await expect(ChartService.updateChart('edit-tok-1', chartData, 1)).rejects.toThrow(
       /invalid or expired authentication/i,
     );
   });

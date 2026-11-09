@@ -1,3 +1,5 @@
+import type { ChartInput, ToCData } from '../types';
+
 // Types for structured graph edits.
 // `value` is unknown because edits come from untrusted model output; callers
 // validate the shape per-field. The path helpers below walk nested objects
@@ -28,8 +30,11 @@ function indexCursor(cursor: PathCursor, key: string): unknown {
   return undefined;
 }
 
-// Apply structured edits to a graph object
-export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
+// Apply structured edits to a chart. The result is a `ChartInput`, not a
+// `ToCData`: the model addresses sections and columns by index and may add ones
+// without ids, so it needs `prepareAIResult` (src/sync/aiEdit.ts) before it can
+// join the document.
+export function applyEdits(graphData: ToCData | ChartInput, edits: EditInstruction[]): ChartInput {
   if (!graphData) {
     throw new Error('Graph data is null or undefined');
   }
@@ -38,7 +43,7 @@ export function applyEdits<T>(graphData: T, edits: EditInstruction[]): T {
     throw new Error('Edit instructions must be an array');
   }
 
-  const updated = JSON.parse(JSON.stringify(graphData)) as T; // Deep clone
+  const updated = JSON.parse(JSON.stringify(graphData)) as ChartInput; // Deep clone
 
   const getAtPath = (obj: unknown, path: string[]): unknown => {
     return path.reduce<unknown>((acc, key) => indexCursor(acc as PathCursor, key), obj);

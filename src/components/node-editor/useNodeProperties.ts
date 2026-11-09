@@ -36,15 +36,21 @@
 // is the user-facing intent).
 //
 // ---------------------------------------------------------------------------
-// Selection-change buffer reset
+// Local buffers (`useFieldBuffer`)
 // ---------------------------------------------------------------------------
 //
-// When `selectedNodeIds` changes (different node clicked, multi-select
-// added/removed), the local title/details buffer resets to read from the
-// new selection. Any unflushed typing on the previous selection is
-// LOST locally — but it has already been written to live state via
-// mutateDebounced, so the parent retains it under the previous key. If
-// the user wanted to keep typing they'd return to that selection.
+// Title and details each keep a local buffer so typing previews instantly.
+// The buffer resets when `selectedNodeIds` changes (different node
+// clicked, multi-select added/removed): any unflushed typing on the
+// previous selection is LOST locally — but it has already been written to
+// live state via mutateDebounced, so the parent retains it under the
+// previous key. If the user wanted to keep typing they'd return to that
+// selection.
+//
+// Between selection changes the buffer adopts any value of the node in
+// `data` that the user did not write, which is how a collaborator's change
+// reaches the open editor (see `useFieldBuffer`). When a multi-selection's
+// values come to differ, the field empties to show "Multiple values".
 //
 // ---------------------------------------------------------------------------
 // Cleanup
@@ -54,8 +60,9 @@
 // the caller's job (NodeEditor cleanup effect calls commitTitle() +
 // commitDetails()). This keeps the hook pure data and avoids surprising
 // double-commits when NodeEditor sub-components mount/unmount.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
+import { useFieldBuffer } from '../../hooks/useFieldBuffer';
 import type { Node as GraphNode, ToCData } from '../../types';
 import { DEFAULT_NODE_WIDTH } from '../../utils/nodeWidth';
 
@@ -143,25 +150,8 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
   const sourceTitle = isTitleMixed ? '' : (titleValues[0] ?? '');
   const sourceDetails = isDetailsMixed ? '' : (detailsValues[0] ?? '');
 
-  // Local buffers for title/details. Initialized from the source and
-  // re-synced whenever the selection changes. Local typing reflects
-  // instantly; the live state also receives it via mutateDebounced so
-  // external observers (other open editors, hot AI edits) see consistent
-  // partial values.
-  const [titleBuffer, setTitleBuffer] = useState(sourceTitle);
-  const [detailsBuffer, setDetailsBuffer] = useState(sourceDetails);
-
-  // Re-sync the local buffer when the selection changes. We compare to
-  // the *new* sourceTitle/sourceDetails so a re-render that doesn't
-  // change selection doesn't clobber unflushed typing.
-  const lastSelKeyRef = useRef(selKey);
-  useEffect(() => {
-    if (lastSelKeyRef.current !== selKey) {
-      lastSelKeyRef.current = selKey;
-      setTitleBuffer(sourceTitle);
-      setDetailsBuffer(sourceDetails);
-    }
-  }, [selKey, sourceTitle, sourceDetails]);
+  const [titleBuffer, setTitleBuffer] = useFieldBuffer(sourceTitle, selKey);
+  const [detailsBuffer, setDetailsBuffer] = useFieldBuffer(sourceDetails, selKey);
 
   // Width/color: read the first selected node's value (or default if no
   // selection / property unset).
@@ -203,7 +193,7 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
         `title-${selKey}`,
       );
     },
-    [mutateDebounced, mapSelected, selKey],
+    [setTitleBuffer, mutateDebounced, mapSelected, selKey],
   );
 
   const setDetails = useCallback(
@@ -214,7 +204,7 @@ export function useNodeProperties(args: UseNodePropertiesArgs): UseNodePropertie
         `details-${selKey}`,
       );
     },
-    [mutateDebounced, mapSelected, selKey],
+    [setDetailsBuffer, mutateDebounced, mapSelected, selKey],
   );
 
   const setWidth = useCallback(

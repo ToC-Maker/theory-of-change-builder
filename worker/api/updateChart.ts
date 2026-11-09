@@ -1,21 +1,31 @@
 import type { Env } from '../_shared/types';
+import type {
+  UpdateChartConflict,
+  UpdateChartOk,
+  UpdateChartRequest,
+} from '../../shared/chart-wire';
+import { isChartVersion } from '../../shared/chart-wire';
 import { getDb } from '../_shared/db';
-import { extractToken, verifyToken, JWKSFetchError } from '../_shared/auth';
+import { extractToken, verifyToken } from '../_shared/auth';
+import { authorizeChartEdit } from '../_shared/chart-edit-access';
 
 export async function handler(request: Request, env: Env): Promise<Response> {
   // chartData is round-tripped to JSONB — we don't field-validate it here.
-  let body: { editToken?: string; chartData?: unknown };
+  let body: Partial<UpdateChartRequest>;
   try {
-    body = (await request.json()) as { editToken?: string; chartData?: unknown };
+    body = (await request.json()) as Partial<UpdateChartRequest>;
   } catch {
     return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
   }
 
   try {
-    const { editToken, chartData } = body;
+    const { editToken, chartData, baseVersion } = body;
 
     if (!editToken || !chartData) {
       return Response.json({ error: 'Edit token and chart data are required' }, { status: 400 });
+    }
+    if (baseVersion !== undefined && !isChartVersion(baseVersion)) {
+      return Response.json({ error: 'baseVersion must be a positive integer' }, { status: 400 });
     }
 
     const sql = getDb(env);
@@ -26,72 +36,64 @@ export async function handler(request: Request, env: Env): Promise<Response> {
         ? (chartData as { title: string }).title
         : 'Theory of Change';
 
-    // Look up the chart first so we can gate edit access on link_sharing_level
-    // and chart_permissions. Previously the edit token alone was sufficient,
-    // which meant a rejected collaborator (or an ex-member whose access was
-    // revoked) could still overwrite the chart as long as they remembered the
-    // edit URL. Anon charts (user_id IS NULL) and owned charts with
-    // link_sharing_level='editor' still rely on the edit token only.
-    const chartRows = (await sql`
-      SELECT id, user_id, link_sharing_level FROM charts WHERE edit_token = ${editToken}
-    `) as { id: string; user_id: string | null; link_sharing_level: string | null }[];
+    const access = await authorizeChartEdit(request, env, sql, editToken);
+    if (!access.ok) return access.response;
+    const chartId = access.chart.id;
 
-    if (!chartRows || chartRows.length === 0) {
-      return Response.json({ error: 'Chart not found or invalid edit token' }, { status: 404 });
+    // The version trigger advances `version` when chart_data changes (an
+    // identical resave leaves it as is), so both branches return the version
+    // the row has after their write.
+    let saved: { version: number }[];
+    if (baseVersion === undefined) {
+      // A tab still running the previous client: it never sends a version, so
+      // its save is applied as before (last save wins). A write that changes
+      // the chart still advances the version, so up-to-date tabs merge around it.
+      saved = (await sql`
+        UPDATE charts
+        SET chart_data = ${JSON.stringify(chartData)},
+            chart_title = ${chartTitle},
+            updated_at = NOW()
+        WHERE edit_token = ${editToken}
+        RETURNING version
+      `) as { version: number }[];
+      if (saved.length > 0) {
+        console.log(JSON.stringify({ event: 'updateChart.legacy', chartId }));
+      }
+    } else {
+      // Compare-and-swap: a single UPDATE is atomic, so of two different saves
+      // on the same base only the first matches the version; the second, now
+      // behind, gets no row.
+      saved = (await sql`
+        UPDATE charts
+        SET chart_data = ${JSON.stringify(chartData)},
+            chart_title = ${chartTitle},
+            updated_at = NOW()
+        WHERE edit_token = ${editToken} AND version = ${baseVersion}
+        RETURNING version
+      `) as { version: number }[];
     }
 
-    const chart = chartRows[0];
-    const linkSharingLevel = chart.link_sharing_level || 'restricted';
-
-    if (chart.user_id && linkSharingLevel !== 'editor') {
-      const authToken = extractToken(request.headers.get('authorization'));
-      if (!authToken) {
-        return Response.json(
-          { error: 'Authentication required to edit this chart.' },
-          { status: 403 },
-        );
+    if (saved.length === 0) {
+      const current = (await sql`
+        SELECT version, chart_data FROM charts WHERE edit_token = ${editToken}
+      `) as { version: number; chart_data: unknown }[];
+      if (current.length === 0) {
+        return Response.json({ error: 'Chart not found or invalid edit token' }, { status: 404 });
       }
-      let decoded;
-      try {
-        decoded = await verifyToken(authToken, env);
-      } catch (err) {
-        if (err instanceof JWKSFetchError) {
-          return Response.json(
-            { error: 'Authentication service unavailable. Please try again later.' },
-            { status: 502 },
-          );
-        }
-        return Response.json(
-          { error: 'Invalid or expired authentication. Please log in again.' },
-          { status: 403 },
-        );
-      }
-
-      if (decoded.sub !== chart.user_id) {
-        const perm = (await sql`
-          SELECT status FROM chart_permissions
-          WHERE chart_id = ${chart.id} AND user_id = ${decoded.sub}
-        `) as { status: string }[];
-        if (!perm.length || perm[0].status !== 'approved') {
-          return Response.json(
-            { error: 'You do not have permission to edit this chart.' },
-            { status: 403 },
-          );
-        }
-      }
-    }
-
-    const result = (await sql`
-      UPDATE charts
-      SET chart_data = ${JSON.stringify(chartData)},
-          chart_title = ${chartTitle},
-          updated_at = NOW()
-      WHERE edit_token = ${editToken}
-      RETURNING id
-    `) as { id: string }[];
-
-    if (!result || result.length === 0) {
-      return Response.json({ error: 'Chart not found or invalid edit token' }, { status: 404 });
+      console.log(
+        JSON.stringify({
+          event: 'updateChart.conflict',
+          chartId,
+          baseVersion,
+          currentVersion: current[0].version,
+        }),
+      );
+      const conflict: UpdateChartConflict = {
+        error: 'conflict',
+        version: current[0].version,
+        chartData: current[0].chart_data,
+      };
+      return Response.json(conflict, { status: 409 });
     }
 
     // Track an authenticated editor in chart_permissions so the chart shows
@@ -106,7 +108,6 @@ export async function handler(request: Request, env: Env): Promise<Response> {
     if (token) {
       try {
         const decoded = await verifyToken(token, env);
-        const chartId = result[0].id;
         const email = decoded.email || decoded.name || null;
         await sql`
           INSERT INTO chart_permissions
@@ -123,7 +124,8 @@ export async function handler(request: Request, env: Env): Promise<Response> {
       }
     }
 
-    return Response.json({ success: true, message: 'Chart updated successfully' });
+    const ok: UpdateChartOk = { success: true, version: saved[0].version };
+    return Response.json(ok);
   } catch (error) {
     console.error('Error updating chart:', error);
     return Response.json({ error: 'Failed to update chart' }, { status: 500 });

@@ -40,7 +40,12 @@ import { createPortal } from 'react-dom';
 import { useAuth0 } from '@auth0/auth0-react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDownIcon, XMarkIcon } from '@heroicons/react/24/outline';
-import { ChartService, type CreateChartResponse } from '../../services/chartService';
+import {
+  ChartService,
+  type ChartCreated,
+  type CreateChartResponse,
+  type OpenChart,
+} from '../../services/chartService';
 import type { Permission, LinkSharingLevel } from '../../../shared/permissions';
 import type { ToCData } from '../../types';
 import { CopyButton } from './CopyButton';
@@ -55,7 +60,12 @@ export interface ShareDialogProps {
   currentEditToken: string | null;
   /** Width/height for the embed iframe aspect ratio. */
   containerSize?: { width: number; height: number };
-  onChartCreated?: (token: string, chartId: string) => void;
+  /**
+   * Tells the app a chart was created and returns the chart the app is saving
+   * to: this one, or the one it attached first if two creates raced. The dialog
+   * shows that chart's links.
+   */
+  onChartCreated?: (created: ChartCreated) => OpenChart;
   /** App-owned permissions array (single source of truth). */
   permissions: Permission[];
   /** App-owned current link-sharing level (single source of truth). */
@@ -166,10 +176,26 @@ export function ShareDialog({
     setShareError(null);
     try {
       const response = await ChartService.createChart(data);
+      const opened = onChartCreated?.({
+        editToken: response.editToken,
+        chartId: response.chartId,
+        version: response.version,
+        chart: data,
+      }) ?? { chartId: response.chartId, editToken: response.editToken };
+      const attached = opened.editToken === response.editToken;
       setIsOwner(isAuthenticated);
-      setShareData(response);
-      ChartService.saveEditToken(response.chartId, response.editToken);
-      if (!isAuthenticated) {
+      setShareData(
+        attached
+          ? response
+          : {
+              chartId: opened.chartId,
+              editToken: opened.editToken,
+              viewUrl: `${window.location.origin}/chart/${opened.chartId}`,
+              editUrl: `${window.location.origin}/edit/${opened.editToken}`,
+            },
+      );
+      ChartService.saveEditToken(opened.chartId, opened.editToken);
+      if (!isAuthenticated && attached) {
         const stored = localStorage.getItem('recentEditCharts');
         const charts = stored ? JSON.parse(stored) : [];
         charts.unshift({
@@ -180,11 +206,10 @@ export function ShareDialog({
         });
         localStorage.setItem('recentEditCharts', JSON.stringify(charts.slice(0, 10)));
       }
-      navigate(`/edit/${response.editToken}`, {
+      navigate(`/edit/${opened.editToken}`, {
         replace: true,
         state: { skipChartReload: true },
       });
-      if (onChartCreated) onChartCreated(response.editToken, response.chartId);
     } catch (err) {
       setShareError(err instanceof Error ? err.message : 'Failed to share chart');
     } finally {

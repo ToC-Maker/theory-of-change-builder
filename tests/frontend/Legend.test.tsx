@@ -17,15 +17,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';
 import { Legend } from '../../src/components/Legend';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
 import { getConfidenceStrokeStyle } from '../../src/utils';
-import type { ToCData } from '../../src/types';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
 });
 
-const makeBaseData = (): ToCData => ({
+const makeBaseData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -99,12 +99,12 @@ describe('Legend (static connection-strength key)', () => {
 
 describe('ToC does not own the legend anymore', () => {
   it('edit mode renders no legend (editors read confidence in the EdgeEditor)', () => {
-    render(<ToC data={makeBaseData()} showEditButton={true} />);
+    renderToC(makeBaseData());
     expect(screen.queryByText('Connection Confidence')).toBeNull();
   });
 
   it('view mode renders no legend either — the viewer route mounts it outside the zoom transform', () => {
-    render(<ToC data={makeBaseData()} showEditButton={false} />);
+    renderToC(makeBaseData(), { showEditButton: false });
     expect(screen.queryByText('Connection Confidence')).toBeNull();
   });
 });

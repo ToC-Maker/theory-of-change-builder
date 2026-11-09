@@ -1,16 +1,17 @@
 // Tests for the synchronous-mutate path of `useGraphMutation`.
 //
 // Acceptance for `mutate(updater)`:
-//   1. `setData` is called synchronously (live state updates in the same task).
-//   2. `onDataChange` fires exactly once per mutate, deferred to a microtask
-//      so it runs after React's commit phase (not synchronously inside the
-//      updater — see file-header comment on the hook for the failure class).
-//   3. Two synchronous `mutate` calls collapse to exactly one `onDataChange`
-//      via the shared `pendingNotifyRef` queueMicrotask slot.
-import { describe, it, expect, vi } from 'vitest';
+//   1. The preview reaches the store synchronously (live state updates in the
+//      same task).
+//   2. The store commits exactly once per mutate, on a microtask, so the
+//      commit runs after the event handler's own work and not inside the updater.
+//   (Two synchronous `mutate` calls collapsing to one commit is pinned in
+//   `useGraphMutation.commit.test.ts`.)
+import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useGraphMutation } from '../../src/hooks/useGraphMutation';
 import type { ToCData } from '../../src/types';
+import { makeDoc } from './helpers/renderToC';
 
 const makeData = (title = 'init'): ToCData => ({
   title,
@@ -20,9 +21,9 @@ const makeData = (title = 'init'): ToCData => ({
 const flushMicrotasks = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 
 describe('useGraphMutation.mutate', () => {
-  it('updates local state synchronously and notifies parent on the next microtask', async () => {
-    const onDataChange = vi.fn<(d: ToCData) => void>();
-    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+  it('previews synchronously and commits on the next microtask', async () => {
+    const { doc, onCommit } = makeDoc(makeData());
+    const { result } = renderHook(() => useGraphMutation(doc));
 
     act(() => {
       result.current.mutate((prev) => ({ ...prev, title: 'changed' }));
@@ -30,36 +31,19 @@ describe('useGraphMutation.mutate', () => {
 
     // Synchronous reflect: state is already updated.
     expect(result.current.data.title).toBe('changed');
-    // Parent has not been notified yet (still in current task).
-    expect(onDataChange).not.toHaveBeenCalled();
+    // Nothing is committed yet (still in the current task).
+    expect(onCommit).not.toHaveBeenCalled();
 
     await flushMicrotasks();
 
-    expect(onDataChange).toHaveBeenCalledTimes(1);
-    expect(onDataChange.mock.calls[0]?.[0].title).toBe('changed');
-  });
-
-  it('collapses two synchronous mutate calls into one parent notification', async () => {
-    const onDataChange = vi.fn<(d: ToCData) => void>();
-    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
-
-    act(() => {
-      result.current.mutate((prev) => ({ ...prev, title: 'first' }));
-      result.current.mutate((prev) => ({ ...prev, title: 'second' }));
-    });
-
-    expect(result.current.data.title).toBe('second');
-    await flushMicrotasks();
-
-    // Both writes land, but the parent only learns the final value once.
-    expect(onDataChange).toHaveBeenCalledTimes(1);
-    expect(onDataChange.mock.calls[0]?.[0].title).toBe('second');
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit.mock.calls[0]?.[0].title).toBe('changed');
   });
 
   it('accepts a non-function updater', async () => {
-    const onDataChange = vi.fn<(d: ToCData) => void>();
+    const { doc, onCommit } = makeDoc(makeData());
     const next: ToCData = { title: 'replaced', sections: [] };
-    const { result } = renderHook(() => useGraphMutation(makeData(), onDataChange));
+    const { result } = renderHook(() => useGraphMutation(doc));
 
     act(() => {
       result.current.mutate(next);
@@ -67,6 +51,6 @@ describe('useGraphMutation.mutate', () => {
 
     expect(result.current.data).toEqual(next);
     await flushMicrotasks();
-    expect(onDataChange).toHaveBeenCalledWith(next);
+    expect(onCommit).toHaveBeenCalledWith(next);
   });
 });

@@ -4,7 +4,9 @@
 // The validator is used by `FileMenu.handleFileChosen` (before
 // `onImportJson`) and by `App.tsx#handleUploadJSON` (defense in depth
 // for non-FileMenu callers). It must:
-//   - Accept a well-formed ToCData (with and without optional fields).
+//   - Accept a well-formed chart (with and without optional fields) and hand
+//     it back normalised: ids on every section and column, canonical
+//     connections.
 //   - Reject any malformation along the sections → columns → nodes →
 //     connections → waypoints chain, with a path-stamped reason.
 //   - Tolerate optional fields being absent (no `connections`,
@@ -75,7 +77,124 @@ describe('validateChartImport', () => {
     };
     const result = validateChartImport(chart);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data).toBe(chart);
+    if (result.ok) {
+      expect(result.data.sections[0].columns[0].nodes[0].connections?.[0].waypoints).toEqual([
+        { x: 10, y: 20 },
+      ]);
+    }
+  });
+
+  it('accepts a node whose connections is not an array and draws it from its connectionIds', () => {
+    const result = validateChartImport({
+      sections: [
+        {
+          columns: [
+            {
+              nodes: [
+                { id: 'n1', connections: null, connectionIds: ['n2'] },
+                { id: 'n2', connectionIds: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.sections[0].columns[0].nodes[0].connections).toEqual([
+        { targetId: 'n2', confidence: 50 },
+      ]);
+    }
+  });
+
+  it('accepts a node whose connections is a string, number or object, as normalizeChart does', () => {
+    for (const connections of ['x', 5, {}]) {
+      const result = validateChartImport({
+        sections: [
+          {
+            columns: [
+              {
+                nodes: [
+                  { id: 'n1', connections, connectionIds: ['n2'] },
+                  { id: 'n2', connectionIds: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.ok, JSON.stringify(connections)).toBe(true);
+    }
+  });
+
+  it('imports a file whose connection names no node, without that connection', () => {
+    const result = validateChartImport({
+      sections: [
+        {
+          columns: [
+            { nodes: [{ id: 'n1', connections: [{ confidence: 50 }], connectionIds: [] }] },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.sections[0].columns[0].nodes[0].connections).toEqual([]);
+  });
+
+  it('returns the chart normalised, with ids and canonical connections', () => {
+    const result = validateChartImport({
+      title: 'T',
+      sections: [
+        {
+          title: 'A',
+          columns: [
+            {
+              nodes: [
+                { id: 'n1', title: 'A', text: '', connectionIds: ['n2'] },
+                { id: 'n2', title: 'B', text: '', connectionIds: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.sections[0].id).toBe('s0');
+    expect(result.data.sections[0].columns[0].id).toBe('c0.0');
+    expect(result.data.sections[0].columns[0].nodes[0].connections).toEqual([
+      { targetId: 'n2', confidence: 50 },
+    ]);
+  });
+
+  it('names a bad waypoint by its position in the file, not in the normalised chart', () => {
+    // Normalising drops the second connection to n2, which would shift the index.
+    const result = validateChartImport({
+      sections: [
+        {
+          columns: [
+            {
+              nodes: [
+                {
+                  id: 'n1',
+                  connections: [
+                    { targetId: 'n2', confidence: 50 },
+                    { targetId: 'n2', confidence: 60 },
+                    { targetId: 'n3', confidence: 70, waypoints: [null] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe(
+        'sections[0].columns[0].nodes[0].connections[2].waypoints[0] is not an object',
+      );
+    }
   });
 
   it.each([
@@ -98,25 +217,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: 'not-an-array',
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      expectedReason: /connections is not an array/,
-    },
-    {
-      input: {
-        sections: [
-          {
-            columns: [
-              {
-                nodes: [
-                  {
-                    connections: [{ waypoints: [{ dx: 'oops', dy: 10 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: 'oops', dy: 10 }] }],
                   },
                 ],
               },
@@ -134,7 +235,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: NaN, dy: 0 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: NaN, dy: 0 }] }],
                   },
                 ],
               },
@@ -152,7 +253,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ x: NaN, y: 0 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ x: NaN, y: 0 }] }],
                   },
                 ],
               },
@@ -170,7 +271,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: 4 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: 4 }] }],
                   },
                 ],
               },
@@ -188,7 +289,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [{ dx: Infinity, dy: 1 }] }],
+                    connections: [{ targetId: 'b', waypoints: [{ dx: Infinity, dy: 1 }] }],
                   },
                 ],
               },
@@ -206,7 +307,7 @@ describe('validateChartImport', () => {
               {
                 nodes: [
                   {
-                    connections: [{ waypoints: [null] }],
+                    connections: [{ targetId: 'b', waypoints: [null] }],
                   },
                 ],
               },

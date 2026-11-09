@@ -2,15 +2,15 @@
 // so adding the first node does not widen the section. Edit and view mode
 // share the geometry.
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { cleanup, fireEvent, act } from '@testing-library/react';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
 });
 
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Programme',
   sections: [{ title: 'New Section', columns: [{ nodes: [] }] }],
 });
@@ -26,14 +26,14 @@ const widths = (container: HTMLElement) => ({
 
 describe('empty column width', () => {
   it.each([true, false])('is 192px, a new node, with edit mode %s', async (editMode) => {
-    const { container } = render(<ToC data={makeData()} showEditButton={editMode} />);
+    const { container } = renderToC(makeData(), { showEditButton: editMode });
     await flush();
     expect(widths(container).column).toBe('192px');
     expect(widths(container).bar).toContain('min-width: 192px');
   });
 
   it('does not change when the first node is added to it', async () => {
-    const { container } = render(<ToC data={makeData()} showEditButton={true} />);
+    const { container } = renderToC(makeData());
     await flush();
     const before = widths(container);
 

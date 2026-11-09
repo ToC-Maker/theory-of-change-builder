@@ -10,9 +10,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { cleanup, act } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import type { ToCData } from '../../src/types';
+import type { ChartInput } from '../../src/types';
 import {
-  canvas,
   move,
   pointer,
   pressEscape,
@@ -22,7 +21,7 @@ import {
   stubCanvasLayout,
 } from './helpers/dragCanvas';
 
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -68,8 +67,7 @@ const ghostTop = () => ghost()!.style.top;
 const ghostShift = () => (ghost()!.firstElementChild as HTMLElement).style.transform;
 
 // Grab 30px below the node's top edge.
-const startDrag = (onDataChange?: (data: ToCData) => void) =>
-  startCanvasDrag(canvas(makeData(), onDataChange), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
+const startDrag = () => startCanvasDrag(makeData(), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
 
 // The first ToC render in a worker pays the lazy-import and JIT warm-up, which
 // can pass the 5s default on a busy machine.
@@ -173,14 +171,16 @@ describe('TheoryOfChangeGraph dragged node copy', { timeout: 20_000 }, () => {
     expect(ghost()).toBeNull();
   });
 
-  it('dropping on another column moves the node there and leaves the previous state intact', async () => {
-    const onDataChange = vi.fn();
-    await startDrag(onDataChange);
+  it('dropping on another column commits once, moves the node there and leaves the previous chart intact', async () => {
+    const { doc, onCommit } = await startDrag();
+    const before = doc.getCommitted();
     move(300, 400);
     await release(300, 400);
-    expect(onDataChange).toHaveBeenCalledTimes(1);
-    const next = onDataChange.mock.calls[0][0] as ToCData;
-    expect(next.sections[0].columns.map((c) => c.nodes.map((n) => n.id))).toEqual([[], ['n-1']]);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const columnNodeIds = (chart: typeof before) =>
+      chart.sections[0].columns.map((c) => c.nodes.map((n) => n.id));
+    expect(columnNodeIds(onCommit.mock.calls[0][0])).toEqual([[], ['n-1']]);
+    expect(columnNodeIds(before)).toEqual([['n-1'], []]);
   });
 
   it('is gone when the canvas unmounts mid-drag', async () => {

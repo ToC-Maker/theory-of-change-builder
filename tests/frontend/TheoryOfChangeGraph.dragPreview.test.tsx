@@ -10,13 +10,13 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { cleanup, act } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import type { ToCData } from '../../src/types';
+import type { ChartInput } from '../../src/types';
 import {
-  canvas,
   move,
   nodeWrapper,
   pointer,
   pressEscape,
+  release,
   rect,
   startDrag as startCanvasDrag,
   stubCanvasLayout,
@@ -31,7 +31,7 @@ const node = (id: string, yPosition: number) => ({
   yPosition,
 });
 
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -47,9 +47,14 @@ const makeData = (): ToCData => ({
 const COLUMN_TOP = 100;
 const NODE_TOP = 262;
 
+// The stubbed column rects, by `data-column` key; a test that lands a chart
+// which reflows the columns edits them to match.
+let columnRects: Record<string, [number, number]>;
+
 beforeEach(() => {
+  columnRects = { '0-0': [50, 250], '0-1': [274, 474] };
   stubCanvasLayout({
-    columns: { '0-0': [50, 250], '0-1': [274, 474] },
+    columns: columnRects,
     columnTop: COLUMN_TOP,
     columnBottom: 900,
     grabbed: { id: 'n-1', rect: rect(50, NODE_TOP, 242, NODE_TOP + 76), width: 192 },
@@ -63,10 +68,11 @@ afterEach(() => {
 });
 
 // Grab 30px below the node's top edge.
-const startDrag = (onDataChange?: (data: ToCData) => void) =>
-  startCanvasDrag(canvas(makeData(), onDataChange), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
+const startDrag = () => startCanvasDrag(makeData(), { id: 'n-1', x: 100, y: NODE_TOP + 30 });
 
-const ghost = () => document.querySelector('[data-testid="node-drag-ghost"]');
+const ghost = () => document.querySelector<HTMLElement>('[data-testid="node-drag-ghost"]');
+const ghostTop = () => ghost()!.style.top;
+const ghostShift = () => (ghost()!.firstElementChild as HTMLElement).style.transform;
 const tops = (...ids: string[]) => ids.map((id) => nodeWrapper(id).style.top);
 
 // Pointer at container y 420 over column 0-1: column-local 320, grab offset
@@ -104,11 +110,12 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
   });
 
   it('writes nothing to the data while dragging', async () => {
-    const onDataChange = vi.fn();
-    await startDrag(onDataChange);
+    const { doc, onCommit } = await startDrag();
+    const before = doc.getCommitted();
     move(...OVER_COLUMN_1);
     await act(async () => {});
-    expect(onDataChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(doc.getLive()).toBe(before);
   });
 
   it('follows the pointer: the shifts are recomputed as it moves', async () => {
@@ -146,15 +153,41 @@ describe('TheoryOfChangeGraph live make-room preview', { timeout: 20_000 }, () =
   });
 
   it('drops the shifts when the dragged node disappears mid-drag', async () => {
-    const view = await startDrag();
+    const { land } = await startDrag();
     move(...OVER_COLUMN_1);
     expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
     // Another editor deletes the node being dragged.
-    const without = makeData();
-    without.sections[0].columns[0].nodes = [node('n-2', 500)];
-    view.rerender(canvas(without));
+    act(() =>
+      land((draft) => {
+        draft.sections[0].columns[0].nodes = draft.sections[0].columns[0].nodes.filter(
+          (n) => n.id !== 'n-1',
+        );
+      }),
+    );
     expect(ghost()).toBeNull();
     expect(tops('n-3', 'n-4')).toEqual(['262px', '362px']);
+  });
+
+  it('follows a chart landing mid-drag: the preview goes where a drop would', async () => {
+    const { land, onCommit } = await startDrag();
+    move(...OVER_COLUMN_1);
+    expect(tops('n-3', 'n-4')).toEqual(SHIFTED);
+
+    // Another editor inserts a wide column in front of both. The old columns
+    // move right, so the pointer (x 350) is now over the new, empty column,
+    // and that is where a drop lands. The preview must be there too, not on
+    // the column that now has the old index.
+    Object.assign(columnRects, { '0-0': [50, 450], '0-1': [474, 674], '0-2': [698, 898] });
+    act(() => land((draft) => void draft.sections[0].columns.unshift({ id: 'c-new', nodes: [] })));
+
+    expect(tops('n-3', 'n-4')).toEqual(['262px', '362px']);
+    expect(ghostShift()).toBe('translateX(50px)');
+    expect(ghostTop()).toBe('390px');
+
+    await release(...OVER_COLUMN_1);
+    const dropped = onCommit.mock.calls[0][0].sections[0].columns;
+    expect(dropped[0].nodes.map((n) => n.id)).toEqual(['n-1']);
+    expect(dropped[2].nodes.map((n) => n.yPosition)).toEqual([300, 400]);
   });
 
   it('makes room in the node’s own column without counting its original slot', async () => {

@@ -15,19 +15,15 @@
 //
 // `edgeKey` = `${sourceId}->${targetId}` (directed: a->b ≠ b->a).
 //
-// The graph data format has TWO shapes:
-//   - New: `connections: Array<{targetId, confidence, evidence, assumptions}>`
-//   - Old: `connectionIds: string[]` (legacy, no per-edge metadata)
-//
-// All writers below produce a `connections` array (creating one from the
-// legacy `connectionIds` if necessary). All readers prefer `connections`
-// and fall back to a `connectionIds` view with zeroed metadata.
-//
-// `deleteConnection` removes the target from BOTH the new and legacy
-// arrays atomically, so subsequent reads through either format see the
-// connection as gone.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// A node's edges are its `connections: Array<{targetId, confidence,
+// evidence, assumptions}>`. Charts from outside the tab are normalised on the
+// way in (`normalizeChart` builds `connections` from the legacy
+// `connectionIds`), so this reads `connections` only. `connectionIds` is
+// rewritten from `connections` on read and on merge; the delete paths here and
+// elsewhere keep it in step, and nothing draws or edits from it.
+import { useCallback, useMemo } from 'react';
 import type { SetStateAction } from 'react';
+import { useFieldBuffer } from '../../hooks/useFieldBuffer';
 import { validWaypointOffsets } from '../../utils/connectionGeometry';
 import type { Connection, Node as GraphNode, ToCData } from '../../types';
 
@@ -68,18 +64,8 @@ function findAllNodes(data: ToCData): GraphNode[] {
   return data.sections.flatMap((s) => s.columns.flatMap((c) => c.nodes));
 }
 
-/**
- * Normalize a node's outgoing connections to the new shape. If the node
- * uses the legacy `connectionIds` array we synthesize the metadata at
- * default values so write paths can patch a single record.
- */
-function readConnections(node: GraphNode): Connection[] {
-  if (node.connections) return node.connections;
-  return node.connectionIds.map((id) => ({ targetId: id, confidence: DEFAULT_CONFIDENCE }));
-}
-
 function readConnection(node: GraphNode, targetId: string): Connection | undefined {
-  return readConnections(node).find((c) => c.targetId === targetId);
+  return node.connections?.find((c) => c.targetId === targetId);
 }
 
 export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertiesResult {
@@ -99,52 +85,44 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
   const sourceEvidence = conn?.evidence ?? '';
   const sourceAssumptions = conn?.assumptions ?? '';
 
-  // Local buffers for the typing inputs.
-  const [evidenceBuffer, setEvidenceBuffer] = useState(sourceEvidence);
-  const [assumptionsBuffer, setAssumptionsBuffer] = useState(sourceAssumptions);
-
-  // Resync the local buffer when the (sourceId, targetId) pair changes
-  // (e.g. user clicks a different connection).
-  const lastEdgeKeyRef = useRef(edgeKey);
-  useEffect(() => {
-    if (lastEdgeKeyRef.current !== edgeKey) {
-      lastEdgeKeyRef.current = edgeKey;
-      setEvidenceBuffer(sourceEvidence);
-      setAssumptionsBuffer(sourceAssumptions);
-    }
-  }, [edgeKey, sourceEvidence, sourceAssumptions]);
+  // Local buffers for the typing inputs. They reset when the (sourceId,
+  // targetId) pair changes (user clicks a different connection) and adopt
+  // any value of the connection the user did not write, which is how a
+  // collaborator's change reaches the open editor (see `useFieldBuffer`).
+  const [evidenceBuffer, setEvidenceBuffer] = useFieldBuffer(sourceEvidence, edgeKey);
+  const [assumptionsBuffer, setAssumptionsBuffer] = useFieldBuffer(sourceAssumptions, edgeKey);
 
   /**
    * Map an updater over the source node's connections array, patching the
-   * record for `targetId`. Handles the legacy `connectionIds` → new-shape
-   * upgrade in a single pass.
+   * record for `targetId`. A connection that is not in the chart (the
+   * editor stayed open after someone deleted it) is left absent, not
+   * created from the patch, and the chart comes back as it was.
    */
   const patchConnection = useCallback(
     (patch: Partial<Connection>) => {
-      return (prev: ToCData): ToCData => ({
-        ...prev,
-        sections: prev.sections.map((section) => ({
-          ...section,
-          columns: section.columns.map((column) => ({
-            ...column,
-            nodes: column.nodes.map((node) => {
-              if (node.id !== sourceId) return node;
-              // Upgrade legacy → new format if needed.
-              const baseConnections: Connection[] = node.connections
-                ? node.connections
-                : node.connectionIds.map((cid) => ({
-                    targetId: cid,
-                    confidence: DEFAULT_CONFIDENCE,
-                  }));
-              const found = baseConnections.some((c) => c.targetId === targetId);
-              const nextConnections: Connection[] = found
-                ? baseConnections.map((c) => (c.targetId === targetId ? { ...c, ...patch } : c))
-                : [...baseConnections, { targetId, confidence: DEFAULT_CONFIDENCE, ...patch }];
-              return { ...node, connections: nextConnections };
-            }),
+      return (prev: ToCData): ToCData => {
+        const source = findAllNodes(prev).find((n) => n.id === sourceId);
+        if (!source || !readConnection(source, targetId)) return prev;
+        return {
+          ...prev,
+          sections: prev.sections.map((section) => ({
+            ...section,
+            columns: section.columns.map((column) => ({
+              ...column,
+              nodes: column.nodes.map((node) =>
+                node.id === sourceId
+                  ? {
+                      ...node,
+                      connections: node.connections?.map((c) =>
+                        c.targetId === targetId ? { ...c, ...patch } : c,
+                      ),
+                    }
+                  : node,
+              ),
+            })),
           })),
-        })),
-      });
+        };
+      };
     },
     [sourceId, targetId],
   );
@@ -163,7 +141,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
       setEvidenceBuffer(next);
       mutateDebounced(patchConnection({ evidence: next }), `evidence-${edgeKey}`);
     },
-    [mutateDebounced, patchConnection, edgeKey],
+    [setEvidenceBuffer, mutateDebounced, patchConnection, edgeKey],
   );
 
   const setAssumptions = useCallback(
@@ -171,7 +149,7 @@ export function useEdgeProperties(args: UseEdgePropertiesArgs): UseEdgePropertie
       setAssumptionsBuffer(next);
       mutateDebounced(patchConnection({ assumptions: next }), `assumptions-${edgeKey}`);
     },
-    [mutateDebounced, patchConnection, edgeKey],
+    [setAssumptionsBuffer, mutateDebounced, patchConnection, edgeKey],
   );
 
   // --- commits

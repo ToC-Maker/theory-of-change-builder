@@ -25,8 +25,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
-import { ChartService } from '../../src/services/chartService';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+import { ChartApiError, ChartService } from '../../src/services/chartService';
 import { ShareDialog, type ShareDialogProps } from '../../src/components/share/ShareDialog';
 import type { Permission, LinkSharingLevel } from '../../shared/permissions';
 
@@ -160,6 +160,71 @@ describe('ShareDialog', () => {
         expect(screen.getByText('View link')).toBeInTheDocument();
       });
       expect(screen.queryByText(/embed code/i)).toBeNull();
+    });
+  });
+
+  describe('creating the chart on first share', () => {
+    const created = {
+      chartId: 'chart-new',
+      editToken: 'tok-new',
+      viewUrl: 'https://x.test/chart/chart-new',
+      editUrl: 'https://x.test/edit/tok-new',
+      version: 1,
+    };
+
+    it('hands the version, and exactly the chart that was sent, to the app', async () => {
+      const onChartCreated = vi.fn();
+      const createChart = vi.spyOn(ChartService, 'createChart').mockResolvedValue(created);
+      vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
+      renderDialog({ currentEditToken: null, onChartCreated });
+
+      await waitFor(() => expect(onChartCreated).toHaveBeenCalledTimes(1));
+      expect(onChartCreated).toHaveBeenCalledWith({
+        editToken: 'tok-new',
+        chartId: 'chart-new',
+        version: 1,
+        chart: createChart.mock.calls[0][0],
+      });
+      expect(createChart.mock.calls[0][0]).toBe(baseProps.data);
+    });
+
+    it('follows the chart the document holds when another create attached first', async () => {
+      // Chat and Share created a chart at once: the app keeps the first, so the
+      // URL and the links shown must be that chart's, not the one just created.
+      vi.spyOn(ChartService, 'createChart').mockResolvedValue(created);
+      vi.spyOn(ChartService, 'saveEditToken').mockImplementation(() => {});
+      const onChartCreated = vi
+        .fn()
+        .mockReturnValue({ editToken: 'tok-doc', chartId: 'chart-doc' });
+      function Pathname() {
+        return <output data-testid="pathname">{useLocation().pathname}</output>;
+      }
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <ShareDialog {...baseProps} currentEditToken={null} onChartCreated={onChartCreated} />
+          <Pathname />
+        </MemoryRouter>,
+      );
+
+      expect(
+        await screen.findByDisplayValue(`${window.location.origin}/edit/tok-doc`),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByDisplayValue(`${window.location.origin}/chart/chart-doc`),
+      ).toBeInTheDocument();
+      expect(screen.queryByDisplayValue(/tok-new/)).toBeNull();
+      await waitFor(() => expect(screen.getByTestId('pathname').textContent).toBe('/edit/tok-doc'));
+    });
+
+    it('shows the failure when the server answers without a chart version', async () => {
+      const onChartCreated = vi.fn();
+      vi.spyOn(ChartService, 'createChart').mockRejectedValue(
+        new ChartApiError('The server did not return a chart version', 200),
+      );
+      renderDialog({ currentEditToken: null, onChartCreated });
+
+      expect(await screen.findByText(/did not return a chart version/i)).toBeInTheDocument();
+      expect(onChartCreated).not.toHaveBeenCalled();
     });
   });
 

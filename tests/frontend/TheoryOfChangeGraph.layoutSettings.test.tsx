@@ -3,15 +3,16 @@
 // instead of keeping the value it showed before the undo.
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { act, cleanup } from '@testing-library/react';
+import { normalizeChart } from '../../shared/chart-model';
+import type { ChartInput } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
 });
 
-const sections: ToCData['sections'] = [
+const sections: ChartInput['sections'] = [
   {
     title: 'S1',
     columns: [{ nodes: [] }, { nodes: [] }],
@@ -22,7 +23,7 @@ const sections: ToCData['sections'] = [
   },
 ];
 
-const configured: ToCData = {
+const configured: ChartInput = {
   title: 'Settings fixture',
   sections,
   columnPadding: 48,
@@ -31,7 +32,7 @@ const configured: ToCData = {
   fontFamily: "'Roboto', sans-serif",
 };
 
-const unset: ToCData = { title: 'Settings fixture', sections };
+const unset: ChartInput = { title: 'Settings fixture', sections };
 
 // The add-control zones lie over the gaps, so a zone is as wide as its gap:
 // `columnPadding` between the columns of S1, `sectionPadding` between S1 and S2.
@@ -39,9 +40,9 @@ const width = (testId: string) =>
   (document.querySelector(`[data-testid="${testId}"]`) as HTMLElement).style.width;
 const title = () => document.querySelector('h1') as HTMLElement;
 
-describe('layout settings follow the data prop, including when a setting is unset', () => {
+describe('layout settings follow the chart, including when a setting is unset', () => {
   it('renders the configured values', () => {
-    render(<ToC data={configured} showEditButton={true} />);
+    renderToC(configured);
     expect(width('add-zone-column-gap-0-0')).toBe('48px');
     expect(width('add-zone-section-gap-0')).toBe('64px');
     expect(title().style.fontSize).toBe('3.375rem');
@@ -49,16 +50,16 @@ describe('layout settings follow the data prop, including when a setting is unse
   });
 
   it('renders the defaults when the settings are not set', () => {
-    render(<ToC data={unset} showEditButton={true} />);
+    renderToC(unset);
     expect(width('add-zone-column-gap-0-0')).toBe('24px');
     expect(width('add-zone-section-gap-0')).toBe('32px');
     expect(title().style.fontSize).toBe('2.25rem');
     expect(title().style.fontFamily).toContain('Ubuntu');
   });
 
-  it('returns to the defaults when the data changes from configured to unset', () => {
-    const { rerender } = render(<ToC data={configured} showEditButton={true} />);
-    rerender(<ToC data={unset} showEditButton={true} />);
+  it('returns to the defaults when the chart changes from configured to unset', () => {
+    const { doc } = renderToC(configured);
+    act(() => doc.replace(normalizeChart(unset)));
     expect(width('add-zone-column-gap-0-0')).toBe('24px');
     expect(width('add-zone-section-gap-0')).toBe('32px');
     expect(title().style.fontSize).toBe('2.25rem');

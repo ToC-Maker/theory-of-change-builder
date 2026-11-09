@@ -8,21 +8,27 @@ interface NodeWithPath {
   [key: string]: unknown;
 }
 interface ColumnWithNodes {
+  id?: string;
   nodes?: NodeWithPath[];
 }
 interface SectionWithColumns {
+  id?: string;
   columns: ColumnWithNodes[];
 }
 
 /**
- * Adds a "path" property to each node in the graph data
- * showing its location in the data structure
+ * Adds a "path" property to each node in the graph data showing its location
+ * in the data structure, and drops section and column ids: the model addresses
+ * containers by index, and `prepareAIResult` gives the ones it creates their
+ * own ids. Node ids stay, since connections refer to them.
  */
 export function addNodePaths(data: ToCData): ToCData {
   const dataWithPaths = JSON.parse(JSON.stringify(data)); // Deep clone to avoid mutations
 
   dataWithPaths.sections.forEach((section: SectionWithColumns, sectionIndex: number) => {
+    delete section.id;
     section.columns.forEach((column, columnIndex) => {
+      delete column.id;
       if (!column || !column.nodes) return;
 
       column.nodes.forEach((node, nodeIndex) => {

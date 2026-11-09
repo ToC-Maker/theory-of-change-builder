@@ -1,22 +1,15 @@
-// Pure alignment math for the "Align nodes" action (PR #34 round-4
-// feedback 67).
+// Pure alignment math for the "Align nodes" action.
 //
-// Extracted from `TheoryOfChangeGraph.straightenEdges`, which previously
-// built its next state through a shallow `{ ...prevData }` copy and then
-// assigned into the nested `sections[i].columns[j].nodes[k]` arrays —
-// mutating the PREVIOUS state object in place. App.tsx's undo history
-// snapshots the previous data object (`saveToHistory(dataRef.current)`,
-// App.tsx:1050) when the change notification arrives, so the in-place
-// mutation meant the undo entry already carried the aligned positions:
-// Ctrl+Z after "Align nodes" restored the post-alignment state — a
-// visual no-op (live evidence in the round-4 report; regression tests
-// in `tests/frontend/TheoryOfChangeGraph.alignment.test.tsx`).
+// The chart an updater receives can be the `before` of an undo entry, so the
+// alignment must not write into it: an in-place write would leave the entry
+// already holding the aligned positions, and Ctrl+Z after "Align nodes" would
+// restore the post-alignment state (regression tests in
+// `tests/frontend/TheoryOfChangeGraph.alignment.test.tsx`).
 //
-// This module is PURE: it never mutates its input, and it returns the
-// input `sections` array by reference when nothing needs aligning (so
-// callers can cheaply detect the no-op). Grouping behavior is ported
-// verbatim from the inline implementation: greedy first-fit on the
-// running group average with a 40px tolerance, group average rounded.
+// This module is therefore PURE: it never mutates its input, and it returns the
+// input `sections` array by reference when nothing needs aligning (so callers
+// can cheaply detect the no-op). Grouping is greedy first-fit on the running
+// group average with a 40px tolerance, group average rounded.
 
 import type { ToCData } from '../types';
 

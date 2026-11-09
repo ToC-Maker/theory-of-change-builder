@@ -177,6 +177,9 @@ interface HookArgs {
   editMode?: boolean;
   zoomScale?: number;
   snapshot?: LayoutSnapshot;
+  // What the layout looks like when read afresh at release, after a chart
+  // landing changed it since the last pointer move.
+  freshSnapshot?: LayoutSnapshot;
 }
 
 function setupHook(args: HookArgs) {
@@ -201,7 +204,8 @@ function setupHook(args: HookArgs) {
       });
     }
     containerRef.current = containerEl;
-    const getSnapshot = () => args.snapshot ?? makeSnapshot();
+    const getSnapshot = (options?: { fresh?: boolean }) =>
+      (options?.fresh ? args.freshSnapshot : undefined) ?? args.snapshot ?? makeSnapshot();
     return usePointerDrag({
       data: args.data,
       containerRef,
@@ -394,6 +398,74 @@ describe('usePointerDrag', () => {
       expect(onDrop.mock.calls[0][1]).toBe('n-1');
       expect(onDrop.mock.calls[0][2]).toEqual({ x: 100, y: 200 });
       expect(result.current.dragState).toBeNull();
+      expect(isCanvasGestureActive()).toBe(false);
+    });
+
+    it('places the drop by the layout as it is at release, not as it was at the last move', () => {
+      const onDrop = vi.fn();
+      // After the last move a landing re-flowed the canvas: the pointer's
+      // position (350) now lies in section 1's column, not section 0's second.
+      const freshSnapshot: LayoutSnapshot = {
+        ...makeSnapshot(),
+        columnRects: [
+          [
+            { left: 50, right: 150, top: 100, bottom: 900 },
+            { left: 170, right: 270, top: 100, bottom: 900 },
+          ],
+          [{ left: 300, right: 500, top: 100, bottom: 900 }],
+        ],
+        nodeRects: { '0-0': [], '0-1': [], '1-0': [] },
+      };
+      const { result } = setupHook({ data: sampleData(), onDrop, freshSnapshot });
+
+      act(() => {
+        result.current
+          .bindNode('n-1')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 100, clientY: 200, nodeEl: makeMockElement() }),
+          );
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 350, clientY: 400 }));
+      });
+      expect(result.current.dragState?.dragOverLocation).toEqual(
+        expect.objectContaining({ sectionIndex: 0, columnIndex: 1 }),
+      );
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 350, clientY: 400 }));
+      });
+
+      expect(onDrop).toHaveBeenCalledTimes(1);
+      expect(onDrop.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ kind: 'node-slot', sectionIndex: 1, columnIndex: 0 }),
+      );
+    });
+
+    it('does not drop when no column lies under the pointer at release', () => {
+      const onDrop = vi.fn();
+      // The columns now start below the pointer.
+      const freshSnapshot: LayoutSnapshot = {
+        ...makeSnapshot(),
+        columnRects: [[{ left: 50, right: 250, top: 500, bottom: 900 }]],
+        nodeRects: { '0-0': [] },
+      };
+      const { result } = setupHook({ data: sampleData(), onDrop, freshSnapshot });
+
+      act(() => {
+        result.current
+          .bindNode('n-1')
+          .onPointerDown(
+            pointerDownEvent({ clientX: 100, clientY: 200, nodeEl: makeMockElement() }),
+          );
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointermove', { clientX: 350, clientY: 400 }));
+      });
+      act(() => {
+        document.dispatchEvent(pointerEvent('pointerup', { clientX: 350, clientY: 400 }));
+      });
+
+      expect(onDrop).not.toHaveBeenCalled();
       expect(isCanvasGestureActive()).toBe(false);
     });
 

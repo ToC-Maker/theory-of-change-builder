@@ -26,6 +26,30 @@
 // component does not own the close-edge commit.
 //
 // ---------------------------------------------------------------------------
+// Following a changed `markdown` prop
+// ---------------------------------------------------------------------------
+//
+// MDXEditor reads `markdown` only when it mounts. A `markdown` that
+// differs from what the editor last showed or reported (someone else's
+// change, or another selection) is pushed in so that Undo can never
+// return to the old text: undoing into it would fire `onChange` and save
+// the old text over the change.
+//   - Focus is outside the editor: it is remounted with the new text,
+//     which starts with an empty undo history. Remounting a focused
+//     editor would drop focus and the caret.
+//   - Focus is inside it: `setMarkdown`, which also empties the undo
+//     history (see MDXEditor.tsx). The caret moves to the start of the
+//     document; no position is right in text someone else rewrote.
+// Neither produces an `onChange` that is forwarded, so the text is not
+// saved back: `setMarkdown` is silent, and a fresh editor reports the text it
+// opened with, when that is not in normal form, as `onChange(text, true)`,
+// which is dropped (see below).
+//
+// MDXEditor also calls `onChange(text, true)` on open when the stored text
+// is not in its normal form. That reports no edit, so it is not forwarded;
+// forwarding it would save a phantom change of `text` on every open.
+//
+// ---------------------------------------------------------------------------
 // Lazy-load failure containment
 // ---------------------------------------------------------------------------
 //
@@ -41,21 +65,16 @@
 // We wrap the lazy chunk in a local `<ErrorBoundary>` with an inline
 // fallback (retry button + plain-text preview) so the surrounding
 // NodeEditor stays functional.
-import { Suspense, lazy, useCallback, useState } from 'react';
-import type { ComponentType, LazyExoticComponent } from 'react';
+import { Suspense, lazy, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import type { ComponentProps, ComponentType, LazyExoticComponent } from 'react';
+import type { MDXEditorMethods } from '@mdxeditor/editor';
+import type { MDXEditorComponent } from '../MDXEditor';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { loggingService } from '../../services/loggingService';
 
-// Subset of `MDXEditorComponent`'s prop signature that DetailsEditor
-// actually passes. Kept structural (not `typeof MDXEditorComponent`) so
-// the lazy-factory escape hatch doesn't drag in the heavy
-// `@mdxeditor/editor` types and force them into this file's chunk.
-interface MDXEditorPropsShape {
-  markdown: string;
-  onChange?: (markdown: string) => void;
-  placeholder?: string;
-  fontFamily?: string;
-}
+// The lazily loaded editor's props, read from the component itself. The
+// imports above are type-only, so the chunk still loads on demand.
+type MDXEditorProps = ComponentProps<typeof MDXEditorComponent>;
 
 interface DetailsEditorProps {
   markdown: string;
@@ -69,7 +88,7 @@ interface DetailsEditorProps {
    * to inject a rejecting promise (verifies the local ErrorBoundary).
    * Production callers should always use the default.
    */
-  lazyFactory?: () => LazyExoticComponent<ComponentType<MDXEditorPropsShape>>;
+  lazyFactory?: () => LazyExoticComponent<ComponentType<MDXEditorProps>>;
 }
 
 // Lazy import — defers the lexical / mdast / mdxeditor chunk (~600 KB
@@ -79,12 +98,8 @@ interface DetailsEditorProps {
 // Returned as a factory so Retry can rebuild a fresh lazy component
 // (React.lazy caches rejected promises — re-using the same instance
 // after a chunk-load failure would re-throw the cached rejection).
-function buildLazyMDXEditor(): LazyExoticComponent<ComponentType<MDXEditorPropsShape>> {
-  return lazy(() =>
-    import('../MDXEditor').then((m) => ({
-      default: m.MDXEditorComponent as ComponentType<MDXEditorPropsShape>,
-    })),
-  );
+function buildLazyMDXEditor(): LazyExoticComponent<ComponentType<MDXEditorProps>> {
+  return lazy(() => import('../MDXEditor').then((m) => ({ default: m.MDXEditorComponent })));
 }
 
 // Eager module-load: kicks off the chunk download as soon as this
@@ -112,6 +127,33 @@ export function DetailsEditor({
     setLazyMDXEditor(() => lazyFactory());
     setLoadAttempt((n) => n + 1);
   }, [lazyFactory]);
+
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<MDXEditorMethods>(null);
+  // The `markdown` the editor last showed or reported, to tell a change
+  // from outside from the echo of the user's own typing.
+  const shownRef = useRef(markdown);
+  // Bumped to mount a fresh editor.
+  const [editorGeneration, setEditorGeneration] = useState(0);
+
+  const handleChange = useCallback(
+    (next: string, initialMarkdownNormalize: boolean) => {
+      if (initialMarkdownNormalize) return;
+      shownRef.current = next;
+      onChange(next);
+    },
+    [onChange],
+  );
+
+  useLayoutEffect(() => {
+    if (markdown === shownRef.current) return;
+    shownRef.current = markdown;
+    if (wrapperRef.current?.contains(document.activeElement)) {
+      editorRef.current?.setMarkdown(markdown);
+    } else {
+      setEditorGeneration((n) => n + 1);
+    }
+  }, [markdown]);
 
   // Local fallback for the ErrorBoundary: never the full-screen reload
   // UI. The rest of NodeEditor (title input, width, color, delete)
@@ -145,7 +187,7 @@ export function DetailsEditor({
   );
 
   return (
-    <div className="details-editor">
+    <div className="details-editor" ref={wrapperRef}>
       <span className="text-xs text-gray-600 mb-1 block">Details</span>
       <ErrorBoundary
         // `key` resets the boundary state when Retry rebuilds the lazy
@@ -183,8 +225,10 @@ export function DetailsEditor({
         >
           <div className="mt-1">
             <LazyMDXEditor
+              key={editorGeneration}
               markdown={markdown}
-              onChange={onChange}
+              onChange={handleChange}
+              editorRef={editorRef}
               placeholder={placeholder}
               fontFamily={fontFamily}
             />

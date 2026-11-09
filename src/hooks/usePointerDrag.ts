@@ -106,8 +106,11 @@ export interface UsePointerDragArgs {
   /** Container that wraps the canvas; rects in the snapshot are
    *  relative to its origin. */
   containerRef: RefObject<HTMLElement | null>;
-  /** Layout snapshot accessor (from `useGraphLayout`). */
-  getSnapshot: () => LayoutSnapshot;
+  /**
+   * Layout snapshot accessor (from `useGraphLayout`). Called with
+   * `{ fresh: true }` once, at release, to re-read the layout.
+   */
+  getSnapshot: (options?: { fresh?: boolean }) => LayoutSnapshot;
   /** When false, pointerdown is a no-op (read-only mode). */
   editMode: boolean;
   /** Current zoom scale (1 = no zoom). Used to translate viewport→local. */
@@ -154,6 +157,13 @@ export interface UsePointerDragResult {
   };
   /** Convenience read of `dragState !== null` for the polling-pause guard. */
   isActive: boolean;
+  /**
+   * Where a drop at a viewport position would land: the position
+   * classified against the layout snapshot, which `fresh` re-reads first
+   * (as the drop does at release). A consumer previewing the drop uses it
+   * to name the same target the drop will.
+   */
+  locate: (clientX: number, clientY: number, fresh?: boolean) => DragOverLocation | null;
 }
 
 /** Map a classifyRegion result onto the public DragOverLocation union. */
@@ -329,20 +339,30 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
     setDragState(null);
   }, [removeDocListeners, setDragState]);
 
+  // Where a drop at a viewport position would land: the position in
+  // container-local content space, classified against the layout snapshot.
+  const locate = useCallback(
+    (clientX: number, clientY: number, fresh = false): DragOverLocation | null => {
+      const container = containerRef.current;
+      if (!container) return null;
+      const containerRect = container.getBoundingClientRect();
+      const region = classifyRegion(getSnapshotRef.current({ fresh }), {
+        x: (clientX - containerRect.left) / zoomRef.current,
+        y: (clientY - containerRect.top) / zoomRef.current,
+      });
+      return regionToDragOverLocation(region);
+    },
+    [containerRef],
+  );
+
   // pointermove handler — translate to container-local, classify, update state.
   const handlePointerMove = useCallback(
     (e: PointerEvent) => {
       // Ignore moves from other pointers (active pointer is the one we
       // captured at start; second pointers are handled separately).
       if (activePointerIdRef.current != null && e.pointerId !== activePointerIdRef.current) return;
-      const container = containerRef.current;
-      if (!container) return;
-      const containerRect = container.getBoundingClientRect();
-      const localX = (e.clientX - containerRect.left) / zoomRef.current;
-      const localY = (e.clientY - containerRect.top) / zoomRef.current;
-      const snap = getSnapshotRef.current();
-      const region = classifyRegion(snap, { x: localX, y: localY });
-      const dragOverLocation = regionToDragOverLocation(region);
+      if (!containerRef.current) return;
+      const dragOverLocation = locate(e.clientX, e.clientY);
       setDragState((prev) => {
         if (!prev) return prev;
         // Flip hasMoved the first time the cursor crosses the tap
@@ -363,7 +383,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
         };
       });
     },
-    [containerRef, setDragState],
+    [containerRef, locate, setDragState],
   );
 
   // pointerup handler — stale-node guard, then fire onDrop if valid.
@@ -402,8 +422,14 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
               request_metadata: { nodeId: state.nodeId },
             });
             onStaleDropRef.current?.(state.nodeId);
-          } else if (state.dragOverLocation) {
-            onDropRef.current(state.dragOverLocation, state.nodeId, state.pointerOffset);
+          } else {
+            // A chart landing during the drag can have added, removed or
+            // resized columns since the last move, so the column indices of
+            // `dragOverLocation` may name other columns. The drop is placed by
+            // reading the layout again at the last pointer position; no column
+            // there means no drop.
+            const target = locate(state.ghostPos.x, state.ghostPos.y, true);
+            if (target) onDropRef.current(target, state.nodeId, state.pointerOffset);
           }
         }
       } catch (err) {
@@ -417,7 +443,7 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
         cleanup();
       }
     },
-    [cleanup],
+    [cleanup, locate],
   );
 
   const handlePointerCancel = useCallback(
@@ -537,7 +563,6 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       onDragStartRef.current?.(nodeId, { metaKey: e.metaKey, ctrlKey: e.ctrlKey });
 
       const nodeEl = e.currentTarget as HTMLElement;
-      const containerRect = container.getBoundingClientRect();
       const nodeRect = nodeEl.getBoundingClientRect();
       const pointerOffset = {
         x: e.clientX - nodeRect.left,
@@ -548,23 +573,19 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
         height: nodeHeightsRef.current[nodeId] || nodeEl.offsetHeight,
       };
 
-      const localX = (e.clientX - containerRect.left) / zoomRef.current;
-      const localY = (e.clientY - containerRect.top) / zoomRef.current;
-      const initialRegion = classifyRegion(getSnapshotRef.current(), { x: localX, y: localY });
-
       setDragState({
         nodeId,
         ghostPos: { x: e.clientX, y: e.clientY },
         pointerOffset,
         nodeSize,
-        dragOverLocation: regionToDragOverLocation(initialRegion),
+        dragOverLocation: locate(e.clientX, e.clientY),
         hasMoved: false,
       });
     },
     // All of these are referentially stable (refs / ref-reading
     // useCallbacks), so `startDrag` — and therefore the `bindNode`
     // cache entries that close over it — never changes identity.
-    [containerRef, setDragState, installDocListeners],
+    [containerRef, locate, setDragState, installDocListeners],
   );
 
   const bindNode = useCallback(
@@ -585,7 +606,8 @@ export function usePointerDrag(args: UsePointerDragArgs): UsePointerDragResult {
       dragState,
       bindNode,
       isActive: dragState !== null,
+      locate,
     }),
-    [dragState, bindNode],
+    [dragState, bindNode, locate],
   );
 }

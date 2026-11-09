@@ -5,13 +5,10 @@
 // Layout: column 0-0 holds the dragged n-1 (centre 200) and n-2 (centre
 // 500); column 0-1 holds n-3 (centre 300) and n-4 (centre 400). jsdom
 // measures no heights, so every node is the renderer's 76px default.
-import { useRef, useState } from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { cleanup, fireEvent } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
+import { act, cleanup, fireEvent } from '@testing-library/react';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import type { ToCData } from '../../src/types';
-import { deepFreeze } from './helpers/deepFreeze';
+import type { ChartInput, ToCData } from '../../src/types';
 import {
   move,
   nodeWrapper,
@@ -30,7 +27,7 @@ const node = (id: string, yPosition: number) => ({
   yPosition,
 });
 
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -60,40 +57,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Feeds each change back as the new data prop and keeps the previous
-// object for undo, the way App's change notification does.
-function Controlled({
-  onChange,
-  initial = makeData,
-}: {
-  onChange: (next: ToCData) => void;
-  initial?: () => ToCData;
-}) {
-  const [data, setData] = useState(() => deepFreeze(initial()));
-  const history = useRef<ToCData[]>([]);
-  return (
-    <>
-      <ToC
-        data={data}
-        showEditButton={true}
-        onDataChange={(next) => {
-          history.current.push(data);
-          onChange(next);
-          setData(next);
-        }}
-      />
-      <button
-        data-testid="undo"
-        onClick={() => {
-          const previous = history.current.pop();
-          if (previous) setData(previous);
-        }}
-      />
-      <output data-testid="history-size">{history.current.length}</output>
-    </>
-  );
-}
-
 const grab = { id: 'n-1', x: 100, y: NODE_TOP + 30 };
 const yOf = (data: ToCData, id: string) =>
   data.sections[0].columns.flatMap((c) => c.nodes).find((n) => n.id === id)?.yPosition;
@@ -106,13 +69,12 @@ const OVER_COLUMN_1 = [350, 420] as const;
 
 describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
   it('writes the dropped node and every shifted node in one change', async () => {
-    const onChange = vi.fn();
-    await startDrag(<Controlled onChange={onChange} />, grab);
+    const { onCommit } = await startDrag(makeData(), grab);
     move(...OVER_COLUMN_1);
     await release(...OVER_COLUMN_1);
 
-    expect(onChange).toHaveBeenCalledTimes(1);
-    const next = onChange.mock.calls[0][0] as ToCData;
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const next = onCommit.mock.calls[0][0];
     expect(idsIn(next, 0)).toEqual(['n-2']);
     expect(idsIn(next, 1).sort()).toEqual(['n-1', 'n-3', 'n-4']);
     expect(yOf(next, 'n-1')).toBe(328);
@@ -123,7 +85,7 @@ describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
   });
 
   it('lands the nodes where the preview showed them', async () => {
-    await startDrag(<Controlled onChange={() => {}} />, grab);
+    await startDrag(makeData(), grab);
     move(...OVER_COLUMN_1);
     const previewTops = ['n-3', 'n-4'].map((id) => nodeWrapper(id).style.top);
     await release(...OVER_COLUMN_1);
@@ -133,13 +95,18 @@ describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
   });
 
   it('is undone by one undo', async () => {
-    const onChange = vi.fn();
-    await startDrag(<Controlled onChange={onChange} />, grab);
+    const { doc, onCommit } = await startDrag(makeData(), grab);
+    const before = doc.getCommitted();
     move(...OVER_COLUMN_1);
     await release(...OVER_COLUMN_1);
-    expect(document.querySelector('[data-testid="history-size"]')!.textContent).toBe('1');
+    expect(onCommit).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(document.querySelector('[data-testid="undo"]')!);
+    act(() => doc.undo());
+
+    // One undo is all it took: nothing is left to undo, and the chart is
+    // the one from before the drop.
+    expect(doc.getStatus().canUndo).toBe(false);
+    expect(doc.getCommitted()).toEqual(before);
 
     const columns = [...document.querySelectorAll('[data-column]')];
     const idsOf = (key: string) =>
@@ -161,14 +128,13 @@ describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
   });
 
   it('makes room in the same column too, in one change', async () => {
-    const onChange = vi.fn();
-    await startDrag(<Controlled onChange={onChange} />, grab);
+    const { onCommit } = await startDrag(makeData(), grab);
     // Column 0-0, landing centre 480 (box 442..518): n-2 (462..538) → top 534.
     move(100, 572);
     await release(100, 572);
 
-    expect(onChange).toHaveBeenCalledTimes(1);
-    const next = onChange.mock.calls[0][0] as ToCData;
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const next = onCommit.mock.calls[0][0];
     expect(yOf(next, 'n-1')).toBe(480);
     expect(yOf(next, 'n-2')).toBe(572);
     expect(idsIn(next, 1)).toEqual(['n-3', 'n-4']);
@@ -180,31 +146,29 @@ describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
     // out of the way of a landing box at 90..166 (pointer column-local 120,
     // grab offset 30 → centre 128). 'top' settles at the column top (centre
     // 38) and the landing spot moves down to 130, not the raw 128.
-    const onChange = vi.fn();
-    const initial = (): ToCData => ({
+    const initial = (): ChartInput => ({
       title: 'Test',
       sections: [
         { title: 'Inputs', columns: [{ nodes: [node('n-1', 200)] }, { nodes: [node('top', 50)] }] },
       ],
     });
-    await startDrag(<Controlled onChange={onChange} initial={initial} />, grab);
+    const { onCommit } = await startDrag(initial(), grab);
     move(350, 220);
     await release(350, 220);
 
-    expect(onChange).toHaveBeenCalledTimes(1);
-    const next = onChange.mock.calls[0][0] as ToCData;
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const next = onCommit.mock.calls[0][0];
     expect(yOf(next, 'n-1')).toBe(130);
     expect(yOf(next, 'top')).toBe(38);
   });
 
   it('shifts nothing when the drop creates a new column', async () => {
-    const onChange = vi.fn();
-    await startDrag(<Controlled onChange={onChange} />, grab);
+    const { onCommit } = await startDrag(makeData(), grab);
     move(262, 420); // the gap between the two columns
     await release(262, 420);
 
-    expect(onChange).toHaveBeenCalledTimes(1);
-    const next = onChange.mock.calls[0][0] as ToCData;
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    const next = onCommit.mock.calls[0][0];
     expect(next.sections[0].columns.map((c) => c.nodes.map((n) => n.id))).toEqual([
       ['n-2'],
       ['n-1'],
@@ -215,10 +179,9 @@ describe('TheoryOfChangeGraph drop commit', { timeout: 20_000 }, () => {
   });
 
   it('commits nothing when the drag is cancelled', async () => {
-    const onChange = vi.fn();
-    await startDrag(<Controlled onChange={onChange} />, grab);
+    const { onCommit } = await startDrag(makeData(), grab);
     move(...OVER_COLUMN_1);
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });

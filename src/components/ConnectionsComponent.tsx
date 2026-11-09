@@ -30,6 +30,14 @@ interface SelectedEdge {
   midY: number;
 }
 
+/** True when `data` has the connection and both of its end nodes. */
+function hasConnection(data: ToCData, { sourceId, targetId }: SelectedEdge): boolean {
+  const nodes = data.sections.flatMap((section) => section.columns.flatMap((c) => c.nodes));
+  const source = nodes.find((n) => n.id === sourceId);
+  if (!source || !nodes.some((n) => n.id === targetId)) return false;
+  return source.connections?.some((c) => c.targetId === targetId) ?? false;
+}
+
 interface ConnectionsComponentProps {
   data: ToCData;
   /**
@@ -191,6 +199,18 @@ export function ConnectionsComponent({
   useLayoutEffect(() => {
     if (highlightedNodes.size > 0) setSelectedEdge(null);
   }, [highlightedNodes]);
+
+  // The editor addresses its connection by the two end nodes, so a
+  // connection deleted by someone else (or left dangling by a deleted end
+  // node) closes the editor instead of leaving it over a line that is
+  // gone, where a keystroke would go nowhere (`patchConnection` leaves a
+  // missing connection absent). Dropping the state, not just hiding the
+  // editor, keeps it closed if the connection comes back (an undo). The
+  // updater returns the same state while the connection exists, so
+  // ordinary edits cause no extra render.
+  useLayoutEffect(() => {
+    setSelectedEdge((current) => (current && hasConnection(data, current) ? current : null));
+  }, [data]);
 
   // Stash `onSizeChange` in a ref so `updateSize` doesn't need it as a dep —
   // the parent passes a fresh inline arrow every render, which would otherwise
@@ -375,48 +395,26 @@ export function ConnectionsComponent({
       .flatMap((section, sectionIndex) =>
         section.columns.flatMap((column, columnIndex) =>
           column.nodes.flatMap((node) => {
-            // Handle both old connectionIds and new connections format
-            if (node.connections) {
-              return node.connections.map((conn) => {
-                const targetLocation = findNodeLocation(conn.targetId);
-                return {
-                  start: nodeRefs[node.id],
-                  end: nodeRefs[conn.targetId],
-                  sourceSectionIndex: sectionIndex,
-                  sourceColumnIndex: columnIndex,
-                  targetSectionIndex: targetLocation?.sectionIndex ?? -1,
-                  targetColumnIndex: targetLocation?.columnIndex ?? -1,
-                  sourceId: node.id,
-                  targetId: conn.targetId,
-                  confidence: conn.confidence,
-                  evidence: conn.evidence,
-                  assumptions: conn.assumptions,
-                  // PR 7: forward optional waypoints. Empty/undefined =
-                  // falls back to auto-bezier (byte-identical to
-                  // pre-PR-7 rendering, see
-                  // `tests/frontend/connectionPath.waypoints.test.ts`).
-                  waypoints: conn.waypoints,
-                };
-              });
-            } else {
-              return node.connectionIds.map((connectionId) => {
-                const targetLocation = findNodeLocation(connectionId);
-                return {
-                  start: nodeRefs[node.id],
-                  end: nodeRefs[connectionId],
-                  sourceSectionIndex: sectionIndex,
-                  sourceColumnIndex: columnIndex,
-                  targetSectionIndex: targetLocation?.sectionIndex ?? -1,
-                  targetColumnIndex: targetLocation?.columnIndex ?? -1,
-                  sourceId: node.id,
-                  targetId: connectionId,
-                  confidence: 50, // default confidence (medium)
-                  evidence: undefined,
-                  assumptions: undefined,
-                  waypoints: undefined,
-                };
-              });
-            }
+            return (node.connections ?? []).map((conn) => {
+              const targetLocation = findNodeLocation(conn.targetId);
+              return {
+                start: nodeRefs[node.id],
+                end: nodeRefs[conn.targetId],
+                sourceSectionIndex: sectionIndex,
+                sourceColumnIndex: columnIndex,
+                targetSectionIndex: targetLocation?.sectionIndex ?? -1,
+                targetColumnIndex: targetLocation?.columnIndex ?? -1,
+                sourceId: node.id,
+                targetId: conn.targetId,
+                confidence: conn.confidence,
+                evidence: conn.evidence,
+                assumptions: conn.assumptions,
+                // Forward optional waypoints. Empty/undefined = falls back to
+                // the automatic bezier (see
+                // `tests/frontend/connectionPath.waypoints.test.ts`).
+                waypoints: conn.waypoints,
+              };
+            });
           }),
         ),
       )

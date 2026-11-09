@@ -1,27 +1,29 @@
-// App's undo history stores the data object it held before a change, so
-// every edit must build a new object graph and leave the previous one
-// alone. The data prop is deep-frozen here: an updater that splices,
-// pushes to or assigns into a nested array or object of the previous
-// state throws instead of silently rewriting the undo snapshot.
+// The canvas hands every updater the document's live chart, and the document
+// keeps the charts on both sides of a change, by reference, as an undo entry.
+// An updater must therefore build a new object graph and leave the chart it
+// received alone: an in-place write (a splice, a push, an assignment into a
+// nested array or object) would rewrite the entry's `before`, and undo would
+// restore the wrong chart. The document is created over a deep-frozen chart
+// (see `makeDoc`), so such a write throws instead of corrupting history.
 //
-// fireEvent renders and flushes effects before the graph's queued change
-// notification runs, so each edit must also survive that re-render: a node
-// moved to another column remounts, and the graph must not answer by
-// re-absorbing its unchanged data prop and reporting the old chart.
+// Each gesture is also undone and redone on the document: undo must restore
+// the chart the gesture started from, exactly, and redo the chart it produced.
+//
+// fireEvent renders and flushes effects before the canvas's queued commit
+// runs, so each edit must also survive that re-render: a node moved to another
+// column remounts, and the remount must not write the old chart back.
 
-import { useState } from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
-import { deepFreeze } from './helpers/deepFreeze';
+import { describe, it, expect, afterEach } from 'vitest';
+import { cleanup, fireEvent, act } from '@testing-library/react';
+import type { ChartInput, ToCData } from '../../src/types';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
 });
 
 // Section 0 has two columns so "between" is reachable; section 1 has one.
-const makeData = (): ToCData => ({
+const makeData = (): ChartInput => ({
   title: 'Snapshot fixture',
   sections: [
     {
@@ -52,38 +54,32 @@ const makeData = (): ToCData => ({
   ],
 });
 
-// Feeds each change back as the new data prop, as App does. Without the
-// feedback the graph re-absorbs its unchanged prop after the edit.
-function Controlled({ initial, onChange }: { initial: ToCData; onChange: (d: ToCData) => void }) {
-  const [data, setData] = useState(initial);
-  return (
-    <ToC
-      data={data}
-      showEditButton={true}
-      onDataChange={(next) => {
-        onChange(next);
-        setData(next);
-      }}
-    />
-  );
-}
-
 const nodeIds = (col: ToCData['sections'][number]['columns'][number]) => col.nodes.map((n) => n.id);
 
-// Renders the graph on frozen data, runs `edit`, and returns the one change
-// the parent was notified of.
-async function editAndCollect(edit: () => void) {
-  const data = deepFreeze(makeData());
-  const before = JSON.parse(JSON.stringify(data));
-  const onDataChange = vi.fn();
-  render(<Controlled initial={data} onChange={onDataChange} />);
-  edit();
-  // The graph notifies the parent in a microtask; the parent's state
-  // update from it belongs inside act.
+// Renders the canvas on a frozen chart and runs `perform`. Expects exactly one
+// commit (one undo step), the starting chart untouched, undo back to it and
+// redo back to the edit; returns the edited chart.
+async function editAndCollect(perform: () => void) {
+  const { doc, onCommit } = renderToC(makeData());
+  const before = doc.getCommitted();
+  const snapshot = JSON.parse(JSON.stringify(before));
+  perform();
+  // The canvas commits in a microtask; the store notifications it causes
+  // belong inside act.
   await act(async () => {});
-  expect(onDataChange).toHaveBeenCalledTimes(1);
-  expect(data).toEqual(before);
-  return onDataChange.mock.calls[0][0] as ToCData;
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(before).toEqual(snapshot);
+  const next = doc.getCommitted();
+  expect(next).not.toEqual(snapshot);
+
+  act(() => doc.undo());
+  expect(doc.getCommitted()).toEqual(snapshot);
+  expect(doc.getStatus()).toMatchObject({ canUndo: false, canRedo: true });
+
+  act(() => doc.redo());
+  expect(doc.getCommitted()).toEqual(next);
+  expect(doc.getStatus()).toMatchObject({ canUndo: true, canRedo: false });
+  return next;
 }
 
 const byId = (testId: string, index = 0) =>

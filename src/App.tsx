@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from 'react';
 import { useZoomPan } from './hooks/useZoomPan';
 import { useViewportOffset } from './hooks/useViewportOffset';
 import { Routes, Route, useParams, useLocation, Link, useNavigate } from 'react-router-dom';
@@ -10,9 +10,18 @@ import { ChatInterface } from './components/ChatInterface';
 import { GraphTutorial } from './components/GraphTutorial';
 import { PrivacyPolicyPopup } from './components/PrivacyPolicyPopup';
 import { ApiKeyProvider } from './contexts/ApiKeyContext';
-import { ChartService } from './services/chartService';
+import {
+  ChartApiError,
+  ChartService,
+  type ChartCreated,
+  type OpenChart,
+} from './services/chartService';
 import { chatService } from './services/chatService';
-import { LoggingServiceClass, loggingService } from './services/loggingService';
+import {
+  LoggingServiceClass,
+  loggingService,
+  type SaveSnapshotParams,
+} from './services/loggingService';
 import { useLoggingSession } from './hooks/useLoggingSession';
 import {
   PlusIcon,
@@ -35,14 +44,15 @@ import {
 } from './services/authSessionHealth';
 import { SessionExpiredBanner } from './components/SessionExpiredBanner';
 import { isTextEntryFocused } from './utils/isInputFocused';
-import { useUndoHistory } from './hooks/useUndoHistory';
+import { ChartDocument, staticStore } from './sync/ChartDocument';
+import { prepareAIResult } from './sync/aiEdit';
 import { clearChartSpend } from './utils/byokSpend';
-import type { ToCData } from './types';
+import { normalizeChart, type ChartInput, type ToCData } from './types';
 import type { Permission, LinkSharingLevel } from '../shared/permissions';
 import './App.css';
 
-// Default empty template with 4 sections
-const emptyTemplate: ToCData = {
+// Default empty template with 5 sections
+const emptyTemplate: ChartInput = {
   title: 'Theory of Change',
   sections: [
     {
@@ -93,6 +103,18 @@ const emptyTemplate: ToCData = {
   curvature: 0.5,
 };
 
+// Positional ids: every tab that starts from the template agrees on them.
+const emptyChart = normalizeChart(emptyTemplate);
+
+// A 200 `ChartApiError` is the server answering without a chart version: a
+// server that is older than this page (or being rolled back).
+function loadErrorMessage(err: unknown): string {
+  if (err instanceof ChartApiError && err.status === 200) {
+    return `${err.message}, so this chart cannot be edited safely. Reload in a minute; if it keeps happening, the server needs updating.`;
+  }
+  return err instanceof Error ? err.message : 'Failed to load data';
+}
+
 function ToCViewerOnly() {
   const { filename, chartId } = useParams<{ filename?: string; chartId?: string }>();
   const {
@@ -109,6 +131,9 @@ function ToCViewerOnly() {
   const [isCopying, setIsCopying] = useState(false);
   const [isInIframe, setIsInIframe] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The canvas reads the chart through a store; the viewer's never changes
+  // under it, so a new one is made only for a new chart.
+  const store = useMemo(() => (data ? staticStore(data) : null), [data]);
   // PR 4: viewer-only mode never enters edit, so the hook's drag path
   // is dormant. The ref is referenced by the shared `syncData` guard
   // and always stays `false` here.
@@ -184,7 +209,7 @@ function ToCViewerOnly() {
         const saved = localStorage.getItem(storageKey);
         if (saved) {
           console.log('Loaded from localStorage:', storageKey);
-          return JSON.parse(saved);
+          return normalizeChart(JSON.parse(saved));
         }
       } catch (error) {
         console.warn('Failed to load from localStorage:', error);
@@ -264,11 +289,10 @@ function ToCViewerOnly() {
           if (!response.ok) {
             throw new Error(`Failed to load ${filename}`);
           }
-          const jsonData = await response.json();
-          setData(jsonData);
+          setData(normalizeChart(await response.json()));
         } else {
           // Default to empty template
-          setData(emptyTemplate);
+          setData(emptyChart);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load data');
@@ -533,7 +557,7 @@ function ToCViewerOnly() {
     );
   }
 
-  if (!data) {
+  if (!data || !store) {
     return (
       <div className="h-screen w-screen bg-white flex items-center justify-center">
         <div className="text-xl text-gray-600">No data available</div>
@@ -573,12 +597,7 @@ function ToCViewerOnly() {
         }}
       >
         <div style={{ background: 'transparent', padding: '16px' }}>
-          <ToC
-            data={data}
-            onSizeChange={setContainerSize}
-            onDataChange={() => {}}
-            showEditButton={false}
-          />
+          <ToC store={store} onSizeChange={setContainerSize} showEditButton={false} />
         </div>
       </div>
 
@@ -664,25 +683,35 @@ function ToCViewer() {
     isLoading: authLoading,
     loginWithRedirect,
   } = useAuth0();
-  const [data, setData] = useState<ToCData | null>(null);
-  const {
-    undoHistory,
-    setUndoHistory,
-    redoHistory,
-    setRedoHistory,
-    saveToHistory,
-    flushPendingHistory,
-  } = useUndoHistory();
+  // The tab's one chart store. The route starts on the empty template; loading a
+  // chart builds a document for it (see `loadData`), and the canvas, undo, the
+  // save pill and the save and poll hooks all read and write through the
+  // current one.
+  const [doc, setDoc] = useState(
+    () => new ChartDocument({ chart: emptyChart, editToken: null, server: null }),
+  );
+  const docRef = useRef(doc);
+  useEffect(() => {
+    docRef.current = doc;
+  }, [doc]);
+  // What App renders is the committed chart: a keystroke in progress is a preview
+  // that does not change it, so typing does not re-render App.
+  const data = useSyncExternalStore(doc.subscribe, doc.getCommitted);
+  const status = useSyncExternalStore(doc.subscribe, doc.getStatus);
+  // The document holds the edit token of the chart it is saving to.
+  const currentEditToken = status.editToken;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
-  const [currentEditToken, setCurrentEditToken] = useState<string | null>(null);
   const [currentChartId, setCurrentChartId] = useState<string | null>(null);
-  // PR 1 task 1.7: sync button gone, "Last synced X ago" display gone.
-  // setLastSyncTime kept (auto-sync still writes it) for future
-  // observability hooks, but the helpers that read it are stripped.
-  const [, setLastSyncTime] = useState<Date | null>(null);
+  // The chart id of the chart the document saves to, readable by a create that
+  // finishes after the render that would have shown it in `currentChartId`.
+  const chartIdRef = useRef<string | null>(null);
+  const rememberChartId = useCallback((chartId: string) => {
+    chartIdRef.current = chartId;
+    setCurrentChartId(chartId);
+  }, []);
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set());
   // Server-verified `isOwner` from the latest getChart response. Reset
   // when the edit token changes. Wired through to FileMenu so the
@@ -716,10 +745,9 @@ function ToCViewer() {
     [permissions],
   );
 
-  // PR 4: 30s sync poll pauses while a pointer-drag is in flight.
-  // `ToC.onDragActiveChange` toggles this ref; `syncData` reads it and
-  // skips the network call until the gesture completes. Red-team
-  // Important: "PR 4 pointer-capture during cross-tab delete race".
+  // The poll (`useChartSync`) pauses while a pointer drag is in flight, so a
+  // landing cannot move the dragged node under the pointer. `ToC.onDragActiveChange`
+  // toggles this ref; the poll skips its check until the gesture completes.
   const isDragInFlightRef = useRef(false);
 
   // Reserved chrome space + breathing pad for the canvas auto-fit.
@@ -922,18 +950,35 @@ function ToCViewer() {
   const { initializeLogging, handlePrivacyAccept, handleLoggingEnabled, logGraphChange } =
     useLoggingSession({ chartId: currentChartId, graphData: data });
 
-  // Handler for when a new chart is created (auto-save or manual share)
+  // A chart on `/` is not on the server until the first message or share
+  // creates it. The document attaches the server's version and the chart that
+  // was sent; edits made while the request was out go out on that version.
+  // Two creates can race (several files at once, or a message and the Share
+  // dialog): the document keeps the first server, so only that create changes
+  // what the page follows, and every creator is told which chart that is.
   const handleChartCreated = useCallback(
-    async (editToken: string, chartId: string) => {
-      setCurrentEditToken(editToken);
-      setCurrentChartId(chartId);
-      if (dataRef.current) {
-        initializeLogging(chartId, dataRef.current);
+    (created: ChartCreated): OpenChart => {
+      const attached = doc.attachServer(created.editToken, {
+        version: created.version,
+        chart: created.chart,
+      });
+      const { editToken } = doc.getStatus();
+      if (attached) {
+        rememberChartId(created.chartId);
+        initializeLogging(created.chartId, doc.getCommitted());
       }
+      return {
+        editToken: editToken ?? created.editToken,
+        chartId: chartIdRef.current ?? created.chartId,
+      };
     },
-    [initializeLogging],
+    [doc, initializeLogging, rememberChartId],
   );
 
+  // The unsaved copy of a chart that has no server yet (and of any chart whose
+  // save failed) is also kept in localStorage. Nothing reads it back for an edit
+  // token, so it is not a recovery path; the save itself is retried while the
+  // edits stay pending.
   const saveToLocalStorage = useCallback(
     (dataToSave: ToCData, currentFilename?: string) => {
       try {
@@ -946,14 +991,16 @@ function ToCViewer() {
     },
     [filename],
   );
+  useEffect(() => {
+    if (!loading && !currentEditToken) saveToLocalStorage(data);
+  }, [loading, currentEditToken, data, saveToLocalStorage]);
 
-  // The one save path (edit, import, undo, redo). After a failed save the
-  // unsaved data is also written to localStorage, but nothing reads that
-  // copy back (the file-based load reads a per-file key, and `/` overwrites
-  // the default key with the empty template), so it is not a recovery
-  // path. The save itself is retried while the edits stay pending.
-  const { isSaving, saveError, setSaveError, hasPendingChanges, pendingChangesRef, saveChart } =
-    useChartSave({ editToken: currentEditToken, onSaveFailed: saveToLocalStorage });
+  // The one save path (edit, import, undo, redo, AI) and its retries; the
+  // document decides what is sent.
+  const { isSaving, saveError, setSaveError } = useChartSave({
+    doc,
+    onSaveFailed: saveToLocalStorage,
+  });
 
   const loadFromLocalStorage = useCallback(
     (currentFilename?: string): ToCData | null => {
@@ -962,7 +1009,7 @@ function ToCViewer() {
         const saved = localStorage.getItem(storageKey);
         if (saved) {
           console.log('Loaded from localStorage:', storageKey);
-          return JSON.parse(saved);
+          return normalizeChart(JSON.parse(saved));
         }
       } catch (error) {
         console.warn('Failed to load from localStorage:', error);
@@ -972,89 +1019,73 @@ function ToCViewer() {
     [filename],
   );
 
+  // Why the next change to the chart should be logged as something other than
+  // a manual edit, or not at all (AI edits log themselves).
+  const logAsRef = useRef<SaveSnapshotParams['edit_type'] | 'none' | null>(null);
+  const changeAs = useCallback(
+    (editType: SaveSnapshotParams['edit_type'] | 'none', change: () => void) => {
+      logAsRef.current = editType;
+      try {
+        change();
+      } finally {
+        logAsRef.current = null;
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    // The commit count moves for every local commit, undo, redo, import and AI
+    // edit, and never for a chart that merely arrived from the server.
+    let seen = doc.getCommitCount();
+    return doc.subscribe(() => {
+      const count = doc.getCommitCount();
+      if (count === seen) return;
+      seen = count;
+      const editType = logAsRef.current ?? 'manual_edit';
+      if (editType !== 'none') logGraphChange(doc.getCommitted(), editType);
+    });
+  }, [doc, logGraphChange]);
+
   const handleUploadJSON = useCallback(
     (jsonData: unknown) => {
       // Defense in depth: FileMenu already deep-validates before
       // calling us, but any other future caller (programmatic, dev
       // console, future paste-from-clipboard, etc.) goes through here
-      // with possibly malformed data. Walk the full shape — same
-      // validator — and surface a console error if it fails. The
-      // legacy `alert()` was a UX anti-pattern from PR 1 era.
-      //
-      // `validateChartImport` covers waypoint validation introduced
-      // by PR 7 (it was designed in PR 6 fix to anticipate the new
-      // shape).
+      // with possibly malformed data. `validateChartImport` walks the full
+      // shape, covers waypoint validation, and hands back a normalised chart.
       const result = validateChartImport(jsonData);
       if (!result.ok) {
         console.error('[App] handleUploadJSON received malformed data:', result.reason);
         return;
       }
-      const validData = result.data;
-      console.log('Uploading JSON data:', validData);
-
-      // Save current state to history before updating
-      if (data) {
-        saveToHistory(data);
-      }
-
-      // Clear redo history when new changes are made
-      setRedoHistory([]);
-
-      // Set the uploaded data
-      setData(validData);
-      saveChart(validData);
-      saveToLocalStorage(validData);
-
+      // The import becomes the whole chart; edits others save meanwhile merge into it.
+      changeAs('none', () => doc.replace(result.data));
       console.log('JSON data uploaded successfully');
     },
-    [data, saveToHistory, setRedoHistory, saveToLocalStorage, saveChart],
+    [doc, changeAs],
   );
 
-  const handleGraphUpdate = (newGraphData: ToCData) => {
-    console.log('App handleGraphUpdate called - delegating to handleUploadJSON');
-    console.log('Current data before update:', data);
-    console.log('New data to update:', newGraphData);
-    // Simply delegate to handleUploadJSON which has the proper logic
-    handleUploadJSON(newGraphData);
-    console.log('Data after handleUploadJSON call:', data);
-  };
-
-  const dataRef = useRef<ToCData | null>(data);
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
-
-  const handleDataChange = useCallback(
-    (newData: ToCData) => {
-      console.log('App handleDataChange called');
-
-      // Save current state to history before updating
-      if (dataRef.current) {
-        saveToHistory(dataRef.current);
-      }
-
-      // Clear redo history when new changes are made
-      setRedoHistory([]);
-
-      setData(newData);
-      saveChart(newData);
-
-      // Save debounced snapshot for logging (manual edits)
-      logGraphChange(newData, 'manual_edit');
-
-      // A chart that doesn't exist yet only has the local copy.
-      if (!currentEditToken) {
-        saveToLocalStorage(newData);
-      }
+  // An AI reply's edits were computed against the chart as it was sent; they
+  // merge into the chart as it is now, so edits made meanwhile, by anyone,
+  // survive. Throws when the result is not a chart (the chat reports it).
+  const handleAIEdit = useCallback(
+    (asSent: ToCData, result: ChartInput): ToCData => {
+      const prepared = prepareAIResult(asSent, result);
+      changeAs('none', () => doc.applyRebased(asSent, prepared));
+      return prepared;
     },
-    [
-      saveToHistory,
-      setRedoHistory,
-      saveToLocalStorage,
-      currentEditToken,
-      logGraphChange,
-      saveChart,
-    ],
+    [doc, changeAs],
+  );
+
+  const handleLoadGeneratedGraph = useCallback(
+    (chart: ToCData) => changeAs('none', () => doc.replace(chart)),
+    [doc, changeAs],
+  );
+
+  // Format-menu changes: one commit per tick, each derived from the current chart.
+  const editChart = useCallback(
+    (change: Partial<ToCData>) => doc.edit((prev) => ({ ...prev, ...change })),
+    [doc],
   );
 
   const handleUndo = useCallback(() => {
@@ -1064,94 +1095,15 @@ function ToCViewer() {
     // graph history. Toolbar undo buttons that fire handleUndo MUST pair
     // this with `onMouseDown={(e) => e.preventDefault()}` so the click
     // doesn't shift focus to the button before this check runs.
-    if (isTextEntryFocused()) return;
-
-    // Flush, never drop, a snapshot still inside the grouping window,
-    // so the operation the user is undoing is the one that gets undone.
-    const effectiveUndoHistory = flushPendingHistory(undoHistory);
-
-    if (effectiveUndoHistory.length > 0 && data) {
-      const previousState = effectiveUndoHistory[effectiveUndoHistory.length - 1];
-      const newUndoHistory = effectiveUndoHistory.slice(0, -1);
-
-      // Validate the previous state has required structure
-      if (!previousState || !previousState.sections || !Array.isArray(previousState.sections)) {
-        console.error('Invalid undo state detected:', previousState);
-        return;
-      }
-
-      // Save current state to redo history
-      setRedoHistory((prev) => [...prev, JSON.parse(JSON.stringify(data))]);
-      setUndoHistory(newUndoHistory);
-
-      // Saves like an edit, but skips history management
-      setData(previousState);
-      saveChart(previousState);
-      saveToLocalStorage(previousState);
-
-      // Save undo snapshot for logging
-      logGraphChange(previousState, 'undo');
-
-      console.log('Undo performed, undo history length:', newUndoHistory.length);
-    }
-  }, [
-    undoHistory,
-    data,
-    flushPendingHistory,
-    setRedoHistory,
-    setUndoHistory,
-    saveToLocalStorage,
-    logGraphChange,
-    saveChart,
-  ]);
+    if (isTextEntryFocused() || !doc.getStatus().canUndo) return;
+    changeAs('undo', () => doc.undo());
+  }, [doc, changeAs]);
 
   const handleRedo = useCallback(() => {
     // L2 mitigation symmetric to handleUndo — see comment there.
-    if (isTextEntryFocused()) return;
-
-    // Same flush-not-drop rule as handleUndo. (A pending
-    // snapshot here implies a data change after the last undo, which
-    // also cleared redoHistory — so this is unreachable in practice;
-    // kept for invariant safety.)
-    const flushedUndoHistory = flushPendingHistory(undoHistory);
-    if (flushedUndoHistory !== undoHistory) {
-      setUndoHistory(flushedUndoHistory);
-    }
-
-    if (redoHistory.length > 0 && data) {
-      const nextState = redoHistory[redoHistory.length - 1];
-      const newRedoHistory = redoHistory.slice(0, -1);
-
-      // Validate the next state has required structure
-      if (!nextState || !nextState.sections || !Array.isArray(nextState.sections)) {
-        console.error('Invalid redo state detected:', nextState);
-        return;
-      }
-
-      // Save current state to undo history
-      setUndoHistory((prev) => [...prev, JSON.parse(JSON.stringify(data))]);
-      setRedoHistory(newRedoHistory);
-
-      setData(nextState);
-      saveChart(nextState);
-      saveToLocalStorage(nextState);
-
-      // Save redo snapshot for logging
-      logGraphChange(nextState, 'redo');
-
-      console.log('Redo performed, redo history length:', newRedoHistory.length);
-    }
-  }, [
-    redoHistory,
-    undoHistory,
-    data,
-    flushPendingHistory,
-    setRedoHistory,
-    setUndoHistory,
-    saveToLocalStorage,
-    logGraphChange,
-    saveChart,
-  ]);
+    if (isTextEntryFocused() || !doc.getStatus().canRedo) return;
+    changeAs('redo', () => doc.redo());
+  }, [doc, changeAs]);
 
   // Keyboard shortcut handler
   useEffect(() => {
@@ -1221,11 +1173,11 @@ function ToCViewer() {
     [currentEditToken, currentChartId, isAuthenticated, setSaveError],
   );
 
-  // Add beforeunload warning for unsaved changes
+  // Add beforeunload warning for unsaved changes: typed but uncommitted text, a
+  // commit not yet sent, and a save still in flight all count as unsaved.
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Check if there are pending changes or currently saving
-      if (pendingChangesRef.current || isSaving) {
+      if (doc.getStatus().unsaved) {
         e.preventDefault();
         e.returnValue = ''; // Chrome requires returnValue to be set
       }
@@ -1236,7 +1188,7 @@ function ToCViewer() {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isSaving, pendingChangesRef]);
+  }, [doc]);
 
   // PR 2 fix-pass: single permissions poll. Replaces three overlapping
   // callers (ShareDialog's `loadPermissions`, `usePermissionsRefresh`,
@@ -1344,7 +1296,11 @@ function ToCViewer() {
         return;
       }
 
-      setLoading(true);
+      // The document of a chart that is already open stays (an auth state change
+      // re-runs this effect): replacing it would drop what the user is typing
+      // or has not saved, and flash the loading screen over the editor.
+      const alreadyOpen = Boolean(editToken) && docRef.current.getStatus().editToken === editToken;
+      if (!alreadyOpen) setLoading(true);
       setError(null);
 
       try {
@@ -1360,19 +1316,27 @@ function ToCViewer() {
             ChartService.hasAuthToken(),
           );
           const result = await ChartService.getChartByEditToken(editToken);
-          setData(result.chartData);
-          setCurrentEditToken(editToken);
-          setCurrentChartId(result.chartId);
+          rememberChartId(result.chartId);
           setIsOwner(Boolean(result.isOwner));
-
-          // Initialize logging session after chart is loaded
-          initializeLogging(result.chartId, result.chartData);
+          if (!alreadyOpen) {
+            // `result.chartData` is normalised by the service, and `version` is the one it was read at.
+            setDoc(
+              new ChartDocument({
+                chart: result.chartData,
+                editToken,
+                server: { version: result.version, chart: result.chartData },
+              }),
+            );
+            // Initialize logging session after chart is loaded
+            initializeLogging(result.chartId, result.chartData);
+          }
         } else if (filename) {
-          // Fallback to file-based loading for backwards compatibility
+          // Fallback to file-based loading for backwards compatibility. These
+          // charts have no server: the document holds only the local chart.
           const savedData = loadFromLocalStorage(filename);
           if (savedData) {
             console.log('Using saved data from localStorage');
-            setData(savedData);
+            setDoc(new ChartDocument({ chart: savedData, editToken: null, server: null }));
             setLoading(false);
             return;
           }
@@ -1381,17 +1345,17 @@ function ToCViewer() {
           if (!response.ok) {
             throw new Error(`Failed to load ${filename}`);
           }
-          const jsonData = await response.json();
-          setData(jsonData);
+          const fileChart = normalizeChart(await response.json());
+          setDoc(new ChartDocument({ chart: fileChart, editToken: null, server: null }));
           // Save the loaded file data to localStorage for future use
-          saveToLocalStorage(jsonData, filename);
-        } else {
-          // Default to empty template
-          setData(emptyTemplate);
-          saveToLocalStorage(emptyTemplate);
+          saveToLocalStorage(fileChart, filename);
+        } else if (docRef.current.getStatus().serverVersion !== null) {
+          // The empty template. A document that came from a server chart (this
+          // tab opened one before it came back here) must not carry over.
+          setDoc(new ChartDocument({ chart: emptyChart, editToken: null, server: null }));
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load data');
+        setError(loadErrorMessage(err));
         console.error('Error loading ToC data:', err);
       } finally {
         setLoading(false);
@@ -1408,37 +1372,27 @@ function ToCViewer() {
     isAuthenticated,
     location.state,
     initializeLogging,
+    rememberChartId,
   ]);
 
   // Update document title when data changes
   useEffect(() => {
-    if (data?.title) {
+    if (data.title) {
       document.title = `${data.title} - Theory of Change Builder`;
     } else {
       document.title = 'Theory of Change Builder';
     }
-  }, [data?.title]);
+  }, [data.title]);
 
-  // Smart periodic sync with idle detection for edit mode. Extracted to
-  // `useChartSync` (round-7 issue 80): the inline effect's in-flight GET
-  // could land after a newer local edit and setData the stale snapshot
-  // over it (the "slider reverts after release" bug). The hook carries
-  // apply-time guards (dead-epoch drop, local-pending drop, own-echo
-  // skip) and the regression tests; see the header of
-  // `src/hooks/useChartSync.ts` for the measured timeline.
-  const handleRemoteData = useCallback((chartData: ToCData) => {
-    setData(chartData);
-    setLastSyncTime(new Date());
-  }, []);
-  useChartSync({
-    editToken,
-    authTokenReady,
-    isSaving,
-    isDragInFlightRef,
-    pendingChangesRef,
-    dataRef,
-    onRemoteData: handleRemoteData,
-  });
+  // Every `POLL_MS` an open, active editor asks whether the chart has a newer
+  // version and merges it into the document (see `useChartSync`). A chart the
+  // merge cannot use shows in the save pill, which an idle tab has no other way
+  // to reach.
+  const showSyncFailure = useCallback(
+    (message: string) => setSaveError({ message }),
+    [setSaveError],
+  );
+  useChartSync({ doc, authTokenReady, isDragInFlightRef, onSyncFailed: showSyncFailure });
 
   if (loading) {
     return (
@@ -1568,14 +1522,6 @@ function ToCViewer() {
     );
   }
 
-  if (!data) {
-    return (
-      <div className="h-screen w-screen bg-white flex items-center justify-center">
-        <div className="text-xl text-gray-600">No data available</div>
-      </div>
-    );
-  }
-
   // Get transform position from the hook
   const { x: offsetX, y: offsetY, scale } = getTransformPosition();
 
@@ -1587,30 +1533,29 @@ function ToCViewer() {
       <TopBar
         editMode={true}
         showEditButton={true}
-        undoHistory={undoHistory}
-        redoHistory={redoHistory}
+        canUndo={status.canUndo}
+        canRedo={status.canRedo}
         handleUndo={handleUndo}
         handleRedo={handleRedo}
         isSaving={isSaving}
         saveError={saveError}
-        // PR 7 fb (57): drives the SaveIndicator "Unsaved changes"
-        // state — mirrors pendingChangesRef, so a failed autosave (the
-        // round-2 silent-save bug) shows as unsaved instead of a stale
-        // "Saved".
-        hasPendingChanges={hasPendingChanges}
+        // Drives the SaveIndicator "Unsaved changes" state: the document's
+        // own account of what the server does not hold, so a failed autosave
+        // shows as unsaved instead of a stale "Saved".
+        hasPendingChanges={status.unsaved}
         currentEditToken={currentEditToken}
-        // Format-menu setters write through `handleDataChange` so the
-        // canonical state lives in `data.*`, which the graph renders from.
+        // Format-menu setters edit the document, so the canonical state lives
+        // in `data.*`, which the graph renders from.
         fontFamily={data.fontFamily ?? "'Ubuntu', sans-serif"}
-        setFontFamily={(next) => handleDataChange({ ...data, fontFamily: next })}
+        setFontFamily={(next) => editChart({ fontFamily: next })}
         textSize={data.textSize ?? 1}
-        setTextSize={(next) => handleDataChange({ ...data, textSize: next })}
+        setTextSize={(next) => editChart({ textSize: next })}
         curvature={data.curvature ?? 0.5}
-        setCurvature={(next) => handleDataChange({ ...data, curvature: next })}
+        setCurvature={(next) => editChart({ curvature: next })}
         columnPadding={data.columnPadding ?? 24}
-        setColumnPadding={(next) => handleDataChange({ ...data, columnPadding: next })}
+        setColumnPadding={(next) => editChart({ columnPadding: next })}
         sectionPadding={data.sectionPadding ?? 32}
-        setSectionPadding={(next) => handleDataChange({ ...data, sectionPadding: next })}
+        setSectionPadding={(next) => editChart({ sectionPadding: next })}
         isAuthenticated={isAuthenticated}
         isOwner={isOwner}
         currentChartId={currentChartId}
@@ -1624,8 +1569,7 @@ function ToCViewer() {
         // appeared disabled even on charts with modifications.
         data={data}
         // PR 6 (Task 6.2): FileMenu Import → JSON drops through
-        // `handleUploadJSON`, which validates the shape, saves to
-        // history, and triggers a debounced DB save.
+        // `handleUploadJSON`, which validates the shape and replaces the chart.
         onImportJson={handleUploadJSON}
         // Share button opens the PR 2 ShareDialog mounted below.
         // Replaces the CustomEvent bridge to the legacy share-dialog
@@ -1660,7 +1604,8 @@ function ToCViewer() {
         isCollapsed={isLeftPanelCollapsed}
         onToggle={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
         graphData={data}
-        onGraphUpdate={handleGraphUpdate}
+        onAIEdit={handleAIEdit}
+        onLoadGeneratedGraph={handleLoadGeneratedGraph}
         highlightedNodes={highlightedNodes}
         onChartCreated={handleChartCreated}
       />
@@ -1707,9 +1652,8 @@ function ToCViewer() {
             }}
           >
             <ToC
-              data={data}
+              store={doc}
               onSizeChange={setContainerSize}
-              onDataChange={handleDataChange}
               zoomScale={camera.z}
               camera={camera}
               onHighlightedNodesChange={setHighlightedNodes}

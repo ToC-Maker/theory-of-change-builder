@@ -1,4 +1,4 @@
-// PR 5 review (Wave 3): addConnection idempotency regression test.
+// addConnection idempotency regression test.
 //
 // The hook (useConnectionDrag) fires onConnect on any pointerup over a
 // target node, including when the source-target pair is already
@@ -13,11 +13,10 @@
 // target does not grow node.connections.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import { ToC } from '../../src/components/TheoryOfChangeGraph';
-import type { ToCData } from '../../src/types';
+import { cleanup, fireEvent, act } from '@testing-library/react';
+import type { ChartInput } from '../../src/types';
 import { _resetCanvasGestureStateForTest } from '../../src/hooks/_canvasGestureState';
-import { deepFreeze } from './helpers/deepFreeze';
+import { renderToC } from './helpers/renderToC';
 
 afterEach(() => {
   cleanup();
@@ -26,9 +25,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// A fresh object per test, deep-frozen where it is rendered: an updater
-// that writes into the state it receives throws.
-const makeData = (): ToCData => ({
+// A fresh object per test; the document freezes it, so an updater that
+// writes into the state it receives throws.
+const makeData = (): ChartInput => ({
   title: 'Test',
   sections: [
     {
@@ -59,10 +58,9 @@ const makeData = (): ToCData => ({
   ],
 });
 
-describe('TheoryOfChangeGraph.addConnection (PR 5 Task 5.2 idempotency)', () => {
+describe('TheoryOfChangeGraph.addConnection idempotency', () => {
   it('re-dropping on an already-connected target does not grow node.connections', async () => {
-    const onDataChange = vi.fn();
-    render(<ToC data={deepFreeze(makeData())} showEditButton={true} onDataChange={onDataChange} />);
+    const { doc, onCommit } = renderToC(makeData());
 
     // Reveal the connection handles on the source node (they're gated
     // by isHovered || isHighlighted).
@@ -108,21 +106,16 @@ describe('TheoryOfChangeGraph.addConnection (PR 5 Task 5.2 idempotency)', () => 
       document.dispatchEvent(up);
     });
 
-    // Wait one microtask for useGraphMutation's deferred flush.
+    // Wait one microtask for the gesture's deferred commit.
     await Promise.resolve();
 
-    // addConnection's `areNodesConnected` short-circuit fires before
-    // setDataAndNotify is even called for the duplicate edge, so
-    // onDataChange may have zero calls. The invariant we pin: even if
-    // it WAS called, the connection count must not have grown.
-    if (onDataChange.mock.calls.length > 0) {
-      const lastArg = onDataChange.mock.calls[onDataChange.mock.calls.length - 1][0] as ToCData;
-      const sourceNodeAfter = lastArg.sections[0].columns[0].nodes.find((n) => n.id === 'n-source');
-      expect(sourceNodeAfter?.connections?.length).toBe(1);
-      expect(sourceNodeAfter?.connections?.[0].targetId).toBe('n-target');
+    // The duplicate edge is suppressed before the store is written, so
+    // nothing commits. Both layers must still hold the single original
+    // connection: without the dedup guard the array would have two.
+    expect(onCommit).not.toHaveBeenCalled();
+    for (const chart of [doc.getLive(), doc.getCommitted()]) {
+      const sourceNodeAfter = chart.sections[0].columns[0].nodes.find((n) => n.id === 'n-source');
+      expect(sourceNodeAfter?.connections).toEqual([{ targetId: 'n-target', confidence: 75 }]);
     }
-    // Whether or not onDataChange fired, the test passes only if the
-    // duplicate would-be entry was suppressed. If a future refactor
-    // dropped the dedup guard, the connections array would be length 2.
   });
 });
