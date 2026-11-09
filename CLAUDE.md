@@ -25,9 +25,6 @@ npm run format:check
 npm test
 npm run preflight        # typecheck + lint + format:check + build + test, in parallel
 npm run preflight:serial # same as preflight but sequential (easier to read when debugging a failure)
-
-# Storybook
-npm run storybook        # Component development (port 6006)
 ```
 
 For full-stack dev with HMR: run `npm run dev` in one terminal (Worker + API),
@@ -43,7 +40,7 @@ read, `npm run preflight:serial` runs the same gates sequentially.
 
 ## Stack
 
-- **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS + React Router 7
+- **Frontend**: React 19 + TypeScript + Vite + Tailwind CSS + React Router 7
 - **Backend**: Cloudflare Workers (with Static Assets)
 - **Database**: Neon PostgreSQL (serverless)
 - **Auth**: Auth0 (JWT validation server-side via `jose`)
@@ -62,10 +59,12 @@ Theory of Change graphs use nested structure: `sections[] → columns[] → node
 - Never treat yPosition as top coordinate or nodes will misalign
 
 **Connections:**
-- New format: `connections: [{ targetId, confidence, evidence, assumptions }]`
+- New format: `connections: [{ targetId, confidence, evidence, assumptions, waypoints? }]`
 - Old format still supported: `connectionIds: string[]`
 - Always use new format for new code
-- Confidence (0-100) determines visual style: solid (80+), dashed (40-79), dotted (0-39)
+- Confidence (0-100) determines visual style CONTINUOUSLY: solid at 95+; below that the dash length grows cubically toward the threshold (2px dots at 0 → ~46.6px at 94) while the gap shrinks linearly (8px → ~1.6px), so 94 reads ~97% ink (near-solid, the 95 boundary is imperceptible) and low confidence reads as sparse dots (see `computeConfidenceDash` in `src/utils/index.ts`; no hard style buckets)
+- The connection-strength Legend is view-mode chrome only: `ToCViewerOnly` mounts it as a fixed bottom-left overlay outside the zoom/pan transform; the editor renders no legend (confidence is numeric in the EdgeEditor) and the legend is not draggable
+- `waypoints` is an array for backward compatibility, but the UI edits AT MOST ONE waypoint per connection (single-waypoint model). Legacy charts with N>1 waypoints still render; the first drag of any handle collapses to the single dragged waypoint; double-click on the handle resets to the automatic curve. A press on the midpoint dot that is released without becoming a drag opens the connection's editor, as a click on the line does.
 
 ### AI Edit System
 
@@ -85,6 +84,8 @@ The AI modifies graphs via structured JSON edits in `src/utils/graphEdits.ts`:
 - Four types: `update`, `insert`, `delete`, `push`
 - Edits validated sequentially - later edits can reference earlier results
 - Never use negative indices or invalid paths
+- **`update` REPLACES the whole value at its path** (`setAtPath` in `graphEdits.ts`); it does not merge. Rewriting a whole connection/node object therefore silently drops any field the model omits.
+- **UI-managed fields the prompts must keep documented as "preserve, don't author":** `connection.waypoints`, `node.width`/`node.color`, and the root-level format fields (`curvature`, `textSize`, `fontFamily`, `columnPadding`, `sectionPadding`). They live in the JSON and must round-trip through edits, so the model changes a connection/node via **granular path edits** (e.g. `...connections.0.confidence`) rather than whole-object rewrites, or those fields are lost. The prompts (`src/prompts/chatModePrompt.md`, `generateModePrompt.md`) document this; `tests/frontend/graphEdits.waypoints.test.ts` guards the replace-vs-granular behavior.
 
 ### URL Patterns and Permissions
 
@@ -129,6 +130,15 @@ There are three distinct "where it's needed" categories. Some variables are need
 
 For local development, copy `.dev.vars.example` to `.dev.vars` (gitignored) and fill in values. Wrangler's `wrangler dev` reads `.dev.vars`; Vite reads `.env.local` or `.env.development` — create those too if you need frontend-side vars for local Vite builds.
 
+### Turnstile testkeys in dev
+
+Cloudflare publishes [always-pass testkeys for Turnstile](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) so dev sessions (human or headless) can complete the widget without a real challenge. They are wired into this repo:
+
+- **Site key** (`1x00000000000000000000AA`): committed in `.env.development`. Loaded by Vite when building in development mode. `npm run dev` passes `--mode development` to `vite build` so the testkey is inlined into the dev bundle; `npm run dev:vite` (the HMR dev server) loads it automatically because Vite defaults to development mode there.
+- **Secret key** (`1x0000000000000000000000000000000AA`): present in `.dev.vars.example`. Copy that to `.dev.vars` (gitignored) and `wrangler dev` reads it. The Worker's `/api/verify-turnstile` and the anon Turnstile gate in `/api/anthropic-stream` accept any token the widget emits when this secret is configured.
+
+Production keeps real Turnstile keys: site key in `.env.production` + `wrangler.jsonc` `vars`, secret in the Cloudflare dashboard. Nothing in the code path differs — dev exercises the full Turnstile round-trip, just against the always-pass keypair.
+
 ## Database Schema
 
 See `database/schema.sql` for full schema. Key tables:
@@ -158,7 +168,7 @@ The legacy `POST /api/updateTokenUsage` endpoint and `user_token_usage` table ha
 
 Two writers update `logging_messages.cost_micro_usd`: (1) the post-stream IIFE in `worker/api/anthropic-stream.ts`, and (2) `POST /api/reconcile-cost` (`worker/api/reconcile-cost.ts`) — a client-driven fallback for streams where `ctx.waitUntil()` was killed by Cloudflare's time budget before the IIFE finished, leaving the row at the input-only floor. The endpoint clamps `GREATEST(existing, client_value)`, so the client can only push the cost up; combined with the message_start floor it cannot under-report. `reconcile-cost` does NOT touch `user_api_usage` (the cap was already enforced by the pre-stream reservation).
 
-`POST /api/count-tokens-estimate` (`worker/api/count-tokens-estimate.ts`) is a thin pass-through to Anthropic's `/v1/messages/count_tokens` plus a server-side cost projection. It strips Files-API `document` blocks (count_tokens rejects them), bucket-counts cached file tokens by draft vs history (so the client can apply cache-write 1.25× to the draft side and cache-read 0.1× to history), and returns `{input_tokens, estimated_cost_usd, ...}` for the composer's pre-send estimate. No usage is billed because `count_tokens` is a free Anthropic endpoint.
+`POST /api/count-tokens-estimate` (`worker/api/count-tokens-estimate.ts`) is a thin pass-through to Anthropic's `/v1/messages/count_tokens` plus a server-side cost projection. It strips Files-API `document` blocks (count_tokens rejects them), bucket-counts cached file tokens by draft vs history (so the client can apply cache-write 1.25× to the draft side and cache-read 0.1× to history), and returns `{input_tokens, estimated_cost_usd, ...}` for the composer's pre-send estimate. It also sanitizes the forwarded messages against count_tokens's shape rules (`sanitizeMessagesForCountTokens`: trailing-whitespace final assistant turns, empty/whitespace-only text blocks and messages, empty message lists) so shape-violating payloads can't surface as 503s — endpoint-contract hardening; the current UI does not produce these shapes (the graph JSON always rides in the draft text block). No usage is billed because `count_tokens` is a free Anthropic endpoint.
 
 ## BYOK (Bring Your Own Key)
 
@@ -190,6 +200,10 @@ Auth0 tokens refresh automatically, but invalid tokens silently fall back to ano
 - Token in Authorization header: `Bearer <token>`
 - Token validated in backend via `verifyToken()` in `worker/_shared/auth.ts`
 - User exists in `chart_permissions` table with `status='approved'`
+
+ChartService, chatService, and LoggingService all resolve the token **per request** via `setAuthTokenProvider()` (one shared resolver, `src/services/requestTokenSource.ts`; the App auth effect registers `() => getFreshIdToken(...)` on all three, which refreshes near expiry). The static `setAuthToken()` is only a fallback for callers without a provider. Don't reintroduce mount-time-only token capture: the worker fails closed on stale tokens — 401 on `getUserCharts`, 403 on `updateChart` for owned charts with `link_sharing_level != 'editor'`, 401 `invalid_token` on `/api/anthropic-stream` (and a NULL token silently demotes the stream to anonymous: BYOK ignored, anon caps + Turnstile gate), 401 on the `logging-*` writes (which trips LoggingService's circuit breaker and silently kills logging). A stale snapshot therefore means signed-in 401s, silent autosave failures, broken AI chat, and lost logs.
+
+**Persistently dead sessions are surfaced, not silent**: when the provider keeps failing while `isAuthenticated` is true (classically Auth0 403 "Unknown or invalid refresh token" — revoked refresh-token grant; only a re-login fixes it), `src/services/authSessionHealth.ts` flips to degraded (invalid_grant-family errors immediately, transient failures after 3 consecutive) and `SessionExpiredBanner.tsx` shows a "Sign in again" affordance. Any successful token resolution clears it. `useRefreshTokensFallback` is enabled in `main.tsx` so browsers with third-party cookies self-heal via iframe silent auth before the banner is ever needed (requires the app origin in Auth0 "Allowed Web Origins").
 
 ### Anonymous Identity and Turnstile Session
 
@@ -250,12 +264,14 @@ For quick full-stack testing without HMR, `npm run dev` alone serves everything 
 - `src/components/TheoryOfChangeGraph.tsx` - Graph SVG renderer
 - `src/components/ChatInterface.tsx` - AI assistant UI
 - `src/services/chartService.ts` - API client for CRUD operations
+- `src/hooks/useChartSave.ts` - Every editor save (edit, import, AI replacement, undo, redo) goes through its `saveChart(data)`: one save in flight at a time, pending edits cleared only if unchanged since the save was sent, edits made before the chart has an edit token are sent once it arrives, retries with backoff (capped at 30s) while edits stay pending, for network and 5xx failures (401/403 only at the 30s cap, never cut short; other 4xx none), and at once when the browser comes back online or the tab is shown again
+- `src/hooks/useUndoHistory.ts` - Undo and redo stacks of whole-chart snapshots. A snapshot is the data object as it was before a change, so every graph updater (`mutate`, `mutateDebounced`, the add/delete/move handlers) returns new arrays and objects and never writes into the state it receives (the updater tests deep-freeze their fixtures). Changes closer together than 300 ms share one step, restoring the chart as it was before the first. Undo and redo are suppressed only while a text field has focus (`isTextEntryFocused`), not a slider or colour input.
 - `src/utils/graphEdits.ts` - AI edit instruction parser and applier
 - `worker/index.ts` - Worker entry point (router, CORS, security headers)
 - `worker/api/` - API route handlers (getChart, updateChart, etc.)
 - `worker/api/anthropic-stream.ts` - AI streaming proxy (SSE, usage UPSERT, kill-switch, Turnstile gate). Exports `buildAssistantBlocksForCountTokens` (count_tokens validation rules) and `collectAssistantBlocksForAnalytics` (raw `content_blocks` capture).
 - `worker/api/reconcile-cost.ts` - Client-driven fallback that pushes the running cost figure when the streaming reconcile IIFE was killed by `ctx.waitUntil()` time budget; clamps `GREATEST(existing, client)` so it can only push up. Updates `logging_messages.cost_micro_usd` only — never `user_api_usage`.
-- `worker/api/count-tokens-estimate.ts` - Pre-send cost projection. Strips Files-API `document` blocks (count_tokens 400s on them), splits cached file tokens by draft vs history so the client prices cache-write vs cache-read correctly.
+- `worker/api/count-tokens-estimate.ts` - Pre-send cost projection. Strips Files-API `document` blocks (count_tokens 400s on them), splits cached file tokens by draft vs history so the client prices cache-write vs cache-read correctly. Exports `sanitizeMessagesForCountTokens`, which repairs the count_tokens shape rules on the forwarded payload so shape-violating payloads can't 503 the estimate (contract hardening; the current UI doesn't produce these shapes — see the sanitizer's header for verified reachability notes).
 - `worker/api/verify-turnstile.ts` - Turnstile challenge verification, issues `tocb_anon` session cookie
 - `worker/api/upload-file.ts` - Anthropic Files API upload proxy, records rows in `chart_files`
 - `worker/api/chart-files.ts` - `chart_files` cleanup (clear-chat and per-chart erasure)
@@ -275,9 +291,12 @@ For Auth0 integration details or permission system changes, see `worker/_shared/
 
 ## Testing
 
-Run all worker-side unit tests: `npm test`. Tests live under `tests/worker/` and use vitest + `@cloudflare/vitest-pool-workers` to execute in a real Workers runtime. Watch mode: `npm run test:watch`.
+Run everything: `npm test` (watch mode: `npm run test:watch`; one project: `npx vitest run --project frontend`). `vitest.config.ts` defines two Vitest projects:
 
-Current coverage: `computeCostMicroUsd`, tier predicates, AES-GCM BYOK key round-trip, Turnstile session-cookie HMAC. Add tests for new Worker helpers alongside the code; especially `anon-id.ts`, the kill-switch logic in `anthropic-stream.ts`, and `reserveCost` race-safety tests.
+- **`workerd`**: `tests/worker/`, `tests/client/`, `tests/shared/` and the top-level `tests/*.test.ts`. They run inside a real Workers runtime via `@cloudflare/vitest-plugin`, with bindings and secrets from `wrangler.jsonc` and `.dev.vars`.
+- **`frontend`**: `tests/frontend/**/*.test.{ts,tsx}`. They run in jsdom with React Testing Library and `@testing-library/jest-dom` for components, hooks and client utilities.
+
+Add tests for new Worker helpers alongside the code; especially `anon-id.ts`, the kill-switch logic in `anthropic-stream.ts`, and `reserveCost` race-safety tests. jsdom does not do layout, so geometry (overflow, positions) needs a manual browser check.
 
 Manual testing is still needed for end-to-end flows (graph editing, permissions, AI streaming):
 1. Create chart → 2. Edit nodes/connections → 3. Share with different users → 4. Test permission flows

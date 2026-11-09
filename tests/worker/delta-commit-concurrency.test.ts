@@ -31,7 +31,7 @@
 //
 // For real-Postgres coverage, the project would need either a Neon test
 // branch with credentials provisioned in the Workers test runtime
-// (`@cloudflare/vitest-pool-workers` runs inside workerd, which can't
+// (`@cloudflare/vitest-plugin` runs inside workerd, which can't
 // reach a local Docker postgres via raw TCP) or a dedicated integration
 // suite outside the current vitest harness. This file is the in-memory
 // simulation fallback: we model the CTE algebra inline and pin the

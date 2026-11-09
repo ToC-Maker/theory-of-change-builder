@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Node, ToCData } from '../types';
+import { isInputFocused } from '../utils/isInputFocused';
 
 interface UseKeyboardShortcutsProps {
   data: ToCData;
@@ -10,9 +11,10 @@ interface UseKeyboardShortcutsProps {
   nodeRefs: { [key: string]: HTMLDivElement | null };
   setNodeWidth: (width: number) => void;
   setNodeColor: (color: string) => void;
-  setNodePopup: React.Dispatch<
-    React.SetStateAction<{ id: string; title: string; text: string } | null>
-  >;
+  // PR 3: `setNodePopup` was used by `clearSelections` to dismiss the
+  // pencil-icon NodePopup modal. The modal is gone; the anchored
+  // NodeEditor self-dismisses when selection clears, so the prop is no
+  // longer needed.
   moveNodeVertically: (nodeId: string, direction: 'up' | 'down') => void;
   nodeHeights: { [key: string]: number };
 }
@@ -26,7 +28,6 @@ export function useKeyboardShortcuts({
   nodeRefs,
   setNodeWidth,
   setNodeColor,
-  setNodePopup,
   moveNodeVertically,
   nodeHeights,
 }: UseKeyboardShortcutsProps) {
@@ -86,8 +87,9 @@ export function useKeyboardShortcuts({
     setHighlightedNodes(new Set());
     setNodeWidth(192);
     setNodeColor('#ffffff');
-    setNodePopup(null);
-  }, [setHighlightedNodes, setNodeWidth, setNodeColor, setNodePopup]);
+    // PR 3: the anchored NodeEditor watches `highlightedNodes`, so it
+    // dismisses automatically when we clear the set.
+  }, [setHighlightedNodes, setNodeWidth, setNodeColor]);
 
   // Navigate to next/previous node with Tab
   const navigateNodes = useCallback(
@@ -170,36 +172,48 @@ export function useKeyboardShortcuts({
       }
 
       setDataAndNotify((prevData) => {
-        const newData = { ...prevData };
-
-        // Ensure target section has at least one column
-        if (newData.sections[targetSectionIndex].columns.length === 0) {
-          newData.sections[targetSectionIndex].columns.push({ nodes: [] });
-          targetColumnIndex = 0;
-        }
-
-        const sourceSection = newData.sections[sectionIndex];
-        const targetSection = newData.sections[targetSectionIndex];
-        const sourceColumn = sourceSection.columns[columnIndex];
-        const targetColumn = targetSection.columns[targetColumnIndex];
-
-        // Find the node to move
-        const nodeToMove = sourceColumn.nodes.find((node) => node.id === nodeId);
+        const nodeToMove = prevData.sections[sectionIndex].columns[columnIndex].nodes.find(
+          (node) => node.id === nodeId,
+        );
         if (!nodeToMove) return prevData;
 
-        // Remove node from source column
-        sourceColumn.nodes = sourceColumn.nodes.filter((node) => node.id !== nodeId);
+        // A target section without columns gets an empty one to receive the node.
+        const targetHasColumns = prevData.sections[targetSectionIndex].columns.length > 0;
+        const destinationIndex = targetHasColumns ? targetColumnIndex : 0;
+        const destinationNodes = targetHasColumns
+          ? prevData.sections[targetSectionIndex].columns[destinationIndex].nodes
+          : [];
 
         // Add node to target column with preserved yPosition or calculate new position
         const nodeWithPosition = {
           ...nodeToMove,
           yPosition:
             nodeToMove.yPosition ||
-            targetColumn.nodes.length * 180 + 30 + (nodeHeights[nodeId] || 150) / 2,
+            destinationNodes.length * 180 + 30 + (nodeHeights[nodeId] || 150) / 2,
         };
-        targetColumn.nodes.push(nodeWithPosition);
 
-        return newData;
+        return {
+          ...prevData,
+          sections: prevData.sections.map((section, sIndex) => {
+            if (sIndex !== sectionIndex && sIndex !== targetSectionIndex) return section;
+            const columns =
+              sIndex === targetSectionIndex && !targetHasColumns
+                ? [{ nodes: [] }]
+                : section.columns;
+            return {
+              ...section,
+              columns: columns.map((column, cIndex) => {
+                if (sIndex === sectionIndex && cIndex === columnIndex) {
+                  return { ...column, nodes: column.nodes.filter((node) => node.id !== nodeId) };
+                }
+                if (sIndex === targetSectionIndex && cIndex === destinationIndex) {
+                  return { ...column, nodes: [...column.nodes, nodeWithPosition] };
+                }
+                return column;
+              }),
+            };
+          }),
+        };
       });
     },
     [editMode, findNodeLocation, data.sections, setDataAndNotify, nodeHeights],
@@ -242,22 +256,14 @@ export function useKeyboardShortcuts({
   // Enhanced keyboard event handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if user is typing in an input field
-      const activeElement = document.activeElement;
-      const isTyping =
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          (activeElement as HTMLElement).contentEditable === 'true');
+      // Don't interfere with any keyboard shortcut while any input has
+      // focus (an arrow key must reach a focused slider). Undo/redo use
+      // the narrower isTextEntryFocused.
+      if (isInputFocused()) return;
 
-      // Allow ALL shortcuts to pass through when typing in input fields
-      if (isTyping) {
-        // Don't interfere with any keyboard shortcuts while user is typing
-        return;
-      }
-
-      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode)
-      if ((event.ctrlKey || event.metaKey) && event.key === 'a' && editMode) {
+      // Handle Ctrl+A / Cmd+A - Select all nodes (only in edit mode). Caps Lock
+      // makes `key` 'A', so compare without case.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && editMode) {
         event.preventDefault();
         selectAllNodes();
         return;

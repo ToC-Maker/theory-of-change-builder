@@ -157,13 +157,11 @@ export function InfoPanel({ legendComponent, height, isCollapsed, onToggle }: In
                     • <strong>Line styles</strong> indicate confidence levels
                   </li>
                   <li>
-                    • <strong>Solid lines:</strong> High confidence (75-100%)
+                    • <strong>Solid lines:</strong> Near-certain (95-100%)
                   </li>
                   <li>
-                    • <strong>Dashed lines:</strong> Medium confidence (25-75%)
-                  </li>
-                  <li>
-                    • <strong>Dotted lines:</strong> Low confidence (0-25%)
+                    • <strong>Dashed lines:</strong> Dash gaps grow continuously as confidence drops
+                    — sparse dots mean low confidence
                   </li>
                   <li>
                     • <strong>Click connections</strong> to edit confidence & evidence

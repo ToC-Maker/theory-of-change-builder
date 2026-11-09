@@ -20,7 +20,7 @@ A Theory of Change maps the causal chain from your activities to your intended i
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18+)
+- [Node.js](https://nodejs.org/) 22.13+ (CI uses 24)
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (for local development with backend functions)
 - A [Neon](https://neon.tech) PostgreSQL database
 - An [Auth0](https://auth0.com) application (for authentication)
@@ -89,7 +89,7 @@ For full-stack dev with hot reloading: run `npm run dev` in one terminal, then `
 
 ## Tech Stack
 
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router 7
+- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, React Router 7
 - **Backend**: Cloudflare Workers (with Static Assets)
 - **Database**: Neon PostgreSQL (serverless)
 - **Auth**: Auth0

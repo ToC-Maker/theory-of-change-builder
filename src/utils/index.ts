@@ -35,6 +35,48 @@ export function getContrastTextColor(backgroundColor: string): string {
   return isColorDark(backgroundColor) ? '#ffffff' : '#000000';
 }
 
+/**
+ * Confidence at or above this renders as a SOLID stroke. Below it the
+ * dash geometry varies continuously (PR #34 feedback 51 — "variable
+ * dash size rather than hard stops").
+ */
+export const CONFIDENCE_SOLID_THRESHOLD = 95;
+
+/**
+ * Continuous dash geometry for a confidence value (0-100).
+ *
+ * Returns `null` for the solid range (≥ CONFIDENCE_SOLID_THRESHOLD).
+ * Below it, with t = c / 95 ∈ [0, 1):
+ *
+ *   - dash length: 2 + 46·t³ px  (2px dots at c=0 → ~46.6px at c=94);
+ *   - gap length:  8 − 6.5·t px  (8px sparse gaps → ~1.6px at c=94).
+ *
+ * The dash channel is deliberately CUBIC (PR #34 round-7 feedback 79:
+ * "it looks too visually different between 94 and 100"). The previous
+ * linear ramp (dash 2→14, gap 8→2) left a 94-confidence stroke ~87%
+ * ink — visibly dashed against the solid 95 — so the threshold read as
+ * a cliff. With the cubic ramp the approach to solid is asymptotic:
+ * at 94 the stroke is ~97% ink (hairline 1.6px breaks every ~46px),
+ * so crossing 95 is imperceptible, while the low end keeps sparse
+ * dots (c≤20 → dash ≤ 2.4 against gaps ≥ 6.6) and the middle still
+ * clearly reads dashed (c=50 → `8.7 4.6`, close to the previous
+ * linear map's `8.3 4.8` and the old "dashed" bucket's `8 6`).
+ *
+ * Both channels are monotonic and rounded to 0.1px so the emitted
+ * stroke-dasharray strings stay stable. Unit-pinned in
+ * `tests/frontend/confidenceStroke.test.ts`.
+ */
+export function computeConfidenceDash(confidence: number): { dash: number; gap: number } | null {
+  const c = Math.max(0, Math.min(100, confidence));
+  if (c >= CONFIDENCE_SOLID_THRESHOLD) return null;
+  const t = c / CONFIDENCE_SOLID_THRESHOLD; // 0..1 across the dashed range
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+  return {
+    dash: round1(2 + 46 * t * t * t),
+    gap: round1(8 - 6.5 * t),
+  };
+}
+
 export function getConfidenceStrokeStyle(confidence: number): {
   strokeDasharray: string;
   stroke: string;
@@ -46,26 +88,13 @@ export function getConfidenceStrokeStyle(confidence: number): {
   // Use black color for all connections
   const stroke = '#000000'; // black
 
-  if (clampedConfidence >= 66) {
-    // High confidence (66-100%): solid line
-    return {
-      strokeDasharray: 'none',
-      stroke,
-      opacity: 1.0,
-    };
-  } else if (clampedConfidence >= 33) {
-    // Medium confidence (33-66%): dashed line
-    return {
-      strokeDasharray: '8 6', // 8px dash, 6px gap
-      stroke,
-      opacity: 0.9,
-    };
-  } else {
-    // Low confidence (0-33%): dotted line
-    return {
-      strokeDasharray: '2 6', // 2px dot, 6px gap
-      stroke,
-      opacity: 0.8,
-    };
-  }
+  const dash = computeConfidenceDash(clampedConfidence);
+
+  return {
+    strokeDasharray: dash === null ? 'none' : `${dash.dash} ${dash.gap}`,
+    stroke,
+    // Continuous opacity ramp 0.8 → 1.0 (replaces the old 0.8/0.9/1.0
+    // bucket opacities; same range, no hard stops).
+    opacity: 0.8 + 0.2 * (clampedConfidence / 100),
+  };
 }
