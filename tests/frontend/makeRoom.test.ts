@@ -4,8 +4,7 @@
 //
 // Conventions in these tests: a node is `{ id, centerY, height }` in
 // column-local px, so its box spans `centerY ± height/2`; every node is
-// 76px tall unless a test says otherwise, and the gap is the default
-// (16px) unless a test passes one.
+// 76px tall unless a test says otherwise, and the gap is 16px.
 import { describe, it, expect } from 'vitest';
 import {
   computeMakeRoom,
@@ -18,8 +17,8 @@ import type { Node } from '../../src/types';
 const H = 76;
 const n = (id: string, centerY: number, height = H): MakeRoomNode => ({ id, centerY, height });
 
-const room = (droppedCenterY: number, nodes: MakeRoomNode[], gap?: number, droppedHeight = H) =>
-  computeMakeRoom({ droppedCenterY, droppedHeight, nodes, gap });
+const room = (droppedCenterY: number, nodes: MakeRoomNode[], droppedHeight = H) =>
+  computeMakeRoom({ droppedCenterY, droppedHeight, nodes });
 
 describe('computeMakeRoom', () => {
   it('uses a 16px minimum gap by default', () => {
@@ -85,15 +84,8 @@ describe('computeMakeRoom', () => {
   it('measures the gap from the real box edges of nodes of different heights', () => {
     // Dropped 100 tall (250..350). Tall node below: centre 340, 200 tall → top 240.
     // Needs top 366 → centre 466.
-    const result = room(300, [n('tall', 340, 200)], undefined, 100);
+    const result = room(300, [n('tall', 340, 200)], 100);
     expect(result.shifted).toEqual({ tall: 466 });
-  });
-
-  it('respects the gap it is given', () => {
-    // Landing bottom 338; 'b' top 362.
-    expect(room(300, [n('b', 400)], 16).shifted).toEqual({});
-    expect(room(300, [n('b', 400)], 40).shifted).toEqual({ b: 416 });
-    expect(room(300, [n('b', 400)], 0).shifted).toEqual({});
   });
 
   it('treats a node centred exactly on the landing centre as below it', () => {
